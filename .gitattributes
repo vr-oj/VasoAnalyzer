@@ -1,0 +1,20 @@
+## ✅ `.gitattributes`
+
+```gitattributes
+# Normalize text files to LF (Unix-style line endings)
+* text=auto eol=lf
+
+# Treat Python and Markdown files as text
+*.py text
+*.md text
+
+# Treat images and icons as binary
+*.png binary
+*.ico binary
+*.icns binary
+*.tiff binary
+*.jpg binary
+
+# Prevent VSCode config or compiled cache from being misclassified
+.vscode/* text
+__pycache__/* text
