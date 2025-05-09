@@ -64,7 +64,7 @@ class VasoAnalyzerApp(QMainWindow):
 		self.selected_event_marker = None
 		self.pinned_points = []
 		self.slider_marker = None
-		self.recording_interval = 0.14	# 140 ms per frame
+		self.recording_interval = 1 #0.14	# 140 ms per frame
 		self.last_replaced_event = None
 		self.excel_auto_path = None		# Path to Excel file for auto-update
 		self.excel_auto_column = None	# Column letter to use for auto-update
@@ -251,8 +251,8 @@ class VasoAnalyzerApp(QMainWindow):
 		self.slider.setToolTip("Navigate TIFF frames")
 	
 		self.event_table = QTableWidget()
-		self.event_table.setColumnCount(3)
-		self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", "ID (µm)"])
+		self.event_table.setColumnCount(4)
+		self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", "Frame", "ID (µm)"])
 		self.event_table.setMinimumWidth(400)
 		self.event_table.setEditTriggers(QAbstractItemView.DoubleClicked)
 		self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -301,6 +301,20 @@ class VasoAnalyzerApp(QMainWindow):
 		self.canvas.mpl_connect("button_press_event", self.handle_click_on_plot)
 		self.canvas.mpl_connect("button_release_event", lambda event: QTimer.singleShot(100, lambda: self.on_mouse_release(event)))
 
+		# Add context menu to snapshot label
+		self.snapshot_label.setContextMenuPolicy(Qt.CustomContextMenu)
+		self.snapshot_label.customContextMenuRequested.connect(self.show_snapshot_context_menu)
+
+	def show_snapshot_context_menu(self, pos):
+		if not hasattr(self, 'snapshot_frames') or not self.snapshot_frames:
+			return
+			
+		menu = QMenu(self)
+		view_metadata_action = menu.addAction("📋 View Frame Metadata")
+		view_metadata_action.triggered.connect(self.show_current_frame_metadata)
+		
+		menu.exec_(self.snapshot_label.mapToGlobal(pos))
+
 # [D] ========================= FILE LOADERS: TRACE / EVENTS / TIFF =====================
 	def load_trace_and_events(self):
 		file_path, _ = QFileDialog.getOpenFileName(self, "Select Trace File", "", "CSV Files (*.csv)")
@@ -325,7 +339,7 @@ class VasoAnalyzerApp(QMainWindow):
 	
 		if os.path.exists(event_path):
 			try:
-				self.event_labels, self.event_times = load_events(event_path)
+				self.event_labels, self.event_times, self.event_frames = load_events(event_path)
 	
 				# Generate table data by sampling diameters
 				diam_trace = self.trace_data['Inner Diameter']
@@ -338,10 +352,15 @@ class VasoAnalyzerApp(QMainWindow):
 						idx_pre = np.argmin(np.abs(time_trace - t_sample))
 					else:
 						idx_pre = -1
+
+					# Calculate frame number based on event time and recording interval
+					frame_number = self.event_times[i]
+
 					diam_pre = diam_trace.iloc[idx_pre]
 					self.event_table_data.append((
 						self.event_labels[i],
 						round(self.event_times[i], 2),
+						frame_number,  # Using actual frame number
 						round(diam_pre, 2)
 					))
 	
@@ -357,13 +376,25 @@ class VasoAnalyzerApp(QMainWindow):
 		file_path, _ = QFileDialog.getOpenFileName(self, "Open Result TIFF", "", "TIFF Files (*.tif *.tiff)")
 		if file_path:
 			try:
-				frames = load_tiff(file_path)
-				valid_frames = [f for f in frames if f is not None and f.size > 0]
+				frames, frames_metadata = load_tiff(file_path)
+				valid_frames = []
+				valid_metadata = []
+				
+				# Filter out empty/corrupt frames
+				for i, frame in enumerate(frames):
+					if frame is not None and frame.size > 0:
+						valid_frames.append(frame)
+						if i < len(frames_metadata):
+							valid_metadata.append(frames_metadata[i])
+						else:
+							valid_metadata.append({})
 
 				if len(valid_frames) < len(frames):
 					QMessageBox.warning(self, "TIFF Warning", "Some TIFF frames were empty or corrupted and were skipped.")
 
 				self.snapshot_frames = valid_frames
+				self.frames_metadata = valid_metadata
+				
 				if self.snapshot_frames:
 					self.display_frame(0)
 					self.slider.setMaximum(len(self.snapshot_frames) - 1)
@@ -371,8 +402,59 @@ class VasoAnalyzerApp(QMainWindow):
 					self.snapshot_label.show()
 					self.slider.show()
 					self.slider_marker = None
+					
+					# Create metadata button if it doesn't exist
+					if not hasattr(self, 'metadata_btn'):
+						self.metadata_btn = QPushButton("📋 View Metadata")
+						self.metadata_btn.clicked.connect(self.show_current_frame_metadata)
+						
+						# Find the layout containing the snapshot label
+						right_layout = self.snapshot_label.parent().layout()
+						right_layout.addWidget(self.metadata_btn)
+					else:
+						self.metadata_btn.show()
+				
 			except Exception as e:
 				QMessageBox.critical(self, "Error", f"Failed to load TIFF file:\n{e}")
+
+	def show_current_frame_metadata(self):
+		"""Show metadata for the currently displayed frame"""
+		if not hasattr(self, 'frames_metadata') or not self.frames_metadata:
+			QMessageBox.information(self, "Metadata", "No metadata available for this TIFF file.")
+			return
+		
+		current_idx = self.slider.value()
+		if current_idx >= len(self.frames_metadata):
+			QMessageBox.information(self, "Metadata", "No metadata available for this frame.")
+			return
+		
+		# Get metadata for current frame
+		metadata = self.frames_metadata[current_idx]
+		
+		# Format metadata as text
+		metadata_text = f"Frame {current_idx} Metadata:\n" + "-" * 40 + "\n"
+		
+		# Sort keys alphabetically for consistent display
+		for key in sorted(metadata.keys()):
+			value = metadata[key]
+			# Handle arrays specially to avoid overwhelming the display
+			if isinstance(value, (list, tuple, np.ndarray)) and len(str(value)) > 100:
+				metadata_text += f"{key}: [Array with shape {np.array(value).shape}]\n"
+			else:
+				metadata_text += f"{key}: {value}\n"
+		
+		# Show dialog with metadata
+		msg = QMessageBox(self)
+		msg.setWindowTitle(f"Frame {current_idx} Metadata")
+		msg.setText(metadata_text)
+		msg.setDetailedText(str(metadata))  # Full metadata in detailed view
+		msg.setStandardButtons(QMessageBox.Ok)
+		msg.setIcon(QMessageBox.Information)
+		
+		# Make the dialog bigger
+		msg.setStyleSheet("QLabel{min-width: 500px; min-height: 400px;}")
+		
+		msg.exec_()
 
 	def display_frame(self, index):
 		if not self.snapshot_frames:
@@ -417,11 +499,35 @@ class VasoAnalyzerApp(QMainWindow):
 		self.display_frame(idx)
 		self.update_slider_marker()
 
+		# Add a small indicator that shows metadata is available
+		if hasattr(self, 'metadata_btn') and idx < len(self.frames_metadata):
+			num_tags = len(self.frames_metadata[idx])
+			self.metadata_btn.setText(f"📋 View Metadata ({num_tags} tags)")
+
 	def update_slider_marker(self):
 		if self.trace_data is None or not self.snapshot_frames:
 			return
 
-		t_current = self.slider.value() * self.recording_interval
+		current_frame_idx = self.slider.value()
+		
+		# Get the actual frame number from metadata if available
+		if hasattr(self, 'frames_metadata') and current_frame_idx < len(self.frames_metadata):
+			frame_meta = self.frames_metadata[current_frame_idx]
+			
+			if 'FrameNumber' in frame_meta:
+				# Use the actual frame number from metadata
+				frame_number = frame_meta['FrameNumber']
+				# Convert frame number to time using recording interval
+				t_current = frame_number
+				print(f"Using FrameNumber {frame_number} → time: {t_current:.2f}s")
+			else:
+				# Fall back to slider index if frame number isn't available
+				t_current = current_frame_idx
+				print(f"No FrameNumber in metadata, using slider index: {t_current:.2f}s")
+		else:
+			# Fall back to slider index if no metadata is available
+			t_current = current_frame_idx
+			print(f"No metadata available, using slider index: {t_current:.2f}s")
 
 		if self.slider_marker is None:
 			self.slider_marker = self.ax.axvline(x=t_current, color='red', linestyle='--', linewidth=1.5, label="TIFF Frame")
@@ -431,8 +537,16 @@ class VasoAnalyzerApp(QMainWindow):
 		self.canvas.draw_idle()
 		self.canvas.flush_events()
 
+	def populate_event_table_from_df(self, df):
+		self.event_table.setRowCount(len(df))
+		for row in range(len(df)):
+			self.event_table.setItem(row, 0, QTableWidgetItem(str(df.iloc[row].get("EventLabel", ""))))
+			self.event_table.setItem(row, 1, QTableWidgetItem(str(df.iloc[row].get("Time (s)", ""))))
+			self.event_table.setItem(row, 2, QTableWidgetItem(str(df.iloc[row].get("ID (µm)", ""))))
+
+
 	def update_event_label_positions(self, event=None):
-		if not self.event_text_objects:
+		if not hasattr(self, 'event_text_objects') or not self.event_text_objects:
 			return
 
 		y_min, y_max = self.ax.get_ylim()
@@ -440,13 +554,6 @@ class VasoAnalyzerApp(QMainWindow):
 
 		for txt, x in self.event_text_objects:
 			txt.set_position((x, y_top))
-
-	def populate_event_table_from_df(self, df):
-		self.event_table.setRowCount(len(df))
-		for row in range(len(df)):
-			self.event_table.setItem(row, 0, QTableWidgetItem(str(df.iloc[row].get("EventLabel", ""))))
-			self.event_table.setItem(row, 1, QTableWidgetItem(str(df.iloc[row].get("Time (s)", ""))))
-			self.event_table.setItem(row, 2, QTableWidgetItem(str(df.iloc[row].get("ID (µm)", ""))))
 
 # [E] ========================= PLOTTING AND EVENT SYNC ============================
 	def update_plot(self):
@@ -465,7 +572,7 @@ class VasoAnalyzerApp(QMainWindow):
 		t = self.trace_data['Time (s)']
 		d = self.trace_data['Inner Diameter']
 		self.ax.plot(t, d, 'k-', linewidth=1.5)
-		self.ax.set_xlabel("Time (s)")
+		self.ax.set_xlabel("Time (s or frames)")
 		self.ax.set_ylabel("Inner Diameter (µm)")
 		self.ax.grid(True, color='#CCC')
 
@@ -488,12 +595,14 @@ class VasoAnalyzerApp(QMainWindow):
 					idx_pre = -1
 				diam_pre = diam_trace.iloc[idx_pre]
 
+				frame_number = self.event_frames[i]
+
 				# Vertical line
-				self.ax.axvline(x=self.event_times[i], color='black', linestyle='--', linewidth=0.8)
+				self.ax.axvline(x=frame_number, color='black', linestyle='--', linewidth=0.8)
 
 				# Label on plot
 				txt = self.ax.text(
-					self.event_times[i], 0, self.event_labels[i],
+					frame_number, 0, self.event_labels[i],
 					rotation=90,
 					verticalalignment='top',
 					horizontalalignment='right',
@@ -501,12 +610,13 @@ class VasoAnalyzerApp(QMainWindow):
 					color='black',
 					clip_on=True
 				)
-				self.event_text_objects.append((txt, self.event_times[i]))
+				self.event_text_objects.append((txt, frame_number))
 
 				# Table entry
 				self.event_table_data.append((
 					self.event_labels[i],
 					round(self.event_times[i], 2),
+					frame_number,
 					round(diam_pre, 2)
 				))
 
@@ -538,10 +648,11 @@ class VasoAnalyzerApp(QMainWindow):
 	def populate_table(self):
 		self.event_table.blockSignals(True)
 		self.event_table.setRowCount(len(self.event_table_data))
-		for row, (label, t, d) in enumerate(self.event_table_data):
+		for row, (label, t, frame, d) in enumerate(self.event_table_data):
 			self.event_table.setItem(row, 0, QTableWidgetItem(str(label)))
 			self.event_table.setItem(row, 1, QTableWidgetItem(str(t)))
-			self.event_table.setItem(row, 2, QTableWidgetItem(str(d)))
+			self.event_table.setItem(row, 2, QTableWidgetItem(str(frame)))
+			self.event_table.setItem(row, 3, QTableWidgetItem(str(d)))
 		self.event_table.blockSignals(False)
 
 	def handle_table_edit(self, item):
@@ -549,7 +660,7 @@ class VasoAnalyzerApp(QMainWindow):
 		col = item.column()
 
 		# Only allow editing the third column (ID)
-		if col != 2:
+		if col != 3:
 			self.populate_table()
 			return
 
@@ -562,10 +673,11 @@ class VasoAnalyzerApp(QMainWindow):
 
 		label = self.event_table_data[row][0]
 		time = self.event_table_data[row][1]
-		old_val = self.event_table_data[row][2]
-
+		frame = self.event_table_data[row][2]  # Get the frame value
+		old_val = self.event_table_data[row][3]  # Changed from index 2 to 3
+		
 		self.last_replaced_event = (row, old_val)
-		self.event_table_data[row] = (label, time, round(new_val, 2))
+		self.event_table_data[row] = (label, time, frame, round(new_val, 2))  # Include frame in tuple
 
 		self.auto_export_table()
 		print(f"✏️ ID updated at {time:.2f}s → {new_val:.2f} µm")
@@ -676,7 +788,7 @@ class VasoAnalyzerApp(QMainWindow):
 			if confirm == QMessageBox.Yes:
 				old_value = self.event_table_data[index][2]
 				self.last_replaced_event = (index, old_value)
-	
+				frame_num = self.event_table_data[index][2]
 				self.event_table_data[index] = (event_label, round(event_time, 2), round(y, 2))
 				self.populate_table()
 				self.auto_export_table()
@@ -714,6 +826,10 @@ class VasoAnalyzerApp(QMainWindow):
 			return
 	
 		insert_idx = insert_labels.index(selected)
+
+		# Calculate frame number based on time
+		frame_number = int(x / self.recording_interval)
+
 		new_entry = (new_label.strip(), round(x, 2), round(y, 2))
 	
 		# Insert into data
@@ -736,9 +852,9 @@ class VasoAnalyzerApp(QMainWindow):
 			return
 	
 		index, old_val = self.last_replaced_event
-		label, time, _ = self.event_table_data[index]
+		label, time, frame, _ = self.event_table_data[index]
 	
-		self.event_table_data[index] = (label, time, old_val)
+		self.event_table_data[index] = (label, time, frame, old_val)
 		self.populate_table()
 		self.auto_export_table()
 	
@@ -761,7 +877,10 @@ class VasoAnalyzerApp(QMainWindow):
 		nearest_idx = np.argmin(np.abs(time_array - x_val))
 		y_val = id_array[nearest_idx]
 	
-		text = f"Time: {x_val:.2f} s\nID: {y_val:.2f} µm"
+		frame_num = int(x_val)
+		time_val = frame_num * self.recording_interval
+		text = f"Frame: {frame_num}\nTime: {time_val:.2f} s\nID: {y_val:.2f} µm"
+
 		self.hover_label.setText(text)
 	
 		cursor_offset_x = 10
@@ -872,7 +991,7 @@ class VasoAnalyzerApp(QMainWindow):
 		try:
 			output_dir = os.path.abspath(self.trace_file_path)
 			csv_path = os.path.join(output_dir, "eventDiameters_output.csv")
-			df = pd.DataFrame(self.event_table_data, columns=["Event", "Time (s)", "ID (µm)"])
+			df = pd.DataFrame(self.event_table_data, columns=["Event", "Time (s)", "Frame", "ID (µm)"])
 			df.to_csv(csv_path, index=False)
 			print(f"✔ Event table auto-exported to:\n{csv_path}")
 		except Exception as e:
@@ -926,13 +1045,15 @@ class VasoAnalyzerApp(QMainWindow):
 		if not self.event_table_data:
 			QMessageBox.warning(self, "No Data", "No event data available to export.")
 			return
-	
-		dialog = ExcelMappingDialog(self, [
-			{"EventLabel": label, "Time (s)": time, "ID (µm)": idval}
-			for label, time, idval in self.event_table_data
-		])
+		
+		# Format the data as dictionaries with all four fields
+		dialog_data = [
+			{"EventLabel": label, "Time (s)": time, "Frame": frame, "ID (µm)": idval}
+			for label, time, frame, idval in self.event_table_data
+		]
+		
+		dialog = ExcelMappingDialog(self, dialog_data)
 		if dialog.exec_():
-			# Only remember file path and column – don't trigger auto-write!
 			self.excel_auto_path = dialog.excel_path
 			self.excel_auto_column = dialog.column_selector.currentText()
 

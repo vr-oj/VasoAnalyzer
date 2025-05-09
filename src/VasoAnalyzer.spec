@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
+sys.setrecursionlimit(sys.getrecursionlimit() * 5)  # Increase recursion limit
+
 project_dir = os.getcwd()
 
 block_cipher = None
@@ -13,7 +16,7 @@ a = Analysis(
         ('vasoanalyzer/VasoAnalyzerIcon.icns', 'vasoanalyzer'),
         ('vasoanalyzer/VasoAnalyzerIcon.ico', 'vasoanalyzer'),
     ],
-    hiddenimports=[],
+    hiddenimports=['tkinter', 'tkinter.filedialog', 'tkinter.messagebox', 'PIL._tkinter_finder'],  # Add tkinter dependencies
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -36,7 +39,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False,   # You might want to set this to True for debugging
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

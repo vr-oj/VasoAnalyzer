@@ -35,8 +35,8 @@ class ExcelMappingDialog(QDialog):
 		self.layout.addWidget(self.cell_label)
 
 		self.event_table = QTableWidget()
-		self.event_table.setColumnCount(3)
-		self.event_table.setHorizontalHeaderLabels(["EventLabel", "Time (s)", "ID (\u00b5m)"])
+		self.event_table.setColumnCount(4)
+		self.event_table.setHorizontalHeaderLabels(["EventLabel", "Time (s)", "Frame", "ID (\u00b5m)"])
 		self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
 		self.event_table.cellClicked.connect(self.map_event_to_excel)
 		self.layout.addWidget(self.event_table)
@@ -63,12 +63,14 @@ class ExcelMappingDialog(QDialog):
 			if isinstance(event, dict):
 				label = event.get("EventLabel", "")
 				time = event.get("Time (s)", "")
+				frame = event.get("Frame", "")
 				id_val = event.get("ID (\u00b5m)", "")
 			else:
 				label, time, id_val = event
 			self.event_table.setItem(i, 0, QTableWidgetItem(str(label)))
 			self.event_table.setItem(i, 1, QTableWidgetItem(str(time)))
-			self.event_table.setItem(i, 2, QTableWidgetItem(str(id_val)))
+			self.event_table.setItem(i, 2, QTableWidgetItem(str(frame)))
+			self.event_table.setItem(i, 3, QTableWidgetItem(str(id_val)))
 		self.event_table.resizeColumnsToContents()
 
 	def load_excel(self):
@@ -146,16 +148,16 @@ class ExcelMappingDialog(QDialog):
 
 # Auto-update utility
 def update_excel_file(excel_path, event_table_data, start_row=3, column_letter="B"):
-	try:
-		wb = load_workbook(excel_path)
-		ws = wb.active
-		for i, (_, _, id_val) in enumerate(event_table_data):
-			cell = f"{column_letter}{start_row + i}"
-			ws[cell] = id_val
-		wb.save(excel_path)
-		print(f"🔄 Excel file updated with new values in column {column_letter}.")
-	except Exception as e:
-		print(f"❌ Failed to update Excel file:\n{e}")
+    try:
+        wb = load_workbook(excel_path)
+        ws = wb.active
+        for i, (_, _, frame, _) in enumerate(event_table_data):  # Now unpacking 4 values
+            cell = f"{column_letter}{start_row + i}"
+            ws[cell] = frame  # Use frame instead of ID
+        wb.save(excel_path)
+        print(f"🔄 Excel file updated with frame values in column {column_letter}.")
+    except Exception as e:
+        print(f"❌ Failed to update Excel file:\n{e}")
 
 # Cross-platform file reopening logic
 def reopen_excel_file_crossplatform(path):
