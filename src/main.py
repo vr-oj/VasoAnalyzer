@@ -1,14 +1,15 @@
 # ===== Main Launcher =====
 import sys
 import os
+import base64
 from PyQt5.QtWidgets import QApplication, QSplashScreen
-from PyQt5.QtGui import QPixmap, QIcon
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer
+import re
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from PyQt5.QtGui import QIcon
 
 from vasoanalyzer.gui import VasoAnalyzerApp
-import vasoanalyzer.gui
-print("📄 Loaded gui.py from:", vasoanalyzer.gui.__file__)
-
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import rcParams

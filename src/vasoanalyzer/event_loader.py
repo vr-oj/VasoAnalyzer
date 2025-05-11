@@ -11,6 +11,7 @@ def load_events(file_path):
 	# Auto-detect columns
 	label_col = next((col for col in df.columns if 'label' in col.lower()), df.columns[0])
 	time_col  = next((col for col in df.columns if 'time' in col.lower()), df.columns[1])
+	frame_col = next((col for col in df.columns if 'frame' in col.lower()), None)
 
 	# Convert time to seconds
 	if df[time_col].dtype == 'object':
@@ -21,4 +22,8 @@ def load_events(file_path):
 	labels = df[label_col].astype(str).tolist()
 	times = time_sec.tolist()
 
-	return labels, times
+	frames = None
+	if frame_col:
+		frames = df[frame_col].tolist()
+
+	return labels, times, frames
