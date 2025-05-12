@@ -30,3 +30,9 @@ src/build/VasoAnalyzer_2.1/localpycs/
 
 # === Optional: Ignore macOS app internals ===
 src/dist/VasoAnalyzer_2.1.app/Contents/
+
+# === VSCode Workspace Settings ===
+.vscode/
+
+# === Python Virtual Environment ===
+vasoenv/

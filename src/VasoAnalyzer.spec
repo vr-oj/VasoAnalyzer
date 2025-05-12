@@ -1,5 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sys
+sys.setrecursionlimit(sys.getrecursionlimit() * 5)  # Increase recursion limit
+
 project_dir = os.getcwd()
 
 block_cipher = None
@@ -13,7 +16,7 @@ a = Analysis(
         ('vasoanalyzer/VasoAnalyzerIcon.icns', 'vasoanalyzer'),
         ('vasoanalyzer/VasoAnalyzerIcon.ico', 'vasoanalyzer'),
     ],
-    hiddenimports=[],
+    hiddenimports=['tkinter', 'tkinter.filedialog', 'tkinter.messagebox', 'PIL._tkinter_finder'],  # Add tkinter dependencies
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -29,14 +32,14 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='VasoAnalyzer 2.5',
+    name='VasoAnalyzer 2.6',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,
+    console=False, # You might want to set this to True for debugging
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -53,12 +56,12 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='VasoAnalyzer 2.5',
+    name='VasoAnalyzer 2.6',
 )
 
 app = BUNDLE(
     coll,
-    name='VasoAnalyzer 2.5.app',
+    name='VasoAnalyzer 2.6.app',
     icon='vasoanalyzer/VasoAnalyzerIcon.icns',
     bundle_identifier=None,
 )
