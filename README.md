@@ -1,4 +1,4 @@
-# VasoAnalyzer 2.5
+# VasoAnalyzer 2.6
 
 🧪 *Bladder Vasculature Analysis Toolkit — Python Edition*  
 Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State University
@@ -16,7 +16,7 @@ Designed for researchers. Powered by Python. Zero coding required.
 
 ---
 
-## 🧰 Key Features in v2.5
+## 🧰 Key Features in v2.6
 
 - **📊 Load and visualize trace data** from `.csv` files
 - **📍 Import and display events** from `.csv` or `.txt` files
