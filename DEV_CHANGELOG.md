@@ -148,3 +148,8 @@ This changelog documents all feature additions, fixes, and improvements implemen
 - Integrate hover label, pinning, and blue-line highlight behaviors into `DualViewWindow`.
 - Match visual style and logic for event interaction with `main.py`.
 - Refactor shared functions if needed for dual/single mode consistency.
+
+### May 11, 2025 — Dual View Performance Planning
+- Confirmed dual-view panels now fully mirror main view functionality (toolbars, load, styling, event-label repositioning, table sampling logic).
+- Noted sluggish performance and UI unresponsiveness when both panels are active.
+- Planned tomorrow: profile rendering and callback overhead, batch `draw_event` updates, and optimize shared resources to improve responsiveness.

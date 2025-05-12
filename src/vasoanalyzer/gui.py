@@ -51,6 +51,8 @@ from PyQt5.QtWidgets import (
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QBrush, QColor
 from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent
+from PyQt5.QtWidgets import QStackedWidget
+from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
 
 import requests
 
@@ -134,7 +136,30 @@ class VasoAnalyzerApp(QMainWindow):
         # ===== Build UI =====
         self.create_menubar()
         self.initUI()
+        self._wrap_views()
         self.check_for_updates_at_startup()
+
+    def _wrap_views(self):
+        # Create the three modes:
+        self.singleMode = QWidget()          # placeholder for your existing GUI
+        self.dualMode   = DualViewWidget(self)
+
+        # Extract current central widget (your single view)
+        old = self.centralWidget().children()
+        # We’ll assume initUI placed everything inside self.main_layout of centralWidget()
+        # So just wrap the existing layout in a container:
+        container = QWidget()
+        container.setLayout(self.main_layout)
+
+        # Now set up the stack
+        self.modeStack = QStackedWidget(self)
+        self.modeStack.addWidget(container)   # index 0: single view
+        self.modeStack.addWidget(self.dualMode)  # index 1: dual view
+
+        # Replace central widget’s layout
+        self.setCentralWidget(self.modeStack)
+        self.modeStack.setCurrentIndex(0)
+
 
     def update_recent_files_menu(self):
         self.recent_menu.clear()
@@ -256,6 +281,17 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_toggle_grid.setChecked(self.grid_visible)
         self.action_toggle_grid.triggered.connect(self.toggle_grid)
         view_menu.addAction(self.action_toggle_grid)
+        
+        view_menu.addSeparator()
+        self.action_single = QAction("Single View", self, checkable=True)
+        self.action_dual   = QAction("Dual View",   self, checkable=True)
+        self.action_single.setChecked(True)
+        view_menu.addAction(self.action_single)
+        view_menu.addAction(self.action_dual)
+
+        self.action_single.triggered.connect(lambda: self._switch_mode(0))
+        self.action_dual.triggered.connect(lambda: self._switch_mode(1))
+
 
     def _build_help_menu(self, menubar):
         help_menu = menubar.addMenu("Help")
@@ -297,6 +333,12 @@ class VasoAnalyzerApp(QMainWindow):
         clear_action = QAction("Clear Recent Files", self)
         clear_action.triggered.connect(self.clear_recent_files)
         self.recent_menu.addAction(clear_action)
+
+    def _switch_mode(self, idx):
+        self.modeStack.setCurrentIndex(idx)
+        self.action_single.setChecked(idx == 0)
+        self.action_dual.setChecked(idx == 1)
+
 
     def save_plot_pickle(self):
         try:
@@ -564,9 +606,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.loadTraceBtn.setToolTip(
             "Load .csv trace file and auto-load matching event table"
         )
-        self.loadTraceBtn.clicked.connect(
-            lambda: print("📂 Button clicked") or self.load_trace_and_events()
-        )
+        
+        self.loadTraceBtn.clicked.connect(self._handle_load_trace)
+
 
         self.load_snapshot_button = QPushButton("🖼️ Load _Result.tiff")
         self.load_snapshot_button.setToolTip("Load Vasotracker _Result.tiff snapshot")
@@ -1100,10 +1142,22 @@ class VasoAnalyzerApp(QMainWindow):
         event.ignore()
 
     def dropEvent(self, event):
-        for url in event.mimeData().urls():
-            file_path = url.toLocalFile()
-            if file_path.endswith(".fig.pickle"):
-                self.load_pickle_session(file_path)
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        idx = self.modeStack.currentIndex()
+
+        # SINGLE‑VIEW: unchanged
+        if idx == 0:
+            for p in paths:
+                if p.endswith(".fig.pickle"):
+                    self.load_pickle_session(p)
+            return
+
+        # DUAL‑VIEW: expect exactly two pickles
+        panels = [self.dualMode.panelA, self.dualMode.panelB]
+        for i, p in enumerate(paths[:2]):
+            if p.endswith(".fig.pickle"):
+                panels[i].load_pickle_session(p)
+
 
     def load_pickle_session(self, file_path):
         try:
@@ -1162,6 +1216,48 @@ class VasoAnalyzerApp(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Load Failed", f"Error loading session:\n{e}")
+
+    def _handle_load_trace(self):
+        # Prompt for the trace file
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Trace File", "", "CSV Files (*.csv)"
+        )
+        if not file_path:
+            return
+
+        # SINGLE‑VIEW: just forward to your existing method
+        if self.modeStack.currentIndex() == 0:
+            self.load_trace_and_events(file_path)
+            return
+
+        # DUAL‑VIEW: decide which panel
+        from PyQt5.QtWidgets import QMessageBox
+        choice = QMessageBox.question(
+            self,
+            "Load Into…",
+            "Load this dataset into Panel A?\n(Select No to load into Panel B.)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        panel = self.dualMode.panelA if choice == QMessageBox.Yes else self.dualMode.panelB
+
+        # Load the trace DataFrame
+        df = load_trace(file_path)
+
+        # Attempt to find matching events file
+        base = os.path.splitext(os.path.basename(file_path))[0]
+        ev_path = os.path.join(os.path.dirname(file_path), f"{base}_table.csv")
+        events = []
+        if os.path.exists(ev_path):
+            try:
+                labels, times, _ = load_events(ev_path)
+                events = list(zip(labels, times))
+            except:
+                pass
+
+        # Feed into the chosen panel
+        panel.load_trace_and_events(df, events)
+
 
     # [E] ========================= PLOTTING AND EVENT SYNC ============================
     def update_plot(self):
