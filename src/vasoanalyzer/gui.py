@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
     QSlider, QLabel, QTableWidget, QTableWidgetItem, QAbstractItemView,
     QHeaderView, QMessageBox, QInputDialog, QMenu, QSizePolicy, QAction,
-    QToolBar, QToolButton, QSpacerItem, QStatusBar, QDesktopWidget, QStackedWidget
+    QToolBar, QToolButton, QSpacerItem, QStatusBar, QDesktopWidget, QStackedWidget, QUndoStack, QUndoView, QUndoCommand
 )
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QBrush, QColor, QCursor
@@ -32,7 +32,7 @@ rcParams.update({
 import requests
 
 
-def check_for_new_version(current_version="v2.5.1"):
+def check_for_new_version(current_version="v2.6"):
     try:
         response = requests.get(
             "https://api.github.com/repos/vr-oj/VasoAnalyzer_2.0/releases/latest"
@@ -63,7 +63,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.setMouseTracking(True)
 
         # ===== Setup App Window =====
-        self.setWindowTitle("VasoAnalyzer 2.5 - Python Edition")
+        self.setWindowTitle("VasoAnalyzer 2.6 - Python Edition")
         self.setGeometry(100, 100, 1280, 720)
         screen_size = QDesktopWidget().availableGeometry()
         self.resize(screen_size.width(), screen_size.height())
@@ -91,6 +91,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.setAcceptDrops(True)
         self.setStatusBar(QStatusBar(self))
         self.setAcceptDrops(True)
+        self.setAcceptDrops(True)
+        # ——— undo/redo ———
+        self.undo_stack = QUndoStack(self)
+
 
         # ===== Axis + Slider State =====
         self.axis_dragging = False
@@ -180,88 +184,180 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _build_file_menu(self, menubar):
         file_menu = menubar.addMenu("File")
-        # 1) New Analysis
-        self.action_new = QAction("Start New Analysis", self)
+
+        # 1) New Analysis…
+        self.action_new = QAction("Start New Analysis…", self)
         self.action_new.setShortcut("Ctrl+N")
         self.action_new.triggered.connect(self.start_new_analysis)
         file_menu.addAction(self.action_new)
-        # 2) Open Trace + Events
-        self.action_open_trace = QAction("Open Trace + Events", self)
+
+        # 2) Open Trace & Events…
+        self.action_open_trace = QAction("Open Trace & Events…", self)
         self.action_open_trace.setShortcut("Ctrl+O")
-        self.action_open_trace.triggered.connect(self.load_trace_and_events)
+        self.action_open_trace.triggered.connect(self._handle_load_trace)
         file_menu.addAction(self.action_open_trace)
-        # 3) Open _Result.tiff
-        self.action_open_tiff = QAction("Open _Result.tiff", self)
+
+        # 3) Open Result TIFF…
+        self.action_open_tiff = QAction("Open Result TIFF…", self)
         self.action_open_tiff.setShortcut("Ctrl+T")
         self.action_open_tiff.triggered.connect(self.load_snapshot)
         file_menu.addAction(self.action_open_tiff)
 
         file_menu.addSeparator()
-        # 4) Export Plot as TIFF
-        self.action_export_tiff = QAction("Export Plot as TIFF", self)
+
+        # 4) Export ▶
+        export_menu = file_menu.addMenu("Export ▶")
+
+        self.action_export_tiff = QAction("High‑Res Plot…", self)
         self.action_export_tiff.triggered.connect(self.export_high_res_plot)
-        file_menu.addAction(self.action_export_tiff)
-        # 5) Export Events as CSV
-        self.action_export_csv = QAction("Export Events as CSV", self)
+        export_menu.addAction(self.action_export_tiff)
+
+        self.action_export_csv = QAction("Events as CSV…", self)
         self.action_export_csv.triggered.connect(self.auto_export_table)
-        file_menu.addAction(self.action_export_csv)
-        # 6) Export to Excel Template
-        self.action_export_excel = QAction("Export to Excel Template", self)
+        export_menu.addAction(self.action_export_csv)
+
+        self.action_export_excel = QAction("To Excel Template…", self)
         self.action_export_excel.triggered.connect(self.open_excel_mapping_dialog)
-        file_menu.addAction(self.action_export_excel)
+        export_menu.addAction(self.action_export_excel)
 
         file_menu.addSeparator()
-        # 7) Recent Files
-        self.recent_menu = file_menu.addMenu("Recent Files")
+
+        # 5) Recent Files ▶
+        self.recent_menu = file_menu.addMenu("Recent Files ▶")
         self.build_recent_files_menu()
         self.update_recent_files_menu()
+
         file_menu.addSeparator()
-        # 8) Exit
+
+        # 6) Preferences… (stub)
+        self.action_preferences = QAction("Preferences…", self)
+        self.action_preferences.setShortcut("Ctrl+,")
+        self.action_preferences.triggered.connect(self.open_preferences_dialog)
+        file_menu.addAction(self.action_preferences)
+
+        # 7) Exit
         self.action_exit = QAction("Exit", self)
+        self.action_exit.setShortcut("Ctrl+Q")
         self.action_exit.triggered.connect(self.close)
         file_menu.addAction(self.action_exit)
 
+
     def _build_edit_menu(self, menubar):
         edit_menu = menubar.addMenu("Edit")
-        # Undo
-        self.action_undo = QAction("Undo Last Replacement", self)
-        self.action_undo.setShortcut("Ctrl+Z")
-        self.action_undo.triggered.connect(self.undo_last_replacement)
-        edit_menu.addAction(self.action_undo)
+
+        # Undo / Redo
+        undo = self.undo_stack.createUndoAction(self, "Undo")
+        undo.setShortcut("Ctrl+Z")
+        edit_menu.addAction(undo)
+
+        redo = self.undo_stack.createRedoAction(self, "Redo")
+        redo.setShortcut("Ctrl+Y")
+        edit_menu.addAction(redo)
+
         edit_menu.addSeparator()
-        # Customize Plot Style…
-        self.action_customize = QAction("Customize Plot Style", self)
-        self.action_customize.triggered.connect(self.open_plot_style_editor)
-        edit_menu.addAction(self.action_customize)
-        # …and sub‑menu “Customize”
-        customize_menu = edit_menu.addMenu("Customize")
-        for label, tab in [
-            ("Axis Titles", "axis_tab"),
-            ("Tick Labels", "tick_tab"),
-            ("Event Labels", "event_tab"),
-            ("Pinned Labels", "pin_tab"),
-            ("Trace Style", "line_tab"),
-        ]:
-            act = QAction(label, self)
-            act.triggered.connect(lambda _, t=tab: self.open_plot_style_editor(t))
-            customize_menu.addAction(act)
+
+        # Clear / Reset
+        clear_pins = QAction("❌ Clear All Pins", self)
+        clear_pins.triggered.connect(self.clear_all_pins)
+        edit_menu.addAction(clear_pins)
+        clear_events = QAction("🧼 Clear All Events", self)
+        clear_events.triggered.connect(self.clear_current_session)
+        edit_menu.addAction(clear_events)
+
+        edit_menu.addSeparator()
+
+        # Customize ▶  (drills down to style tabs)
+        customize_menu = edit_menu.addMenu("Customize ▶")
+        #  – Axis Titles
+        a = QAction("Axis Titles…", self)
+        a.setShortcut("Ctrl+Alt+A")
+        a.triggered.connect(lambda: self.open_plot_style_editor("axis_tab"))
+        customize_menu.addAction(a)
+        #  – Tick Labels
+        t = QAction("Tick Labels…", self)
+        t.setShortcut("Ctrl+Alt+T")
+        t.triggered.connect(lambda: self.open_plot_style_editor("tick_tab"))
+        customize_menu.addAction(t)
+        #  – Event Labels
+        e = QAction("Event Labels…", self)
+        e.triggered.connect(lambda: self.open_plot_style_editor("event_tab"))
+        customize_menu.addAction(e)
+        #  – Pinned Labels
+        p = QAction("Pinned Labels…", self)
+        p.triggered.connect(lambda: self.open_plot_style_editor("pin_tab"))
+        customize_menu.addAction(p)
+        #  – Trace Style
+        l = QAction("Trace Style…", self)
+        l.triggered.connect(lambda: self.open_plot_style_editor("line_tab"))
+        customize_menu.addAction(l)
+
+        edit_menu.addSeparator()
+
 
     def _build_view_menu(self, menubar):
         view_menu = menubar.addMenu("View")
-        self.action_toggle_grid = QAction("Toggle Grid", self, checkable=True)
-        self.action_toggle_grid.setChecked(self.grid_visible)
-        self.action_toggle_grid.triggered.connect(self.toggle_grid)
-        view_menu.addAction(self.action_toggle_grid)
-        
+
+        # 1) Reset / Fit / Zoom
+        reset_act = QAction("Reset View", self)
+        reset_act.setShortcut("Ctrl+R")
+        reset_act.triggered.connect(self.reset_view)
+        view_menu.addAction(reset_act)
+
+        fit_act = QAction("Fit to Data", self)
+        fit_act.setShortcut("Ctrl+F")
+        fit_act.triggered.connect(self.fit_to_data)
+        view_menu.addAction(fit_act)
+
+        zoom_sel_act = QAction("Zoom to Selection", self)
+        zoom_sel_act.setShortcut("Ctrl+E")
+        zoom_sel_act.triggered.connect(self.zoom_to_selection)
+        view_menu.addAction(zoom_sel_act)
+
         view_menu.addSeparator()
+
+        # 2) Annotations ▶
+        anno_menu = view_menu.addMenu("Annotations ▶")
+        ev_lines = QAction("Event Lines", self, checkable=True, checked=True)
+        ev_lbls  = QAction("Event Labels", self, checkable=True, checked=True)
+        pin_lbls = QAction("Pinned Labels", self, checkable=True, checked=True)
+        frame_mk = QAction("Frame Marker", self, checkable=True, checked=True)
+        ev_lines.triggered.connect(lambda _: self.toggle_annotation("lines"))
+        ev_lbls.triggered.connect(lambda _: self.toggle_annotation("evt_labels"))
+        pin_lbls.triggered.connect(lambda _: self.toggle_annotation("pin_labels"))
+        frame_mk.triggered.connect(lambda _: self.toggle_annotation("frame_marker"))
+        for a in (ev_lines, ev_lbls, pin_lbls, frame_mk):
+            anno_menu.addAction(a)
+
+        view_menu.addSeparator()
+
+        # 3) Show / Hide ▶
+        showhide = view_menu.addMenu("Show/Hide ▶")
+        evt_tbl = QAction("Event Table", self, checkable=True, checked=True)
+        snap_vw = QAction("Snapshot Viewer", self, checkable=True, checked=True)
+        evt_tbl.triggered.connect(self.toggle_event_table)
+        snap_vw.triggered.connect(self.toggle_snapshot_viewer)
+        showhide.addAction(evt_tbl); showhide.addAction(snap_vw)
+
+        view_menu.addSeparator()
+
+        # 4) Single / Dual
         self.action_single = QAction("Single View", self, checkable=True)
         self.action_dual   = QAction("Dual View",   self, checkable=True)
+        self.action_single.setShortcut("Ctrl+1")
+        self.action_dual.setShortcut("Ctrl+2")
         self.action_single.setChecked(True)
+        self.action_single.triggered.connect(lambda: self._switch_mode(0))
+        self.action_dual.triggered.connect(lambda: self._switch_mode(1))
         view_menu.addAction(self.action_single)
         view_menu.addAction(self.action_dual)
 
-        self.action_single.triggered.connect(lambda: self._switch_mode(0))
-        self.action_dual.triggered.connect(lambda: self._switch_mode(1))
+        view_menu.addSeparator()
+
+        # 5) Full‑Screen
+        fs_act = QAction("Full‑Screen Mode", self)
+        fs_act.setShortcut("F11")
+        fs_act.triggered.connect(self.toggle_fullscreen)
+        view_menu.addAction(fs_act)
 
     def _build_help_menu(self, menubar):
         help_menu = menubar.addMenu("Help")
@@ -271,7 +367,7 @@ class VasoAnalyzerApp(QMainWindow):
             lambda: QMessageBox.information(
                 self,
                 "About VasoAnalyzer",
-                "VasoAnalyzer 2.5 (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer_2.0",
+                "VasoAnalyzer 2.6 (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer_2.0",
             )
         )
         help_menu.addAction(self.action_about)
@@ -284,6 +380,29 @@ class VasoAnalyzerApp(QMainWindow):
             lambda: os.system(f'open "{manual_path}"')
         )
         help_menu.addAction(self.action_user_manual)
+
+        help_menu.addSeparator()
+
+        # Check for Updates
+        act_update = QAction("Check for Updates", self)
+        act_update.triggered.connect(self.check_for_updates_at_startup)
+        help_menu.addAction(act_update)
+
+        # Keyboard Shortcuts
+        act_keys = QAction("Keyboard Shortcuts…", self)
+        act_keys.triggered.connect(self.show_shortcuts)
+        help_menu.addAction(act_keys)
+
+        # Report a Bug
+        act_bug = QAction("Report a Bug…", self)
+        act_bug.triggered.connect(lambda: webbrowser.open("https://github.com/vr-oj/VasoAnalyzer_2.0/issues/new"))
+        help_menu.addAction(act_bug)
+
+        # Release Notes
+        act_rel = QAction("Release Notes…", self)
+        act_rel.triggered.connect(self.show_release_notes)
+        help_menu.addAction(act_rel)
+
 
     def build_recent_files_menu(self):
         self.recent_menu.clear()
@@ -309,6 +428,19 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_single.setChecked(idx == 0)
         self.action_dual.setChecked(idx == 1)
 
+    def open_preferences_dialog(self):
+        QMessageBox.information(
+            self,
+            "Preferences",
+            "Preferences will be implemented soon(ish)."
+        )
+
+    def clear_all_pins(self):
+        for marker, label in self.pinned_points:
+            marker.remove()
+            label.remove()
+        self.pinned_points.clear()
+        self.canvas.draw_idle()
 
     def save_plot_pickle(self):
         try:
@@ -398,7 +530,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_files = recent
 
     def check_for_updates_at_startup(self):
-        latest = check_for_new_version("v2.5.1")
+        latest = check_for_new_version("v2.6")
         if latest:
             QMessageBox.information(
                 self,
@@ -417,6 +549,69 @@ class VasoAnalyzerApp(QMainWindow):
         from vasoanalyzer.event_loader import load_events
 
         return load_events
+
+    def reset_view(self):
+        self.toolbar.home()  # same as the Home button
+
+    def fit_to_data(self):
+        self.ax.relim()
+        self.ax.autoscale_view()
+        self.canvas.draw_idle()
+
+    def zoom_to_selection(self):
+        # if you later add box‐select, you’ll grab the extents here;
+        # for now just stub it to full‐data
+        self.fit_to_data()
+
+    def toggle_annotation(self, kind: str):
+        if kind == "lines":
+            for line in self.ax.get_lines():
+                if line.get_linestyle() == "--" and line.get_color()=="black":
+                    line.set_visible(not line.get_visible())
+        elif kind == "evt_labels":
+            for txt, _ in self.event_text_objects:
+                txt.set_visible(not txt.get_visible())
+        elif kind == "pin_labels":
+            for marker, lbl in self.pinned_points:
+                lbl.set_visible(not lbl.get_visible())
+        elif kind == "frame_marker" and self.slider_marker:
+            vis = not self.slider_marker.get_visible()
+            self.slider_marker.set_visible(vis)
+        self.canvas.draw_idle()
+
+    def toggle_event_table(self, checked: bool):
+        self.event_table.setVisible(checked)
+
+    def toggle_snapshot_viewer(self, checked: bool):
+        self.snapshot_label.setVisible(checked)
+        self.slider.setVisible(checked)
+
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+            self.menuBar().show()
+            self.statusBar().show()
+        else:
+            self.showFullScreen()
+            self.menuBar().hide()
+            self.statusBar().hide()
+
+    def show_shortcuts(self):
+        text = (
+            "Ctrl+N: New Analysis\n"
+            "Ctrl+O: Open Trace & Events\n"
+            "Ctrl+T: Open TIFF…\n"
+            "Ctrl+P: Detect Peaks\n"
+            "Ctrl+M: Find Minima\n"
+            "Ctrl+I: Compute Statistics\n"
+            "Ctrl+R: Generate Report\n"
+            "Ctrl+Z/Y: Undo/Redo\n"
+        )
+        QMessageBox.information(self, "Keyboard Shortcuts", text)
+
+    def show_release_notes(self):
+        # You could load a local CHANGELOG.md and display it
+        QMessageBox.information(self, "Release Notes", "Release 2.5.1:\n- Foo\n- Bar\n")
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
@@ -1373,15 +1568,9 @@ class VasoAnalyzerApp(QMainWindow):
         frame = self.event_table_data[row][2]  # Get the frame value
         old_val = self.event_table_data[row][3]  # Changed from index 2 to 3
 
-        self.last_replaced_event = (row, old_val)
-        self.event_table_data[row] = (
-            label,
-            time,
-            frame,
-            round(new_val, 2),
-        )  # Include frame in tuple
-
-        self.auto_export_table()
+        old_val = self.event_table_data[row][3]
+        cmd = ReplaceEventCommand(self, row, old_val, round(new_val, 2))
+        self.undo_stack.push(cmd)
         print(f"✏️ ID updated at {time:.2f}s → {new_val:.2f} µm")
 
     def table_row_clicked(self, row, col):
@@ -1495,17 +1684,10 @@ class VasoAnalyzerApp(QMainWindow):
             )
 
             if confirm == QMessageBox.Yes:
-                old_value = self.event_table_data[index][2]
-                self.last_replaced_event = (index, old_value)
-                frame_num = self.event_table_data[index][2]
-                self.event_table_data[index] = (
-                    event_label,
-                    round(event_time, 2),
-                    round(y, 2),
-                )
-                self.populate_table()
-                self.auto_export_table()
-                print(f"✅ Replaced value at {event_time:.2f}s with {y:.1f} µm.")
+                old_value = self.event_table_data[index][3]
+                new_value = round(y, 2)
+                cmd = ReplaceEventCommand(self, index, old_value, new_value)
+                self.undo_stack.push(cmd)
 
     def prompt_add_event(self, x, y):
         if not self.event_table_data:
@@ -1561,21 +1743,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.auto_export_table()
         print(f"➕ Inserted new event: {new_entry}")
 
-    def undo_last_replacement(self):
-        if self.last_replaced_event is None:
-            QMessageBox.information(self, "Undo", "No replacement to undo.")
-            return
-
-        index, old_val = self.last_replaced_event
-        label, time, frame, _ = self.event_table_data[index]
-
-        self.event_table_data[index] = (label, time, frame, old_val)
-        self.auto_export_table()
-
-        QMessageBox.information(
-            self, "Undo", f"Restored value for '{label}' at {time:.2f}s."
-        )
-        self.last_replaced_event = None
 
 # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
@@ -2334,3 +2501,23 @@ class PlotStyleDialog(QDialog):
             "pin_size": self.pin_size.value(),
             "line_width": self.line_width.value(),
         }
+
+class ReplaceEventCommand(QUndoCommand):
+    def __init__(self, app, index, old_val, new_val):
+        super().__init__(f"Replace Event #{index}")
+        self.app = app
+        self.i = index
+        self.old = old_val
+        self.new = new_val
+
+    def redo(self):
+        lbl, t, frame, _ = self.app.event_table_data[self.i]
+        self.app.event_table_data[self.i] = (lbl, t, frame, self.new)
+        self.app.populate_table()
+        self.app.auto_export_table()
+
+    def undo(self):
+        lbl, t, frame, _ = self.app.event_table_data[self.i]
+        self.app.event_table_data[self.i] = (lbl, t, frame, self.old)
+        self.app.populate_table()
+        self.app.auto_export_table()

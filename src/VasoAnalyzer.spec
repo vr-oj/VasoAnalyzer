@@ -32,7 +32,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='VasoAnalyzer 2.5',
+    name='VasoAnalyzer 2.6',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -56,12 +56,12 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='VasoAnalyzer 2.5',
+    name='VasoAnalyzer 2.6',
 )
 
 app = BUNDLE(
     coll,
-    name='VasoAnalyzer 2.5.app',
+    name='VasoAnalyzer 2.6.app',
     icon='vasoanalyzer/VasoAnalyzerIcon.icns',
     bundle_identifier=None,
 )
