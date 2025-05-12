@@ -1,58 +1,33 @@
 # [A] ========================= IMPORTS AND GLOBAL CONFIG ============================
-import sys, os, pickle
-import numpy as np
-import pandas as pd
-import tifffile
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
-from matplotlib import rcParams
+import sys, os, pickle, requests
+import numpy as np, pandas as pd, tifffile
 from functools import partial
-
-rcParams.update(
-    {
-        "axes.labelcolor": "black",
-        "xtick.color": "black",
-        "ytick.color": "black",
-        "text.color": "black",
-        "figure.facecolor": "white",
-        "figure.edgecolor": "white",
-        "savefig.facecolor": "white",
-        "savefig.edgecolor": "white",
-    }
-)
-
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
+from matplotlib import rcParams
 from PyQt5.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QPushButton,
-    QFileDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QSlider,
-    QLabel,
-    QTableWidget,
-    QTableWidgetItem,
-    QAbstractItemView,
-    QHeaderView,
-    QMessageBox,
-    QInputDialog,
-    QMenu,
-    QSizePolicy,
-    QAction,
-    QToolBar,
-    QToolButton,
-    QSpacerItem,
-    QStatusBar,
-    QDesktopWidget,
+    QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
+    QSlider, QLabel, QTableWidget, QTableWidgetItem, QAbstractItemView,
+    QHeaderView, QMessageBox, QInputDialog, QMenu, QSizePolicy, QAction,
+    QToolBar, QToolButton, QSpacerItem, QStatusBar, QDesktopWidget, QStackedWidget
 )
 
+from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QBrush, QColor, QCursor
+from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 
-from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QBrush, QColor
-from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent
-from PyQt5.QtWidgets import QStackedWidget
 from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
+from vasoanalyzer.trace_loader import load_trace
+from vasoanalyzer.tiff_loader import load_tiff
+from vasoanalyzer.event_loader import load_events
+from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
+from vasoanalyzer.version_checker import check_for_new_version
+
+rcParams.update({
+    "axes.labelcolor": "black", "xtick.color": "black",
+    "ytick.color": "black", "text.color": "black",
+    "figure.facecolor": "white", "figure.edgecolor": "white",
+    "savefig.facecolor": "white", "savefig.edgecolor": "white",
+})
 
 import requests
 
@@ -70,31 +45,22 @@ def check_for_new_version(current_version="v2.5.1"):
         print(f"Update check failed: {e}")
     return None
 
-
-from vasoanalyzer.trace_loader import load_trace
-from vasoanalyzer.tiff_loader import load_tiff
-from vasoanalyzer.event_loader import load_events
-from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
-from vasoanalyzer.version_checker import check_for_new_version
-
-# [B] ========================= MAIN CLASS DEFINITION ================================
 PREVIOUS_PLOT_PATH = os.path.join(
     os.path.expanduser("~"), ".vasoanalyzer_last_plot.pickle"
 )
+DEFAULT_STYLE = dict(
+    axis_font_size=14, axis_font_family="Arial", axis_bold=False, axis_italic=False,
+    tick_font_size=12, event_font_size=10, event_font_family="Arial",
+    event_bold=False, event_italic=False, pin_font_size=10, pin_font_family="Arial",
+    pin_bold=False, pin_italic=False, pin_size=6, line_width=2,
+)
 
-
+# [B] ========================= MAIN CLASS DEFINITION ================================
 class VasoAnalyzerApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowIcon(QIcon(self.icon_path("VasoAnalyzerIcon.icns")))
-
-        self.setStyleSheet(
-            """
-            QPushButton {
-                color: black;
-            }
-        """
-        )
+        self.setMouseTracking(True)
 
         # ===== Setup App Window =====
         self.setWindowTitle("VasoAnalyzer 2.5 - Python Edition")
@@ -137,6 +103,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.create_menubar()
         self.initUI()
         self._wrap_views()
+
+        self.modeStack.setMouseTracking(True)
+        self.modeStack.widget(0).setMouseTracking(True)
+        self.canvas.setMouseTracking(True)
+
         self.check_for_updates_at_startup()
 
     def _wrap_views(self):
@@ -291,7 +262,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.action_single.triggered.connect(lambda: self._switch_mode(0))
         self.action_dual.triggered.connect(lambda: self._switch_mode(1))
-
 
     def _build_help_menu(self, menubar):
         help_menu = menubar.addMenu("Help")
@@ -459,45 +429,30 @@ class VasoAnalyzerApp(QMainWindow):
                 color: black;  /* Ensure all default widget text is black */
             }
             QPushButton {
-                background-color: #FFFFFF;
-                color: black;  /* <-- Add this */
-                border: 1px solid #CCCCCC;
-                border-radius: 6px;
-                padding: 6px 12px;
+                background: #FFFFFF; color: black;
+                border: 1px solid #CCCCCC; border-radius:6px; padding:6px 12px;
             }
             QPushButton:hover {
-                background-color: #E6F0FF;
+                background: #E6F0FF;
             }
             QToolButton {
-                background-color: #FFFFFF;
-                color: black;  /* <-- Add this */
-                border: 1px solid #CCCCCC;
-                border-radius: 6px;
-                padding: 6px;
-                margin: 2px;
+                background: #FFFFFF; color: black;
+                border: 1px solid #CCCCCC; border-radius:6px; padding:6px; margin:2px;
             }
             QToolButton:hover {
-                background-color: #D6E9FF;
+                background: #D6E9FF;
             }
             QToolButton:checked {
-                background-color: #CCE5FF;
-                border: 1px solid #3399FF;
+                background: #CCE5FF; border:1px solid #3399FF;
             }
             QHeaderView::section {
-                background-color: #E0E0E0;
-                color: black;
-                font-weight: bold;
-                padding: 6px;
-                border-bottom: 1px solid #AAAAAA;
+                background: #E0E0E0; font-weight: bold; padding:6px; color:black;
             }
             QTableWidget {
-                gridline-color: #DDDDDD;
-                color: black;
-                background-color: white;
+                background: white; gridline-color: #DDDDDD; color: black;
             }
             QTableWidget::item {
-                padding: 6px;
-                color: black;  /* <-- Ensure table item text is black */
+                padding:6px; color: black;
             }
         """
         )
@@ -509,15 +464,29 @@ class VasoAnalyzerApp(QMainWindow):
         self.main_layout.setSpacing(0)
         self.fig = Figure(figsize=(8, 4), facecolor="white")
         self.canvas = FigureCanvas(self.fig)
+        self.canvas.setMouseTracking(True)
         self.canvas.toolbar = None
         self.ax = self.fig.add_subplot(111)
+        # ——— in‑canvas hover annotation ———
+        self.hover_annotation = self.ax.annotate(
+            text="",
+            xy=(0, 0),
+            xytext=(15, 15),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1),
+            arrowprops=dict(arrowstyle="->"),
+            fontsize=9,
+        )
+        self.hover_annotation.set_visible(False)
+        # ————————————————————————————————
         self.active_canvas = self.canvas
         self.default_main_layout = self.main_layout
-
         # ===== Initialize Matplotlib Toolbar =====
         self.active_canvas = self.canvas
         self.toolbar = self.build_toolbar_for_canvas(self.active_canvas)
         self.canvas.toolbar = self.toolbar
+        self.canvas.setMouseTracking(True)
+        self.toolbar.setMouseTracking(True)
         self.toolbar.setIconSize(QSize(24, 24))
         self.toolbar.setStyleSheet(
             """
@@ -579,6 +548,10 @@ class VasoAnalyzerApp(QMainWindow):
             )
             style_btn.clicked.connect(self.open_plot_style_editor)
             self.toolbar.insertWidget(visible_buttons[7], style_btn)
+            # force the toolbar to re‑polish its children under the global QSS
+            self.toolbar.style().polish(self.toolbar)
+            for btn in self.toolbar.findChildren(QToolButton):
+                self.toolbar.style().polish(btn)
 
             # [Inject] Grid toggle button
             grid_btn = QToolButton()
@@ -588,12 +561,20 @@ class VasoAnalyzerApp(QMainWindow):
             grid_btn.setChecked(self.grid_visible)
             grid_btn.clicked.connect(self.toggle_grid)
             self.toolbar.insertWidget(visible_buttons[7], grid_btn)
+            # force the toolbar to re‑polish its children under the global QSS
+            self.toolbar.style().polish(self.toolbar)
+            for btn in self.toolbar.findChildren(QToolButton):
+                self.toolbar.style().polish(btn)
 
             # [7] Save/export button
             save_btn = visible_buttons[7]
             save_btn.setToolTip("Save As… Export high-res plot")
             save_btn.triggered.disconnect()
             save_btn.triggered.connect(self.export_high_res_plot)
+            self.toolbar.style().polish(self.toolbar)
+            for btn in self.toolbar.findChildren(QToolButton):
+                self.toolbar.style().polish(btn)
+
 
         # ===== Unified Top Row: Toolbar + Load Buttons =====
         top_row_layout = QHBoxLayout()
@@ -710,19 +691,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.default_main_layout = self.rebuild_default_main_layout()
         self.main_layout.addLayout(self.default_main_layout)
-
-        # ===== Hover Label =====
-        self.hover_label = QLabel("", self)
-        self.hover_label.setStyleSheet(
-            """
-            background-color: rgba(255, 255, 255, 220);
-            border: 1px solid #888;
-            border-radius: 5px;
-            padding: 2px 6px;
-            font-size: 12px;
-        """
-        )
-        self.hover_label.hide()
 
         # ===== Canvas Interactions =====
         self.canvas.mpl_connect("draw_event", self.update_event_label_positions)
@@ -898,7 +866,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.populate_table()                # populates the QTableWidget
         self.excel_btn.setEnabled(bool(self.event_table_data))
         self.update_scroll_slider()          # shows or hides the pan‑slider
-
+        self.style_event_table()
 
 
     def populate_table_widget(self, table_widget, data):
@@ -907,6 +875,7 @@ class VasoAnalyzerApp(QMainWindow):
             table_widget.setItem(row, 0, QTableWidgetItem(str(label)))
             table_widget.setItem(row, 1, QTableWidgetItem(str(t)))
             table_widget.setItem(row, 2, QTableWidgetItem(str(d)))
+            self.style_event_table()
 
     def populate_table(self):
         self.event_table.blockSignals(True)
@@ -1264,7 +1233,21 @@ class VasoAnalyzerApp(QMainWindow):
         if self.trace_data is None:
             return
 
+        # clear everything (old lines, texts, etc)
         self.ax.clear()
+
+        # re‑create the in‑canvas hover annotation on this fresh axes
+        self.hover_annotation = self.ax.annotate(
+            text="",
+            xy=(0, 0),
+            xytext=(6, 6),
+            textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc=(1, 1, 1, 0.85), ec="#888888", lw=1),
+            arrowprops=dict(arrowstyle="->"),
+            fontsize=12,
+        )
+        self.hover_annotation.set_visible(False)
+        
         self.ax.set_facecolor("white")
         self.ax.tick_params(colors="black")
         self.ax.xaxis.label.set_color("black")
@@ -1272,10 +1255,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.ax.title.set_color("black")
         self.event_text_objects = []
 
-        # Plot trace
+        # Plot trace and keep a handle for .contains()
         t = self.trace_data["Time (s)"]
         d = self.trace_data["Inner Diameter"]
-        self.ax.plot(t, d, "k-", linewidth=1.5)
+        self.trace_line, = self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s or frames)")
         self.ax.set_ylabel("Inner Diameter (µm)")
         self.ax.grid(True, color="#CCC")
@@ -1594,44 +1577,35 @@ class VasoAnalyzerApp(QMainWindow):
         )
         self.last_replaced_event = None
 
-    # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
+# [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
+        # only over the main axes and with data loaded
         if event.inaxes != self.ax or self.trace_data is None:
-            self.hover_label.hide()
+            if self.hover_annotation.get_visible():
+                self.hover_annotation.set_visible(False)
+                self.canvas.draw_idle()
             return
 
-        x_val = event.xdata
-        if x_val is None:
-            self.hover_label.hide()
+        # show only when cursor is actually on the line
+        contains, info = self.trace_line.contains(event)
+        if not contains:
+            if self.hover_annotation.get_visible():
+                self.hover_annotation.set_visible(False)
+                self.canvas.draw_idle()
             return
 
-        time_array = self.trace_data["Time (s)"].values
-        id_array = self.trace_data["Inner Diameter"].values
-        nearest_idx = np.argmin(np.abs(time_array - x_val))
-        y_val = id_array[nearest_idx]
+        # get the exact index & value
+        idx = info["ind"][0]
+        times = self.trace_data["Time (s)"].values
+        diams = self.trace_data["Inner Diameter"].values
+        x_near, y_near = times[idx], diams[idx]
 
-        frame_num = int(x_val)
-        time_val = frame_num * self.recording_interval
-        text = f"Frame: {frame_num}\nTime: {time_val:.2f} s\nID: {y_val:.2f} µm"
+        # update and show the annotation
+        self.hover_annotation.xy = (x_near, y_near)
+        self.hover_annotation.set_text(f"{x_near:.2f}s\n{y_near:.2f}µm")
+        self.hover_annotation.set_visible(True)
+        self.canvas.draw_idle()
 
-        self.hover_label.setText(text)
-
-        cursor_offset_x = 10
-        cursor_offset_y = -30
-        self.hover_label.move(
-            int(
-                self.canvas.geometry().left()
-                + event.guiEvent.pos().x()
-                + cursor_offset_x
-            ),
-            int(
-                self.canvas.geometry().top()
-                + event.guiEvent.pos().y()
-                + cursor_offset_y
-            ),
-        )
-        self.hover_label.adjustSize()
-        self.hover_label.show()
 
     # [I] ========================= ZOOM + SLIDER LOGIC ================================
     def on_mouse_release(self, event):

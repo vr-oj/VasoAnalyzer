@@ -2,6 +2,7 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QTableWidget,
     QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton
 )
+from PyQt5.QtWidgets import QLabel
 from PyQt5.QtCore import Qt, QSize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -119,9 +120,26 @@ class DataViewPanel(QWidget):
         row.addWidget(self.event_table, 1)
         main_layout.addLayout(row)
 
+        # — Hover Label (exact same logic as main view) —
+        self.hover_label = QLabel("", self)
+        self.hover_label.setStyleSheet("""
+            background-color: rgba(255, 255, 255, 220);
+            border: 1px solid #888;
+            border-radius: 5px;
+            padding: 2px 6px;
+            font-size: 12px;
+        """)
+        self.hover_label.hide()
+
+        # connect hover & table‐click events
+        self.canvas.mpl_connect("motion_notify_event", self.update_hover_label)
+        self.event_table.cellClicked.connect(self.on_table_row_clicked)
+
         # Hook draw event
         self.canvas.mpl_connect("draw_event", self.sync_slider_with_plot)
-        self.canvas.mpl_connect("draw_event", self.update_event_label_positions)
+        # Only reposition labels on mouse release, not every draw
+        self.canvas.mpl_connect("button_release_event", self.update_event_label_positions)
+
 
         # State
         self.trace_data = None
@@ -316,6 +334,48 @@ class DataViewPanel(QWidget):
             self.ax.lines[0].set_linewidth(style.get("line_width", 2))
         self.canvas.draw_idle()
 
+
+    def update_hover_label(self, event):
+        """Show Time & ID exactly under cursor, like main view."""
+        if event.inaxes != self.ax or self.trace_data is None or event.xdata is None:
+            self.hover_label.hide()
+            return
+
+        # find nearest sample
+        times = self.trace_data["Time (s)"].values
+        diams = self.trace_data["Inner Diameter"].values
+        idx = int(np.argmin(np.abs(times - event.xdata)))
+        t_near = times[idx]
+        d_near = diams[idx]
+
+        self.hover_label.setText(f"Time: {t_near:.2f} s\nID: {d_near:.2f} µm")
+
+        # now position it using the canvas geometry + cursor offset
+        cr = self.canvas.geometry()
+        # event.guiEvent.pos() is QPoint relative to canvas
+        gx = cr.left() + event.guiEvent.pos().x()
+        gy = cr.top()  + event.guiEvent.pos().y()
+        self.hover_label.move(int(gx + 10), int(gy - 30))
+        self.hover_label.adjustSize()
+        self.hover_label.show()
+
+
+    def on_table_row_clicked(self, row, col):
+        """Draw a blue vertical line at the selected event time."""
+        if not self.event_table_data:
+            return
+
+        # remove any prior blue line
+        if hasattr(self, "_selected_marker") and self._selected_marker:
+            self._selected_marker.remove()
+
+        t = self.event_table_data[row][1]  # your (label, time, id) tuple
+        self._selected_marker = self.ax.axvline(
+            x=t, color="blue", linestyle="--", linewidth=1.2
+        )
+        self.canvas.draw_idle()
+
+    
     def _toggle_grid(self):
         self.grid_visible = not self.grid_visible
         self.ax.grid(self.grid_visible, color="#CCC")
