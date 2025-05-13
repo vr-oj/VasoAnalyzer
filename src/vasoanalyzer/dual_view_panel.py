@@ -1,11 +1,12 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QTableWidget,
-    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton
+    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton, QMessageBox
 )
 from PyQt5.QtWidgets import QLabel
 from PyQt5.QtCore import Qt, QSize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
+import pickle
 import numpy as np
 import os
 
@@ -148,6 +149,29 @@ class DataViewPanel(QWidget):
         self.event_table_data = []
         self.slider_marker = None
         self.grid_visible = True
+        
+        # Dual Clearing
+        self._original_title = self.ax.get_title()
+
+    def clear_data(self):
+        """
+        Clear this panel's plot, table, and any pins/highlights.
+        """
+        # Clear plot
+        self.ax.clear()
+        self.ax.set_title(self._original_title)
+        self.canvas.draw_idle()
+
+        # Clear events table
+        self.event_table.setRowCount(0)
+
+        # Clear pins/highlights
+        for pin in getattr(self, 'pins', []):
+            try:
+                pin.remove()
+            except Exception:
+                pass
+        self.pins = []
 
     def _on_load(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -393,6 +417,51 @@ class DataViewPanel(QWidget):
                 self.fig.savefig(file_path, format="svg", bbox_inches="tight")
             else:
                 self.fig.savefig(file_path, format="tiff", dpi=600, bbox_inches="tight")
+
+    def load_pickle_session(self, file_path):
+        """
+        Load a .fig.pickle session into this panel:
+        restores the trace, events, styling, axis limits, and table.
+        """
+        try:
+            with open(file_path, "rb") as f:
+                state = pickle.load(f)
+        except Exception as e:
+            QMessageBox.warning(self, "Load Failed", f"Could not read pickle:\n{e}")
+            return
+
+        # 1) Restore the trace & event lines
+        trace_df = state.get("trace_data", None)
+        labels = state.get("event_labels", [])
+        times  = state.get("event_times", [])
+        events = list(zip(labels, times))
+        if trace_df is not None:
+            self.load_trace_and_events(trace_df, events)
+
+        # 2) Restore table contents if present
+        ev_table = state.get("event_table_data", None)
+        if ev_table is not None:
+            self.event_table_data = ev_table
+            self.populate_table()
+
+        # 3) Restore plot style
+        plot_style = state.get("plot_style", None)
+        if plot_style:
+            self.apply_plot_style(plot_style)
+
+        # 4) Restore axis labels & limits
+        self.ax.set_xlabel(state.get("xlabel", self.ax.get_xlabel()))
+        self.ax.set_ylabel(state.get("ylabel", self.ax.get_ylabel()))
+        self.ax.set_xlim(*state.get("xlim", self.ax.get_xlim()))
+        self.ax.set_ylim(*state.get("ylim", self.ax.get_ylim()))
+
+        # 5) Restore grid visibility
+        self.grid_visible = state.get("grid_visible", self.grid_visible)
+        self.ax.grid(self.grid_visible)
+
+        self.canvas.draw_idle()
+
+
 
 class DualViewWidget(QWidget):
     """Holds two DataViewPanels, stacked vertically."""

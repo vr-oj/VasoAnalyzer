@@ -32,7 +32,7 @@ rcParams.update({
 import requests
 
 
-def check_for_new_version(current_version="v2.6"):
+def check_for_new_version(current_version="v1.6"):
     try:
         response = requests.get(
             "https://api.github.com/repos/vr-oj/VasoAnalyzer_2.0/releases/latest"
@@ -63,7 +63,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.setMouseTracking(True)
 
         # ===== Setup App Window =====
-        self.setWindowTitle("VasoAnalyzer 2.6 - Python Edition")
+        self.setWindowTitle("VasoAnalyzer 1.6 - Python Edition")
         self.setGeometry(100, 100, 1280, 720)
         screen_size = QDesktopWidget().availableGeometry()
         self.resize(screen_size.width(), screen_size.height())
@@ -190,6 +190,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_new.setShortcut("Ctrl+N")
         self.action_new.triggered.connect(self.start_new_analysis)
         file_menu.addAction(self.action_new)
+
+        start_new = QAction("Start New Dual Analysis", self)
+        start_new.triggered.connect(self.clear_dual_view)
+        file_menu.addAction(start_new)
 
         # 2) Open Trace & Events…
         self.action_open_trace = QAction("Open Trace & Events…", self)
@@ -367,7 +371,7 @@ class VasoAnalyzerApp(QMainWindow):
             lambda: QMessageBox.information(
                 self,
                 "About VasoAnalyzer",
-                "VasoAnalyzer 2.6 (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer_2.0",
+                "VasoAnalyzer 1.6 (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer",
             )
         )
         help_menu.addAction(self.action_about)
@@ -403,7 +407,15 @@ class VasoAnalyzerApp(QMainWindow):
         act_rel.triggered.connect(self.show_release_notes)
         help_menu.addAction(act_rel)
 
+    def clear_dual_view(self):
+        """
+        Clear both DataViewPanelA and DataViewPanelB for dual view.
+        """
+        # The DualViewWidget instance is `self.dualMode`, so use its `panelA` and `panelB` attributes
+        self.dualMode.panelA.clear_data()
+        self.dualMode.panelB.clear_data()
 
+    
     def build_recent_files_menu(self):
         self.recent_menu.clear()
 
@@ -530,7 +542,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_files = recent
 
     def check_for_updates_at_startup(self):
-        latest = check_for_new_version("v2.6")
+        latest = check_for_new_version("v1.6")
         if latest:
             QMessageBox.information(
                 self,
