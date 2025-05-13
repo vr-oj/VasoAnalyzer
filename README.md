@@ -1,4 +1,4 @@
-# VasoAnalyzer 2.6
+# VasoAnalyzer 1.6
 
 🧪 *Bladder Vasculature Analysis Toolkit — Python Edition*  
 Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State University
@@ -10,7 +10,7 @@ Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State Universit
 
 ## 🌟 What is VasoAnalyzer?
 
-**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **2.6** brings a host of new UX improvements, analysis‑ready exports, and a full dual‑view mode for side‑by‑side comparisons.
+**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **1.6** brings a host of new UX improvements, analysis‑ready exports, and a full dual‑view mode for side‑by‑side comparisons.
 
 Designed for researchers. Powered by Python. Zero coding required.
 
@@ -27,7 +27,7 @@ Designed for researchers. Powered by Python. Zero coding required.
 – Sync or swap pickles via drag‑and‑drop.
   - Improved TIFF loading, slider syncing, tooltip display
 
-## 🧰 Key Features in v2.6
+## 🧰 Key Features in v1.6
 
 - **📊 Load & visualize trace data** from `.csv`  
 - **📍 Import & display event tables** (CSV/TXT)  
@@ -74,7 +74,7 @@ After downloading:
 
 - **Windows**:  
   1. Unzip the folder.  
-  2. Double-click `VasoAnalyzer_2.6.exe` to launch the app.
+  2. Double-click `VasoAnalyzer_1.6.exe` to launch the app.
 
 ---
 
@@ -93,10 +93,10 @@ This is a common issue for unsigned apps on macOS — it does **not** mean the a
 Open the **Terminal** app and run:
 
 ```bash
-xattr -rd com.apple.quarantine /path/to/VasoAnalyzer 2.6.app
+xattr -rd com.apple.quarantine /path/to/VasoAnalyzer 1.6.app
 ```
 Replace /path/to/VasoAnalyzer.app with the actual path where you placed the app
-(e.g., ~/Applications/VasoAnalyzer 2.6.app).
+(e.g., ~/Applications/VasoAnalyzer 1.6.app).
 
 Then try launching the app again.  
 > You only need to do this once per computer or per download.
@@ -105,8 +105,8 @@ Then try launching the app again.
 ### 🧪 Option 2: Run From Source (Python 3.10+)
 
 ```bash
-git clone https://github.com/vr-oj/VasoAnalyzer_2.0.git
-cd VasoAnalyzer_2.0/src
+git clone https://github.com/vr-oj/VasoAnalyzer.git
+cd VasoAnalyzer/src
 pip install -r requirements.txt
 python main.py
 ```
@@ -134,7 +134,7 @@ python main.py
 ## 🛠️ Folder Structure
 
 ```
-VasoAnalyzer_2.0/
+VasoAnalyzer/
 ├── src/
 │   ├── main.py                 # App launcher
 │   └── vasoanalyzer/           # App modules and logic
