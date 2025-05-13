@@ -1,11 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-sys.setrecursionlimit(sys.getrecursionlimit() * 5)  # Increase recursion limit
+from PyInstaller.utils.hooks import collect_submodules
+
+# decide platform‐specific icon
+if sys.platform == 'darwin':
+    ICON = 'vasoanalyzer/VasoAnalyzerIcon.icns'
+elif sys.platform.startswith('win'):
+    ICON = 'vasoanalyzer/VasoAnalyzerIcon.ico'
+else:
+    ICON = None
 
 project_dir = os.getcwd()
-
-block_cipher = None
+req_subs = collect_submodules('requests')
+xl_subs  = collect_submodules('openpyxl')
 
 a = Analysis(
     ['main.py'],
@@ -13,10 +21,16 @@ a = Analysis(
     binaries=[],
     datas=[
         ('vasoanalyzer/VasoAnalyzerSplashScreen.png', 'vasoanalyzer'),
+        # include whichever icon file(s) you ship
         ('vasoanalyzer/VasoAnalyzerIcon.icns', 'vasoanalyzer'),
-        ('vasoanalyzer/VasoAnalyzerIcon.ico', 'vasoanalyzer'),
+        ('vasoanalyzer/VasoAnalyzerIcon.ico',  'vasoanalyzer'),
     ],
-    hiddenimports=['tkinter', 'tkinter.filedialog', 'tkinter.messagebox', 'PIL._tkinter_finder'],  # Add tkinter dependencies
+    hiddenimports=[
+        'tkinter',
+        'tkinter.filedialog',
+        'tkinter.messagebox',
+        'PIL._tkinter_finder',
+    ] + req_subs + xl_subs,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -25,27 +39,19 @@ a = Analysis(
     optimize=0,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 exe = EXE(
     pyz,
     a.scripts,
-    [],
+    [],                    # no extra binaries here
     exclude_binaries=True,
-    name='VasoAnalyzer 2.6',
+    name='VasoAnalyzer',   # base name; extension/platform is automatic
     debug=False,
-    bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False, # You might want to set this to True for debugging
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon='vasoanalyzer/VasoAnalyzerIcon.ico',
+    console=False,         # GUI only
+    icon=ICON,             # will be .icns on mac, .ico on Windows
 )
 
 coll = COLLECT(
@@ -55,13 +61,14 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
-    name='VasoAnalyzer 2.6',
+    name='VasoAnalyzer',
 )
 
-app = BUNDLE(
-    coll,
-    name='VasoAnalyzer(2.6).app',
-    icon='vasoanalyzer/VasoAnalyzerIcon.icns',
-    bundle_identifier=None,
-)
+# Only on macOS do we wrap into a .app bundle
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='VasoAnalyzer.app',
+        icon='vasoanalyzer/VasoAnalyzerIcon.icns',
+        bundle_identifier=None,
+    )
