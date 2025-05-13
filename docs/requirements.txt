@@ -1,6 +1,14 @@
-matplotlib
-numpy
-pandas
-tifffile
-PyQt5
-openpyxl
+# core plotting + data
+matplotlib>=3.0
+numpy>=1.18
+pandas>=1.0
+tifffile>=2020.7
+
+# GUI
+PyQt5>=5.15
+
+# Excel export
+openpyxl>=3.0
+
+# for GitHub‑API version checks
+requests>=2.25

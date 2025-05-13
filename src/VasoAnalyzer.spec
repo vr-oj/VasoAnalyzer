@@ -12,7 +12,7 @@ a = Analysis(
     pathex=[project_dir],
     binaries=[],
     datas=[
-        ('vasoanalyzer/splash_image_base64.txt', 'vasoanalyzer'),
+        ('vasoanalyzer/VasoAnalyzerSplashScreen.png', 'vasoanalyzer'),
         ('vasoanalyzer/VasoAnalyzerIcon.icns', 'vasoanalyzer'),
         ('vasoanalyzer/VasoAnalyzerIcon.ico', 'vasoanalyzer'),
     ],
@@ -61,7 +61,7 @@ coll = COLLECT(
 
 app = BUNDLE(
     coll,
-    name='VasoAnalyzer 2.6.app',
+    name='VasoAnalyzer(2.6).app',
     icon='vasoanalyzer/VasoAnalyzerIcon.icns',
     bundle_identifier=None,
 )
