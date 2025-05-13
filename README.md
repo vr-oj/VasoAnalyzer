@@ -3,8 +3,8 @@
 🧪 *Bladder Vasculature Analysis Toolkit — Python Edition*  
 Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State University
 
-[![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.5/VasoAnalyzer.2.5.macOS.zip)
-[![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.5/VasoAnalyzer.2.5.Windows.zip)
+[![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.6/VasoAnalyzer.2.6.macOS.zip)
+[![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)]()
 
 ---
 
@@ -61,8 +61,8 @@ Designed for researchers. Powered by Python. Zero coding required.
 
 ### ✅ Option 1: No Python Needed — Use the App!
 
-- [![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.5/VasoAnalyzer.2.5.macOS.zip)
-- [![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.5/VasoAnalyzer.2.5.Windows.zip)
+- [![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.6/VasoAnalyzer.2.6.macOS.zip)
+- [![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)]()
 
 After downloading:
 
@@ -74,7 +74,7 @@ After downloading:
 
 - **Windows**:  
   1. Unzip the folder.  
-  2. Double-click `VasoAnalyzer_2.5.exe` to launch the app.
+  2. Double-click `VasoAnalyzer_2.6.exe` to launch the app.
 
 ---
 
@@ -93,10 +93,10 @@ This is a common issue for unsigned apps on macOS — it does **not** mean the a
 Open the **Terminal** app and run:
 
 ```bash
-xattr -rd com.apple.quarantine /path/to/VasoAnalyzer 2.5.app
+xattr -rd com.apple.quarantine /path/to/VasoAnalyzer 2.6.app
 ```
 Replace /path/to/VasoAnalyzer.app with the actual path where you placed the app
-(e.g., ~/Applications/VasoAnalyzer 2.5.app).
+(e.g., ~/Applications/VasoAnalyzer 2.6.app).
 
 Then try launching the app again.  
 > You only need to do this once per computer or per download.
