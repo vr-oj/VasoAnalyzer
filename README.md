@@ -3,8 +3,8 @@
 🧪 *Bladder Vasculature Analysis Toolkit — Python Edition*  
 Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State University
 
-[![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.6/VasoAnalyzer.2.6.macOS.zip)
-[![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)]()
+[![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_macOS.zip)
+[![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_Windows.zip)
 
 ---
 
@@ -61,8 +61,8 @@ Designed for researchers. Powered by Python. Zero coding required.
 
 ### ✅ Option 1: No Python Needed — Use the App!
 
-- [![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v2.6/VasoAnalyzer.2.6.macOS.zip)
-- [![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)]()
+- [![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_macOS.zip)
+- [![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_Windows.zip)
 
 After downloading:
 
@@ -150,13 +150,26 @@ VasoAnalyzer/
 
 ## 🧪 Requirements for Developers
 
-- PyQt5>=5.15.4
-- matplotlib>=3.5.0
-- numpy>=1.21.0
-- pandas>=1.3.0
-- tifffile>=2021.7.2
-- openpyxl>=3.0.0
-- Compatible with macOS and Windows
+# core plotting + data
+- matplotlib>=3.0
+- numpy>=1.18
+- pandas>=1.0
+- tifffile>=2020.7
+- imagecodecs>=2021.3   # optional, for TIFF compression support
+
+# GUI
+- PyQt5>=5.15
+
+# Excel export
+- openpyxl>=3.0
+
+# for GitHub‑API version checks
+- requests>=2.25
+
+# packaging
+- pyinstaller>=5.0
+
+Compatible with macOS and Windows
 
 ---
 
@@ -172,6 +185,6 @@ To collaborate, adapt, or extend, please contact the **Tykocki Lab**.
 **Osvaldo J. Vega Rodríguez**  
 Developed at the **Tykocki Lab**, Michigan State University
 
-**VasoTracker Group** for TIFF‑trace synchronization logic with VasoTracker software
+Dr. Calum Wilson **VasoTracker Group** for TIFF‑trace synchronization logic with VasoTracker software
 
 ---
