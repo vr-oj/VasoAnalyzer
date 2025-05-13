@@ -10,40 +10,51 @@ Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State Universit
 
 ## 🌟 What is VasoAnalyzer?
 
-**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data.
+**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **2.6** brings a host of new UX improvements, analysis‑ready exports, and a full dual‑view mode for side‑by‑side comparisons.
 
 Designed for researchers. Powered by Python. Zero coding required.
 
 ---
+## 🔍 View Modes
+
+### Single View  
+– Focus on one trace + event table + snapshot.  
+– Ideal for quick QC, event editing, exporting.
+
+### Dual View  
+– Compare two datasets side‑by‑side.  
+– Independent styling, zoom & pan in each panel.  
+– Sync or swap pickles via drag‑and‑drop.
+  - Improved TIFF loading, slider syncing, tooltip display
 
 ## 🧰 Key Features in v2.6
 
-- **📊 Load and visualize trace data** from `.csv` files
-- **📍 Import and display events** from `.csv` or `.txt` files
-- **🖼️ View synchronized TIFF snapshots** with red trace markers
-- **🧠 Interactive plotting**: zoom, pan, hover, and pin points
-- **📏 Auto-populated event table** with editable inner diameter values
-- **🎨 Plot Style Editor** (Tabbed)
-  - Customize fonts and line widths
-  - Separate tabs for: axis titles, tick labels, event labels, pinned labels, trace style
-  - Each tab has **Apply** and **Reset** buttons
-- **🆕 New Toolbar Buttons**:
-  - "Aa" = Open font + style editor
-  - "Grid" = Toggle grid visibility (light grid on/off)
-- **📌 Pin and Edit Tools**:
-  - Right-click any pin to replace or remove
-  - Insert new events with custom labels
-  - Undo last diameter change
-- **🔄 One-click export**:
-  - `eventDiameters_output.csv` (for Excel or analysis)
-  - `tracePlot_output.fig.pickle` (editable in Python)
-  - `tracePlot_output_pubready.tiff` or `.svg` (publication-ready)
-- **🧾 Excel Mapper Integration**:
-  - Map events to a custom Excel file
-  - Preserves formulas and formatting
-- **⚡ UI + Performance Improvements**
-  - Responsive design, light theme, compact toolbar spacing
-  - Improved TIFF loading, slider syncing, tooltip display
+- **📊 Load & visualize trace data** from `.csv`  
+- **📍 Import & display event tables** (CSV/TXT)  
+- **🖼️ Synchronized TIFF snapshots** with red trace‑time markers  
+- **🧠 Interactive plotting**: zoom, pan, hover‑to‑read, and pin points  
+- **📏 Auto‑populated event table** with editable inner‑diameter values  
+- **🎨 Plot Style Editor**  
+  - Tabbed interface for axis titles, tick labels, event labels, pinned labels, trace style  
+  - **Apply** & **Reset** on every tab  
+- **🆕 New Toolbar Buttons**  
+  - **Aa** → Open font & style editor  
+  - **Grid** → Light‑grid toggle  
+- **📌 Pin & Edit Tools**  
+  - Left‑click to pin; right‑click to replace or remove  
+  - Insert new events with custom labels  
+  - Undo last diameter change via Edit → Undo  
+- **🔄 One‑click export**  
+  - `eventDiameters_output.csv` (data table)  
+  - `tracePlot_output.fig.pickle` (editable Python state)  
+  - `tracePlot_output_pubready.tiff` / `.svg` (600 dpi publication‑ready)  
+- **🧾 Excel Mapper Integration**  
+  - Map table into existing `.xlsx` templates  
+  - Preserves formulas & formatting  
+- **⚡ UI & Performance**  
+  - Responsive layout, light theme, compact toolbar  
+  - Fast TIFF loading, slider sync, smooth tooltips  
+
 
 ---
 ## 🚀 Download & Install
