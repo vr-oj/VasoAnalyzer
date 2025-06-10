@@ -1,6 +1,10 @@
 # [A] ========================= IMPORTS AND GLOBAL CONFIG ============================
 import sys, os, pickle, requests
 import numpy as np, pandas as pd, tifffile
+import h5py
+from datetime import datetime
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from utils.config import APP_VERSION
 from functools import partial
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
@@ -1161,6 +1165,105 @@ class VasoAnalyzerApp(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
+
+    def save_project(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "Vaso Projects (*.vaso)")
+        if not path:
+            return
+        try:
+            with h5py.File(path, "w") as f:
+                grp = f.create_group("trace")
+                if self.trace_data is not None:
+                    grp.create_dataset("time", data=self.trace_data["Time (s)"].values)
+                    grp.create_dataset("diameter", data=self.trace_data["Inner Diameter"].values)
+                ev = f.create_group("events")
+                labels = np.array([row[0] for row in self.event_table_data], dtype="S")
+                ev.create_dataset("labels", data=labels)
+                diam_b = [row[3] for row in self.event_table_data]
+                ev.create_dataset("diam_before", data=diam_b)
+                if self.snapshot_frames:
+                    f.create_dataset("snapshots/frames", data=np.stack(self.snapshot_frames), compression="gzip")
+                style = {
+                    "xlim": self.ax.get_xlim(),
+                    "ylim": self.ax.get_ylim(),
+                    "xscale": self.ax.get_xscale(),
+                    "yscale": self.ax.get_yscale(),
+                    "lines": [line.properties() for line in self.ax.get_lines()],
+                    "table_fontsize": self.event_table.font().pointSize(),
+                    "current_frame_idx": self.current_frame,
+                }
+                pdata = pickle.dumps(style)
+                dt = h5py.special_dtype(vlen=bytes)
+                f.create_dataset("style_meta", data=np.void(pdata), dtype=dt)
+                f.attrs["app_version"] = APP_VERSION
+                f.attrs["saved_on"] = datetime.now().isoformat()
+                f.attrs["current_frame_idx"] = self.current_frame
+            QMessageBox.information(self, "Save Project", f"Saved to {path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def open_project(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Vaso Projects (*.vaso)")
+        if not path:
+            return
+        try:
+            with h5py.File(path, "r") as f:
+                t = f["trace/time"][...]
+                d = f["trace/diameter"][...]
+                labels = [s.decode() for s in f["events/labels"][...]]
+                diam_before = f["events/diam_before"][...]
+                stack = f["snapshots/frames"][...] if "snapshots/frames" in f else None
+                raw = bytes(f["style_meta"][()])
+                style = pickle.loads(raw)
+                idx = f.attrs.get("current_frame_idx", 0)
+            self.load_trace(t, d)
+            self.load_events(labels, diam_before)
+            if stack is not None:
+                self.load_snapshots(stack)
+            self.apply_style(style)
+            self.set_current_frame(idx)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def load_trace(self, t, d):
+        import pandas as pd
+        self.trace_data = pd.DataFrame({"Time (s)": t, "Inner Diameter": d})
+        self.update_plot()
+        self.update_scroll_slider()
+
+    def load_events(self, labels, diam_before):
+        self.event_labels = list(labels)
+        self.event_table_data = []
+        for lbl, diam in zip(labels, diam_before):
+            self.event_table_data.append((lbl, 0.0, 0, diam))
+        self.populate_table()
+
+    def load_snapshots(self, stack):
+        self.snapshot_frames = [frame for frame in stack]
+        if self.snapshot_frames:
+            self.slider.setMinimum(0)
+            self.slider.setMaximum(len(self.snapshot_frames) - 1)
+            self.slider.setValue(0)
+            self.display_frame(0)
+
+    def apply_style(self, style):
+        self.ax.set_xlim(*style.get("xlim", self.ax.get_xlim()))
+        self.ax.set_ylim(*style.get("ylim", self.ax.get_ylim()))
+        self.ax.set_xscale(style.get("xscale", self.ax.get_xscale()))
+        self.ax.set_yscale(style.get("yscale", self.ax.get_yscale()))
+        font = self.event_table.font()
+        font.setPointSize(style.get("table_fontsize", font.pointSize()))
+        self.event_table.setFont(font)
+        self.canvas.draw_idle()
+
+    def set_current_frame(self, idx):
+        if not self.snapshot_frames:
+            return
+        idx = int(idx)
+        self.current_frame = idx
+        self.slider.setValue(idx)
+        self.display_frame(idx)
+        self.update_slider_marker()
 
     def show_current_frame_metadata(self):
         """Show metadata for the currently displayed frame"""
