@@ -1978,9 +1978,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.plot_style_dialog = dialog
 
         if tab_name:
-            index = dialog.tabs.indexOf(dialog.tabs.findChild(QWidget, tab_name))
-            if index != -1:
-                dialog.tabs.setCurrentIndex(index)
+            tab_widget = dialog.findChild(QWidget, tab_name)
+            if tab_widget is not None:
+                index = dialog.tabs.indexOf(tab_widget)
+                if index != -1:
+                    dialog.tabs.setCurrentIndex(index)
 
         prev_style = dialog.get_style()
         if dialog.exec_() == QDialog.Accepted:
@@ -2530,6 +2532,7 @@ class PlotStyleDialog(QDialog):
 
     def _init_axis_tab(self):
         tab = QWidget()
+        tab.setObjectName("axis_tab")
         layout = QVBoxLayout(tab)
         form = QFormLayout()
         self.axis_font_size = QSpinBox()
@@ -2551,6 +2554,7 @@ class PlotStyleDialog(QDialog):
 
     def _init_tick_tab(self):
         tab = QWidget()
+        tab.setObjectName("tick_tab")
         layout = QVBoxLayout(tab)
         form = QFormLayout()
         self.tick_font_size = QSpinBox()
@@ -2563,6 +2567,7 @@ class PlotStyleDialog(QDialog):
 
     def _init_event_tab(self):
         tab = QWidget()
+        tab.setObjectName("event_tab")
         layout = QVBoxLayout(tab)
         form = QFormLayout()
         self.event_font_size = QSpinBox()
@@ -2584,6 +2589,7 @@ class PlotStyleDialog(QDialog):
 
     def _init_pin_tab(self):
         tab = QWidget()
+        tab.setObjectName("pin_tab")
         layout = QVBoxLayout(tab)
         form = QFormLayout()
         self.pin_font_size = QSpinBox()
@@ -2609,6 +2615,7 @@ class PlotStyleDialog(QDialog):
 
     def _init_line_tab(self):
         tab = QWidget()
+        tab.setObjectName("line_tab")
         layout = QVBoxLayout(tab)
         form = QFormLayout()
         self.line_width = QSpinBox()
