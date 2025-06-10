@@ -175,8 +175,8 @@ Compatible with macOS and Windows
 
 ## 🛡️ License
 
-Non-commercial academic use only.  
-To collaborate, adapt, or extend, please contact the **Tykocki Lab**.
+VasoAnalyzer is released under the terms of the MIT License. See
+[`docs/LICENSE.txt`](docs/LICENSE.txt) for the full license text.
 
 ---
 
