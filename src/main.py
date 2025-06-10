@@ -2,12 +2,17 @@
 import sys
 import os
 import base64
-from PyQt5.QtWidgets import QApplication, QSplashScreen
+import h5py
+import pickle
+import numpy as np
+from datetime import datetime
+from PyQt5.QtWidgets import QApplication, QSplashScreen, QAction
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtCore import Qt, QTimer
 import re
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from PyQt5.QtGui import QIcon
+from utils.config import APP_VERSION
 
 from vasoanalyzer.gui import VasoAnalyzerApp
 import matplotlib
@@ -121,6 +126,13 @@ class VasoAnalyzerLauncher:
 		try:
 			print("🚀 Attempting to create VasoAnalyzerApp window...")
 			self.window = VasoAnalyzerApp()
+			file_menu = self.window.menuBar().actions()[0].menu()
+			save_act = QAction("Save Project", self.window)
+			save_act.triggered.connect(self.window.save_project)
+			open_act = QAction("Open Project", self.window)
+			open_act.triggered.connect(self.window.open_project)
+			file_menu.addAction(save_act)
+			file_menu.addAction(open_act)
 			self.window.show()
 			print("✅ Main window shown successfully!")
 		except Exception as e:
