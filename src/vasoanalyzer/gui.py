@@ -33,7 +33,6 @@ rcParams.update({
     "savefig.facecolor": "white", "savefig.edgecolor": "white",
 })
 
-import requests
 
 
 def check_for_new_version(current_version="v1.6"):
