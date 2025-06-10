@@ -1170,6 +1170,8 @@ class VasoAnalyzerApp(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "Vaso Projects (*.vaso)")
         if not path:
             return
+        if not path.endswith(".vaso"):
+            path += ".vaso"
         try:
             with h5py.File(path, "w") as f:
                 grp = f.create_group("trace")
