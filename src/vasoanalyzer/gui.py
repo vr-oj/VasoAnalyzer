@@ -7,13 +7,38 @@ from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from utils.config import APP_VERSION
 from functools import partial
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
+from matplotlib.backends.backend_qt5agg import (
+    FigureCanvasQTAgg as FigureCanvas,
+    NavigationToolbar2QT as NavigationToolbar,
+)
 from matplotlib import rcParams
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QPushButton, QFileDialog, QVBoxLayout, QHBoxLayout,
-    QSlider, QLabel, QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QHeaderView, QMessageBox, QInputDialog, QMenu, QSizePolicy, QAction,
-    QToolBar, QToolButton, QSpacerItem, QStatusBar, QDesktopWidget, QStackedWidget, QUndoStack, QUndoView, QUndoCommand
+    QMainWindow,
+    QWidget,
+    QPushButton,
+    QFileDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSlider,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QAbstractItemView,
+    QHeaderView,
+    QMessageBox,
+    QInputDialog,
+    QMenu,
+    QSizePolicy,
+    QAction,
+    QToolBar,
+    QToolButton,
+    QSpacerItem,
+    QStatusBar,
+    QDesktopWidget,
+    QStackedWidget,
+    QUndoStack,
+    QUndoView,
+    QUndoCommand,
 )
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QBrush, QColor, QCursor
@@ -26,13 +51,18 @@ from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
 
-rcParams.update({
-    "axes.labelcolor": "black", "xtick.color": "black",
-    "ytick.color": "black", "text.color": "black",
-    "figure.facecolor": "white", "figure.edgecolor": "white",
-    "savefig.facecolor": "white", "savefig.edgecolor": "white",
-})
-
+rcParams.update(
+    {
+        "axes.labelcolor": "black",
+        "xtick.color": "black",
+        "ytick.color": "black",
+        "text.color": "black",
+        "figure.facecolor": "white",
+        "figure.edgecolor": "white",
+        "savefig.facecolor": "white",
+        "savefig.edgecolor": "white",
+    }
+)
 
 
 def check_for_new_version(current_version="v1.6"):
@@ -48,15 +78,28 @@ def check_for_new_version(current_version="v1.6"):
         print(f"Update check failed: {e}")
     return None
 
+
 PREVIOUS_PLOT_PATH = os.path.join(
     os.path.expanduser("~"), ".vasoanalyzer_last_plot.pickle"
 )
 DEFAULT_STYLE = dict(
-    axis_font_size=14, axis_font_family="Arial", axis_bold=False, axis_italic=False,
-    tick_font_size=12, event_font_size=10, event_font_family="Arial",
-    event_bold=False, event_italic=False, pin_font_size=10, pin_font_family="Arial",
-    pin_bold=False, pin_italic=False, pin_size=6, line_width=2,
+    axis_font_size=14,
+    axis_font_family="Arial",
+    axis_bold=False,
+    axis_italic=False,
+    tick_font_size=12,
+    event_font_size=10,
+    event_font_family="Arial",
+    event_bold=False,
+    event_italic=False,
+    pin_font_size=10,
+    pin_font_family="Arial",
+    pin_bold=False,
+    pin_italic=False,
+    pin_size=6,
+    line_width=2,
 )
+
 
 # [B] ========================= MAIN CLASS DEFINITION ================================
 class VasoAnalyzerApp(QMainWindow):
@@ -98,7 +141,6 @@ class VasoAnalyzerApp(QMainWindow):
         # ——— undo/redo ———
         self.undo_stack = QUndoStack(self)
 
-
         # ===== Axis + Slider State =====
         self.axis_dragging = False
         self.axis_drag_start = None
@@ -119,8 +161,8 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _wrap_views(self):
         # Create the three modes:
-        self.singleMode = QWidget()          # placeholder for your existing GUI
-        self.dualMode   = DualViewWidget(self)
+        self.singleMode = QWidget()  # placeholder for your existing GUI
+        self.dualMode = DualViewWidget(self)
 
         # Extract current central widget (your single view)
         old = self.centralWidget().children()
@@ -131,13 +173,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Now set up the stack
         self.modeStack = QStackedWidget(self)
-        self.modeStack.addWidget(container)   # index 0: single view
+        self.modeStack.addWidget(container)  # index 0: single view
         self.modeStack.addWidget(self.dualMode)  # index 1: dual view
 
         # Replace central widget’s layout
         self.setCentralWidget(self.modeStack)
         self.modeStack.setCurrentIndex(0)
-
 
     def update_recent_files_menu(self):
         self.recent_menu.clear()
@@ -248,7 +289,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_exit.triggered.connect(self.close)
         file_menu.addAction(self.action_exit)
 
-
     def _build_edit_menu(self, menubar):
         edit_menu = menubar.addMenu("Edit")
 
@@ -300,7 +340,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         edit_menu.addSeparator()
 
-
     def _build_view_menu(self, menubar):
         view_menu = menubar.addMenu("View")
 
@@ -325,7 +364,7 @@ class VasoAnalyzerApp(QMainWindow):
         # 2) Annotations ▶
         anno_menu = view_menu.addMenu("Annotations ▶")
         ev_lines = QAction("Event Lines", self, checkable=True, checked=True)
-        ev_lbls  = QAction("Event Labels", self, checkable=True, checked=True)
+        ev_lbls = QAction("Event Labels", self, checkable=True, checked=True)
         pin_lbls = QAction("Pinned Labels", self, checkable=True, checked=True)
         frame_mk = QAction("Frame Marker", self, checkable=True, checked=True)
         ev_lines.triggered.connect(lambda _: self.toggle_annotation("lines"))
@@ -343,13 +382,14 @@ class VasoAnalyzerApp(QMainWindow):
         snap_vw = QAction("Snapshot Viewer", self, checkable=True, checked=True)
         evt_tbl.triggered.connect(self.toggle_event_table)
         snap_vw.triggered.connect(self.toggle_snapshot_viewer)
-        showhide.addAction(evt_tbl); showhide.addAction(snap_vw)
+        showhide.addAction(evt_tbl)
+        showhide.addAction(snap_vw)
 
         view_menu.addSeparator()
 
         # 4) Single / Dual
         self.action_single = QAction("Single View", self, checkable=True)
-        self.action_dual   = QAction("Dual View",   self, checkable=True)
+        self.action_dual = QAction("Dual View", self, checkable=True)
         self.action_single.setShortcut("Ctrl+1")
         self.action_dual.setShortcut("Ctrl+2")
         self.action_single.setChecked(True)
@@ -402,7 +442,11 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Report a Bug
         act_bug = QAction("Report a Bug…", self)
-        act_bug.triggered.connect(lambda: webbrowser.open("https://github.com/vr-oj/VasoAnalyzer_2.0/issues/new"))
+        act_bug.triggered.connect(
+            lambda: webbrowser.open(
+                "https://github.com/vr-oj/VasoAnalyzer_2.0/issues/new"
+            )
+        )
         help_menu.addAction(act_bug)
 
         # Release Notes
@@ -418,7 +462,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.dualMode.panelA.clear_data()
         self.dualMode.panelB.clear_data()
 
-    
     def build_recent_files_menu(self):
         self.recent_menu.clear()
 
@@ -445,9 +488,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def open_preferences_dialog(self):
         QMessageBox.information(
-            self,
-            "Preferences",
-            "Preferences will be implemented soon(ish)."
+            self, "Preferences", "Preferences will be implemented soon(ish)."
         )
 
     def clear_all_pins(self):
@@ -581,7 +622,7 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_annotation(self, kind: str):
         if kind == "lines":
             for line in self.ax.get_lines():
-                if line.get_linestyle() == "--" and line.get_color()=="black":
+                if line.get_linestyle() == "--" and line.get_color() == "black":
                     line.set_visible(not line.get_visible())
         elif kind == "evt_labels":
             for txt, _ in self.event_text_objects:
@@ -785,7 +826,6 @@ class VasoAnalyzerApp(QMainWindow):
             for btn in self.toolbar.findChildren(QToolButton):
                 self.toolbar.style().polish(btn)
 
-
         # ===== Unified Top Row: Toolbar + Load Buttons =====
         top_row_layout = QHBoxLayout()
         top_row_layout.setContentsMargins(6, 4, 6, 2)
@@ -797,9 +837,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.loadTraceBtn.setToolTip(
             "Load .csv trace file and auto-load matching event table"
         )
-        
-        self.loadTraceBtn.clicked.connect(self._handle_load_trace)
 
+        self.loadTraceBtn.clicked.connect(self._handle_load_trace)
 
         self.load_snapshot_button = QPushButton("🖼️ Load _Result.tiff")
         self.load_snapshot_button.setToolTip("Load Vasotracker _Result.tiff snapshot")
@@ -1025,7 +1064,9 @@ class VasoAnalyzerApp(QMainWindow):
             trace_filename = os.path.basename(file_path)
             self.trace_file_label.setText(f"🧪 {trace_filename}")
         except Exception as e:
-            QMessageBox.critical(self, "Trace Load Error", f"Failed to load trace file:\n{e}")
+            QMessageBox.critical(
+                self, "Trace Load Error", f"Failed to load trace file:\n{e}"
+            )
             return
 
         # 3) Remember in Recent Files
@@ -1042,15 +1083,17 @@ class VasoAnalyzerApp(QMainWindow):
                 self.event_labels, self.event_times, _ = load_events(event_path)
             except Exception as e:
                 QMessageBox.warning(
-                    self, "Event Load Error",
-                    f"Trace loaded, but failed to load events:\n{e}"
+                    self,
+                    "Event Load Error",
+                    f"Trace loaded, but failed to load events:\n{e}",
                 )
                 self.event_labels = []
                 self.event_times = []
         else:
             QMessageBox.information(
-                self, "Event File Not Found",
-                f"No matching event file:\n{base}_table.csv"
+                self,
+                "Event File Not Found",
+                f"No matching event file:\n{base}_table.csv",
             )
             self.event_labels = []
             self.event_times = []
@@ -1064,20 +1107,21 @@ class VasoAnalyzerApp(QMainWindow):
                 # sample diameter at the event time
                 idx_evt = int(np.argmin(np.abs(times - t_evt)))
                 diam_evt = float(diam[idx_evt])
-                self.event_table_data.append((
-                    self.event_labels[i],
-                    round(t_evt, 2),
-                    idx_evt,
-                    round(diam_evt, 2),
-                ))
+                self.event_table_data.append(
+                    (
+                        self.event_labels[i],
+                        round(t_evt, 2),
+                        idx_evt,
+                        round(diam_evt, 2),
+                    )
+                )
 
         # 6) Refresh the UI
-        self.update_plot()                   # draws trace + event lines
-        self.populate_table()                # populates the QTableWidget
+        self.update_plot()  # draws trace + event lines
+        self.populate_table()  # populates the QTableWidget
         self.excel_btn.setEnabled(bool(self.event_table_data))
-        self.update_scroll_slider()          # shows or hides the pan‑slider
+        self.update_scroll_slider()  # shows or hides the pan‑slider
         self.style_event_table()
-
 
     def populate_table_widget(self, table_widget, data):
         table_widget.setRowCount(len(data))
@@ -1136,8 +1180,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             if len(valid_frames) < len(frames):
                 QMessageBox.warning(
-                    self, "TIFF Warning",
-                    "Skipped empty or corrupted TIFF frames."
+                    self, "TIFF Warning", "Skipped empty or corrupted TIFF frames."
                 )
 
             self.snapshot_frames = valid_frames
@@ -1166,7 +1209,9 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
 
     def save_project(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "Vaso Projects (*.vaso)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project", "", "Vaso Projects (*.vaso)"
+        )
         if not path:
             return
         if not path.endswith(".vaso"):
@@ -1176,14 +1221,20 @@ class VasoAnalyzerApp(QMainWindow):
                 grp = f.create_group("trace")
                 if self.trace_data is not None:
                     grp.create_dataset("time", data=self.trace_data["Time (s)"].values)
-                    grp.create_dataset("diameter", data=self.trace_data["Inner Diameter"].values)
+                    grp.create_dataset(
+                        "diameter", data=self.trace_data["Inner Diameter"].values
+                    )
                 ev = f.create_group("events")
                 labels = np.array([row[0] for row in self.event_table_data], dtype="S")
                 ev.create_dataset("labels", data=labels)
                 diam_b = [row[3] for row in self.event_table_data]
                 ev.create_dataset("diam_before", data=diam_b)
                 if self.snapshot_frames:
-                    f.create_dataset("snapshots/frames", data=np.stack(self.snapshot_frames), compression="gzip")
+                    f.create_dataset(
+                        "snapshots/frames",
+                        data=np.stack(self.snapshot_frames),
+                        compression="gzip",
+                    )
                 style = {
                     "xlim": self.ax.get_xlim(),
                     "ylim": self.ax.get_ylim(),
@@ -1194,8 +1245,11 @@ class VasoAnalyzerApp(QMainWindow):
                     "current_frame_idx": self.current_frame,
                 }
                 pdata = pickle.dumps(style)
-                dt = h5py.special_dtype(vlen=bytes)
-                f.create_dataset("style_meta", data=pdata, dtype=dt)
+                f.create_dataset(
+                    "style_meta",
+                    data=np.frombuffer(pdata, dtype="uint8"),
+                    dtype="uint8",
+                )
                 f.attrs["app_version"] = APP_VERSION
                 f.attrs["saved_on"] = datetime.now().isoformat()
                 f.attrs["current_frame_idx"] = self.current_frame
@@ -1204,7 +1258,9 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
 
     def open_project(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Vaso Projects (*.vaso)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", "", "Vaso Projects (*.vaso)"
+        )
         if not path:
             return
         try:
@@ -1214,7 +1270,7 @@ class VasoAnalyzerApp(QMainWindow):
                 labels = [s.decode() for s in f["events/labels"][...]]
                 diam_before = f["events/diam_before"][...]
                 stack = f["snapshots/frames"][...] if "snapshots/frames" in f else None
-                raw = bytes(f["style_meta"][()])
+                raw = f["style_meta"][...].tobytes()
                 style = pickle.loads(raw)
                 idx = f.attrs.get("current_frame_idx", 0)
             self.load_trace(t, d)
@@ -1228,6 +1284,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def load_trace(self, t, d):
         import pandas as pd
+
         self.trace_data = pd.DataFrame({"Time (s)": t, "Inner Diameter": d})
         self.update_plot()
         self.update_scroll_slider()
@@ -1389,7 +1446,6 @@ class VasoAnalyzerApp(QMainWindow):
         # 4) Refresh the plot
         self.canvas.draw_idle()
 
-
     def populate_event_table_from_df(self, df):
         self.event_table.setRowCount(len(df))
         for row in range(len(df)):
@@ -1437,7 +1493,6 @@ class VasoAnalyzerApp(QMainWindow):
         for i, p in enumerate(paths[:2]):
             if p.endswith(".fig.pickle"):
                 panels[i].load_pickle_session(p)
-
 
     def load_pickle_session(self, file_path):
         try:
@@ -1512,6 +1567,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # DUAL‑VIEW: decide which panel
         from PyQt5.QtWidgets import QMessageBox
+
         choice = QMessageBox.question(
             self,
             "Load Into…",
@@ -1519,7 +1575,9 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.Yes,
         )
-        panel = self.dualMode.panelA if choice == QMessageBox.Yes else self.dualMode.panelB
+        panel = (
+            self.dualMode.panelA if choice == QMessageBox.Yes else self.dualMode.panelB
+        )
 
         # Load the trace DataFrame
         df = load_trace(file_path)
@@ -1537,7 +1595,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Feed into the chosen panel
         panel.load_trace_and_events(df, events)
-
 
     # [E] ========================= PLOTTING AND EVENT SYNC ============================
     def update_plot(self):
@@ -1558,7 +1615,7 @@ class VasoAnalyzerApp(QMainWindow):
             fontsize=12,
         )
         self.hover_annotation.set_visible(False)
-        
+
         self.ax.set_facecolor("white")
         self.ax.tick_params(colors="black")
         self.ax.xaxis.label.set_color("black")
@@ -1569,7 +1626,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Plot trace and keep a handle for .contains()
         t = self.trace_data["Time (s)"]
         d = self.trace_data["Inner Diameter"]
-        self.trace_line, = self.ax.plot(t, d, "k-", linewidth=1.5)
+        (self.trace_line,) = self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s or frames)")
         self.ax.set_ylabel("Inner Diameter (µm)")
         self.ax.grid(True, color="#CCC")
@@ -1600,10 +1657,7 @@ class VasoAnalyzerApp(QMainWindow):
 
                 # draw the vertical line at the event time
                 self.ax.axvline(
-                    x=self.event_times[i],
-                    color="black",
-                    linestyle="--",
-                    linewidth=0.8
+                    x=self.event_times[i], color="black", linestyle="--", linewidth=0.8
                 )
 
                 # place the text at the same time coordinate
@@ -1621,13 +1675,14 @@ class VasoAnalyzerApp(QMainWindow):
                 self.event_text_objects.append((txt, self.event_times[i]))
 
                 # populate your table row
-                self.event_table_data.append((
-                    self.event_labels[i],
-                    round(self.event_times[i], 2),
-                    frame_number,      # now the idx_ev
-                    round(diam_pre, 2)
-                ))
-
+                self.event_table_data.append(
+                    (
+                        self.event_labels[i],
+                        round(self.event_times[i], 2),
+                        frame_number,  # now the idx_ev
+                        round(diam_pre, 2),
+                    )
+                )
 
             self.populate_table()
             self.auto_export_table()
@@ -1859,8 +1914,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.auto_export_table()
         print(f"➕ Inserted new event: {new_entry}")
 
-
-# [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
+    # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
         # only over the main axes and with data loaded
         if event.inaxes != self.ax or self.trace_data is None:
@@ -1888,7 +1942,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.hover_annotation.set_text(f"{x_near:.2f}s\n{y_near:.2f}µm")
         self.hover_annotation.set_visible(True)
         self.canvas.draw_idle()
-
 
     # [I] ========================= ZOOM + SLIDER LOGIC ================================
     def on_mouse_release(self, event):
@@ -2617,6 +2670,7 @@ class PlotStyleDialog(QDialog):
             "pin_size": self.pin_size.value(),
             "line_width": self.line_width.value(),
         }
+
 
 class ReplaceEventCommand(QUndoCommand):
     def __init__(self, app, index, old_val, new_val):
