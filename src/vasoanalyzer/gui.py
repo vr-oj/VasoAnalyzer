@@ -1195,7 +1195,7 @@ class VasoAnalyzerApp(QMainWindow):
                 }
                 pdata = pickle.dumps(style)
                 dt = h5py.special_dtype(vlen=bytes)
-                f.create_dataset("style_meta", data=np.void(pdata), dtype=dt)
+                f.create_dataset("style_meta", data=pdata, dtype=dt)
                 f.attrs["app_version"] = APP_VERSION
                 f.attrs["saved_on"] = datetime.now().isoformat()
                 f.attrs["current_frame_idx"] = self.current_frame
