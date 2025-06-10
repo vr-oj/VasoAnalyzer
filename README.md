@@ -106,9 +106,9 @@ Then try launching the app again.
 
 ```bash
 git clone https://github.com/vr-oj/VasoAnalyzer.git
-cd VasoAnalyzer/src
+cd VasoAnalyzer
 pip install -r requirements.txt
-python main.py
+python src/main.py
 ```
 
 ---
