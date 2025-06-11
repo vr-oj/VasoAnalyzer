@@ -121,12 +121,13 @@ class VasoAnalyzerApp(QMainWindow):
         self.current_frame = 0
         self.event_labels = []
         self.event_times = []
+        self.event_frames = []
         self.event_text_objects = []
         self.event_table_data = []
         self.selected_event_marker = None
         self.pinned_points = []
         self.slider_marker = None
-        self.recording_interval = 1 #0.14	# 140 ms per frame
+        self.recording_interval = 1 #0.14    # 140 ms per frame
         self.last_replaced_event = None
         self.excel_auto_path = None  # Path to Excel file for auto-update
         self.excel_auto_column = None  # Column letter to use for auto-update
@@ -1282,6 +1283,10 @@ class VasoAnalyzerApp(QMainWindow):
                 ev.create_dataset("labels", data=labels)
                 diam_b = [row[3] for row in self.event_table_data]
                 ev.create_dataset("diam_before", data=diam_b)
+                if self.event_times:
+                    ev.create_dataset("times", data=self.event_times)
+                if getattr(self, "event_frames", None):
+                    ev.create_dataset("frames", data=self.event_frames)
                 if self.snapshot_frames:
                     f.create_dataset(
                         "snapshots/frames",
@@ -1323,12 +1328,14 @@ class VasoAnalyzerApp(QMainWindow):
                 d = f["trace/diameter"][...]
                 labels = [s.decode() for s in f["events/labels"][...]]
                 diam_before = f["events/diam_before"][...]
+                times = f["events/times"][...] if "events" in f and "times" in f["events"] else None
+                frames = f["events/frames"][...] if "events" in f and "frames" in f["events"] else None
                 stack = f["snapshots/frames"][...] if "snapshots/frames" in f else None
                 raw = f["style_meta"][...].tobytes()
                 style = pickle.loads(raw)
                 idx = f.attrs.get("current_frame_idx", 0)
             self.load_trace(t, d)
-            self.load_events(labels, diam_before)
+            self.load_project_events(labels, times, frames, diam_before)
             if stack is not None:
                 self.load_snapshots(stack)
             self.apply_style(style)
@@ -1349,6 +1356,16 @@ class VasoAnalyzerApp(QMainWindow):
         for lbl, diam in zip(labels, diam_before):
             self.event_table_data.append((lbl, 0.0, 0, diam))
         self.populate_table()
+
+    def load_project_events(self, labels, times, frames, diam_before):
+        self.event_labels = list(labels)
+        self.event_times = list(times) if times is not None else []
+        self.event_frames = list(frames) if frames is not None else [0] * len(self.event_times)
+        self.event_table_data = []
+        for lbl, t, fr, diam in zip(self.event_labels, self.event_times, self.event_frames, diam_before):
+            self.event_table_data.append((lbl, float(t), int(fr), float(diam)))
+        self.populate_table()
+        self.update_plot()
 
     def load_snapshots(self, stack):
         self.snapshot_frames = [frame for frame in stack]
@@ -1488,21 +1505,21 @@ class VasoAnalyzerApp(QMainWindow):
 
         # 2) Convert index → time (seconds)
         current_frame_idx = self.slider.value()
-		
-		# Get the actual frame number from metadata if available
-		if hasattr(self, 'frames_metadata') and current_frame_idx < len(self.frames_metadata):
-                frame_meta = self.frames_metadata[current_frame_idx]
-                
-                if 'FrameNumber' in frame_meta:
-                    # Use the actual frame number from metadata
-                    frame_number = frame_meta['FrameNumber']
-                    # Convert frame number to time using recording interval
-                    t_current = frame_number
-                    print(f"Using FrameNumber {frame_number} → time: {t_current:.2f}s")
-                else:
-                    # Fall back to slider index if frame number isn't available
-                    t_current = current_frame_idx
-                    print(f"No FrameNumber in metadata, using slider index: {t_current:.2f}s")
+
+        # Get the actual frame number from metadata if available
+        if hasattr(self, "frames_metadata") and current_frame_idx < len(self.frames_metadata):
+            frame_meta = self.frames_metadata[current_frame_idx]
+
+            if "FrameNumber" in frame_meta:
+                # Use the actual frame number from metadata
+                frame_number = frame_meta["FrameNumber"]
+                # Convert frame number to time using recording interval
+                t_current = frame_number
+                print(f"Using FrameNumber {frame_number} → time: {t_current:.2f}s")
+            else:
+                # Fall back to slider index if frame number isn't available
+                t_current = current_frame_idx
+                print(f"No FrameNumber in metadata, using slider index: {t_current:.2f}s")
         else:
             # Fall back to slider index if no metadata is available
             t_current = current_frame_idx
@@ -1947,9 +1964,13 @@ class VasoAnalyzerApp(QMainWindow):
                 old_value = self.event_table_data[index][2]
                 self.last_replaced_event = (index, old_value)
                 frame_num = self.event_table_data[index][2]
-				self.event_table_data[index] = (event_label, round(event_time, 2), round(y, 2))
-				self.populate_table()
-				self.auto_export_table()
+                self.event_table_data[index] = (
+                    event_label,
+                    round(event_time, 2),
+                    round(y, 2),
+                )
+                self.populate_table()
+                self.auto_export_table()
 
     def prompt_add_event(self, x, y):
         if not self.event_table_data:
