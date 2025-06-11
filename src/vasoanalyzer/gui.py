@@ -2037,10 +2037,52 @@ class VasoAnalyzerApp(QMainWindow):
         self, ax, canvas, event_text_objects=None, pinned_points=None
     ):
         dialog = PlotStyleDialog(self)
-        prev_style = dialog.get_style()
 
-        def apply_local_style():
-            style = dialog.get_style()
+        def capture_current_style():
+            style = {
+                "axis_font_size": ax.xaxis.label.get_fontsize(),
+                "axis_font_family": ax.xaxis.label.get_fontname(),
+                "axis_bold": str(ax.xaxis.label.get_fontweight()).lower() == "bold",
+                "axis_italic": ax.xaxis.label.get_fontstyle() == "italic",
+                "tick_font_size": ax.xaxis.get_ticklabels()[0].get_fontsize()
+                if ax.xaxis.get_ticklabels()
+                else 12,
+                "event_font_size": event_text_objects[0][0].get_fontsize()
+                if event_text_objects
+                else 10,
+                "event_font_family": event_text_objects[0][0].get_fontname()
+                if event_text_objects
+                else "Arial",
+                "event_bold": str(
+                    event_text_objects[0][0].get_fontweight()
+                ).lower()
+                == "bold"
+                if event_text_objects
+                else False,
+                "event_italic": event_text_objects[0][0].get_fontstyle() == "italic"
+                if event_text_objects
+                else False,
+                "pin_font_size": pinned_points[0][1].get_fontsize()
+                if pinned_points
+                else 10,
+                "pin_font_family": pinned_points[0][1].get_fontname()
+                if pinned_points
+                else "Arial",
+                "pin_bold": str(pinned_points[0][1].get_fontweight()).lower() == "bold"
+                if pinned_points
+                else False,
+                "pin_italic": pinned_points[0][1].get_fontstyle() == "italic"
+                if pinned_points
+                else False,
+                "pin_size": pinned_points[0][0].get_markersize() if pinned_points else 6,
+                "line_width": ax.lines[0].get_linewidth() if ax.lines else 2,
+            }
+            return style
+
+        prev_style = capture_current_style()
+
+        def apply_local_style(style=None):
+            style = style or dialog.get_style()
             # Apply style to the specified axis, not globally
             ax.xaxis.label.set_fontsize(style["axis_font_size"])
             ax.xaxis.label.set_fontname(style["axis_font_family"])
@@ -2079,8 +2121,7 @@ class VasoAnalyzerApp(QMainWindow):
         if dialog.exec_():
             dialog.apply_callback()
         else:
-            # Optional: revert or keep previous style
-            pass
+            apply_local_style(prev_style)
 
     def open_customize_dialog(self):
         # Check visibility of any existing grid line
@@ -2432,6 +2473,7 @@ class PlotStyleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Plot Style Editor")
         self.setMinimumWidth(400)
+        self.apply_callback = None
 
         # Tab widget
         self.tabs = QTabWidget()
@@ -2464,59 +2506,60 @@ class PlotStyleDialog(QDialog):
     def handle_apply_all(self):
         """Apply *all* settings at once."""
         style = self.get_style()
-        self.parent().apply_plot_style(style)
+        if callable(self.apply_callback):
+            self.apply_callback(style)
+        else:
+            self.parent().apply_plot_style(style)
 
     def handle_apply_tab(self, section):
         """Apply only one section (axis/tick/event/pin/line)."""
         style = self.get_style()
-        parent = self.parent()
-        if section == "axis":
-            # Axis titles
-            parent.ax.xaxis.label.set_fontsize(style["axis_font_size"])
-            parent.ax.xaxis.label.set_fontname(style["axis_font_family"])
-            parent.ax.xaxis.label.set_fontweight(
-                "bold" if style["axis_bold"] else "normal"
-            )
-            parent.ax.xaxis.label.set_fontstyle(
-                "italic" if style["axis_italic"] else "normal"
-            )
-            parent.ax.yaxis.label.set_fontsize(style["axis_font_size"])
-            parent.ax.yaxis.label.set_fontname(style["axis_font_family"])
-            parent.ax.yaxis.label.set_fontweight(
-                "bold" if style["axis_bold"] else "normal"
-            )
-            parent.ax.yaxis.label.set_fontstyle(
-                "italic" if style["axis_italic"] else "normal"
-            )
+        if callable(self.apply_callback):
+            self.apply_callback(style)
+        else:
+            parent = self.parent()
+            if section == "axis":
+                parent.ax.xaxis.label.set_fontsize(style["axis_font_size"])
+                parent.ax.xaxis.label.set_fontname(style["axis_font_family"])
+                parent.ax.xaxis.label.set_fontweight(
+                    "bold" if style["axis_bold"] else "normal"
+                )
+                parent.ax.xaxis.label.set_fontstyle(
+                    "italic" if style["axis_italic"] else "normal"
+                )
+                parent.ax.yaxis.label.set_fontsize(style["axis_font_size"])
+                parent.ax.yaxis.label.set_fontname(style["axis_font_family"])
+                parent.ax.yaxis.label.set_fontweight(
+                    "bold" if style["axis_bold"] else "normal"
+                )
+                parent.ax.yaxis.label.set_fontstyle(
+                    "italic" if style["axis_italic"] else "normal"
+                )
 
-        elif section == "tick":
-            # Tick labels
-            parent.ax.tick_params(axis="x", labelsize=style["tick_font_size"])
-            parent.ax.tick_params(axis="y", labelsize=style["tick_font_size"])
+            elif section == "tick":
+                parent.ax.tick_params(axis="x", labelsize=style["tick_font_size"])
+                parent.ax.tick_params(axis="y", labelsize=style["tick_font_size"])
 
-        elif section == "event":
-            # Event labels
-            for txt, _ in parent.event_text_objects:
-                txt.set_fontsize(style["event_font_size"])
-                txt.set_fontname(style["event_font_family"])
-                txt.set_fontweight("bold" if style["event_bold"] else "normal")
-                txt.set_fontstyle("italic" if style["event_italic"] else "normal")
+            elif section == "event":
+                for txt, _ in parent.event_text_objects:
+                    txt.set_fontsize(style["event_font_size"])
+                    txt.set_fontname(style["event_font_family"])
+                    txt.set_fontweight("bold" if style["event_bold"] else "normal")
+                    txt.set_fontstyle("italic" if style["event_italic"] else "normal")
 
-        elif section == "pin":
-            # Pinned labels
-            for marker, label in parent.pinned_points:
-                marker.set_markersize(style["pin_size"])
-                label.set_fontsize(style["pin_font_size"])
-                label.set_fontname(style["pin_font_family"])
-                label.set_fontweight("bold" if style["pin_bold"] else "normal")
-                label.set_fontstyle("italic" if style["pin_italic"] else "normal")
+            elif section == "pin":
+                for marker, label in parent.pinned_points:
+                    marker.set_markersize(style["pin_size"])
+                    label.set_fontsize(style["pin_font_size"])
+                    label.set_fontname(style["pin_font_family"])
+                    label.set_fontweight("bold" if style["pin_bold"] else "normal")
+                    label.set_fontstyle("italic" if style["pin_italic"] else "normal")
 
-        elif section == "line":
-            # Trace line
-            if parent.ax.lines:
-                parent.ax.lines[0].set_linewidth(style["line_width"])
+            elif section == "line":
+                if parent.ax.lines:
+                    parent.ax.lines[0].set_linewidth(style["line_width"])
 
-        parent.canvas.draw_idle()
+            parent.canvas.draw_idle()
 
     def _make_section_widgets(self, section):
         """Helper: create section's Apply/Default row."""
