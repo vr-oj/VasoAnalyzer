@@ -114,11 +114,12 @@ class VasoAnalyzerLauncher:
 			print("⚠️ Splash image could not be loaded from:", splash_path)
 			self.start_main_app()
 		else:
-			self.splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
-			self.splash.setMask(splash_pix.mask())
-			self.splash.show()
-		
-			QTimer.singleShot(2500, self.start_main_app)
+				splash_pix = splash_pix.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+				self.splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
+				self.splash.setMask(splash_pix.mask())
+				self.splash.show()
+
+				QTimer.singleShot(2500, self.start_main_app)
 
 	def start_main_app(self):
 		if hasattr(self, 'splash'):
