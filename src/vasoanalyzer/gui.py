@@ -1119,8 +1119,8 @@ class VasoAnalyzerApp(QMainWindow):
                     (
                         self.event_labels[i],
                         round(t_evt, 2),
-                        idx_evt,
                         round(diam_evt, 2),
+                        idx_evt,
                     )
                 )
 
@@ -1288,7 +1288,7 @@ class VasoAnalyzerApp(QMainWindow):
                 ev = f.create_group("events")
                 labels = np.array([row[0] for row in self.event_table_data], dtype="S")
                 ev.create_dataset("labels", data=labels)
-                diam_b = [row[3] for row in self.event_table_data]
+                diam_b = [row[2] for row in self.event_table_data]
                 ev.create_dataset("diam_before", data=diam_b)
                 if self.event_times:
                     ev.create_dataset("times", data=self.event_times)
@@ -1361,7 +1361,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_labels = list(labels)
         self.event_table_data = []
         for lbl, diam in zip(labels, diam_before):
-            self.event_table_data.append((lbl, 0.0, 0, diam))
+            self.event_table_data.append((lbl, 0.0, diam, 0))
         self.populate_table()
 
     def load_project_events(self, labels, times, frames, diam_before):
@@ -1370,7 +1370,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_frames = list(frames) if frames is not None else [0] * len(self.event_times)
         self.event_table_data = []
         for lbl, t, fr, diam in zip(self.event_labels, self.event_times, self.event_frames, diam_before):
-            self.event_table_data.append((lbl, float(t), int(fr), float(diam)))
+            self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
         self.populate_table()
         self.update_plot()
 
@@ -1784,8 +1784,8 @@ class VasoAnalyzerApp(QMainWindow):
                     (
                         self.event_labels[i],
                         round(evt_time, 2),
-                        frame_number,
                         round(diam_pre, 2),
+                        frame_number,
                     )
                 )
             self.populate_table()
@@ -1816,10 +1816,10 @@ class VasoAnalyzerApp(QMainWindow):
     def populate_table(self):
         self.event_table.blockSignals(True)
         self.event_table.setRowCount(len(self.event_table_data))
-        for row, (label, t, frame, d) in enumerate(self.event_table_data):
+        for row, (label, t, idval, frame) in enumerate(self.event_table_data):
             self.event_table.setItem(row, 0, QTableWidgetItem(str(label)))
             self.event_table.setItem(row, 1, QTableWidgetItem(str(t)))
-            self.event_table.setItem(row, 2, QTableWidgetItem(str(d)))
+            self.event_table.setItem(row, 2, QTableWidgetItem(str(idval)))
             self.event_table.setItem(row, 3, QTableWidgetItem(str(frame)))
         self.event_table.blockSignals(False)
 
@@ -1828,7 +1828,7 @@ class VasoAnalyzerApp(QMainWindow):
         col = item.column()
 
         # Only allow editing the third column (ID)
-        if col != 3:
+        if col != 2:
             self.populate_table()
             return
 
@@ -1841,10 +1841,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         label = self.event_table_data[row][0]
         time = self.event_table_data[row][1]
-        frame = self.event_table_data[row][2]  # Get the frame value
-        old_val = self.event_table_data[row][3]  # Changed from index 2 to 3
+        frame = self.event_table_data[row][3]
+        old_val = self.event_table_data[row][2]
         self.last_replaced_event = (row, old_val)
-        self.event_table_data[row] = (label, time, frame, round(new_val, 2))  # Include frame in tuple
+        self.event_table_data[row] = (label, time, round(new_val, 2), frame)
 
         # Record the change for undo/redo functionality
         cmd = ReplaceEventCommand(self, row, old_val, round(new_val, 2))
@@ -1964,11 +1964,12 @@ class VasoAnalyzerApp(QMainWindow):
             if confirm == QMessageBox.Yes:
                 old_value = self.event_table_data[index][2]
                 self.last_replaced_event = (index, old_value)
-                frame_num = self.event_table_data[index][2]
+                frame_num = self.event_table_data[index][3]
                 self.event_table_data[index] = (
                     event_label,
                     round(event_time, 2),
                     round(y, 2),
+                    frame_num,
                 )
                 self.populate_table()
                 self.auto_export_table()
@@ -1982,7 +1983,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Build label options and insertion points
         insert_labels = [
-            f"{label} at {t:.2f}s" for label, t, _ in self.event_table_data
+            f"{label} at {t:.2f}s" for label, t, _, _ in self.event_table_data
         ]
         insert_labels.append("↘️ Add to end")  # final option
 
@@ -2011,7 +2012,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Calculate frame number based on time
         frame_number = int(x / self.recording_interval)
 
-        new_entry = (new_label.strip(), round(x, 2), round(y, 2))
+        new_entry = (new_label.strip(), round(x, 2), round(y, 2), frame_number)
 
         # Insert into data
         if insert_idx == len(self.event_table_data):  # Add to end
@@ -2346,6 +2347,7 @@ class VasoAnalyzerApp(QMainWindow):
                     self.event_table_data[row][0],
                     self.event_table_data[row][1],
                     round(new_val, 2),
+                    self.event_table_data[row][3],
                 )
                 self.populate_table()
                 self.auto_export_table()
@@ -2414,6 +2416,7 @@ class VasoAnalyzerApp(QMainWindow):
                     self.event_table_data[row][0],
                     t_event,
                     round(pin_id, 2),
+                    self.event_table_data[row][3],
                 )
                 self.populate_table()
                 self.auto_export_table()
@@ -2508,7 +2511,7 @@ class VasoAnalyzerApp(QMainWindow):
             output_dir = os.path.abspath(self.trace_file_path)
             csv_path = os.path.join(output_dir, "eventDiameters_output.csv")
             df = pd.DataFrame(
-                self.event_table_data, columns=["Event", "Time (s)", "Frame", "ID (µm)"]
+                self.event_table_data, columns=["Event", "Time (s)", "ID (µm)", "Frame"]
             )
             df.to_csv(csv_path, index=False)
             print(f"✔ Event table auto-exported to:\n{csv_path}")
@@ -2581,7 +2584,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Format the data as dictionaries with all four fields
         dialog_data = [
             {"EventLabel": label, "Time (s)": time, "Frame": frame, "ID (µm)": idval}
-            for label, time, frame, idval in self.event_table_data
+            for label, time, idval, frame in self.event_table_data
         ]
 
         dialog = ExcelMappingDialog(self, dialog_data)
@@ -2894,13 +2897,13 @@ class ReplaceEventCommand(QUndoCommand):
         self.new = new_val
 
     def redo(self):
-        lbl, t, frame, _ = self.app.event_table_data[self.i]
-        self.app.event_table_data[self.i] = (lbl, t, frame, self.new)
+        lbl, t, _, frame = self.app.event_table_data[self.i]
+        self.app.event_table_data[self.i] = (lbl, t, self.new, frame)
         self.app.populate_table()
         self.app.auto_export_table()
 
     def undo(self):
-        lbl, t, frame, _ = self.app.event_table_data[self.i]
-        self.app.event_table_data[self.i] = (lbl, t, frame, self.old)
+        lbl, t, _, frame = self.app.event_table_data[self.i]
+        self.app.event_table_data[self.i] = (lbl, t, self.old, frame)
         self.app.populate_table()
         self.app.auto_export_table()
