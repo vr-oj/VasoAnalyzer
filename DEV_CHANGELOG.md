@@ -217,3 +217,10 @@ This changelog documents all feature additions, fixes, and improvements implemen
   * Compute Statistics…
   * Generate Report…
 * Plan to introduce smoothing and filtering tools in future release.
+
+### 🐛 Style Editor Fixes
+
+* Cancelling the **Plot Style** dialog now restores the previous fonts and line
+  widths.
+* Per-tab **Apply** buttons respect the dialog's callback so dual-view panels
+  update correctly.
