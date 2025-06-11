@@ -1257,12 +1257,13 @@ class VasoAnalyzerApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
-    def open_project(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", "Vaso Projects (*.vaso)"
-        )
-        if not path:
-            return
+    def open_project(self, path=None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Open Project", "", "Vaso Projects (*.vaso)"
+            )
+            if not path:
+                return
         try:
             with h5py.File(path, "r") as f:
                 t = f["trace/time"][...]
@@ -1472,13 +1473,21 @@ class VasoAnalyzerApp(QMainWindow):
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if url.toLocalFile().endswith(".fig.pickle"):
+                f = url.toLocalFile()
+                if f.endswith(".fig.pickle") or f.endswith(".vaso"):
                     event.accept()
                     return
         event.ignore()
 
     def dropEvent(self, event):
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
+
+        # Check for dropped .vaso project first
+        for p in paths:
+            if p.endswith(".vaso"):
+                self.open_project(p)
+                return
+
         idx = self.modeStack.currentIndex()
 
         # SINGLE‑VIEW: unchanged
