@@ -1977,6 +1977,39 @@ class VasoAnalyzerApp(QMainWindow):
         dialog = PlotStyleDialog(self)
         self.plot_style_dialog = dialog
 
+        def capture_current_style():
+            style = {
+                "axis_font_size": self.ax.xaxis.label.get_fontsize(),
+                "axis_font_family": self.ax.xaxis.label.get_fontname(),
+                "axis_bold": str(self.ax.xaxis.label.get_fontweight()).lower() == "bold",
+                "axis_italic": self.ax.xaxis.label.get_fontstyle() == "italic",
+                "tick_font_size": self.ax.xaxis.get_ticklabels()[0].get_fontsize()
+                if self.ax.xaxis.get_ticklabels()
+                else 12,
+                "event_font_size": self.event_text_objects[0][0].get_fontsize()
+                if self.event_text_objects
+                else 10,
+                "event_font_family": self.event_text_objects[0][0].get_fontname()
+                if self.event_text_objects
+                else "Arial",
+                "event_bold": str(self.event_text_objects[0][0].get_fontweight()).lower() == "bold"
+                if self.event_text_objects
+                else False,
+                "event_italic": self.event_text_objects[0][0].get_fontstyle() == "italic"
+                if self.event_text_objects
+                else False,
+                "pin_font_size": self.pinned_points[0][1].get_fontsize() if self.pinned_points else 10,
+                "pin_font_family": self.pinned_points[0][1].get_fontname() if self.pinned_points else "Arial",
+                "pin_bold": str(self.pinned_points[0][1].get_fontweight()).lower() == "bold" if self.pinned_points else False,
+                "pin_italic": self.pinned_points[0][1].get_fontstyle() == "italic" if self.pinned_points else False,
+                "pin_size": self.pinned_points[0][0].get_markersize() if self.pinned_points else 6,
+                "line_width": self.ax.lines[0].get_linewidth() if self.ax.lines else 2,
+            }
+            return style
+
+        prev_style = capture_current_style()
+        dialog.set_style(prev_style)
+
         if tab_name:
             tab_widget = dialog.findChild(QWidget, tab_name)
             if tab_widget is not None:
@@ -1984,7 +2017,6 @@ class VasoAnalyzerApp(QMainWindow):
                 if index != -1:
                     dialog.tabs.setCurrentIndex(index)
 
-        prev_style = dialog.get_style()
         if dialog.exec_() == QDialog.Accepted:
             style = dialog.get_style()
             self.apply_plot_style(style)
@@ -2080,6 +2112,7 @@ class VasoAnalyzerApp(QMainWindow):
             return style
 
         prev_style = capture_current_style()
+        dialog.set_style(prev_style)
 
         def apply_local_style(style=None):
             style = style or dialog.get_style()
@@ -2720,6 +2753,23 @@ class PlotStyleDialog(QDialog):
             "pin_size": self.pin_size.value(),
             "line_width": self.line_width.value(),
         }
+
+    def set_style(self, style):
+        """Populate widgets based on a style dictionary."""
+        for key, val in style.items():
+            if not hasattr(self, key):
+                continue
+            widget = getattr(self, key)
+            if isinstance(widget, QSpinBox):
+                widget.setValue(int(val))
+            elif isinstance(widget, QComboBox):
+                idx = widget.findText(str(val))
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                else:
+                    widget.setCurrentText(str(val))
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(bool(val))
 
 
 class ReplaceEventCommand(QUndoCommand):

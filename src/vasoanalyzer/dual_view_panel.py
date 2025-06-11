@@ -311,7 +311,34 @@ class DataViewPanel(QWidget):
         from PyQt5.QtWidgets import QDialog
         from vasoanalyzer.gui import PlotStyleDialog
         dialog = PlotStyleDialog(self)
-        prev = dialog.get_style()
+
+        def capture_current_style():
+            style = {
+                "axis_font_size": self.ax.xaxis.label.get_fontsize(),
+                "axis_font_family": self.ax.xaxis.label.get_fontname(),
+                "axis_bold": str(self.ax.xaxis.label.get_fontweight()).lower() == "bold",
+                "axis_italic": self.ax.xaxis.label.get_fontstyle() == "italic",
+                "tick_font_size": self.ax.xaxis.get_ticklabels()[0].get_fontsize()
+                if self.ax.xaxis.get_ticklabels()
+                else 12,
+                "event_font_size": self.event_text_objects[0][0].get_fontsize()
+                if getattr(self, "event_text_objects", None)
+                else 10,
+                "event_font_family": self.event_text_objects[0][0].get_fontname()
+                if getattr(self, "event_text_objects", None)
+                else "Arial",
+                "event_bold": str(self.event_text_objects[0][0].get_fontweight()).lower() == "bold"
+                if getattr(self, "event_text_objects", None)
+                else False,
+                "event_italic": self.event_text_objects[0][0].get_fontstyle() == "italic"
+                if getattr(self, "event_text_objects", None)
+                else False,
+                "line_width": self.ax.lines[0].get_linewidth() if self.ax.lines else 2,
+            }
+            return style
+
+        prev = capture_current_style()
+        dialog.set_style(prev)
         if dialog.exec_() == QDialog.Accepted:
             style = dialog.get_style()
             # Apply line width
