@@ -1742,6 +1742,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Plot events if available
         if self.event_labels and self.event_times:
+
             self.event_table_data = []
             offset_sec = 2
             nEv = len(self.event_times)
@@ -1749,37 +1750,27 @@ class VasoAnalyzerApp(QMainWindow):
             time_trace = self.trace_data["Time (s)"]
 
             for i in range(nEv):
-                # compute where the event falls on your time axis
-                idx_ev = int(np.argmin(np.abs(time_trace - self.event_times[i])))
-                diam_at_ev = diam_trace.iloc[idx_ev]
+                evt_time = self.event_times[i]
+                idx_ev = int(np.argmin(np.abs(time_trace - evt_time)))
 
-                # sample just before next event (or at end)
                 if i < nEv - 1:
                     t_sample = self.event_times[i + 1] - offset_sec
                     idx_pre = np.argmin(np.abs(time_trace - t_sample))
                 else:
                     idx_pre = -1
 
-                # Calculate frame number based on event time and recording interval
                 diam_pre = diam_trace.iloc[idx_pre]
                 if self.event_frames:
                     frame_number = self.event_frames[i]
                 else:
-                    frame_number = self.event_times[i]
+                    frame_number = idx_ev
 
-                # Vertical Line
-                self.ax.axvline(x=frame_number, color='black', linestyle='--', linewidth=0.8)
+                self.ax.axvline(x=evt_time, color="black", linestyle="--", linewidth=0.8)
 
-                self.event_table_data.append((
-                    self.event_labels[i],
-                    round(self.event_times[i], 2),
-                    frame_number,  # Using actual frame number
-                    round(diam_pre, 2)
-                ))
-
-                # place the text at the same time coordinate
                 txt = self.ax.text(
-                    frame_number, 0, self.event_labels[i],
+                    evt_time,
+                    0,
+                    self.event_labels[i],
                     rotation=90,
                     verticalalignment="top",
                     horizontalalignment="right",
@@ -1787,20 +1778,16 @@ class VasoAnalyzerApp(QMainWindow):
                     color="black",
                     clip_on=True,
                 )
-                # store reference to the text object and its corresponding
-                # frame number for later repositioning
-                self.event_text_objects.append((txt, frame_number))
+                self.event_text_objects.append((txt, evt_time))
 
-                # populate your table row
                 self.event_table_data.append(
                     (
                         self.event_labels[i],
-                        round(self.event_times[i], 2),
-                        frame_number,  # now the idx_ev
+                        round(evt_time, 2),
+                        frame_number,
                         round(diam_pre, 2),
                     )
                 )
-
             self.populate_table()
             self.auto_export_table()
 
