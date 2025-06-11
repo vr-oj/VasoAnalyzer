@@ -1858,6 +1858,9 @@ class VasoAnalyzerApp(QMainWindow):
         old_val = self.event_table_data[row][3]  # Changed from index 2 to 3
         self.last_replaced_event = (row, old_val)
         self.event_table_data[row] = (label, time, frame, round(new_val, 2))  # Include frame in tuple
+
+        # Record the change for undo/redo functionality
+        cmd = ReplaceEventCommand(self, row, old_val, round(new_val, 2))
         self.undo_stack.push(cmd)
         print(f"✏️ ID updated at {time:.2f}s → {new_val:.2f} µm")
 
