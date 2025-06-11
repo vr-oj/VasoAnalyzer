@@ -1082,6 +1082,13 @@ class VasoAnalyzerApp(QMainWindow):
         if os.path.exists(event_path):
             try:
                 self.event_labels, self.event_times, self.event_frames = load_events(event_path)
+                # If event_frames column was absent, derive frames from times
+                if self.event_frames is None:
+                    trace_times = self.trace_data["Time (s)"].values
+                    self.event_frames = [
+                        int(np.argmin(np.abs(trace_times - t)))
+                        for t in self.event_times
+                    ]
             except Exception as e:
                 QMessageBox.warning(
                     self,
@@ -1754,9 +1761,11 @@ class VasoAnalyzerApp(QMainWindow):
                     idx_pre = -1
 
                 # Calculate frame number based on event time and recording interval
-                frame_number = self.event_times[i]
                 diam_pre = diam_trace.iloc[idx_pre]
-                frame_number = self.event_frames[i]
+                if self.event_frames:
+                    frame_number = self.event_frames[i]
+                else:
+                    frame_number = self.event_times[i]
 
                 # Vertical Line
                 self.ax.axvline(x=frame_number, color='black', linestyle='--', linewidth=0.8)
