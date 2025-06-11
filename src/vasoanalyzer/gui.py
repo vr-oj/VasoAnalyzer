@@ -1787,7 +1787,9 @@ class VasoAnalyzerApp(QMainWindow):
                     color="black",
                     clip_on=True,
                 )
-                self.event_text_objects.append((txt, self.frame_number))
+                # store reference to the text object and its corresponding
+                # frame number for later repositioning
+                self.event_text_objects.append((txt, frame_number))
 
                 # populate your table row
                 self.event_table_data.append(
