@@ -669,8 +669,6 @@ class VasoAnalyzerApp(QMainWindow):
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
-
-
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
@@ -2962,14 +2960,14 @@ class PlotStyleDialog(QDialog):
     def reset_defaults(self, section):
         defaults = {
             "axis": {
-                "axis_font_size": 14,
+                "axis_font_size": 16,
                 "axis_font_family": "Arial",
-                "axis_bold": False,
+                "axis_bold": True,
                 "axis_italic": False,
             },
             "tick": {"tick_font_size": 12},
             "event": {
-                "event_font_size": 10,
+                "event_font_size": 12,
                 "event_font_family": "Arial",
                 "event_bold": False,
                 "event_italic": False,
