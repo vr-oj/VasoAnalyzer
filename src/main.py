@@ -3,7 +3,6 @@ import sys
 import os
 import logging
 import base64
-import h5py
 import pickle
 import numpy as np
 from datetime import datetime
@@ -56,7 +55,7 @@ class VasoAnalyzerLauncher:
         # Enable HiDPI scaling and crisp pixmaps on all displays
         QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-        
+
         self.app = QApplication(sys.argv)
 
         # ===== Platform-specific icon =====

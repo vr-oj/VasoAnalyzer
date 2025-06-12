@@ -37,3 +37,4 @@ src/dist/VasoAnalyzer_2.1.app/Contents/
 # === Python Virtual Environment ===
 vasoenv/
 /vaso
+src.zip
