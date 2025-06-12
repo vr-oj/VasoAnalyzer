@@ -1,4 +1,4 @@
-from PyQt5.QtGui import QPalette, QColor, QFont
+from PyQt5.QtGui import QPalette, QColor
 from PyQt5.QtWidgets import QApplication
 from matplotlib import rcParams
 import re
@@ -6,7 +6,7 @@ import re
 # -----------------------------------------------------------------------------
 # Centralized Theme Definitions for VasoAnalyzer
 # -----------------------------------------------------------------------------
-# Define color tokens for light and dark themes
+# Define color tokens for the application theme
 LIGHT_THEME = {
     'window_bg': '#F5F5F5',
     'text': '#000000',
@@ -20,21 +20,6 @@ LIGHT_THEME = {
     'hover_label_bg': 'rgba(255,255,255,220)',
     'hover_label_border': '#888888',
     'grid_color': '#CCCCCC',
-}
-
-DARK_THEME = {
-    'window_bg': '#2E2E2E',
-    'text': '#FFFFFF',
-    'button_bg': '#3C3C3C',
-    'button_hover_bg': '#505050',
-    'toolbar_bg': '#333333',
-    'table_bg': '#3C3C3C',
-    'table_text': '#FFFFFF',
-    'selection_bg': '#505470',
-    'alternate_bg': '#2A2A2A',
-    'hover_label_bg': 'rgba(60,60,60,220)',
-    'hover_label_border': '#AAAAAA',
-    'grid_color': '#444444',
 }
 
 # Currently applied theme; defaults to light until explicitly changed
@@ -175,45 +160,3 @@ def apply_light_theme():
     if app is not None:
         app.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
     apply_matplotlib_style(LIGHT_THEME)
-
-
-def apply_dark_theme():
-    global CURRENT_THEME
-    CURRENT_THEME = DARK_THEME
-    apply_qt_palette(DARK_THEME)
-    app = QApplication.instance()
-    if app is not None:
-        app.setStyleSheet(apply_qt_stylesheet(DARK_THEME))
-    apply_matplotlib_style(DARK_THEME)
-
-
-def is_system_dark_mode() -> bool:
-    """Return True if the OS preference is set to dark mode."""
-    import sys
-    import subprocess
-
-    if sys.platform == "darwin":
-        try:
-            result = subprocess.run(
-                ["defaults", "read", "-g", "AppleInterfaceStyle"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            return result.returncode == 0 and result.stdout.strip().lower() == "dark"
-        except Exception:
-            return False
-    elif sys.platform.startswith("win"):
-        try:
-            import winreg
-
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-            ) as key:
-                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
-            return value == 0
-        except Exception:
-            return False
-    else:
-        return False
