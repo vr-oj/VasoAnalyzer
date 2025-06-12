@@ -47,27 +47,37 @@ class DataViewPanel(QWidget):
                 "Pan: Click and drag plot",
                 "Zoom: Draw box to zoom in"
             ]
-            for btn, tip in zip(visible[:5], tooltips):
+            icons = [
+                "Home.svg",
+                "Back.svg",
+                "Forward.svg",
+                "Pan.svg",
+                "Zoom.svg",
+            ]
+            for btn, tip, icon in zip(visible[:5], tooltips, icons):
                 btn.setToolTip(tip)
+                btn.setIcon(QIcon(self.window().icon_path(icon)))
             # Configure subplot layout
             btn = visible[5]
             btn.setToolTip("Configure subplot layout")
+            btn.setIcon(QIcon(self.window().icon_path("Subplots.svg")))
             btn.triggered.disconnect()
             btn.triggered.connect(self.toolbar.configure_subplots)
             # Edit parameters
             btn = visible[6]
             btn.setToolTip("Edit axis ranges and titles")
+            btn.setIcon(QIcon(self.window().icon_path("Customize:edit_axis_ranges.svg")))
             btn.triggered.disconnect()
             btn.triggered.connect(self._open_axis_dialog)
             # Inject Plot Style button
             style_btn = QToolButton()
-            style_btn.setText("Aa")
+            style_btn.setIcon(QIcon(self.window().icon_path("Aa.svg")))
             style_btn.setToolTip("Customize plot fonts and layout")
             style_btn.clicked.connect(self._open_plot_style)
             self.toolbar.insertWidget(visible[7], style_btn)
             # Inject Grid Toggle
             grid_btn = QToolButton()
-            grid_btn.setText("Grid")
+            grid_btn.setIcon(QIcon(self.window().icon_path("Grid.svg")))
             grid_btn.setToolTip("Toggle grid visibility")
             grid_btn.setCheckable(True)
             grid_btn.setChecked(True)
@@ -76,6 +86,7 @@ class DataViewPanel(QWidget):
             # Override save
             save_btn = visible[7]
             save_btn.setToolTip("Save As… Export high-res plot")
+            save_btn.setIcon(QIcon(self.window().icon_path("Save.svg")))
             save_btn.triggered.disconnect()
             save_btn.triggered.connect(self._export_high_res_plot)
 
