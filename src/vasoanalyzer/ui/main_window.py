@@ -44,7 +44,7 @@ from PyQt5.QtWidgets import (
     QTreeWidgetItem,
 )
 
-from PyQt5.QtGui import QPixmap, QImage, QIcon
+from PyQt5.QtGui import QPixmap, QImage, QIcon, QCursor
 from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 
 from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
@@ -947,10 +947,10 @@ class VasoAnalyzerApp(QMainWindow):
 
             # [7] Save/export button
             save_btn = visible_buttons[7]
-            save_btn.setToolTip("Save As… Export high-res plot")
+            save_btn.setToolTip("Save As… Export plot or save to N")
             save_btn.setIcon(QIcon(self.icon_path("Save.svg")))
             save_btn.triggered.disconnect()
-            save_btn.triggered.connect(self.export_high_res_plot)
+            save_btn.triggered.connect(self.show_save_menu)
             self.toolbar.style().polish(self.toolbar)
             for btn in self.toolbar.findChildren(QToolButton):
                 self.toolbar.style().polish(btn)
@@ -1153,10 +1153,10 @@ class VasoAnalyzerApp(QMainWindow):
 
             # Override Save
             save_btn = visible_buttons[7]
-            save_btn.setToolTip("Save As… Export high-res plot")
+            save_btn.setToolTip("Save As… Export plot or save to N")
             save_btn.setIcon(QIcon(self.icon_path("Save.svg")))
             save_btn.triggered.disconnect()
-            save_btn.triggered.connect(self.export_high_res_plot)
+            save_btn.triggered.connect(self.show_save_menu)
 
         return toolbar
 
@@ -2799,6 +2799,70 @@ class VasoAnalyzerApp(QMainWindow):
                 )
             except Exception as e:
                 QMessageBox.critical(self, "Export Failed", str(e))
+
+    def save_data_as_n(self):
+        if not self.current_project:
+            QMessageBox.warning(self, "No Project", "Open or create a project first.")
+            return
+        if self.trace_data is None:
+            QMessageBox.warning(self, "No Data", "No trace data loaded.")
+            return
+
+        if not self.current_project.experiments:
+            QMessageBox.warning(self, "No Experiment", "Add an experiment to the project first.")
+            return
+
+        exp = self.current_experiment
+        if exp is None:
+            items = [e.name for e in self.current_project.experiments]
+            choice, ok = QInputDialog.getItem(
+                self, "Select Experiment", "Experiment:", items, 0, False
+            )
+            if not ok:
+                return
+            exp = next(e for e in self.current_project.experiments if e.name == choice)
+
+        name, ok = QInputDialog.getText(self, "Sample Name", "Name:")
+        if not ok or not name:
+            return
+
+        trace_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Trace CSV", f"{name}_trace.csv", "CSV Files (*.csv)"
+        )
+        if not trace_path:
+            return
+
+        events_path, _ = QFileDialog.getSaveFileName(
+            self, "Save Events CSV", f"{name}_events.csv", "CSV Files (*.csv)"
+        )
+        if not events_path:
+            return
+
+        try:
+            self.trace_data.to_csv(trace_path, index=False)
+            df = pd.DataFrame(
+                self.event_table_data,
+                columns=["Event", "Time (s)", "ID (µm)", "Frame"],
+            )
+            df.to_csv(events_path, index=False)
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", str(e))
+            return
+
+        exp.samples.append(SampleN(name=name, trace_path=trace_path, events_path=events_path))
+        self.refresh_project_tree()
+        if self.current_project.path:
+            save_project(self.current_project, self.current_project.path)
+
+    def show_save_menu(self):
+        menu = QMenu(self)
+        act_plot = menu.addAction("High‑Res Plot…")
+        act_sample = menu.addAction("Save Data as N…")
+        action = menu.exec_(QCursor.pos())
+        if action == act_plot:
+            self.export_high_res_plot()
+        elif action == act_sample:
+            self.save_data_as_n()
 
     def open_excel_mapping_dialog(self):
         if not self.event_table_data:

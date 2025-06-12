@@ -86,10 +86,10 @@ class DataViewPanel(QWidget):
             self.toolbar.insertWidget(visible[7], grid_btn)
             # Override save
             save_btn = visible[7]
-            save_btn.setToolTip("Save As… Export high-res plot")
+            save_btn.setToolTip("Save As… Export plot or save to N")
             save_btn.setIcon(QIcon(self.window().icon_path("Save.svg")))
             save_btn.triggered.disconnect()
-            save_btn.triggered.connect(self._export_high_res_plot)
+            save_btn.triggered.connect(self.window().show_save_menu)
 
         # --- Load Button ---
         self.load_btn = QPushButton("📂 Load Trace + Events")

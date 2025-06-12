@@ -70,6 +70,7 @@ Organize related experiments together in a single `.vasoproj` file. Each project
 3. Right‑click an N and choose **Load Data Into N…** to import trace and events.
 4. Save progress with **Project → Save Project** and reopen using **Project → Open Project…**.
 5. **Save N As…** exports a single sample to its own `.vaso` file for quick sharing.
+6. Use the **Save As** toolbar button to export a high‑res plot or save the current data directly as a new N in the selected experiment.
 
 ---
 ## 🚀 Download & Install
