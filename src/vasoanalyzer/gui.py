@@ -51,21 +51,11 @@ from vasoanalyzer.tiff_loader import load_tiff
 from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
+from vasoanalyzer.theme_manager import CURRENT_THEME
 
 log = logging.getLogger(__name__)
 
-rcParams.update(
-    {
-        "axes.labelcolor": "black",
-        "xtick.color": "black",
-        "ytick.color": "black",
-        "text.color": "black",
-        "figure.facecolor": "white",
-        "figure.edgecolor": "white",
-        "savefig.facecolor": "white",
-        "savefig.edgecolor": "white",
-    }
-)
+
 
 
 def check_for_new_version(current_version=f"v{APP_VERSION}"):
@@ -675,49 +665,14 @@ class VasoAnalyzerApp(QMainWindow):
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
-        self.setStyleSheet(
-            """
-            QWidget {
-                background-color: #F5F5F5;
-                font-family: 'Arial';
-                font-size: 13px;
-                color: black;  /* Ensure all default widget text is black */
-            }
-            QPushButton {
-                background: #FFFFFF; color: black;
-                border: 1px solid #CCCCCC; border-radius:6px; padding:6px 12px;
-            }
-            QPushButton:hover {
-                background: #E6F0FF;
-            }
-            QToolButton {
-                background: #FFFFFF; color: black;
-                border: 1px solid #CCCCCC; border-radius:6px; padding:6px; margin:2px;
-            }
-            QToolButton:hover {
-                background: #D6E9FF;
-            }
-            QToolButton:checked {
-                background: #CCE5FF; border:1px solid #3399FF;
-            }
-            QHeaderView::section {
-                background: #E0E0E0; font-weight: bold; padding:6px; color:black;
-            }
-            QTableWidget {
-                background: white; gridline-color: #DDDDDD; color: black;
-            }
-            QTableWidget::item {
-                padding:6px; color: black;
-            }
-        """
-        )
+
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-        self.fig = Figure(figsize=(8, 4), facecolor="white")
+        self.fig = Figure(figsize=(8, 4), facecolor=CURRENT_THEME['window_bg'])
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setMouseTracking(True)
         self.canvas.toolbar = None
@@ -728,9 +683,15 @@ class VasoAnalyzerApp(QMainWindow):
             xy=(0, 0),
             xytext=(15, 15),
             textcoords="offset points",
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1),
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                fc=CURRENT_THEME['hover_label_bg'],
+                ec=CURRENT_THEME['hover_label_border'],
+                lw=1,
+            ),
             arrowprops=dict(arrowstyle="->"),
             fontsize=9,
+            color=CURRENT_THEME['text'],
         )
         self.hover_annotation.set_visible(False)
         # ————————————————————————————————
@@ -744,12 +705,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.toolbar.setMouseTracking(True)
         self.toolbar.setIconSize(QSize(24, 24))
         self.toolbar.setStyleSheet(
-            """
-            QToolBar {
-                background-color: #F0F0F0;
+            f"""
+            QToolBar {{
+                background-color: {CURRENT_THEME['toolbar_bg']};
                 padding: 2px;
                 border: none;
-            }
+            }}
         """
         )
         self.toolbar.setContentsMargins(0, 0, 0, 0)
@@ -789,22 +750,7 @@ class VasoAnalyzerApp(QMainWindow):
             style_btn = QToolButton()
             style_btn.setText("Aa")
             style_btn.setToolTip("Customize plot fonts and layout")
-            style_btn.setStyleSheet(
-                """
-                QToolButton {
-                    background-color: #FFFFFF;
-                    border: 1px solid #CCCCCC;
-                    border-radius: 6px;
-                    padding: 6px;
-                    margin: 2px;
-                    font-weight: bold;
-                    font-size: 14px;
-                }
-                QToolButton:hover {
-                    background-color: #E0F0FF;
-                }
-            """
-            )
+            # Use global theme styling for toolbuttons
             style_btn.clicked.connect(self.open_plot_style_editor)
             self.toolbar.insertWidget(visible_buttons[7], style_btn)
             # force the toolbar to re‑polish its children under the global QSS
@@ -898,7 +844,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.snapshot_label.setAlignment(Qt.AlignCenter)
         self.snapshot_label.setFixedSize(500, 300)
         self.snapshot_label.setStyleSheet(
-            "background-color: white; border: 1px solid #999;"
+            f"background-color: {CURRENT_THEME['window_bg']}; border: 1px solid {CURRENT_THEME['grid_color']}"
         )
         self.snapshot_label.hide()
 
@@ -917,7 +863,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.setMinimumWidth(400)
         self.event_table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.event_table.setStyleSheet("background-color: white; color: black;")
+        self.event_table.setStyleSheet(
+            f"background-color: {CURRENT_THEME['table_bg']}; color: {CURRENT_THEME['table_text']}"
+        )
         self.event_table.horizontalHeader().setStretchLastSection(True)
         self.event_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.event_table.cellClicked.connect(self.table_row_clicked)
@@ -965,12 +913,12 @@ class VasoAnalyzerApp(QMainWindow):
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setStyleSheet(
-            """
-            QToolBar {
-                background-color: #F0F0F0;
+            f"""
+            QToolBar {{
+                background-color: {CURRENT_THEME['toolbar_bg']};
                 padding: 2px;
                 border: none;
-            }
+            }}
         """
         )
 
@@ -1007,22 +955,7 @@ class VasoAnalyzerApp(QMainWindow):
             style_btn = QToolButton()
             style_btn.setText("Aa")
             style_btn.setToolTip("Customize plot fonts and layout")
-            style_btn.setStyleSheet(
-                """
-                QToolButton {
-                    background-color: #FFFFFF;
-                    border: 1px solid #CCCCCC;
-                    border-radius: 6px;
-                    padding: 6px;
-                    margin: 2px;
-                    font-weight: bold;
-                    font-size: 14px;
-                }
-                QToolButton:hover {
-                    background-color: #E0F0FF;
-                }
-            """
-            )
+            # Use global theme styling for toolbuttons
             style_btn.clicked.connect(self.open_plot_style_editor)
             toolbar.insertWidget(visible_buttons[7], style_btn)
 
@@ -1169,10 +1102,14 @@ class VasoAnalyzerApp(QMainWindow):
         for col in range(self.event_table.columnCount()):
             header_item = self.event_table.horizontalHeaderItem(col)
             header_item.setFont(header_font)
-            header_item.setBackground(QBrush(QColor("#D3D3D3")))
+            header_item.setBackground(QBrush(QColor(CURRENT_THEME['button_bg'])))
 
         for row in range(self.event_table.rowCount()):
-            row_color = QColor("#FFFFFF") if row % 2 == 0 else QColor("#F0F0F0")
+            row_color = (
+                QColor(CURRENT_THEME['table_bg'])
+                if row % 2 == 0
+                else QColor(CURRENT_THEME['alternate_bg'])
+            )
             for col in range(self.event_table.columnCount()):
                 item = self.event_table.item(row, col)
                 if item:
@@ -1647,7 +1584,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax.set_xlim(*state.get("xlim", self.ax.get_xlim()))
             self.ax.set_ylim(*state.get("ylim", self.ax.get_ylim()))
             self.grid_visible = state.get("grid_visible", True)
-            self.ax.grid(self.grid_visible, color="#CCC")
+            self.ax.grid(self.grid_visible, color=CURRENT_THEME['grid_color'])
 
             # Re-plot pinned points
             self.pinned_points.clear()
@@ -1658,7 +1595,12 @@ class VasoAnalyzerApp(QMainWindow):
                     xy=(x, y),
                     xytext=(6, 6),
                     textcoords="offset points",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1),
+                    bbox=dict(
+                        boxstyle="round,pad=0.3",
+                        fc=CURRENT_THEME['hover_label_bg'],
+                        ec=CURRENT_THEME['hover_label_border'],
+                        lw=1,
+                    ),
                     fontsize=8,
                 )
                 self.pinned_points.append((marker, label))
@@ -1737,17 +1679,23 @@ class VasoAnalyzerApp(QMainWindow):
             xy=(0, 0),
             xytext=(6, 6),
             textcoords="offset points",
-            bbox=dict(boxstyle="round,pad=0.3", fc=(1, 1, 1, 0.85), ec="#888888", lw=1),
+            bbox=dict(
+                boxstyle="round,pad=0.3",
+                fc=CURRENT_THEME['hover_label_bg'],
+                ec=CURRENT_THEME['hover_label_border'],
+                lw=1,
+            ),
             arrowprops=dict(arrowstyle="->"),
             fontsize=12,
+            color=CURRENT_THEME['text'],
         )
         self.hover_annotation.set_visible(False)
 
-        self.ax.set_facecolor("white")
-        self.ax.tick_params(colors="black")
-        self.ax.xaxis.label.set_color("black")
-        self.ax.yaxis.label.set_color("black")
-        self.ax.title.set_color("black")
+        self.ax.set_facecolor(CURRENT_THEME['window_bg'])
+        self.ax.tick_params(colors=CURRENT_THEME['text'])
+        self.ax.xaxis.label.set_color(CURRENT_THEME['text'])
+        self.ax.yaxis.label.set_color(CURRENT_THEME['text'])
+        self.ax.title.set_color(CURRENT_THEME['text'])
         self.event_text_objects = []
 
         # Plot trace and keep a handle for .contains()
@@ -1756,7 +1704,7 @@ class VasoAnalyzerApp(QMainWindow):
         (self.trace_line,) = self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Inner Diameter (µm)")
-        self.ax.grid(True, color="#CCC")
+        self.ax.grid(True, color=CURRENT_THEME['grid_color'])
 
         # Plot events if available
         if self.event_labels and self.event_times:
@@ -1783,7 +1731,12 @@ class VasoAnalyzerApp(QMainWindow):
                 else:
                     frame_number = idx_ev
 
-                self.ax.axvline(x=evt_time, color="black", linestyle="--", linewidth=0.8)
+                self.ax.axvline(
+                    x=evt_time,
+                    color=CURRENT_THEME['text'],
+                    linestyle="--",
+                    linewidth=0.8,
+                )
 
                 txt = self.ax.text(
                     evt_time,
@@ -1793,7 +1746,7 @@ class VasoAnalyzerApp(QMainWindow):
                     verticalalignment="top",
                     horizontalalignment="right",
                     fontsize=8,
-                    color="black",
+                    color=CURRENT_THEME['text'],
                     clip_on=True,
                 )
                 self.event_text_objects.append((txt, evt_time))
@@ -1942,7 +1895,12 @@ class VasoAnalyzerApp(QMainWindow):
                 xy=(x, y),
                 xytext=(6, 6),
                 textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1),
+                bbox=dict(
+                    boxstyle="round,pad=0.3",
+                    fc=CURRENT_THEME['hover_label_bg'],
+                    ec=CURRENT_THEME['hover_label_border'],
+                    lw=1,
+                ),
                 fontsize=8,
             )
 
@@ -2420,7 +2378,12 @@ class VasoAnalyzerApp(QMainWindow):
                 xy=(t, id_val),
                 xytext=(6, 6),
                 textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", lw=1),
+                bbox=dict(
+                    boxstyle="round,pad=0.3",
+                    fc=CURRENT_THEME['hover_label_bg'],
+                    ec=CURRENT_THEME['hover_label_border'],
+                    lw=1,
+                ),
                 fontsize=8,
             )
             self.pinned_points.append((marker, label))
@@ -2632,7 +2595,7 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_grid(self):
         self.grid_visible = not self.grid_visible
         if self.grid_visible:
-            self.ax.grid(True, color="#CCC")
+            self.ax.grid(True, color=CURRENT_THEME['grid_color'])
         else:
             self.ax.grid(False)
         self.canvas.draw_idle()
@@ -3077,7 +3040,7 @@ class SubplotLayoutDialog(QDialog):
             self.controls[name] = spin
         layout.addLayout(form)
 
-        self.preview_fig = Figure(figsize=(2, 2))
+        self.preview_fig = Figure(figsize=(2, 2), facecolor=CURRENT_THEME['window_bg'])
         self.preview_canvas = FigureCanvas(self.preview_fig)
         self.preview_axes = self.preview_fig.subplots(2, 2)
         for ax in self.preview_axes.flat:
