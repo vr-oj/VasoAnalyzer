@@ -59,7 +59,7 @@ Designed for researchers. Powered by Python. Zero coding required.
 ---
 ## Projects & Ns
 
-Organize related experiments together in a single `.vaso` file. Each project can contain multiple experiments and each experiment holds your N‑samples.
+Organize related experiments together in a single `.vasoproj` file. Each project can contain multiple experiments and each experiment holds your N‑samples.
 
 ![Sidebar demo](docs/projects_demo.png)
 
@@ -69,6 +69,7 @@ Organize related experiments together in a single `.vaso` file. Each project can
 2. **Project → Add Experiment** and **Project → Add N** build your experiment tree.
 3. Right‑click an N and choose **Load Data Into N…** to import trace and events.
 4. Save progress with **Project → Save Project** and reopen using **Project → Open Project…**.
+5. **Save N As…** exports a single sample to its own `.vaso` file for quick sharing.
 
 ---
 ## 🚀 Download & Install
