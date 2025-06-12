@@ -773,7 +773,9 @@ class VasoAnalyzerApp(QMainWindow):
             layout_btn = visible_buttons[5]
             layout_btn.setToolTip("Configure subplot layout")
             layout_btn.triggered.disconnect()
-            layout_btn.triggered.connect(self.toolbar.configure_subplots)
+            layout_btn.triggered.connect(
+                lambda: self.open_subplot_layout_dialog(self.fig)
+            )
 
             # [6] Axes and title editor
             axes_btn = visible_buttons[6]
@@ -988,7 +990,9 @@ class VasoAnalyzerApp(QMainWindow):
             layout_btn = visible_buttons[5]
             layout_btn.setToolTip("Configure subplot layout")
             layout_btn.triggered.disconnect()
-            layout_btn.triggered.connect(toolbar.configure_subplots)
+            layout_btn.triggered.connect(
+                lambda fig=canvas.figure: self.open_subplot_layout_dialog(fig)
+            )
 
             axes_btn = visible_buttons[6]
             axes_btn.setToolTip("Edit axis ranges and titles")
@@ -2094,6 +2098,15 @@ class VasoAnalyzerApp(QMainWindow):
         else:
             self.scroll_slider.hide()
 
+    def open_subplot_layout_dialog(self, fig=None):
+        """Open dialog to adjust subplot paddings and spacing."""
+        fig = fig or self.fig
+        dialog = SubplotLayoutDialog(self, fig)
+        if dialog.exec_():
+            params = dialog.get_values()
+            fig.subplots_adjust(**params)
+            fig.canvas.draw_idle()
+
     # [J] ========================= PLOT STYLE EDITOR ================================
     def open_plot_style_editor(self, tab_name=None):
         from PyQt5.QtWidgets import QDialog
@@ -2620,11 +2633,13 @@ from PyQt5.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QFormLayout,
     QPushButton,
     QLabel,
     QComboBox,
     QSpinBox,
+    QDoubleSpinBox,
     QCheckBox,
 )
 
@@ -2898,6 +2913,87 @@ class PlotStyleDialog(QDialog):
                     widget.setCurrentText(str(val))
             elif isinstance(widget, QCheckBox):
                 widget.setChecked(bool(val))
+
+
+class SubplotLayoutDialog(QDialog):
+    def __init__(self, parent=None, fig=None):
+        super().__init__(parent)
+        self.setWindowTitle("Subplot Layout")
+        self.fig = fig
+
+        self.params = self._get_initial_params()
+
+        layout = QVBoxLayout(self)
+        form = QGridLayout()
+        self.controls = {}
+        names = ["left", "right", "top", "bottom", "wspace", "hspace"]
+        for row, name in enumerate(names):
+            label = QLabel(name.capitalize())
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(0, 100)
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 1.0)
+            spin.setSingleStep(0.01)
+            spin.setDecimals(2)
+            slider.setValue(int(self.params[name] * 100))
+            spin.setValue(self.params[name])
+            slider.valueChanged.connect(lambda v, s=spin: s.setValue(v / 100))
+            spin.valueChanged.connect(lambda v, s=slider: s.setValue(int(v * 100)))
+            slider.valueChanged.connect(self.update_preview)
+            spin.valueChanged.connect(self.update_preview)
+            form.addWidget(label, row, 0)
+            form.addWidget(slider, row, 1)
+            form.addWidget(spin, row, 2)
+            self.controls[name] = spin
+        layout.addLayout(form)
+
+        self.preview_fig = Figure(figsize=(2, 2))
+        self.preview_canvas = FigureCanvas(self.preview_fig)
+        self.preview_axes = self.preview_fig.subplots(2, 2)
+        for ax in self.preview_axes.flat:
+            ax.plot([0, 1], [0, 1])
+            ax.set_xticks([])
+            ax.set_yticks([])
+        layout.addWidget(self.preview_canvas)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        ok_btn = QPushButton("OK")
+        cancel_btn = QPushButton("Cancel")
+        btn_row.addWidget(ok_btn)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
+        ok_btn.clicked.connect(self.accept)
+        cancel_btn.clicked.connect(self.reject)
+
+        self.update_preview()
+
+    def _get_initial_params(self):
+        if self.fig is not None:
+            sp = self.fig.subplotpars
+            return {
+                "left": sp.left,
+                "right": sp.right,
+                "top": sp.top,
+                "bottom": sp.bottom,
+                "wspace": sp.wspace,
+                "hspace": sp.hspace,
+            }
+        return {
+            "left": rcParams.get("figure.subplot.left", 0.125),
+            "right": rcParams.get("figure.subplot.right", 0.9),
+            "top": rcParams.get("figure.subplot.top", 0.88),
+            "bottom": rcParams.get("figure.subplot.bottom", 0.11),
+            "wspace": rcParams.get("figure.subplot.wspace", 0.2),
+            "hspace": rcParams.get("figure.subplot.hspace", 0.2),
+        }
+
+    def get_values(self):
+        return {name: ctrl.value() for name, ctrl in self.controls.items()}
+
+    def update_preview(self, *_):
+        self.preview_fig.subplots_adjust(**self.get_values())
+        self.preview_canvas.draw_idle()
 
 
 class ReplaceEventCommand(QUndoCommand):
