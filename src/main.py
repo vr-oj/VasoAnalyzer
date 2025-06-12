@@ -9,7 +9,7 @@ import numpy as np
 from datetime import datetime
 from PyQt5.QtWidgets import QApplication, QSplashScreen, QAction
 from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QCoreApplication
 import re
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from PyQt5.QtGui import QIcon
@@ -53,6 +53,10 @@ def fix_matplotlib_dialogs():
 
 class VasoAnalyzerLauncher:
     def __init__(self):
+        # Enable HiDPI scaling and crisp pixmaps on all displays
+        QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+        
         self.app = QApplication(sys.argv)
 
         # ===== Platform-specific icon =====
