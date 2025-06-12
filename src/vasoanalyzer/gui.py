@@ -3090,7 +3090,28 @@ class SubplotLayoutDialog(QDialog):
         return {name: ctrl.value() for name, ctrl in self.controls.items()}
 
     def update_preview(self, *_):
-        self.preview_fig.subplots_adjust(**self.get_values())
+        params = self.get_values()
+        # Clamp parameters to [0, 1]
+        epsilon = 1e-3
+        for key in params:
+            params[key] = max(0.0, min(1.0, params[key]))
+
+        # Ensure left < right and bottom < top
+        if params["right"] <= params["left"]:
+            if params["left"] >= 1.0 - epsilon:
+                params["left"] = 1.0 - epsilon
+                params["right"] = 1.0
+            else:
+                params["right"] = min(1.0, params["left"] + epsilon)
+
+        if params["top"] <= params["bottom"]:
+            if params["bottom"] >= 1.0 - epsilon:
+                params["bottom"] = 1.0 - epsilon
+                params["top"] = 1.0
+            else:
+                params["top"] = min(1.0, params["bottom"] + epsilon)
+
+        self.preview_fig.subplots_adjust(**params)
         self.preview_canvas.draw_idle()
 
 
