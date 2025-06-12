@@ -3,6 +3,7 @@ import sys, os, pickle, requests
 import numpy as np, pandas as pd, tifffile
 import h5py
 import logging
+import sip
 from datetime import datetime
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from utils.config import APP_VERSION
@@ -1119,7 +1120,7 @@ class VasoAnalyzerApp(QMainWindow):
             )
             for col in range(self.event_table.columnCount()):
                 item = self.event_table.item(row, col)
-                if item:
+                if item and not sip.isdeleted(item):
                     item.setBackground(QBrush(row_color))
                     if col > 0:
                         item.setTextAlignment(Qt.AlignCenter)
