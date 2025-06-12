@@ -1228,7 +1228,11 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.critical(self, "Error", str(e))
 
     def open_project(self, path=None):
-        if path is None:
+        # QAction.triggered passes a boolean 'checked' argument. If this method
+        # is connected directly to that signal, ``path`` may receive a bool
+        # instead of the actual file path. Guard against that by treating a
+        # boolean as ``None`` so the file dialog is shown.
+        if isinstance(path, bool) or path is None:
             path, _ = QFileDialog.getOpenFileName(
                 self, "Open Project", "", "Vaso Projects (*.vaso)"
             )
