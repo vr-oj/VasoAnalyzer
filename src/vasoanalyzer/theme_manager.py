@@ -8,7 +8,7 @@ import re
 # -----------------------------------------------------------------------------
 # Define color tokens for the application theme
 LIGHT_THEME = {
-    'window_bg': '#F5F5F5',
+    'window_bg': '#FFFFFF',
     'text': '#000000',
     'button_bg': '#FFFFFF',
     'button_hover_bg': '#E6F0FF',

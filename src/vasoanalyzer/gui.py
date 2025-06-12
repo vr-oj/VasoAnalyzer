@@ -861,8 +861,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.setStyleSheet(
             f"background-color: {CURRENT_THEME['table_bg']}; color: {CURRENT_THEME['table_text']}"
         )
-        self.event_table.horizontalHeader().setStretchLastSection(True)
-        self.event_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        header = self.event_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for i in range(1, 4):
+            header.setSectionResizeMode(i, QHeaderView.Stretch)
         self.event_table.cellClicked.connect(self.table_row_clicked)
         self.event_table.itemChanged.connect(self.handle_table_edit)
         self.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -878,13 +881,13 @@ class VasoAnalyzerApp(QMainWindow):
 
         right_layout = QVBoxLayout()
         right_layout.setSpacing(6)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(0, 0, 10, 0)
         right_layout.addLayout(snapshot_layout)
         right_layout.addWidget(self.event_table)
 
         # ===== Top-Level Layout (Left + Right) =====
         top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setContentsMargins(0, 0, 10, 0)
         top_layout.setSpacing(0)
         top_layout.addLayout(left_layout, 4)
         top_layout.addLayout(right_layout, 1)
@@ -1107,6 +1110,7 @@ class VasoAnalyzerApp(QMainWindow):
             header_item.setFont(header_font)
             header_item.setBackground(QBrush(QColor(CURRENT_THEME['button_bg'])))
 
+        self.event_table.setAlternatingRowColors(True)
         for row in range(self.event_table.rowCount()):
             row_color = (
                 QColor(CURRENT_THEME['table_bg'])
@@ -1117,6 +1121,10 @@ class VasoAnalyzerApp(QMainWindow):
                 item = self.event_table.item(row, col)
                 if item:
                     item.setBackground(QBrush(row_color))
+                    if col > 0:
+                        item.setTextAlignment(Qt.AlignCenter)
+
+        self.event_table.resizeColumnToContents(0)
 
     def load_snapshot(self):
         # 1) Prompt for TIFF
@@ -2477,13 +2485,13 @@ class VasoAnalyzerApp(QMainWindow):
 
         right_layout = QVBoxLayout()
         right_layout.setSpacing(6)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(0, 0, 10, 0)
         right_layout.addLayout(snapshot_layout)
         right_layout.addWidget(self.event_table)
 
         # Combine left + right into top layout
         top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(0, 0, 0, 0)
+        top_layout.setContentsMargins(0, 0, 10, 0)
         top_layout.setSpacing(0)
         top_layout.addLayout(left_layout, 4)
         top_layout.addLayout(right_layout, 1)
