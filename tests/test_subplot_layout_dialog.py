@@ -3,7 +3,7 @@ import matplotlib
 matplotlib.use('Agg')
 from PyQt5.QtWidgets import QApplication
 from matplotlib.figure import Figure
-from vasoanalyzer.gui import SubplotLayoutDialog
+from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
 
 
 def test_subplot_layout_dialog_extreme_values():

@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 from PyQt5.QtWidgets import QApplication
-from vasoanalyzer.gui import VasoAnalyzerApp
+from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 
 def test_update_plot_no_frame(tmp_path):
     os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
