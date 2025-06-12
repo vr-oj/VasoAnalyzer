@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton, QMessageBox
 )
 from PyQt5.QtWidgets import QLabel
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QSize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
