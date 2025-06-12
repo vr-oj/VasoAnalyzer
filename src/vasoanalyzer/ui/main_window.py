@@ -259,6 +259,16 @@ class VasoAnalyzerApp(QMainWindow):
             experiment.samples.append(SampleN(name=nname))
             self.refresh_project_tree()
 
+    def add_sample_to_current_experiment(self):
+        if not self.current_experiment:
+            QMessageBox.warning(
+                self,
+                "No Experiment Selected",
+                "Please select an experiment first.",
+            )
+            return
+        self.add_sample(self.current_experiment)
+
     def save_sample_as(self, sample):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Sample", f"{sample.name}.vaso", "Vaso Sample (*.vaso)"
@@ -358,6 +368,14 @@ class VasoAnalyzerApp(QMainWindow):
         save_as_act = QAction("Save Project As…", self)
         save_as_act.triggered.connect(self.save_project_as)
         proj_menu.addAction(save_as_act)
+
+        add_exp_act = QAction("Add Experiment", self)
+        add_exp_act.triggered.connect(self.add_experiment)
+        proj_menu.addAction(add_exp_act)
+
+        add_n_act = QAction("Add N", self)
+        add_n_act.triggered.connect(self.add_sample_to_current_experiment)
+        proj_menu.addAction(add_n_act)
 
     def _build_file_menu(self, menubar):
         file_menu = menubar.addMenu("File")
