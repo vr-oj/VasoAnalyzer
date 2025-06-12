@@ -1,12 +1,21 @@
+"""Helper routines for loading diameter trace CSV files."""
+
 import pandas as pd
 
 
 def load_trace(file_path):
-    """Load a trace CSV and return a DataFrame with standardized columns.
+    """Load a trace CSV and return a standardized DataFrame.
 
-    The loader searches for columns representing time and inner diameter,
-    renaming them to ``"Time (s)"`` and ``"Inner Diameter"`` respectively.
-    If either column is missing an exception is raised.
+    Args:
+        file_path (str or Path): Path to the CSV file.
+
+    Returns:
+        pandas.DataFrame: Data with ``"Time (s)"`` and ``"Inner Diameter"``
+        columns converted to numeric types.
+
+    Raises:
+        ValueError: If no time or inner diameter column can be found.
+        pandas.errors.ParserError: If the CSV cannot be parsed.
     """
 
     # Try to auto-detect delimiter from the first line
