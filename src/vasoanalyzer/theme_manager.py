@@ -36,6 +36,9 @@ DARK_THEME = {
     'grid_color': '#444444',
 }
 
+# Currently applied theme; defaults to light until explicitly changed
+CURRENT_THEME = LIGHT_THEME
+
 # Font settings
 FONTS = {
     'family': 'Arial',
@@ -149,12 +152,48 @@ def apply_matplotlib_style(theme: dict):
 # -----------------------------------------------------------------------------
 
 def apply_light_theme():
+    global CURRENT_THEME
+    CURRENT_THEME = LIGHT_THEME
     apply_qt_palette(LIGHT_THEME)
     QApplication.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
     apply_matplotlib_style(LIGHT_THEME)
 
 
 def apply_dark_theme():
+    global CURRENT_THEME
+    CURRENT_THEME = DARK_THEME
     apply_qt_palette(DARK_THEME)
     QApplication.setStyleSheet(apply_qt_stylesheet(DARK_THEME))
     apply_matplotlib_style(DARK_THEME)
+
+
+def is_system_dark_mode() -> bool:
+    """Return True if the OS preference is set to dark mode."""
+    import sys
+    import subprocess
+
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return result.returncode == 0 and result.stdout.strip().lower() == "dark"
+        except Exception:
+            return False
+    elif sys.platform.startswith("win"):
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return value == 0
+        except Exception:
+            return False
+    else:
+        return False

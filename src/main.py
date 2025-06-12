@@ -16,9 +16,13 @@ from PyQt5.QtGui import QIcon
 from utils.config import APP_VERSION
 
 from vasoanalyzer.gui import VasoAnalyzerApp
+from vasoanalyzer.theme_manager import (
+    apply_dark_theme,
+    apply_light_theme,
+    is_system_dark_mode,
+)
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib import rcParams
 from matplotlib.backends.backend_qt5 import MainWindow
 
 log = logging.getLogger(__name__)
@@ -66,48 +70,11 @@ class VasoAnalyzerLauncher:
 		if icon_path and os.path.exists(icon_path):
 			self.app.setWindowIcon(QIcon(icon_path))
 
-		# === Global Qt Stylesheet Patch ===
-		self.app.setStyleSheet("""
-			* {
-				color: black;
-				background-color: white;
-			}
-			QPushButton {
-				background-color: #FFFFFF;
-				border: 1px solid #CCCCCC;
-				border-radius: 8px;
-				padding: 6px 12px;
-			}
-			QLabel {
-				color: black;
-			}
-			QLineEdit, QComboBox, QTextEdit {
-				background-color: #F5F5F5;
-				border: 1px solid #AAAAAA;
-				padding: 4px;
-				border-radius: 4px;
-			}
-			QCheckBox, QRadioButton {
-				color: black;
-			}
-			QDialog {
-				background-color: #FFFFFF;
-				color: black;
-			}
-		""")
-
-		# === Matplotlib rcParams Patch for Plot Styling ===
-		rcParams.update({
-			'axes.labelcolor': 'black',
-			'xtick.color': 'black',
-			'ytick.color': 'black',
-			'text.color': 'black',
-			'axes.facecolor': 'white',
-			'figure.facecolor': 'white',
-			'savefig.facecolor': 'white',
-			'figure.edgecolor': 'white',
-			'savefig.edgecolor': 'white',
-		})
+                # === Apply theme based on system preference ===
+                if is_system_dark_mode():
+                        apply_dark_theme()
+                else:
+                        apply_light_theme()
 
 		# === Load and Show Splash Screen from PNG file ===
 		splash_path = os.path.join(os.path.dirname(__file__), "vasoanalyzer", "VasoAnalyzerSplashScreen.png")
