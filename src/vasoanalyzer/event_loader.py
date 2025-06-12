@@ -1,29 +1,47 @@
+"""Utility to load event annotations from CSV or TXT files."""
+
 import pandas as pd
 
+
 def load_events(file_path):
-	# Try to auto-detect delimiter
-	with open(file_path, 'r') as f:
-		first_line = f.readline()
-		delimiter = ',' if ',' in first_line else '\t'
+    """Return event labels, times and optional frames from a table file.
 
-	df = pd.read_csv(file_path, delimiter=delimiter)
+    Args:
+        file_path (str or Path): Path to the event table.
 
-	# Auto-detect columns
-	label_col = next((col for col in df.columns if 'label' in col.lower()), df.columns[0])
-	time_col  = next((col for col in df.columns if 'time' in col.lower()), df.columns[1])
-	frame_col = next((col for col in df.columns if 'frame' in col.lower()), None)
+    Returns:
+        tuple[list[str], list[float], list[int] | None]:
+            A tuple of event labels, times in seconds and optional frame numbers
+            (``None`` if the file lacks a frame column).
 
-	# Convert time to seconds
-	if df[time_col].dtype == 'object':
-		time_sec = pd.to_timedelta(df[time_col]).dt.total_seconds()
-	else:
-		time_sec = df[time_col]
+    Raises:
+        pandas.errors.ParserError: If the file cannot be parsed.
+        ValueError: If time values cannot be converted to seconds.
+    """
 
-	labels = df[label_col].astype(str).tolist()
-	times = time_sec.tolist()
+    # Try to auto-detect delimiter
+    with open(file_path, "r") as f:
+        first_line = f.readline()
+        delimiter = "," if "," in first_line else "\t"
 
-	frames = None
-	if frame_col:
-		frames = df[frame_col].tolist()
+    df = pd.read_csv(file_path, delimiter=delimiter)
 
-	return labels, times, frames
+    # Auto-detect columns
+    label_col = next((col for col in df.columns if "label" in col.lower()), df.columns[0])
+    time_col = next((col for col in df.columns if "time" in col.lower()), df.columns[1])
+    frame_col = next((col for col in df.columns if "frame" in col.lower()), None)
+
+    # Convert time to seconds
+    if df[time_col].dtype == "object":
+        time_sec = pd.to_timedelta(df[time_col]).dt.total_seconds()
+    else:
+        time_sec = df[time_col]
+
+    labels = df[label_col].astype(str).tolist()
+    times = time_sec.tolist()
+
+    frames = None
+    if frame_col:
+        frames = df[frame_col].tolist()
+
+    return labels, times, frames

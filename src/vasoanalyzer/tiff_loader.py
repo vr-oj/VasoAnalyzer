@@ -1,3 +1,5 @@
+"""Loading routines for TIFF stacks used for trace snapshots."""
+
 import logging
 import tifffile
 import numpy as np
@@ -5,7 +7,25 @@ import json
 
 log = logging.getLogger(__name__)
 
+
 def load_tiff(file_path, max_frames=300):
+    """Load a subset of frames from a TIFF file.
+
+    Args:
+        file_path (str or Path): Path to the TIFF stack.
+        max_frames (int, optional): Maximum number of frames to load. Frames are
+            sampled evenly across the stack if it contains more than this value.
+            Defaults to ``300``.
+
+    Returns:
+        tuple[list[numpy.ndarray], list[dict]]: Extracted frames and metadata for
+            each sampled frame.
+
+    Raises:
+        json.JSONDecodeError: If a frame description contains invalid JSON.
+        OSError: If the file cannot be read as a TIFF.
+    """
+
     frames = []
     frames_metadata = []
     
