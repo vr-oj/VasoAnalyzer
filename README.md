@@ -48,12 +48,13 @@ Designed for researchers. Powered by Python. Zero coding required.
   - `eventDiameters_output.csv` (data table)  
   - `tracePlot_output.fig.pickle` (editable Python state)  
   - `tracePlot_output_pubready.tiff` / `.svg` (600 dpi publication‑ready)  
-- **🧾 Excel Mapper Integration**  
-  - Map table into existing `.xlsx` templates  
-  - Preserves formulas & formatting  
-- **⚡ UI & Performance**  
-  - Responsive layout, light theme, compact toolbar  
-  - Fast TIFF loading, slider sync, smooth tooltips  
+- **🧾 Excel Mapper Integration**
+  - Map table into existing `.xlsx` templates
+  - Preserves formulas & formatting
+- **🌗 Toggle Dark Theme** via *View → Toggle Dark Theme*
+- **⚡ UI & Performance**
+  - Responsive layout, light theme, compact toolbar
+  - Fast TIFF loading, slider sync, smooth tooltips
 
 
 ---
