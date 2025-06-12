@@ -1092,8 +1092,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         for col in range(self.event_table.columnCount()):
             header_item = self.event_table.horizontalHeaderItem(col)
-            header_item.setFont(header_font)
-            header_item.setBackground(QBrush(QColor(CURRENT_THEME['button_bg'])))
+            if header_item and not sip.isdeleted(header_item):
+                header_item.setFont(header_font)
+                header_item.setBackground(QBrush(QColor(CURRENT_THEME['button_bg'])))
 
         self.event_table.setAlternatingRowColors(True)
         for row in range(self.event_table.rowCount()):
