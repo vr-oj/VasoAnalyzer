@@ -28,3 +28,18 @@ def test_export_sample():
     assert s.exported is True
     assert s.column == "B"
     assert exp.next_column == "C"
+
+
+def test_trace_event_paths_persist(tmp_path):
+    proj = Project(name="P")
+    exp = Experiment(name="E")
+    s = SampleN(name="N1", trace_path="trace.csv", events_path="events.csv")
+    exp.samples.append(s)
+    proj.experiments.append(exp)
+    path = tmp_path / "proj.vaso"
+    save_project(proj, path)
+
+    loaded = load_project(path)
+    loaded_s = loaded.experiments[0].samples[0]
+    assert loaded_s.trace_path == "trace.csv"
+    assert loaded_s.events_path == "events.csv"
