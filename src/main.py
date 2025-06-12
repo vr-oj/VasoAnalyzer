@@ -93,13 +93,6 @@ class VasoAnalyzerLauncher:
         try:
             print("🚀 Attempting to create VasoAnalyzerApp window...")
             self.window = VasoAnalyzerApp()
-            file_menu = self.window.menuBar().actions()[0].menu()
-            save_act = QAction("Save Project", self.window)
-            save_act.triggered.connect(self.window.save_project)
-            open_act = QAction("Open Project", self.window)
-            open_act.triggered.connect(self.window.open_project)
-            file_menu.addAction(save_act)
-            file_menu.addAction(open_act)
             self.window.show()
             print("✅ Main window shown successfully!")
         except Exception as e:
