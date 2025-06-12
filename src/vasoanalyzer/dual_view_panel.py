@@ -58,7 +58,7 @@ class DataViewPanel(QWidget):
             btn = visible[6]
             btn.setToolTip("Edit axis ranges and titles")
             btn.triggered.disconnect()
-            btn.triggered.connect(self.toolbar.edit_parameters)
+            btn.triggered.connect(self._open_axis_dialog)
             # Inject Plot Style button
             style_btn = QToolButton()
             style_btn.setText("Aa")
@@ -316,6 +316,11 @@ class DataViewPanel(QWidget):
                 event_text_objects=getattr(self, "event_text_objects", None),
                 pinned_points=getattr(self, "pins", None),
             )
+
+    def _open_axis_dialog(self):
+        main = self.window()
+        if hasattr(main, "open_axis_settings_dialog_for"):
+            main.open_axis_settings_dialog_for(self.ax, self.canvas)
 
     def apply_plot_style(self, style):
         """Apply style dictionary to this panel's plot."""
