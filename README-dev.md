@@ -1,4 +1,4 @@
-# VasoAnalyzer Developer Notes (v2.5.1-dev)
+# VasoAnalyzer Developer Notes (v1.6)
 
 This document is for internal use during development of the Python-based VasoAnalyzer toolkit.
 
@@ -34,7 +34,7 @@ Code Style
 
 Dev Branch Workflow
 	•	Base branch: main
-	•	Development branch: v2.5.1-dev
+	•	Development branch: v1.6
 	•	Never commit .vscode/, vasoenv/, or __pycache__/
 	•	Always open PRs into main when features are complete
 	•	Use DEV_CHANGELOG.md to track meaningful commits

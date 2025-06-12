@@ -65,10 +65,10 @@ rcParams.update(
 )
 
 
-def check_for_new_version(current_version="v1.6"):
+def check_for_new_version(current_version=f"v{APP_VERSION}"):
     try:
         response = requests.get(
-            "https://api.github.com/repos/vr-oj/VasoAnalyzer_2.0/releases/latest"
+            "https://api.github.com/repos/vr-oj/VasoAnalyzer/releases/latest"
         )
         if response.status_code == 200:
             latest_version = response.json().get("tag_name", "")
@@ -587,7 +587,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_files = recent
 
     def check_for_updates_at_startup(self):
-        latest = check_for_new_version("v1.6")
+        latest = check_for_new_version(f"v{APP_VERSION}")
         if latest:
             QMessageBox.information(
                 self,
@@ -668,7 +668,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def show_release_notes(self):
         # You could load a local CHANGELOG.md and display it
-        QMessageBox.information(self, "Release Notes", "Release 2.5.1:\n- Foo\n- Bar\n")
+        QMessageBox.information(self, "Release Notes", "Release 1.6:\n- Foo\n- Bar\n")
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
