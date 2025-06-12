@@ -16,11 +16,7 @@ from PyQt5.QtGui import QIcon
 from utils.config import APP_VERSION
 
 from vasoanalyzer.gui import VasoAnalyzerApp
-from vasoanalyzer.theme_manager import (
-    apply_dark_theme,
-    apply_light_theme,
-    is_system_dark_mode,
-)
+from vasoanalyzer.theme_manager import apply_light_theme
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5 import MainWindow
@@ -70,11 +66,8 @@ class VasoAnalyzerLauncher:
         if icon_path and os.path.exists(icon_path):
             self.app.setWindowIcon(QIcon(icon_path))
 
-        # === Apply theme based on system preference ===
-        if is_system_dark_mode():
-                apply_dark_theme()
-        else:
-                apply_light_theme()
+        # === Apply the application theme ===
+        apply_light_theme()
 
         # === Load and Show Splash Screen from PNG file ===
         splash_path = os.path.join(os.path.dirname(__file__), "vasoanalyzer", "VasoAnalyzerSplashScreen.png")
