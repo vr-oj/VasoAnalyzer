@@ -1,6 +1,7 @@
 # ===== Main Launcher =====
 import sys
 import os
+import logging
 import base64
 import h5py
 import pickle
@@ -19,6 +20,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import rcParams
 from matplotlib.backends.backend_qt5 import MainWindow
+
+log = logging.getLogger(__name__)
 
 # ===== Helper to fix Matplotlib dialogs =====
 def fix_matplotlib_dialogs():
@@ -143,5 +146,6 @@ class VasoAnalyzerLauncher:
 		sys.exit(self.app.exec_())
 
 if __name__ == "__main__":
-	launcher = VasoAnalyzerLauncher()
-	launcher.run()
+        logging.basicConfig(level=logging.INFO)
+        launcher = VasoAnalyzerLauncher()
+        launcher.run()
