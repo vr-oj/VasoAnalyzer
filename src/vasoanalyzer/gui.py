@@ -729,14 +729,20 @@ class VasoAnalyzerApp(QMainWindow):
         visible_buttons = [a for a in self.toolbar.actions() if not a.icon().isNull()]
         if len(visible_buttons) >= 8:
             visible_buttons[0].setToolTip("Home: Reset zoom and pan")
+            visible_buttons[0].setIcon(QIcon(self.icon_path("Home.svg")))
             visible_buttons[1].setToolTip("Back: Previous view")
+            visible_buttons[1].setIcon(QIcon(self.icon_path("Back.svg")))
             visible_buttons[2].setToolTip("Forward: Next view")
+            visible_buttons[2].setIcon(QIcon(self.icon_path("Forward.svg")))
             visible_buttons[3].setToolTip("Pan: Click and drag plot")
+            visible_buttons[3].setIcon(QIcon(self.icon_path("Pan.svg")))
             visible_buttons[4].setToolTip("Zoom: Draw box to zoom in")
+            visible_buttons[4].setIcon(QIcon(self.icon_path("Zoom.svg")))
 
             # [5] Subplot layout (borders + spacings)
             layout_btn = visible_buttons[5]
             layout_btn.setToolTip("Configure subplot layout")
+            layout_btn.setIcon(QIcon(self.icon_path("Subplots.svg")))
             layout_btn.triggered.disconnect()
             layout_btn.triggered.connect(
                 lambda: self.open_subplot_layout_dialog(self.fig)
@@ -745,6 +751,7 @@ class VasoAnalyzerApp(QMainWindow):
             # [6] Axes and title editor
             axes_btn = visible_buttons[6]
             axes_btn.setToolTip("Edit axis ranges and titles")
+            axes_btn.setIcon(QIcon(self.icon_path("Customize:edit_axis_ranges.svg")))
             axes_btn.triggered.disconnect()
             axes_btn.triggered.connect(
                 lambda: self.open_axis_settings_dialog_for(self.ax, self.canvas)
@@ -752,7 +759,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             # [Inject] Aa: Plot style editor
             style_btn = QToolButton()
-            style_btn.setText("Aa")
+            style_btn.setIcon(QIcon(self.icon_path("Aa.svg")))
             style_btn.setToolTip("Customize plot fonts and layout")
             # Use global theme styling for toolbuttons
             style_btn.clicked.connect(self.open_plot_style_editor)
@@ -764,7 +771,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             # [Inject] Grid toggle button
             grid_btn = QToolButton()
-            grid_btn.setText("Grid")
+            grid_btn.setIcon(QIcon(self.icon_path("Grid.svg")))
             grid_btn.setToolTip("Toggle grid visibility")
             grid_btn.setCheckable(True)
             grid_btn.setChecked(self.grid_visible)
@@ -778,6 +785,7 @@ class VasoAnalyzerApp(QMainWindow):
             # [7] Save/export button
             save_btn = visible_buttons[7]
             save_btn.setToolTip("Save As… Export high-res plot")
+            save_btn.setIcon(QIcon(self.icon_path("Save.svg")))
             save_btn.triggered.disconnect()
             save_btn.triggered.connect(self.export_high_res_plot)
             self.toolbar.style().polish(self.toolbar)
@@ -936,13 +944,19 @@ class VasoAnalyzerApp(QMainWindow):
         visible_buttons = [a for a in toolbar.actions() if not a.icon().isNull()]
         if len(visible_buttons) >= 8:
             visible_buttons[0].setToolTip("Home: Reset zoom and pan")
+            visible_buttons[0].setIcon(QIcon(self.icon_path("Home.svg")))
             visible_buttons[1].setToolTip("Back: Previous view")
+            visible_buttons[1].setIcon(QIcon(self.icon_path("Back.svg")))
             visible_buttons[2].setToolTip("Forward: Next view")
+            visible_buttons[2].setIcon(QIcon(self.icon_path("Forward.svg")))
             visible_buttons[3].setToolTip("Pan: Click and drag plot")
+            visible_buttons[3].setIcon(QIcon(self.icon_path("Pan.svg")))
             visible_buttons[4].setToolTip("Zoom: Draw box to zoom in")
+            visible_buttons[4].setIcon(QIcon(self.icon_path("Zoom.svg")))
 
             layout_btn = visible_buttons[5]
             layout_btn.setToolTip("Configure subplot layout")
+            layout_btn.setIcon(QIcon(self.icon_path("Subplots.svg")))
             layout_btn.triggered.disconnect()
             layout_btn.triggered.connect(
                 lambda fig=canvas.figure: self.open_subplot_layout_dialog(fig)
@@ -950,6 +964,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             axes_btn = visible_buttons[6]
             axes_btn.setToolTip("Edit axis ranges and titles")
+            axes_btn.setIcon(QIcon(self.icon_path("Customize:edit_axis_ranges.svg")))
             axes_btn.triggered.disconnect()
             axes_btn.triggered.connect(
                 lambda c=canvas: self.open_axis_settings_dialog_for(c.figure.axes[0], c)
@@ -957,7 +972,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             # Inject custom "Aa" button
             style_btn = QToolButton()
-            style_btn.setText("Aa")
+            style_btn.setIcon(QIcon(self.icon_path("Aa.svg")))
             style_btn.setToolTip("Customize plot fonts and layout")
             # Use global theme styling for toolbuttons
             style_btn.clicked.connect(self.open_plot_style_editor)
@@ -965,7 +980,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             # Inject grid toggle
             grid_btn = QToolButton()
-            grid_btn.setText("Grid")
+            grid_btn.setIcon(QIcon(self.icon_path("Grid.svg")))
             grid_btn.setToolTip("Toggle grid visibility")
             grid_btn.setCheckable(True)
             grid_btn.setChecked(self.grid_visible)
@@ -975,6 +990,7 @@ class VasoAnalyzerApp(QMainWindow):
             # Override Save
             save_btn = visible_buttons[7]
             save_btn.setToolTip("Save As… Export high-res plot")
+            save_btn.setIcon(QIcon(self.icon_path("Save.svg")))
             save_btn.triggered.disconnect()
             save_btn.triggered.connect(self.export_high_res_plot)
 
