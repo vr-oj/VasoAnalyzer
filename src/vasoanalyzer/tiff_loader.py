@@ -1,6 +1,9 @@
+import logging
 import tifffile
 import numpy as np
 import json
+
+log = logging.getLogger(__name__)
 
 def load_tiff(file_path, max_frames=300):
     frames = []
@@ -33,9 +36,13 @@ def load_tiff(file_path, max_frames=300):
                     json_metadata = json.loads(page.description)
                     # Add all JSON metadata to our frame metadata
                     frame_meta.update(json_metadata)
-                    print(f"Found JSON metadata in frame {i}")
+                    log.info("Found JSON metadata in frame %s", i)
                 except json.JSONDecodeError:
-                    print(f"Frame {i} has description but not valid JSON: {page.description[:100]}...")
+                    log.warning(
+                        "Frame %s has description but not valid JSON: %s...",
+                        i,
+                        page.description[:100],
+                    )
             
             # Also get regular TIFF tags
             for tag in page.tags.values():

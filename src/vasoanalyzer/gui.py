@@ -2,6 +2,7 @@
 import sys, os, pickle, requests
 import numpy as np, pandas as pd, tifffile
 import h5py
+import logging
 from datetime import datetime
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from utils.config import APP_VERSION
@@ -51,6 +52,8 @@ from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
 
+log = logging.getLogger(__name__)
+
 rcParams.update(
     {
         "axes.labelcolor": "black",
@@ -75,7 +78,7 @@ def check_for_new_version(current_version=f"v{APP_VERSION}"):
             if latest_version and latest_version != current_version:
                 return latest_version
     except Exception as e:
-        print(f"Update check failed: {e}")
+        log.warning("Update check failed: %s", e)
     return None
 
 
@@ -544,9 +547,9 @@ class VasoAnalyzerApp(QMainWindow):
             with open(pickle_path, "wb") as f:
                 pickle.dump(state, f)
 
-            print(f"✔ Session state saved to:\n{pickle_path}")
+            log.info("Session state saved to:\n%s", pickle_path)
         except Exception as e:
-            print(f"❌ Failed to save session state:\n{e}")
+            log.error("Failed to save session state:\n%s", e)
 
             with open(PREVIOUS_PLOT_PATH, "wb") as f:
                 pickle.dump(state, f)
@@ -1454,14 +1457,14 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Clamp index to valid range
         if index < 0 or index >= len(self.snapshot_frames):
-            print(f"⚠️ Frame index {index} out of bounds.")
+            log.warning("Frame index %s out of bounds.", index)
             return
 
         frame = self.snapshot_frames[index]
 
         # Skip if frame is empty or corrupted
         if frame is None or frame.size == 0:
-            print(f"⚠️ Skipping empty or corrupted frame at index {index}")
+            log.warning("Skipping empty or corrupted frame at index %s", index)
             return
 
         try:
@@ -1487,7 +1490,7 @@ class VasoAnalyzerApp(QMainWindow):
                 )
             )
         except Exception as e:
-            print(f"⚠️ Error displaying frame {index}: {e}")
+            log.error("Error displaying frame %s: %s", index, e)
 
     def change_frame(self):
         if not self.snapshot_frames:
@@ -1522,15 +1525,22 @@ class VasoAnalyzerApp(QMainWindow):
                 frame_number = frame_meta["FrameNumber"]
                 # Convert frame number to time using recording interval
                 t_current = frame_number
-                print(f"Using FrameNumber {frame_number} → time: {t_current:.2f}s")
+                log.info(
+                    "Using FrameNumber %s → time: %.2fs", frame_number, t_current
+                )
             else:
                 # Fall back to slider index if frame number isn't available
                 t_current = current_frame_idx
-                print(f"No FrameNumber in metadata, using slider index: {t_current:.2f}s")
+                log.info(
+                    "No FrameNumber in metadata, using slider index: %.2fs",
+                    t_current,
+                )
         else:
             # Fall back to slider index if no metadata is available
             t_current = current_frame_idx
-            print(f"No metadata available, using slider index: {t_current:.2f}s")
+            log.info(
+                "No metadata available, using slider index: %.2fs", t_current
+            )
 
         # 3) Draw or move the red line at that time
         if self.slider_marker is None:
@@ -1656,7 +1666,7 @@ class VasoAnalyzerApp(QMainWindow):
                 f"Restored from: {os.path.basename(file_path)}"
             )
             self.statusBar().showMessage("Session restored successfully.")
-            print("✅ Session reloaded with full metadata.")
+            log.info("Session reloaded with full metadata.")
 
         except Exception as e:
             QMessageBox.critical(self, "Load Failed", f"Error loading session:\n{e}")
@@ -1849,7 +1859,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Record the change for undo/redo functionality
         cmd = ReplaceEventCommand(self, row, old_val, round(new_val, 2))
         self.undo_stack.push(cmd)
-        print(f"✏️ ID updated at {time:.2f}s → {new_val:.2f} µm")
+        log.info("ID updated at %.2fs → %.2f µm", time, new_val)
 
     def table_row_clicked(self, row, col):
         if not self.event_table_data:
@@ -1933,7 +1943,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def handle_event_replacement(self, x, y):
         if not self.event_labels or not self.event_times:
-            print("No events available to replace.")
+            log.info("No events available to replace.")
             return
 
         options = [
@@ -2026,7 +2036,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.populate_table()
         self.auto_export_table()
-        print(f"➕ Inserted new event: {new_entry}")
+        log.info("Inserted new event: %s", new_entry)
 
     # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
@@ -2307,7 +2317,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.slider.hide()
         self.snapshot_label.hide()
         self.excel_btn.setEnabled(False)
-        print("🧼 Cleared session.")
+        log.info("Cleared session.")
         self.scroll_slider.setValue(0)
         self.scroll_slider.hide()
 
@@ -2420,8 +2430,10 @@ class VasoAnalyzerApp(QMainWindow):
                 )
                 self.populate_table()
                 self.auto_export_table()
-                print(
-                    f"🔄 Replaced ID at {t_event:.2f}s with pinned value {pin_id:.2f} µm."
+                log.info(
+                    "Replaced ID at %.2fs with pinned value %.2f µm.",
+                    t_event,
+                    pin_id,
                 )
 
         elif action == clear_pins_action:
@@ -2433,7 +2445,7 @@ class VasoAnalyzerApp(QMainWindow):
                 label.remove()
             self.pinned_points.clear()
             self.canvas.draw_idle()
-            print("🧹 Cleared all pins.")
+            log.info("Cleared all pins.")
 
     def save_recent_files(self):
         self.settings.setValue("recentFiles", self.recent_files)
@@ -2504,7 +2516,7 @@ class VasoAnalyzerApp(QMainWindow):
     # [K] ========================= EXPORT LOGIC (CSV, FIG) ==============================
     def auto_export_table(self):
         if not self.trace_file_path:
-            print("⚠️ No trace path set. Cannot export event table.")
+            log.warning("No trace path set. Cannot export event table.")
             return
 
         try:
@@ -2514,9 +2526,9 @@ class VasoAnalyzerApp(QMainWindow):
                 self.event_table_data, columns=["Event", "Time (s)", "ID (µm)", "Frame"]
             )
             df.to_csv(csv_path, index=False)
-            print(f"✔ Event table auto-exported to:\n{csv_path}")
+            log.info("Event table auto-exported to:\n%s", csv_path)
         except Exception as e:
-            print(f"❌ Failed to auto-export event table:\n{e}")
+            log.error("Failed to auto-export event table:\n%s", e)
 
         if self.excel_auto_path and self.excel_auto_column:
             update_excel_file(
@@ -2541,9 +2553,9 @@ class VasoAnalyzerApp(QMainWindow):
             }
             with open(pickle_path, "wb") as f:
                 pickle.dump(state, f)
-            print(f"✔ Editable trace figure state saved to:\n{pickle_path}")
+            log.info("Editable trace figure state saved to:\n%s", pickle_path)
         except Exception as e:
-            print(f"❌ Failed to save .pickle figure:\n{e}")
+            log.error("Failed to save .pickle figure:\n%s", e)
 
     def export_high_res_plot(self):
         if not self.trace_file_path:
