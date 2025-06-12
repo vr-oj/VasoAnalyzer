@@ -3,7 +3,6 @@ import sys, os, pickle
 import numpy as np, pandas as pd, tifffile
 import h5py
 import logging
-import sip
 from datetime import datetime
 from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from utils.config import APP_VERSION
@@ -43,7 +42,7 @@ from PyQt5.QtWidgets import (
     QUndoCommand,
 )
 
-from PyQt5.QtGui import QPixmap, QImage, QIcon, QFont, QBrush, QColor, QCursor
+from PyQt5.QtGui import QPixmap, QImage, QIcon
 from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 
 from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
@@ -843,9 +842,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.setMinimumWidth(400)
         self.event_table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.event_table.setStyleSheet(
-            f"background-color: {CURRENT_THEME['table_bg']}; color: {CURRENT_THEME['table_text']}"
-        )
+    
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -1086,31 +1083,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.style_event_table()
 
     def style_event_table(self):
-        header_font = QFont()
-        header_font.setBold(True)
-        header_font.setPointSize(12)
-
-        for col in range(self.event_table.columnCount()):
-            header_item = self.event_table.horizontalHeaderItem(col)
-            if header_item and not sip.isdeleted(header_item):
-                header_item.setFont(header_font)
-                header_item.setBackground(QBrush(QColor(CURRENT_THEME['button_bg'])))
-
-        self.event_table.setAlternatingRowColors(True)
-        for row in range(self.event_table.rowCount()):
-            row_color = (
-                QColor(CURRENT_THEME['table_bg'])
-                if row % 2 == 0
-                else QColor(CURRENT_THEME['alternate_bg'])
-            )
-            for col in range(self.event_table.columnCount()):
-                item = self.event_table.item(row, col)
-                if item and not sip.isdeleted(item):
-                    item.setBackground(QBrush(row_color))
-                    if col > 0:
-                        item.setTextAlignment(Qt.AlignCenter)
-
-        self.event_table.resizeColumnToContents(0)
+        """Placeholder styling function (no-op)."""
+        return
 
     def load_snapshot(self):
         # 1) Prompt for TIFF
