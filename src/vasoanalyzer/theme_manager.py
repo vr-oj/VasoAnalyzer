@@ -75,8 +75,10 @@ def apply_qt_palette(theme: dict):
     # Tooltips / hover labels
     palette.setColor(QPalette.ToolTipBase, QColor(theme['hover_label_bg']))
     palette.setColor(QPalette.ToolTipText, QColor(theme['text']))
-    # Apply globally
-    QApplication.setPalette(palette)
+    # Apply globally on the current application instance
+    app = QApplication.instance()
+    if app is not None:
+        app.setPalette(palette)
 
 
 def apply_qt_stylesheet(theme: dict):
@@ -155,7 +157,9 @@ def apply_light_theme():
     global CURRENT_THEME
     CURRENT_THEME = LIGHT_THEME
     apply_qt_palette(LIGHT_THEME)
-    QApplication.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
+    app = QApplication.instance()
+    if app is not None:
+        app.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
     apply_matplotlib_style(LIGHT_THEME)
 
 
@@ -163,7 +167,9 @@ def apply_dark_theme():
     global CURRENT_THEME
     CURRENT_THEME = DARK_THEME
     apply_qt_palette(DARK_THEME)
-    QApplication.setStyleSheet(apply_qt_stylesheet(DARK_THEME))
+    app = QApplication.instance()
+    if app is not None:
+        app.setStyleSheet(apply_qt_stylesheet(DARK_THEME))
     apply_matplotlib_style(DARK_THEME)
 
 
