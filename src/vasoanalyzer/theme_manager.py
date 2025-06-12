@@ -1,6 +1,7 @@
 from PyQt5.QtGui import QPalette, QColor, QFont
 from PyQt5.QtWidgets import QApplication
 from matplotlib import rcParams
+import re
 
 # -----------------------------------------------------------------------------
 # Centralized Theme Definitions for VasoAnalyzer
@@ -50,6 +51,19 @@ FONTS = {
     'category_size': 15,
     'description_size': 17,
 }
+
+# -----------------------------------------------------------------------------
+# Utility
+# -----------------------------------------------------------------------------
+
+def css_rgba_to_mpl(color: str):
+    """Convert an ``rgba(r,g,b,a)`` CSS color string to a matplotlib RGBA tuple."""
+    if isinstance(color, str):
+        m = re.fullmatch(r"rgba\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", color)
+        if m:
+            r, g, b, a = map(int, m.groups())
+            return (r / 255, g / 255, b / 255, a / 255)
+    return color
 
 # -----------------------------------------------------------------------------
 # Qt Palette & Stylesheet Application

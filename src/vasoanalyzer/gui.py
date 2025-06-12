@@ -51,7 +51,7 @@ from vasoanalyzer.tiff_loader import load_tiff
 from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
-from vasoanalyzer.theme_manager import CURRENT_THEME
+from vasoanalyzer.theme_manager import CURRENT_THEME, css_rgba_to_mpl
 
 log = logging.getLogger(__name__)
 
@@ -685,7 +685,7 @@ class VasoAnalyzerApp(QMainWindow):
             textcoords="offset points",
             bbox=dict(
                 boxstyle="round,pad=0.3",
-                fc=CURRENT_THEME['hover_label_bg'],
+                fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
                 ec=CURRENT_THEME['hover_label_border'],
                 lw=1,
             ),
@@ -1597,7 +1597,7 @@ class VasoAnalyzerApp(QMainWindow):
                     textcoords="offset points",
                     bbox=dict(
                         boxstyle="round,pad=0.3",
-                        fc=CURRENT_THEME['hover_label_bg'],
+                        fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
                         ec=CURRENT_THEME['hover_label_border'],
                         lw=1,
                     ),
@@ -1681,7 +1681,7 @@ class VasoAnalyzerApp(QMainWindow):
             textcoords="offset points",
             bbox=dict(
                 boxstyle="round,pad=0.3",
-                fc=CURRENT_THEME['hover_label_bg'],
+                fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
                 ec=CURRENT_THEME['hover_label_border'],
                 lw=1,
             ),
@@ -1897,7 +1897,7 @@ class VasoAnalyzerApp(QMainWindow):
                 textcoords="offset points",
                 bbox=dict(
                     boxstyle="round,pad=0.3",
-                    fc=CURRENT_THEME['hover_label_bg'],
+                    fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
                     ec=CURRENT_THEME['hover_label_border'],
                     lw=1,
                 ),
@@ -2380,7 +2380,7 @@ class VasoAnalyzerApp(QMainWindow):
                 textcoords="offset points",
                 bbox=dict(
                     boxstyle="round,pad=0.3",
-                    fc=CURRENT_THEME['hover_label_bg'],
+                    fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
                     ec=CURRENT_THEME['hover_label_border'],
                     lw=1,
                 ),
