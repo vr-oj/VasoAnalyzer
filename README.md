@@ -125,6 +125,7 @@ python src/main.py
 1. **Load Trace File** (.csv from VasoTracker)
 2. **Load Event File** (.csv or .txt with time labels)
 3. *(Optional)* Load TIFF file (`_Result.tif`) to view snapshots
+   - Frames load in fast preview mode; click **📋 View Metadata** to parse tags
 4. **Zoom** into regions and drag timeline using slider
 5. **Pin points** on trace to annotate or edit events
 6. **Export** results with one click:
