@@ -1516,15 +1516,17 @@ class VasoAnalyzerApp(QMainWindow):
     def populate_event_table_from_df(self, df):
         self.event_table.setRowCount(len(df))
         for row in range(len(df)):
-            self.event_table.setItem(
-                row, 0, QTableWidgetItem(str(df.iloc[row].get("EventLabel", "")))
-            )
-            self.event_table.setItem(
-                row, 1, QTableWidgetItem(str(df.iloc[row].get("Time (s)", "")))
-            )
-            self.event_table.setItem(
-                row, 2, QTableWidgetItem(str(df.iloc[row].get("ID (µm)", "")))
-            )
+            item_label = QTableWidgetItem(str(df.iloc[row].get("EventLabel", "")))
+            item_label.setTextAlignment(Qt.AlignCenter)
+            self.event_table.setItem(row, 0, item_label)
+
+            item_time = QTableWidgetItem(str(df.iloc[row].get("Time (s)", "")))
+            item_time.setTextAlignment(Qt.AlignCenter)
+            self.event_table.setItem(row, 1, item_time)
+
+            item_id = QTableWidgetItem(str(df.iloc[row].get("ID (µm)", "")))
+            item_id.setTextAlignment(Qt.AlignCenter)
+            self.event_table.setItem(row, 2, item_id)
 
     def update_event_label_positions(self, event=None):
         if not hasattr(self, "event_text_objects") or not self.event_text_objects:
