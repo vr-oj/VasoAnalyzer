@@ -198,8 +198,8 @@ class VasoAnalyzerApp(QMainWindow):
             exp_item.setData(0, Qt.UserRole, exp)
             root.addChild(exp_item)
             for s in exp.samples:
-                text = f"{s.name} {'✓' if s.exported else '✗'}"
-                item = QTreeWidgetItem([text])
+                status = "✓" if s.trace_path else "✗"
+                item = QTreeWidgetItem([f"{s.name} {status}"])
                 item.setData(0, Qt.UserRole, s)
                 exp_item.addChild(item)
         self.project_tree.expandAll()
@@ -239,9 +239,12 @@ class VasoAnalyzerApp(QMainWindow):
             if action == add_n:
                 self.add_sample(obj)
         elif isinstance(obj, SampleN):
+            load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save N As…")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
-            if action == save_n:
+            if action == load_data:
+                self.load_data_into_sample(obj)
+            elif action == save_n:
                 self.save_sample_as(obj)
 
     def add_experiment(self):
@@ -268,6 +271,30 @@ class VasoAnalyzerApp(QMainWindow):
             )
             return
         self.add_sample(self.current_experiment)
+
+    def load_data_into_sample(self, sample: SampleN):
+        trace_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Trace File", "", "CSV Files (*.csv)"
+        )
+        if not trace_path:
+            return
+
+        events_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Events File (optional)",
+            os.path.dirname(trace_path),
+            "CSV Files (*.csv)"
+        )
+        if not events_path:
+            events_path = None
+
+        sample.trace_path = trace_path
+        sample.events_path = events_path
+
+        self.refresh_project_tree()
+
+        if self.current_project and self.current_project.path:
+            save_project(self.current_project, self.current_project.path)
 
     def save_sample_as(self, sample):
         path, _ = QFileDialog.getSaveFileName(
