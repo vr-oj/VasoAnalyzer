@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QFrame
 )
 from openpyxl import load_workbook
+from openpyxl.utils import column_index_from_string, get_column_letter
 import os, sys, subprocess, time
 
 class ExcelMappingDialog(QDialog):
@@ -61,6 +62,7 @@ class ExcelMappingDialog(QDialog):
         self.column_selector = QComboBox()
         self.column_selector.addItems([chr(i) for i in range(66, 91)])
         self.column_selector.setEnabled(False)
+        self.column_selector.currentTextChanged.connect(self.update_preview_table)
         self.layout.addWidget(self.column_selector)
 
         self.layout.addSpacing(6)
@@ -81,6 +83,13 @@ class ExcelMappingDialog(QDialog):
         self.event_table.horizontalHeader().setStretchLastSection(True)
         self.layout.addWidget(self.event_table)
         self.populate_event_table()
+
+        # Preview table for selected Excel column
+        self.preview_table = QTableWidget()
+        self.preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preview_table.setMinimumWidth(420)
+        self.preview_table.horizontalHeader().setStretchLastSection(True)
+        self.layout.addWidget(self.preview_table)
 
         self.button_layout = QHBoxLayout()
         self.button_layout.addStretch()
@@ -129,6 +138,7 @@ class ExcelMappingDialog(QDialog):
                 self.column_selector.setEnabled(True)
                 self.instructions.setText("<b>Step 2:</b> File loaded. Now select column and assign values.")
                 self.update_cell_label()
+                self.update_preview_table()
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load Excel file:\n{e}")
         self.excel_filename_label.setText(f"<i>Loaded:</i> {os.path.basename(path)}")
@@ -150,6 +160,43 @@ class ExcelMappingDialog(QDialog):
             except:
                 pass
         self.cell_label.setText(f"<b>Editing Cell:</b> {cell}{description}")
+        self.update_preview_table()
+
+    def update_preview_table(self):
+        if not self.ws or not self.column_selector.currentText():
+            self.preview_table.setRowCount(0)
+            self.preview_table.setColumnCount(0)
+            return
+
+        col_letter = self.column_selector.currentText()
+        col_idx = column_index_from_string(col_letter)
+        column_indices = []
+        headers = []
+
+        if col_idx > 1:
+            column_indices.append(col_idx - 1)
+            headers.append(get_column_letter(col_idx - 1))
+
+        column_indices.append(col_idx)
+        headers.append(col_letter)
+
+        column_indices.append(col_idx + 1)
+        headers.append(get_column_letter(col_idx + 1))
+
+        start_row = max(1, self.current_row - 4)
+        end_row = min(self.ws.max_row, start_row + 8)
+        num_rows = end_row - start_row + 1
+
+        self.preview_table.setRowCount(num_rows)
+        self.preview_table.setColumnCount(len(headers))
+        self.preview_table.setHorizontalHeaderLabels(headers)
+
+        for r, sheet_row in enumerate(range(start_row, end_row + 1)):
+            for c, col in enumerate(column_indices):
+                value = self.ws.cell(row=sheet_row, column=col).value
+                self.preview_table.setItem(r, c, QTableWidgetItem("" if value is None else str(value)))
+
+        self.preview_table.resizeColumnsToContents()
 
     def map_event_to_excel(self, row, column):
         if not self.ws or not self.column_selector.currentText():
@@ -168,12 +215,14 @@ class ExcelMappingDialog(QDialog):
             self.wb.save(self.excel_path)
             self.current_row += 1
             self.update_cell_label()
+            self.update_preview_table()
         except Exception as e:
             QMessageBox.warning(self, "Mapping Error", f"Failed to assign value: {e}")
 
     def skip_cell(self):
         self.current_row += 1
         self.update_cell_label()
+        self.update_preview_table()
 
     def undo_last(self):
         if not self.history:
@@ -184,6 +233,7 @@ class ExcelMappingDialog(QDialog):
         self.wb.save(self.excel_path)
         self.current_row = int(''.join(filter(str.isdigit, cell)))
         self.update_cell_label()
+        self.update_preview_table()
 
     def finish_and_save(self):
         if self.wb and self.excel_path:
