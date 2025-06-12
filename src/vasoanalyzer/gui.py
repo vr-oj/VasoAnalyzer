@@ -2737,9 +2737,32 @@ class PlotStyleDialog(QDialog):
         self.setMinimumWidth(400)
         self.apply_callback = None
 
+        # Consistent styling across tabs and buttons
+        self.setStyleSheet(
+            """
+            QDialog {
+                font-family: Arial;
+                font-size: 12px;
+            }
+            QTabWidget::pane {
+                margin: 6px;
+            }
+            QFormLayout {
+                margin-top: 4px;
+                margin-bottom: 4px;
+            }
+            QPushButton {
+                min-width: 70px;
+                padding: 4px 8px;
+            }
+            """
+        )
+
         # Tab widget
         self.tabs = QTabWidget()
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
         main_layout.addWidget(self.tabs)
 
         # Bottom row: Apply All / Cancel / OK
@@ -2826,6 +2849,7 @@ class PlotStyleDialog(QDialog):
     def _make_section_widgets(self, section):
         """Helper: create section's Apply/Default row."""
         h = QHBoxLayout()
+        h.setSpacing(6)
         h.addStretch()
         apply_btn = QPushButton("Apply")
         default_btn = QPushButton("Default")
@@ -2839,6 +2863,10 @@ class PlotStyleDialog(QDialog):
         tab = QWidget()
         tab.setObjectName("axis_tab")
         layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        desc = QLabel("Adjust axis title fonts")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
         form = QFormLayout()
         self.axis_font_size = QSpinBox()
         self.axis_font_size.setRange(6, 32)
@@ -2861,6 +2889,10 @@ class PlotStyleDialog(QDialog):
         tab = QWidget()
         tab.setObjectName("tick_tab")
         layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        desc = QLabel("Set tick label font size")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
         form = QFormLayout()
         self.tick_font_size = QSpinBox()
         self.tick_font_size.setRange(6, 32)
@@ -2874,6 +2906,10 @@ class PlotStyleDialog(QDialog):
         tab = QWidget()
         tab.setObjectName("event_tab")
         layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        desc = QLabel("Customize event annotation fonts")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
         form = QFormLayout()
         self.event_font_size = QSpinBox()
         self.event_font_size.setRange(6, 32)
@@ -2896,6 +2932,10 @@ class PlotStyleDialog(QDialog):
         tab = QWidget()
         tab.setObjectName("pin_tab")
         layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        desc = QLabel("Pinned point labels and marker size")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
         form = QFormLayout()
         self.pin_font_size = QSpinBox()
         self.pin_font_size.setRange(6, 32)
@@ -2922,6 +2962,10 @@ class PlotStyleDialog(QDialog):
         tab = QWidget()
         tab.setObjectName("line_tab")
         layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        desc = QLabel("Trace line thickness")
+        desc.setWordWrap(True)
+        layout.addWidget(desc)
         form = QFormLayout()
         self.line_width = QSpinBox()
         self.line_width.setRange(1, 10)

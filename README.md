@@ -34,9 +34,9 @@ Designed for researchers. Powered by Python. Zero coding required.
 - **🖼️ Synchronized TIFF snapshots** with red trace‑time markers  
 - **🧠 Interactive plotting**: zoom, pan, hover‑to‑read, and pin points  
 - **📏 Auto‑populated event table** with editable inner‑diameter values  
-- **🎨 Plot Style Editor**  
-  - Tabbed interface for axis titles, tick labels, event labels, pinned labels, trace style  
-  - **Apply** & **Reset** on every tab  
+ - **🎨 Plot Style Editor**
+  - Consistent fonts and spacing across tabs with helpful descriptions
+  - **Apply** & **Reset** on every tab
 - **🆕 New Toolbar Buttons**  
   - **Aa** → Open font & style editor  
   - **Grid** → Light‑grid toggle  
