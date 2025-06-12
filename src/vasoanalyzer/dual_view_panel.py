@@ -172,7 +172,14 @@ class DataViewPanel(QWidget):
         # Clear plot
         self.ax.clear()
         self.ax.set_title(self._original_title)
-        self.canvas.draw_idle()
+        # Apply current or default style after drawing
+        main = self.window()
+        if hasattr(main, "get_current_plot_style"):
+            style = main.get_current_plot_style()
+        else:
+            from .gui import DEFAULT_STYLE
+            style = DEFAULT_STYLE
+        self.apply_plot_style(style)
 
         # Clear events table
         self.event_table.setRowCount(0)

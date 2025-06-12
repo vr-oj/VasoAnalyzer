@@ -494,7 +494,8 @@ class VasoAnalyzerApp(QMainWindow):
             marker.remove()
             label.remove()
         self.pinned_points.clear()
-        self.canvas.draw_idle()
+        # Apply current (or default) font style after rebuilding the plot
+        self.apply_plot_style(self.get_current_plot_style())
 
     def save_plot_pickle(self):
         try:
@@ -514,23 +515,7 @@ class VasoAnalyzerApp(QMainWindow):
                 "plot_style": (
                     getattr(self, "plot_style_dialog", None).get_style()
                     if hasattr(self, "plot_style_dialog")
-                    else {
-                        "axis_font_size": 14,
-                        "axis_font_family": "Arial",
-                        "axis_bold": False,
-                        "axis_italic": False,
-                        "tick_font_size": 12,
-                        "event_font_size": 10,
-                        "event_font_family": "Arial",
-                        "event_bold": False,
-                        "event_italic": False,
-                        "pin_font_size": 10,
-                        "pin_font_family": "Arial",
-                        "pin_bold": False,
-                        "pin_italic": False,
-                        "pin_size": 6,
-                        "line_width": 2,
-                    }
+                    else DEFAULT_STYLE.copy()
                 ),
             }
 
@@ -2465,24 +2450,8 @@ class VasoAnalyzerApp(QMainWindow):
         try:
             return self.plot_style_dialog.get_style()
         except AttributeError:
-            # Return default style dict manually
-            return {
-                "axis_font_size": 16,
-                "axis_font_family": "Arial",
-                "axis_bold": False,
-                "axis_italic": False,
-                "tick_font_size": 10,
-                "event_font_size": 11,
-                "event_font_family": "Arial",
-                "event_bold": False,
-                "event_italic": False,
-                "pin_font_size": 10,
-                "pin_font_family": "Arial",
-                "pin_bold": False,
-                "pin_italic": False,
-                "pin_size": 6,
-                "line_width": 2,
-            }
+            # If no dialog exists yet, fall back to module defaults
+            return DEFAULT_STYLE.copy()
 
     def rebuild_default_main_layout(self):
         # Rebuild left layout (plot + slider)
@@ -2960,26 +2929,26 @@ class PlotStyleDialog(QDialog):
     def reset_defaults(self, section):
         defaults = {
             "axis": {
-                "axis_font_size": 16,
-                "axis_font_family": "Arial",
-                "axis_bold": True,
-                "axis_italic": False,
+                "axis_font_size": DEFAULT_STYLE["axis_font_size"],
+                "axis_font_family": DEFAULT_STYLE["axis_font_family"],
+                "axis_bold": DEFAULT_STYLE["axis_bold"],
+                "axis_italic": DEFAULT_STYLE["axis_italic"],
             },
-            "tick": {"tick_font_size": 12},
+            "tick": {"tick_font_size": DEFAULT_STYLE["tick_font_size"]},
             "event": {
-                "event_font_size": 12,
-                "event_font_family": "Arial",
-                "event_bold": False,
-                "event_italic": False,
+                "event_font_size": DEFAULT_STYLE["event_font_size"],
+                "event_font_family": DEFAULT_STYLE["event_font_family"],
+                "event_bold": DEFAULT_STYLE["event_bold"],
+                "event_italic": DEFAULT_STYLE["event_italic"],
             },
             "pin": {
-                "pin_font_size": 10,
-                "pin_font_family": "Arial",
-                "pin_bold": False,
-                "pin_italic": False,
-                "pin_size": 6,
+                "pin_font_size": DEFAULT_STYLE["pin_font_size"],
+                "pin_font_family": DEFAULT_STYLE["pin_font_family"],
+                "pin_bold": DEFAULT_STYLE["pin_bold"],
+                "pin_italic": DEFAULT_STYLE["pin_italic"],
+                "pin_size": DEFAULT_STYLE["pin_size"],
             },
-            "line": {"line_width": 2},
+            "line": {"line_width": DEFAULT_STYLE["line_width"]},
         }
         for attr, val in defaults[section].items():
             widget = getattr(self, attr)
