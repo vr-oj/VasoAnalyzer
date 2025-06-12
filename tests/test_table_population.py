@@ -20,3 +20,4 @@ def test_table_population_no_exception(tmp_path):
     gui.load_trace_and_events(str(trace_path))
     gui.populate_table()
     app.quit()
+
