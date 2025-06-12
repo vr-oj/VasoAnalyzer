@@ -159,7 +159,10 @@ class VasoAnalyzerApp(QMainWindow):
             self.recent_menu.addAction(action)
 
     def icon_path(self, filename):
-        return os.path.join(os.path.dirname(__file__), "..", "icons", filename)
+        """Return absolute path to an icon shipped with the application."""
+        return os.path.join(
+            os.path.dirname(__file__), "..", "..", "..", "icons", filename
+        )
 
     def sync_slider_with_plot(self, event=None):
         if self.trace_data is None:
