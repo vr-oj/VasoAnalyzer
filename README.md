@@ -63,6 +63,13 @@ Organize related experiments together in a single `.vaso` file. Each project can
 
 ![Sidebar demo](docs/projects_demo.png)
 
+### 📁 Quick Project Workflow
+
+1. **Project → New Project** to start a fresh project file.
+2. **Project → Add Experiment** and **Project → Add N** build your experiment tree.
+3. Right‑click an N and choose **Load Data Into N…** to import trace and events.
+4. Save progress with **Project → Save Project** and reopen using **Project → Open Project…**.
+
 ---
 ## 🚀 Download & Install
 
