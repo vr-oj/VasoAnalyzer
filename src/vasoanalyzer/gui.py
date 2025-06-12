@@ -1765,6 +1765,8 @@ class VasoAnalyzerApp(QMainWindow):
             self.populate_table()
             self.auto_export_table()
 
+        # Apply plot style (defaults on first load)
+        self.apply_plot_style(self.get_current_plot_style())
         self.canvas.draw_idle()
 
     def scroll_plot(self):
