@@ -19,29 +19,29 @@ Running the App
 python src/main.py
 ```
 You can also run and debug using VSCode:
-	•	Open folder in VSCode
-	•	Activate the vasoenv interpreter
-	•	Run main.py with the play button or debugger
+        •       Open folder in VSCode
+        •       Activate the vasoenv interpreter
+        •       Run main.py with the play button or debugger
 
 ⸻
 
 Code Style
-	•	Uses Black formatter
-	•	Line length: 88 characters
-	•	Format on save: Enabled via .vscode/settings.json
+        •       Uses Black formatter
+        •       Line length: 88 characters
+        •       Format on save: Enabled via .vscode/settings.json
 
 ⸻
 
 Dev Branch Workflow
-	•	Base branch: main
-	•	Development branch: v1.6
-	•	Never commit .vscode/, vasoenv/, or __pycache__/
-	•	Always open PRs into main when features are complete
-	•	Use DEV_CHANGELOG.md to track meaningful commits
+        •       Base branch: main
+        •       Development branch: v1.6
+        •       Never commit .vscode/, vasoenv/, or __pycache__/
+        •       Always open PRs into main when features are complete
+        •       Use DEV_CHANGELOG.md to track meaningful commits
 
 ⸻
 
 Additional Notes
-	•	Uses PyQt5, matplotlib, numpy, pandas, tifffile
-	•	App is bundled with PyInstaller for release builds
-    ---
+        •       Uses PyQt5, matplotlib, numpy, pandas, tifffile
+        •       App is bundled with PyInstaller for release builds
+        •       `load_tiff_preview` provides quick frame loading without metadata

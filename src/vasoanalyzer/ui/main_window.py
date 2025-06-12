@@ -49,7 +49,7 @@ from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 
 from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
 from vasoanalyzer.trace_loader import load_trace
-from vasoanalyzer.tiff_loader import load_tiff
+from vasoanalyzer.tiff_loader import load_tiff, load_tiff_preview
 from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
@@ -1248,7 +1248,7 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         try:
-            frames, frames_metadata = load_tiff(file_path)
+            frames, frames_metadata = load_tiff_preview(file_path)
             valid_frames = []
             valid_metadata = []
 
@@ -1271,11 +1271,14 @@ class VasoAnalyzerApp(QMainWindow):
 
             # 4) Build a time‑array for each frame
             self.frame_times = []
-            for idx, meta in enumerate(self.frames_metadata):
-                # use FrameTime tag if present, else uniform interval
-                self.frame_times.append(
-                    meta.get("FrameTime", idx * self.recording_interval)
-                )
+            if self.frames_metadata:
+                for idx, meta in enumerate(self.frames_metadata):
+                    self.frame_times.append(
+                        meta.get("FrameTime", idx * self.recording_interval)
+                    )
+            else:
+                for idx in range(len(self.snapshot_frames)):
+                    self.frame_times.append(idx * self.recording_interval)
 
             # 5) Initialize the image viewer & slider
             self.display_frame(0)
@@ -1288,16 +1291,17 @@ class VasoAnalyzerApp(QMainWindow):
             # 6) Reset the red‑line marker so next scroll redraws it
             self.slider_marker = None
 
-            # Create metadata button if it doesn't exist
-            if not hasattr(self, "metadata_btn"):
-                self.metadata_btn = QPushButton("📋 View Metadata")
-                self.metadata_btn.clicked.connect(self.show_current_frame_metadata)
+            if self.frames_metadata:
+                if not hasattr(self, "metadata_btn"):
+                    self.metadata_btn = QPushButton("📋 View Metadata")
+                    self.metadata_btn.clicked.connect(self.show_current_frame_metadata)
 
-                # Find the layout containing the snapshot label
-                right_layout = self.snapshot_label.parent().layout()
-                right_layout.addWidget(self.metadata_btn)
-            else:
-                self.metadata_btn.show()
+                    right_layout = self.snapshot_label.parent().layout()
+                    right_layout.addWidget(self.metadata_btn)
+                else:
+                    self.metadata_btn.show()
+            elif hasattr(self, "metadata_btn"):
+                self.metadata_btn.hide()
 
         except Exception as e:
             QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
