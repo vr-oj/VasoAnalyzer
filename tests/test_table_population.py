@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 from PyQt5.QtWidgets import QApplication
-from vasoanalyzer.gui import VasoAnalyzerApp
+from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 
 
 def test_table_population_no_exception(tmp_path):

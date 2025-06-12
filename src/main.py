@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from PyQt5.QtGui import QIcon
 from utils.config import APP_VERSION
 
-from vasoanalyzer.gui import VasoAnalyzerApp
+from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 from vasoanalyzer.theme_manager import apply_light_theme
 import matplotlib
 import matplotlib.pyplot as plt
