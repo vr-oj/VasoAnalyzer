@@ -14,7 +14,7 @@ def test_project_save_load(tmp_path):
     exp = Experiment(name="E")
     exp.samples.append(SampleN(name="N1"))
     proj.experiments.append(exp)
-    path = tmp_path / "proj.vaso"
+    path = tmp_path / "proj.vasoproj"
     save_project(proj, path)
     loaded = load_project(path)
     assert loaded.name == "P"
@@ -36,7 +36,7 @@ def test_trace_event_paths_persist(tmp_path):
     s = SampleN(name="N1", trace_path="trace.csv", events_path="events.csv")
     exp.samples.append(s)
     proj.experiments.append(exp)
-    path = tmp_path / "proj.vaso"
+    path = tmp_path / "proj.vasoproj"
     save_project(proj, path)
 
     loaded = load_project(path)

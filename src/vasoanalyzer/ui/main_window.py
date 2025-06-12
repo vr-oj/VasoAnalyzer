@@ -161,7 +161,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def open_project(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", "Vaso Project (*.vaso)"
+            self, "Open Project", "", "Vaso Project (*.vasoproj)"
         )
         if path:
             self.current_project = load_project(path)
@@ -177,11 +177,11 @@ class VasoAnalyzerApp(QMainWindow):
         if not self.current_project:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project As", "", "Vaso Project (*.vaso)"
+            self, "Save Project As", "", "Vaso Project (*.vasoproj)"
         )
         if path:
-            if not path.endswith(".vaso"):
-                path += ".vaso"
+            if not path.endswith(".vasoproj"):
+                path += ".vasoproj"
             save_project(self.current_project, path)
 
     def refresh_project_tree(self):
