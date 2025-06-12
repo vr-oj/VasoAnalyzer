@@ -51,7 +51,13 @@ from vasoanalyzer.tiff_loader import load_tiff
 from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
-from vasoanalyzer.theme_manager import CURRENT_THEME, css_rgba_to_mpl
+from vasoanalyzer.theme_manager import (
+    CURRENT_THEME,
+    LIGHT_THEME,
+    apply_dark_theme,
+    apply_light_theme,
+    css_rgba_to_mpl,
+)
 
 log = logging.getLogger(__name__)
 
@@ -393,6 +399,10 @@ class VasoAnalyzerApp(QMainWindow):
         view_menu.addAction(self.action_dual)
 
         view_menu.addSeparator()
+
+        toggle_theme_act = QAction("Toggle Dark Theme", self)
+        toggle_theme_act.triggered.connect(self.toggle_theme)
+        view_menu.addAction(toggle_theme_act)
 
         # 5) Full‑Screen
         fs_act = QAction("Full‑Screen Mode", self)
@@ -2598,6 +2608,31 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax.grid(True, color=CURRENT_THEME['grid_color'])
         else:
             self.ax.grid(False)
+        self.canvas.draw_idle()
+
+    def toggle_theme(self):
+        """Switch between light and dark application themes."""
+        if CURRENT_THEME is LIGHT_THEME:
+            apply_dark_theme()
+        else:
+            apply_light_theme()
+
+        # Update figure and axes background colors
+        self.fig.set_facecolor(CURRENT_THEME['window_bg'])
+        self.ax.set_facecolor(CURRENT_THEME['window_bg'])
+
+        # Update hover label colors
+        if hasattr(self, 'hover_annotation') and self.hover_annotation:
+            patch = self.hover_annotation.get_bbox_patch()
+            patch.set_facecolor(css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']))
+            patch.set_edgecolor(CURRENT_THEME['hover_label_border'])
+
+        # Update pinned annotation colors
+        for _, label in self.pinned_points:
+            patch = label.get_bbox_patch()
+            patch.set_facecolor(css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']))
+            patch.set_edgecolor(CURRENT_THEME['hover_label_border'])
+
         self.canvas.draw_idle()
 
 
