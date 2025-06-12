@@ -39,6 +39,9 @@ from PyQt5.QtWidgets import (
     QStackedWidget,
     QUndoStack,
     QUndoView,
+    QDockWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
 )
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon
@@ -54,6 +57,14 @@ from vasoanalyzer.theme_manager import (
     CURRENT_THEME,
     apply_light_theme,
     css_rgba_to_mpl,
+)
+from vasoanalyzer.project import (
+    Project,
+    Experiment,
+    SampleN,
+    load_project,
+    save_project,
+    export_sample,
 )
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.plot_style_dialog import PlotStyleDialog
@@ -91,7 +102,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.selected_event_marker = None
         self.pinned_points = []
         self.slider_marker = None
-        self.recording_interval = 1 #0.14    # 140 ms per frame
+        self.recording_interval = 1  # 0.14    # 140 ms per frame
         self.last_replaced_event = None
         self.excel_auto_path = None  # Path to Excel file for auto-update
         self.excel_auto_column = None  # Column letter to use for auto-update
@@ -103,6 +114,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.setStatusBar(QStatusBar(self))
         self.setAcceptDrops(True)
         self.setAcceptDrops(True)
+        self.current_project = None
+        self.project_tree = None
+        self.current_experiment = None
+        self.current_sample = None
         # ——— undo/redo ———
         self.undo_stack = QUndoStack(self)
 
@@ -117,12 +132,142 @@ class VasoAnalyzerApp(QMainWindow):
         self.create_menubar()
         self.initUI()
         self._wrap_views()
+        self.setup_project_sidebar()
 
         self.modeStack.setMouseTracking(True)
         self.modeStack.widget(0).setMouseTracking(True)
         self.canvas.setMouseTracking(True)
 
         self.check_for_updates_at_startup()
+
+    def setup_project_sidebar(self):
+        self.project_dock = QDockWidget("Project", self)
+        self.project_tree = QTreeWidget()
+        self.project_tree.setHeaderHidden(True)
+        self.project_tree.itemClicked.connect(self.on_tree_item_clicked)
+        self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.project_tree.customContextMenuRequested.connect(
+            self.show_project_context_menu
+        )
+        self.project_dock.setWidget(self.project_tree)
+        self.addDockWidget(Qt.LeftDockWidgetArea, self.project_dock)
+
+    # ---------- Project Menu Actions ----------
+    def new_project(self):
+        name, ok = QInputDialog.getText(self, "New Project", "Project name:")
+        if ok and name:
+            self.current_project = Project(name=name)
+            self.refresh_project_tree()
+
+    def open_project(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", "", "Vaso Project (*.vaso)"
+        )
+        if path:
+            self.current_project = load_project(path)
+            self.refresh_project_tree()
+
+    def save_project(self):
+        if self.current_project and self.current_project.path:
+            save_project(self.current_project, self.current_project.path)
+        elif self.current_project:
+            self.save_project_as()
+
+    def save_project_as(self):
+        if not self.current_project:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project As", "", "Vaso Project (*.vaso)"
+        )
+        if path:
+            if not path.endswith(".vaso"):
+                path += ".vaso"
+            save_project(self.current_project, path)
+
+    def refresh_project_tree(self):
+        if not self.project_tree:
+            return
+        self.project_tree.clear()
+        if not self.current_project:
+            return
+        root = QTreeWidgetItem([self.current_project.name])
+        root.setData(0, Qt.UserRole, self.current_project)
+        self.project_tree.addTopLevelItem(root)
+        for exp in self.current_project.experiments:
+            exp_item = QTreeWidgetItem([exp.name])
+            exp_item.setData(0, Qt.UserRole, exp)
+            root.addChild(exp_item)
+            for s in exp.samples:
+                text = f"{s.name} {'✓' if s.exported else '✗'}"
+                item = QTreeWidgetItem([text])
+                item.setData(0, Qt.UserRole, s)
+                exp_item.addChild(item)
+        self.project_tree.expandAll()
+
+    def on_tree_item_clicked(self, item, _):
+        obj = item.data(0, Qt.UserRole)
+        if isinstance(obj, SampleN):
+            self.current_sample = obj
+            parent = item.parent()
+            self.current_experiment = parent.data(0, Qt.UserRole) if parent else None
+        elif isinstance(obj, Experiment):
+            self.current_experiment = obj
+            self.current_sample = None
+        else:
+            self.current_sample = None
+            self.current_experiment = None
+
+    def show_project_context_menu(self, pos):
+        item = self.project_tree.itemAt(pos)
+        menu = QMenu()
+        if item is None:
+            add_exp = menu.addAction("Add Experiment")
+            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            if action == add_exp:
+                self.add_experiment()
+            return
+
+        obj = item.data(0, Qt.UserRole)
+        if isinstance(obj, Project):
+            add_exp = menu.addAction("Add Experiment")
+            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            if action == add_exp:
+                self.add_experiment()
+        elif isinstance(obj, Experiment):
+            add_n = menu.addAction("Add N")
+            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            if action == add_n:
+                self.add_sample(obj)
+        elif isinstance(obj, SampleN):
+            save_n = menu.addAction("Save N As…")
+            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            if action == save_n:
+                self.save_sample_as(obj)
+
+    def add_experiment(self):
+        if not self.current_project:
+            return
+        name, ok = QInputDialog.getText(self, "Experiment Name", "Name:")
+        if ok and name:
+            exp = Experiment(name=name)
+            self.current_project.experiments.append(exp)
+            self.refresh_project_tree()
+
+    def add_sample(self, experiment):
+        nname, ok = QInputDialog.getText(self, "Sample Name", "Name:")
+        if ok and nname:
+            experiment.samples.append(SampleN(name=nname))
+            self.refresh_project_tree()
+
+    def save_sample_as(self, sample):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sample", f"{sample.name}.vaso", "Vaso Sample (*.vaso)"
+        )
+        if path:
+            tmp_proj = Project(
+                name=sample.name, experiments=[Experiment(name="exp", samples=[sample])]
+            )
+            save_project(tmp_proj, path)
 
     def _wrap_views(self):
         # Create the three modes:
@@ -189,10 +334,30 @@ class VasoAnalyzerApp(QMainWindow):
 
     def create_menubar(self):
         menubar = self.menuBar()
+        self._build_project_menu(menubar)
         self._build_file_menu(menubar)
         self._build_edit_menu(menubar)
         self._build_view_menu(menubar)
         self._build_help_menu(menubar)
+
+    def _build_project_menu(self, menubar):
+        proj_menu = menubar.addMenu("Project")
+
+        new_act = QAction("New Project", self)
+        new_act.triggered.connect(self.new_project)
+        proj_menu.addAction(new_act)
+
+        open_act = QAction("Open Project…", self)
+        open_act.triggered.connect(self.open_project)
+        proj_menu.addAction(open_act)
+
+        save_act = QAction("Save Project", self)
+        save_act.triggered.connect(self.save_project)
+        proj_menu.addAction(save_act)
+
+        save_as_act = QAction("Save Project As…", self)
+        save_as_act.triggered.connect(self.save_project_as)
+        proj_menu.addAction(save_as_act)
 
     def _build_file_menu(self, menubar):
         file_menu = menubar.addMenu("File")
@@ -629,7 +794,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.main_layout = QVBoxLayout(central_widget)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(0)
-        self.fig = Figure(figsize=(8, 4), facecolor=CURRENT_THEME['window_bg'])
+        self.fig = Figure(figsize=(8, 4), facecolor=CURRENT_THEME["window_bg"])
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setMouseTracking(True)
         self.canvas.toolbar = None
@@ -642,13 +807,13 @@ class VasoAnalyzerApp(QMainWindow):
             textcoords="offset points",
             bbox=dict(
                 boxstyle="round,pad=0.3",
-                fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
-                ec=CURRENT_THEME['hover_label_border'],
+                fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                ec=CURRENT_THEME["hover_label_border"],
                 lw=1,
             ),
             arrowprops=dict(arrowstyle="->"),
             fontsize=9,
-            color=CURRENT_THEME['text'],
+            color=CURRENT_THEME["text"],
         )
         self.hover_annotation.set_visible(False)
         # ————————————————————————————————
@@ -828,7 +993,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.setMinimumWidth(400)
         self.event_table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-    
+
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -999,7 +1164,9 @@ class VasoAnalyzerApp(QMainWindow):
         event_path = os.path.join(self.trace_file_path, f"{base}_table.csv")
         if os.path.exists(event_path):
             try:
-                self.event_labels, self.event_times, self.event_frames = load_events(event_path)
+                self.event_labels, self.event_times, self.event_frames = load_events(
+                    event_path
+                )
                 # If event_frames column was absent, derive frames from times
                 if self.event_frames is None:
                     trace_times = self.trace_data["Time (s)"].values
@@ -1084,7 +1251,7 @@ class VasoAnalyzerApp(QMainWindow):
             frames, frames_metadata = load_tiff(file_path)
             valid_frames = []
             valid_metadata = []
-            
+
             # Filter out empty/corrupt frames
             for i, frame in enumerate(frames):
                 if frame is not None and frame.size > 0:
@@ -1122,10 +1289,10 @@ class VasoAnalyzerApp(QMainWindow):
             self.slider_marker = None
 
             # Create metadata button if it doesn't exist
-            if not hasattr(self, 'metadata_btn'):
+            if not hasattr(self, "metadata_btn"):
                 self.metadata_btn = QPushButton("📋 View Metadata")
                 self.metadata_btn.clicked.connect(self.show_current_frame_metadata)
-                
+
                 # Find the layout containing the snapshot label
                 right_layout = self.snapshot_label.parent().layout()
                 right_layout.addWidget(self.metadata_btn)
@@ -1136,43 +1303,47 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
 
     def show_current_frame_metadata(self):
-            """Show metadata for the currently displayed frame"""
-            if not hasattr(self, 'frames_metadata') or not self.frames_metadata:
-                QMessageBox.information(self, "Metadata", "No metadata available for this TIFF file.")
-                return
-            
-            current_idx = self.slider.value()
-            if current_idx >= len(self.frames_metadata):
-                QMessageBox.information(self, "Metadata", "No metadata available for this frame.")
-                return
-            
-            # Get metadata for current frame
-            metadata = self.frames_metadata[current_idx]
-            
-            # Format metadata as text
-            metadata_text = f"Frame {current_idx} Metadata:\n" + "-" * 40 + "\n"
-            
-            # Sort keys alphabetically for consistent display
-            for key in sorted(metadata.keys()):
-                value = metadata[key]
-                # Handle arrays specially to avoid overwhelming the display
-                if isinstance(value, (list, tuple, np.ndarray)) and len(str(value)) > 100:
-                    metadata_text += f"{key}: [Array with shape {np.array(value).shape}]\n"
-                else:
-                    metadata_text += f"{key}: {value}\n"
-            
-            # Show dialog with metadata
-            msg = QMessageBox(self)
-            msg.setWindowTitle(f"Frame {current_idx} Metadata")
-            msg.setText(metadata_text)
-            msg.setDetailedText(str(metadata))  # Full metadata in detailed view
-            msg.setStandardButtons(QMessageBox.Ok)
-            msg.setIcon(QMessageBox.Information)
-            
-            # Make the dialog bigger
-            msg.setStyleSheet("QLabel{min-width: 500px; min-height: 400px;}")
-            
-            msg.exec_()
+        """Show metadata for the currently displayed frame"""
+        if not hasattr(self, "frames_metadata") or not self.frames_metadata:
+            QMessageBox.information(
+                self, "Metadata", "No metadata available for this TIFF file."
+            )
+            return
+
+        current_idx = self.slider.value()
+        if current_idx >= len(self.frames_metadata):
+            QMessageBox.information(
+                self, "Metadata", "No metadata available for this frame."
+            )
+            return
+
+        # Get metadata for current frame
+        metadata = self.frames_metadata[current_idx]
+
+        # Format metadata as text
+        metadata_text = f"Frame {current_idx} Metadata:\n" + "-" * 40 + "\n"
+
+        # Sort keys alphabetically for consistent display
+        for key in sorted(metadata.keys()):
+            value = metadata[key]
+            # Handle arrays specially to avoid overwhelming the display
+            if isinstance(value, (list, tuple, np.ndarray)) and len(str(value)) > 100:
+                metadata_text += f"{key}: [Array with shape {np.array(value).shape}]\n"
+            else:
+                metadata_text += f"{key}: {value}\n"
+
+        # Show dialog with metadata
+        msg = QMessageBox(self)
+        msg.setWindowTitle(f"Frame {current_idx} Metadata")
+        msg.setText(metadata_text)
+        msg.setDetailedText(str(metadata))  # Full metadata in detailed view
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.setIcon(QMessageBox.Information)
+
+        # Make the dialog bigger
+        msg.setStyleSheet("QLabel{min-width: 500px; min-height: 400px;}")
+
+        msg.exec_()
 
     def save_project(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -1244,8 +1415,16 @@ class VasoAnalyzerApp(QMainWindow):
                 d = f["trace/diameter"][...]
                 labels = [s.decode() for s in f["events/labels"][...]]
                 diam_before = f["events/diam_before"][...]
-                times = f["events/times"][...] if "events" in f and "times" in f["events"] else None
-                frames = f["events/frames"][...] if "events" in f and "frames" in f["events"] else None
+                times = (
+                    f["events/times"][...]
+                    if "events" in f and "times" in f["events"]
+                    else None
+                )
+                frames = (
+                    f["events/frames"][...]
+                    if "events" in f and "frames" in f["events"]
+                    else None
+                )
                 stack = f["snapshots/frames"][...] if "snapshots/frames" in f else None
                 raw = f["style_meta"][...].tobytes()
                 style = pickle.loads(raw)
@@ -1276,9 +1455,13 @@ class VasoAnalyzerApp(QMainWindow):
     def load_project_events(self, labels, times, frames, diam_before):
         self.event_labels = list(labels)
         self.event_times = list(times) if times is not None else []
-        self.event_frames = list(frames) if frames is not None else [0] * len(self.event_times)
+        self.event_frames = (
+            list(frames) if frames is not None else [0] * len(self.event_times)
+        )
         self.event_table_data = []
-        for lbl, t, fr, diam in zip(self.event_labels, self.event_times, self.event_frames, diam_before):
+        for lbl, t, fr, diam in zip(
+            self.event_labels, self.event_times, self.event_frames, diam_before
+        ):
             self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
         self.populate_table()
         self.update_plot()
@@ -1310,9 +1493,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.display_frame(idx)
         self.update_slider_marker()
         # Add a small indicator that shows metadata is available
-        if hasattr(self, 'metadata_btn') and idx < len(self.frames_metadata):
-                num_tags = len(self.frames_metadata[idx])
-                self.metadata_btn.setText(f"📋 View Metadata ({num_tags} tags)")
+        if hasattr(self, "metadata_btn") and idx < len(self.frames_metadata):
+            num_tags = len(self.frames_metadata[idx])
+            self.metadata_btn.setText(f"📋 View Metadata ({num_tags} tags)")
 
     def show_current_frame_metadata(self):
         """Show metadata for the currently displayed frame"""
@@ -1423,7 +1606,9 @@ class VasoAnalyzerApp(QMainWindow):
         current_frame_idx = self.slider.value()
 
         # Get the actual frame number from metadata if available
-        if hasattr(self, "frames_metadata") and current_frame_idx < len(self.frames_metadata):
+        if hasattr(self, "frames_metadata") and current_frame_idx < len(
+            self.frames_metadata
+        ):
             frame_meta = self.frames_metadata[current_frame_idx]
 
             if "FrameNumber" in frame_meta:
@@ -1431,9 +1616,7 @@ class VasoAnalyzerApp(QMainWindow):
                 frame_number = frame_meta["FrameNumber"]
                 # Convert frame number to time using recording interval
                 t_current = frame_number
-                log.info(
-                    "Using FrameNumber %s → time: %.2fs", frame_number, t_current
-                )
+                log.info("Using FrameNumber %s → time: %.2fs", frame_number, t_current)
             else:
                 # Fall back to slider index if frame number isn't available
                 t_current = current_frame_idx
@@ -1444,9 +1627,7 @@ class VasoAnalyzerApp(QMainWindow):
         else:
             # Fall back to slider index if no metadata is available
             t_current = current_frame_idx
-            log.info(
-                "No metadata available, using slider index: %.2fs", t_current
-            )
+            log.info("No metadata available, using slider index: %.2fs", t_current)
 
         # 3) Draw or move the red line at that time
         if self.slider_marker is None:
@@ -1547,7 +1728,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax.set_xlim(*state.get("xlim", self.ax.get_xlim()))
             self.ax.set_ylim(*state.get("ylim", self.ax.get_ylim()))
             self.grid_visible = state.get("grid_visible", True)
-            self.ax.grid(self.grid_visible, color=CURRENT_THEME['grid_color'])
+            self.ax.grid(self.grid_visible, color=CURRENT_THEME["grid_color"])
 
             # Re-plot pinned points
             self.pinned_points.clear()
@@ -1560,8 +1741,8 @@ class VasoAnalyzerApp(QMainWindow):
                     textcoords="offset points",
                     bbox=dict(
                         boxstyle="round,pad=0.3",
-                        fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
-                        ec=CURRENT_THEME['hover_label_border'],
+                        fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                        ec=CURRENT_THEME["hover_label_border"],
                         lw=1,
                     ),
                     fontsize=8,
@@ -1644,21 +1825,21 @@ class VasoAnalyzerApp(QMainWindow):
             textcoords="offset points",
             bbox=dict(
                 boxstyle="round,pad=0.3",
-                fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
-                ec=CURRENT_THEME['hover_label_border'],
+                fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                ec=CURRENT_THEME["hover_label_border"],
                 lw=1,
             ),
             arrowprops=dict(arrowstyle="->"),
             fontsize=12,
-            color=CURRENT_THEME['text'],
+            color=CURRENT_THEME["text"],
         )
         self.hover_annotation.set_visible(False)
 
-        self.ax.set_facecolor(CURRENT_THEME['window_bg'])
-        self.ax.tick_params(colors=CURRENT_THEME['text'])
-        self.ax.xaxis.label.set_color(CURRENT_THEME['text'])
-        self.ax.yaxis.label.set_color(CURRENT_THEME['text'])
-        self.ax.title.set_color(CURRENT_THEME['text'])
+        self.ax.set_facecolor(CURRENT_THEME["window_bg"])
+        self.ax.tick_params(colors=CURRENT_THEME["text"])
+        self.ax.xaxis.label.set_color(CURRENT_THEME["text"])
+        self.ax.yaxis.label.set_color(CURRENT_THEME["text"])
+        self.ax.title.set_color(CURRENT_THEME["text"])
         self.event_text_objects = []
 
         # Plot trace and keep a handle for .contains()
@@ -1667,7 +1848,7 @@ class VasoAnalyzerApp(QMainWindow):
         (self.trace_line,) = self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Inner Diameter (µm)")
-        self.ax.grid(True, color=CURRENT_THEME['grid_color'])
+        self.ax.grid(True, color=CURRENT_THEME["grid_color"])
 
         # Plot events if available
         if self.event_labels and self.event_times:
@@ -1696,7 +1877,7 @@ class VasoAnalyzerApp(QMainWindow):
 
                 self.ax.axvline(
                     x=evt_time,
-                    color=CURRENT_THEME['text'],
+                    color=CURRENT_THEME["text"],
                     linestyle="--",
                     linewidth=0.8,
                 )
@@ -1709,7 +1890,7 @@ class VasoAnalyzerApp(QMainWindow):
                     verticalalignment="top",
                     horizontalalignment="right",
                     fontsize=8,
-                    color=CURRENT_THEME['text'],
+                    color=CURRENT_THEME["text"],
                     clip_on=True,
                 )
                 self.event_text_objects.append((txt, evt_time))
@@ -1862,8 +2043,8 @@ class VasoAnalyzerApp(QMainWindow):
                 textcoords="offset points",
                 bbox=dict(
                     boxstyle="round,pad=0.3",
-                    fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
-                    ec=CURRENT_THEME['hover_label_border'],
+                    fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                    ec=CURRENT_THEME["hover_label_border"],
                     lw=1,
                 ),
                 fontsize=8,
@@ -2053,28 +2234,60 @@ class VasoAnalyzerApp(QMainWindow):
             style = {
                 "axis_font_size": self.ax.xaxis.label.get_fontsize(),
                 "axis_font_family": self.ax.xaxis.label.get_fontname(),
-                "axis_bold": str(self.ax.xaxis.label.get_fontweight()).lower() == "bold",
+                "axis_bold": str(self.ax.xaxis.label.get_fontweight()).lower()
+                == "bold",
                 "axis_italic": self.ax.xaxis.label.get_fontstyle() == "italic",
-                "tick_font_size": self.ax.xaxis.get_ticklabels()[0].get_fontsize()
-                if self.ax.xaxis.get_ticklabels()
-                else 12,
-                "event_font_size": self.event_text_objects[0][0].get_fontsize()
-                if self.event_text_objects
-                else 10,
-                "event_font_family": self.event_text_objects[0][0].get_fontname()
-                if self.event_text_objects
-                else "Arial",
-                "event_bold": str(self.event_text_objects[0][0].get_fontweight()).lower() == "bold"
-                if self.event_text_objects
-                else False,
-                "event_italic": self.event_text_objects[0][0].get_fontstyle() == "italic"
-                if self.event_text_objects
-                else False,
-                "pin_font_size": self.pinned_points[0][1].get_fontsize() if self.pinned_points else 10,
-                "pin_font_family": self.pinned_points[0][1].get_fontname() if self.pinned_points else "Arial",
-                "pin_bold": str(self.pinned_points[0][1].get_fontweight()).lower() == "bold" if self.pinned_points else False,
-                "pin_italic": self.pinned_points[0][1].get_fontstyle() == "italic" if self.pinned_points else False,
-                "pin_size": self.pinned_points[0][0].get_markersize() if self.pinned_points else 6,
+                "tick_font_size": (
+                    self.ax.xaxis.get_ticklabels()[0].get_fontsize()
+                    if self.ax.xaxis.get_ticklabels()
+                    else 12
+                ),
+                "event_font_size": (
+                    self.event_text_objects[0][0].get_fontsize()
+                    if self.event_text_objects
+                    else 10
+                ),
+                "event_font_family": (
+                    self.event_text_objects[0][0].get_fontname()
+                    if self.event_text_objects
+                    else "Arial"
+                ),
+                "event_bold": (
+                    str(self.event_text_objects[0][0].get_fontweight()).lower()
+                    == "bold"
+                    if self.event_text_objects
+                    else False
+                ),
+                "event_italic": (
+                    self.event_text_objects[0][0].get_fontstyle() == "italic"
+                    if self.event_text_objects
+                    else False
+                ),
+                "pin_font_size": (
+                    self.pinned_points[0][1].get_fontsize()
+                    if self.pinned_points
+                    else 10
+                ),
+                "pin_font_family": (
+                    self.pinned_points[0][1].get_fontname()
+                    if self.pinned_points
+                    else "Arial"
+                ),
+                "pin_bold": (
+                    str(self.pinned_points[0][1].get_fontweight()).lower() == "bold"
+                    if self.pinned_points
+                    else False
+                ),
+                "pin_italic": (
+                    self.pinned_points[0][1].get_fontstyle() == "italic"
+                    if self.pinned_points
+                    else False
+                ),
+                "pin_size": (
+                    self.pinned_points[0][0].get_markersize()
+                    if self.pinned_points
+                    else 6
+                ),
                 "line_width": self.ax.lines[0].get_linewidth() if self.ax.lines else 2,
             }
             return style
@@ -2148,37 +2361,50 @@ class VasoAnalyzerApp(QMainWindow):
                 "axis_font_family": ax.xaxis.label.get_fontname(),
                 "axis_bold": str(ax.xaxis.label.get_fontweight()).lower() == "bold",
                 "axis_italic": ax.xaxis.label.get_fontstyle() == "italic",
-                "tick_font_size": ax.xaxis.get_ticklabels()[0].get_fontsize()
-                if ax.xaxis.get_ticklabels()
-                else 12,
-                "event_font_size": event_text_objects[0][0].get_fontsize()
-                if event_text_objects
-                else 10,
-                "event_font_family": event_text_objects[0][0].get_fontname()
-                if event_text_objects
-                else "Arial",
-                "event_bold": str(
-                    event_text_objects[0][0].get_fontweight()
-                ).lower()
-                == "bold"
-                if event_text_objects
-                else False,
-                "event_italic": event_text_objects[0][0].get_fontstyle() == "italic"
-                if event_text_objects
-                else False,
-                "pin_font_size": pinned_points[0][1].get_fontsize()
-                if pinned_points
-                else 10,
-                "pin_font_family": pinned_points[0][1].get_fontname()
-                if pinned_points
-                else "Arial",
-                "pin_bold": str(pinned_points[0][1].get_fontweight()).lower() == "bold"
-                if pinned_points
-                else False,
-                "pin_italic": pinned_points[0][1].get_fontstyle() == "italic"
-                if pinned_points
-                else False,
-                "pin_size": pinned_points[0][0].get_markersize() if pinned_points else 6,
+                "tick_font_size": (
+                    ax.xaxis.get_ticklabels()[0].get_fontsize()
+                    if ax.xaxis.get_ticklabels()
+                    else 12
+                ),
+                "event_font_size": (
+                    event_text_objects[0][0].get_fontsize()
+                    if event_text_objects
+                    else 10
+                ),
+                "event_font_family": (
+                    event_text_objects[0][0].get_fontname()
+                    if event_text_objects
+                    else "Arial"
+                ),
+                "event_bold": (
+                    str(event_text_objects[0][0].get_fontweight()).lower() == "bold"
+                    if event_text_objects
+                    else False
+                ),
+                "event_italic": (
+                    event_text_objects[0][0].get_fontstyle() == "italic"
+                    if event_text_objects
+                    else False
+                ),
+                "pin_font_size": (
+                    pinned_points[0][1].get_fontsize() if pinned_points else 10
+                ),
+                "pin_font_family": (
+                    pinned_points[0][1].get_fontname() if pinned_points else "Arial"
+                ),
+                "pin_bold": (
+                    str(pinned_points[0][1].get_fontweight()).lower() == "bold"
+                    if pinned_points
+                    else False
+                ),
+                "pin_italic": (
+                    pinned_points[0][1].get_fontstyle() == "italic"
+                    if pinned_points
+                    else False
+                ),
+                "pin_size": (
+                    pinned_points[0][0].get_markersize() if pinned_points else 6
+                ),
                 "line_width": ax.lines[0].get_linewidth() if ax.lines else 2,
             }
             return style
@@ -2345,8 +2571,8 @@ class VasoAnalyzerApp(QMainWindow):
                 textcoords="offset points",
                 bbox=dict(
                     boxstyle="round,pad=0.3",
-                    fc=css_rgba_to_mpl(CURRENT_THEME['hover_label_bg']),
-                    ec=CURRENT_THEME['hover_label_border'],
+                    fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                    ec=CURRENT_THEME["hover_label_border"],
                     lw=1,
                 ),
                 fontsize=8,
@@ -2544,10 +2770,7 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_grid(self):
         self.grid_visible = not self.grid_visible
         if self.grid_visible:
-            self.ax.grid(True, color=CURRENT_THEME['grid_color'])
+            self.ax.grid(True, color=CURRENT_THEME["grid_color"])
         else:
             self.ax.grid(False)
         self.canvas.draw_idle()
-
-
-

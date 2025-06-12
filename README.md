@@ -57,6 +57,13 @@ Designed for researchers. Powered by Python. Zero coding required.
 
 
 ---
+## Projects & Ns
+
+Organize related experiments together in a single `.vaso` file. Each project can contain multiple experiments and each experiment holds your N‑samples.
+
+![Sidebar demo](docs/projects_demo.png)
+
+---
 ## 🚀 Download & Install
 
 ### ✅ Option 1: No Python Needed — Use the App!
