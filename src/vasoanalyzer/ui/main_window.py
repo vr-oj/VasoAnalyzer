@@ -1345,7 +1345,7 @@ class VasoAnalyzerApp(QMainWindow):
                         round(diam_evt, 2),
                         idx_evt,
                     )
-                    )
+                )
 
         # Map TIFF frames to trace indices now that both are loaded
         self.compute_frame_trace_indices()
@@ -1640,7 +1640,10 @@ class VasoAnalyzerApp(QMainWindow):
     def load_snapshots(self, stack):
         self.snapshot_frames = [frame for frame in stack]
         if self.snapshot_frames:
-            self.frame_times = [idx * self.recording_interval for idx in range(len(self.snapshot_frames))]
+            self.frame_times = [
+                idx * self.recording_interval
+                for idx in range(len(self.snapshot_frames))
+            ]
             self.compute_frame_trace_indices()
             self.slider.setMinimum(0)
             self.slider.setMaximum(len(self.snapshot_frames) - 1)
@@ -1800,7 +1803,7 @@ class VasoAnalyzerApp(QMainWindow):
         idx = self.slider.value()
 
         # 2) Lookup the timestamp for this frame
-        if self.frame_trace_indices and idx < len(self.frame_trace_indices):
+        if len(self.frame_trace_indices) > 0 and idx < len(self.frame_trace_indices):
             trace_idx = self.frame_trace_indices[idx]
             t_current = self.trace_data["Time (s)"].iat[trace_idx]
         elif idx < len(self.frame_times):
