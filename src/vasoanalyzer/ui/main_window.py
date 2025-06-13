@@ -990,16 +990,29 @@ class VasoAnalyzerApp(QMainWindow):
                 settings.setValue("tutorialShown", True)
 
     def show_welcome_dialog(self):
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        seen = settings.value("welcomeShown", False, type=bool)
+        if seen:
+            return
+
         from .dialogs.welcome_dialog import WelcomeDialog
 
         dlg = WelcomeDialog(self.recent_projects, self)
         result = dlg.exec_()
+        if dlg.dont_show:
+            settings.setValue("welcomeShown", True)
+
         if result == WelcomeDialog.GETTING_STARTED:
             self.show_tutorial()
         elif result == WelcomeDialog.CREATE_PROJECT:
-            self.new_project()
-            if self.current_project:
-                self.add_experiment()
+            if dlg.project_name:
+                self.current_project = Project(name=dlg.project_name)
+                self.refresh_project_tree()
+                self.project_dock.show()
+                if dlg.experiment_name:
+                    exp = Experiment(name=dlg.experiment_name)
+                    self.current_project.experiments.append(exp)
+                    self.refresh_project_tree()
         elif result == WelcomeDialog.OPEN_PROJECT:
             path = dlg.selected_project
             if not path:
