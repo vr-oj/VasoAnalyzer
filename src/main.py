@@ -22,13 +22,15 @@ from matplotlib.backends.backend_qt5 import MainWindow
 
 log = logging.getLogger(__name__)
 
+
 # ===== Helper to fix Matplotlib dialogs =====
 def fix_matplotlib_dialogs():
     for fig_num in plt.get_fignums():
         fig = plt.figure(fig_num)
         window = fig.canvas.manager.window
         if isinstance(window, MainWindow):
-            window.setStyleSheet("""
+            window.setStyleSheet(
+                """
                 QWidget {
                     background-color: #FFFFFF;
                     color: black;
@@ -48,7 +50,9 @@ def fix_matplotlib_dialogs():
                     background-color: #FFFFFF;
                     color: black;
                 }
-            """)
+            """
+            )
+
 
 class VasoAnalyzerLauncher:
     def __init__(self):
@@ -60,9 +64,13 @@ class VasoAnalyzerLauncher:
 
         # ===== Platform-specific icon =====
         if sys.platform.startswith("win"):
-            icon_path = os.path.join(os.path.dirname(__file__), 'vasoanalyzer', 'VasoAnalyzerIcon.ico')
+            icon_path = os.path.join(
+                os.path.dirname(__file__), "vasoanalyzer", "VasoAnalyzerIcon.ico"
+            )
         elif sys.platform == "darwin":
-            icon_path = os.path.join(os.path.dirname(__file__), 'vasoanalyzer', 'VasoAnalyzerIcon.icns')
+            icon_path = os.path.join(
+                os.path.dirname(__file__), "vasoanalyzer", "VasoAnalyzerIcon.icns"
+            )
         else:
             icon_path = None
 
@@ -73,22 +81,32 @@ class VasoAnalyzerLauncher:
         apply_light_theme()
 
         # === Load and Show Splash Screen from PNG file ===
-        splash_path = os.path.join(os.path.dirname(__file__), "vasoanalyzer", "VasoAnalyzerSplashScreen.png")
+        splash_path = os.path.join(
+            os.path.dirname(__file__), "vasoanalyzer", "VasoAnalyzerSplashScreen.png"
+        )
         splash_pix = QPixmap(splash_path)
-        
+
         if splash_pix.isNull():
             print("⚠️ Splash image could not be loaded from:", splash_path)
             self.start_main_app()
         else:
-                splash_pix = splash_pix.scaled(400, 400, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                self.splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
-                self.splash.setMask(splash_pix.mask())
-                self.splash.show()
+            device_ratio = self.app.devicePixelRatio()
+            target_size = int(400 * device_ratio)
+            splash_pix = splash_pix.scaled(
+                target_size,
+                target_size,
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+            splash_pix.setDevicePixelRatio(device_ratio)
+            self.splash = QSplashScreen(splash_pix, Qt.WindowStaysOnTopHint)
+            self.splash.setMask(splash_pix.mask())
+            self.splash.show()
 
-                QTimer.singleShot(2500, self.start_main_app)
+            QTimer.singleShot(2500, self.start_main_app)
 
     def start_main_app(self):
-        if hasattr(self, 'splash'):
+        if hasattr(self, "splash"):
             self.splash.close()
         try:
             print("🚀 Attempting to create VasoAnalyzerApp window...")
@@ -101,7 +119,8 @@ class VasoAnalyzerLauncher:
     def run(self):
         sys.exit(self.app.exec_())
 
+
 if __name__ == "__main__":
-        logging.basicConfig(level=logging.INFO)
-        launcher = VasoAnalyzerLauncher()
-        launcher.run()
+    logging.basicConfig(level=logging.INFO)
+    launcher = VasoAnalyzerLauncher()
+    launcher.run()
