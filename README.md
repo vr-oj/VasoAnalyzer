@@ -59,7 +59,7 @@ Designed for researchers. Powered by Python. Zero coding required.
 ---
 ## Projects & Ns
 
-Organize related experiments together in a single `.vasoproj` file. Each project can contain multiple experiments and each experiment holds your N‑samples.
+Organize related experiments together in a single `.vaso` file. Each project can contain multiple experiments and each experiment holds your N‑samples.
 
 ![Sidebar demo](docs/projects_demo.png)
 

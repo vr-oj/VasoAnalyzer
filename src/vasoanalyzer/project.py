@@ -107,14 +107,30 @@ def project_from_dict(data: dict) -> Project:
 
 
 def save_project(project: Project, path: str) -> None:
-    project.path = path
-    with open(path, "w", encoding="utf-8") as f:
+    """Safely save ``project`` to ``path`` with a backup."""
+    import os
+    import shutil
+
+    project.path = str(path)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(project_to_dict(project), f, indent=2)
+
+    if os.path.exists(path):
+        shutil.copy2(path, f"{path}.bak")
+    os.replace(tmp_path, path)
 
 
 def load_project(path: str) -> Project:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    """Load a project file, falling back to ``.bak`` if needed."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        bak = f"{path}.bak"
+        with open(bak, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        path = bak
     proj = project_from_dict(data)
     proj.path = path
     return proj
