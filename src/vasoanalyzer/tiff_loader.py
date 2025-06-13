@@ -1,11 +1,54 @@
 """Loading routines for TIFF stacks used for trace snapshots."""
 
 import logging
-import tifffile
-import numpy as np
 import json
+import xml.etree.ElementTree as ET
+
+import numpy as np
+import tifffile
 
 log = logging.getLogger(__name__)
+
+
+def parse_description(desc: str) -> dict:
+    """Parse TIFF page descriptions which may contain JSON or OME-XML."""
+
+    if not desc:
+        return {}
+
+    try:
+        return json.loads(desc)
+    except json.JSONDecodeError:
+        pass
+
+    if desc.lstrip().startswith("<"):
+        try:
+            root = ET.fromstring(desc)
+        except ET.ParseError:
+            return {}
+
+        meta: dict[str, object] = {}
+
+        for elem in root.iter():
+            if elem.text and elem.text.strip() and not list(elem):
+                meta[elem.tag] = elem.text.strip()
+            for key, val in elem.attrib.items():
+                if key in meta:
+                    existing = meta[key]
+                    if isinstance(existing, list):
+                        existing.append(val)
+                    else:
+                        meta[key] = [existing, val]
+                else:
+                    meta[key] = val
+
+        for k, v in list(meta.items()):
+            if isinstance(v, list) and len(v) == 1:
+                meta[k] = v[0]
+
+        return meta
+
+    return {}
 
 
 def load_tiff(file_path, max_frames=300, metadata=True):
@@ -24,7 +67,6 @@ def load_tiff(file_path, max_frames=300, metadata=True):
             each sampled frame.
 
     Raises:
-        json.JSONDecodeError: If a frame description contains invalid JSON.
         OSError: If the file cannot be read as a TIFF.
     """
 
@@ -56,16 +98,11 @@ def load_tiff(file_path, max_frames=300, metadata=True):
             frame_meta["dtype"] = str(frame.dtype)
 
             if hasattr(page, "description") and page.description:
-                try:
-                    json_metadata = json.loads(page.description)
-                    frame_meta.update(json_metadata)
-                    log.info("Found JSON metadata in frame %s", i)
-                except json.JSONDecodeError:
-                    log.warning(
-                        "Frame %s has description but not valid JSON: %s...",
-                        i,
-                        page.description[:100],
-                    )
+                parsed = parse_description(page.description)
+                if parsed:
+                    frame_meta.update(parsed)
+                else:
+                    frame_meta["description_raw"] = page.description
 
             for tag in page.tags.values():
                 frame_meta[tag.name] = tag.value

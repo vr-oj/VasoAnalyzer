@@ -45,3 +45,5 @@ Additional Notes
         •       Uses PyQt5, matplotlib, numpy, pandas, tifffile
         •       App is bundled with PyInstaller for release builds
         •       `load_tiff_preview` provides quick frame loading without metadata
+        •       TIFF page descriptions may contain JSON or OME-XML and are parsed
+                automatically
