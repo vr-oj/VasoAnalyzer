@@ -2857,10 +2857,13 @@ class VasoAnalyzerApp(QMainWindow):
     def show_save_menu(self):
         menu = QMenu(self)
         act_plot = menu.addAction("High‑Res Plot…")
-        act_sample = menu.addAction("Save Data as N…")
+        act_vaso = menu.addAction("Trace && Table (.vaso)…")
+        act_sample = menu.addAction("Save Data to Project…")
         action = menu.exec_(QCursor.pos())
         if action == act_plot:
             self.export_high_res_plot()
+        elif action == act_vaso:
+            self.save_analysis()
         elif action == act_sample:
             self.save_data_as_n()
 
