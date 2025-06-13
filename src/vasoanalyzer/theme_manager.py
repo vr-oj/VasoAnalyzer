@@ -110,6 +110,13 @@ QToolButton {{
 QToolButton:hover {{
     background-color: {theme['button_hover_bg']};
 }}
+QToolTip {{
+    background-color: {theme['hover_label_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['hover_label_border']};
+    padding: 2px 6px;
+    border-radius: 5px;
+}}
 QTableWidget {{
     background-color: {theme['table_bg']};
     color: {theme['table_text']};
