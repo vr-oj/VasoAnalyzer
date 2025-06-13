@@ -1788,7 +1788,10 @@ class VasoAnalyzerApp(QMainWindow):
         idx = self.slider.value()
 
         # 2) Lookup the timestamp for this frame
-        if idx < len(self.frame_times):
+        if self.frame_trace_indices and idx < len(self.frame_trace_indices):
+            trace_idx = self.frame_trace_indices[idx]
+            t_current = self.trace_data["Time (s)"].iat[trace_idx]
+        elif idx < len(self.frame_times):
             t_current = self.frame_times[idx]
         else:
             t_current = idx * self.recording_interval
