@@ -139,15 +139,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.setMouseTracking(True)
 
         self.check_for_updates_at_startup()
+        self.show_tutorial_if_first_time()
 
     def setup_project_sidebar(self):
         self.project_dock = QDockWidget("Project", self)
         self.project_tree = QTreeWidget()
         self.project_tree.setHeaderHidden(True)
         self.project_tree.itemClicked.connect(self.on_tree_item_clicked)
-        self.project_tree.itemDoubleClicked.connect(
-            self.on_tree_item_double_clicked
-        )
+        self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_tree.customContextMenuRequested.connect(
             self.show_project_context_menu
@@ -262,11 +261,7 @@ class VasoAnalyzerApp(QMainWindow):
                     if "Time (s)" in df.columns
                     else [0.0] * len(labels)
                 )
-                diam = (
-                    df["ID (µm)"].tolist()
-                    if "ID (µm)" in df.columns
-                    else []
-                )
+                diam = df["ID (µm)"].tolist() if "ID (µm)" in df.columns else []
                 frames = df["Frame"].tolist() if "Frame" in df.columns else None
             elif sample.events_path:
                 labels, times, frames = load_events(sample.events_path)
@@ -350,7 +345,7 @@ class VasoAnalyzerApp(QMainWindow):
             self,
             "Select Events File (optional)",
             os.path.dirname(trace_path),
-            "CSV Files (*.csv)"
+            "CSV Files (*.csv)",
         )
         if not events_path:
             events_path = None
@@ -673,6 +668,10 @@ class VasoAnalyzerApp(QMainWindow):
         )
         help_menu.addAction(self.action_user_manual)
 
+        tut_act = QAction("Quick Start Tutorial…", self)
+        tut_act.triggered.connect(self.show_tutorial)
+        help_menu.addAction(tut_act)
+
         help_menu.addSeparator()
 
         # Check for Updates
@@ -898,6 +897,29 @@ class VasoAnalyzerApp(QMainWindow):
     def show_release_notes(self):
         # You could load a local CHANGELOG.md and display it
         QMessageBox.information(self, "Release Notes", "Release 1.6:\n- Foo\n- Bar\n")
+
+    def show_tutorial(self):
+        from .dialogs.tutorial_dialog import TutorialDialog
+
+        dlg = TutorialDialog(self)
+        dont_show = dlg.exec_()
+        if dont_show:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            settings.setValue("tutorialShown", True)
+
+    def show_tutorial_if_first_time(self):
+        if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+            return
+
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        seen = settings.value("tutorialShown", False, type=bool)
+        if not seen:
+            from .dialogs.tutorial_dialog import TutorialDialog
+
+            dlg = TutorialDialog(self)
+            dont_show = dlg.exec_()
+            if dont_show:
+                settings.setValue("tutorialShown", True)
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
@@ -2878,7 +2900,9 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         if not self.current_project.experiments:
-            QMessageBox.warning(self, "No Experiment", "Add an experiment to the project first.")
+            QMessageBox.warning(
+                self, "No Experiment", "Add an experiment to the project first."
+            )
             return
 
         exp = self.current_experiment
