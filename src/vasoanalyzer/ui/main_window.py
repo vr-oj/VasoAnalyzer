@@ -280,6 +280,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.trace_data = trace
         self.update_plot()
+        self.compute_frame_trace_indices()
         self.load_project_events(labels, times, frames, diam)
 
     def show_project_context_menu(self, pos):
@@ -1653,7 +1654,18 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         t_trace = self.trace_data["Time (s)"].values
-        idx = np.searchsorted(t_trace, self.frame_times, side="left")
+        frame_times = np.asarray(self.frame_times, dtype=float)
+
+        if len(frame_times) > 1:
+            dt_trace = float(t_trace[-1]) - float(t_trace[0])
+            dt_frames = float(frame_times[-1]) - float(frame_times[0])
+            scale = dt_trace / dt_frames if dt_frames != 0 else 1.0
+        else:
+            scale = 1.0
+
+        adjusted = (frame_times - frame_times[0]) * scale + t_trace[0]
+
+        idx = np.searchsorted(t_trace, adjusted, side="left")
         idx = np.clip(idx, 0, len(t_trace) - 1)
         self.frame_trace_indices = idx
 
