@@ -202,6 +202,4 @@ VasoAnalyzer is released under the terms of the MIT License. See
 **Osvaldo J. Vega Rodríguez**  
 Developed at the **Tykocki Lab**, Michigan State University
 
-Dr. Calum Wilson **VasoTracker Group** for TIFF‑trace synchronization logic with VasoTracker software
-
 ---
