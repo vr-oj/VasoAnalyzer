@@ -1387,7 +1387,8 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         try:
-            frames, frames_metadata = load_tiff_preview(file_path)
+            # Use full loader so metadata for each frame is available
+            frames, frames_metadata = load_tiff(file_path)
             valid_frames = []
             valid_metadata = []
 
