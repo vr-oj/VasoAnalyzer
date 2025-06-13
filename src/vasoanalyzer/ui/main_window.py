@@ -104,7 +104,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.selected_event_marker = None
         self.pinned_points = []
         self.slider_marker = None
-        self.recording_interval = 1  # 0.14    # 140 ms per frame
+        # Default time between frames when metadata is unavailable
+        self.recording_interval = 0.14  # 140 ms per frame
         self.last_replaced_event = None
         self.excel_auto_path = None  # Path to Excel file for auto-update
         self.excel_auto_column = None  # Column letter to use for auto-update
@@ -1408,6 +1409,27 @@ class VasoAnalyzerApp(QMainWindow):
 
             self.snapshot_frames = valid_frames
             self.frames_metadata = valid_metadata
+
+            # Determine recording interval from metadata, otherwise use default
+            if self.frames_metadata:
+                first_meta = self.frames_metadata[0] or {}
+                found = False
+                for key in ("Rec_intvl", "FrameInterval", "FrameTime"):
+                    if key in first_meta:
+                        try:
+                            val = float(str(first_meta[key]).replace("ms", "").strip())
+                            if val > 1:
+                                val /= 1000.0
+                            if val > 0:
+                                self.recording_interval = val
+                                found = True
+                        except (ValueError, TypeError):
+                            pass
+                        break
+                if not found:
+                    self.recording_interval = 0.14
+            else:
+                self.recording_interval = 0.14
 
             # 4) Build a time‑array for each frame
             self.frame_times = []
