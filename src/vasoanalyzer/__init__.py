@@ -11,6 +11,8 @@ from .project import (
     save_project,
     export_sample,
 )
+from .project_controller import open_project, save_project_file
+from .ui.project_explorer import ProjectExplorerWidget
 
 __all__ = [
     "VasoAnalyzerApp",
@@ -24,4 +26,7 @@ __all__ = [
     "load_project",
     "save_project",
     "export_sample",
+    "open_project",
+    "save_project_file",
+    "ProjectExplorerWidget",
 ]

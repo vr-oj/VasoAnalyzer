@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QDockWidget,
     QTreeWidget,
     QTreeWidgetItem,
+    QStyle,
 )
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QCursor
@@ -58,14 +59,8 @@ from vasoanalyzer.theme_manager import (
     apply_light_theme,
     css_rgba_to_mpl,
 )
-from vasoanalyzer.project import (
-    Project,
-    Experiment,
-    SampleN,
-    load_project,
-    save_project,
-    export_sample,
-)
+from vasoanalyzer.project import Project, Experiment, SampleN, export_sample
+from vasoanalyzer.project_controller import open_project, save_project_file
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.plot_style_dialog import PlotStyleDialog
 from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
@@ -145,8 +140,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.show_tutorial_if_first_time()
 
     def setup_project_sidebar(self):
-        self.project_dock = QDockWidget("Project", self)
-        self.project_tree = QTreeWidget()
+        from .project_explorer import ProjectExplorerWidget
+
+        self.project_dock = ProjectExplorerWidget(self)
+        self.project_tree = self.project_dock.tree
         self.project_tree.setHeaderHidden(True)
         self.project_tree.itemClicked.connect(self.on_tree_item_clicked)
         self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
@@ -154,11 +151,22 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.customContextMenuRequested.connect(
             self.show_project_context_menu
         )
-        self.project_dock.setWidget(self.project_tree)
+        self.project_tree.setAlternatingRowColors(True)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.project_dock)
-        self.project_dock.hide()
+        self.project_dock.show()
         if hasattr(self, "showhide_menu"):
             self.showhide_menu.addAction(self.project_dock.toggleViewAction())
+
+        # Toggle button in toolbar
+        self.project_toggle_btn = QToolButton()
+        self.project_toggle_btn.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+        self.project_toggle_btn.setCheckable(True)
+        self.project_toggle_btn.setChecked(True)
+        self.project_toggle_btn.setToolTip("Project")
+        self.project_toggle_btn.clicked.connect(
+            lambda checked: self.project_dock.setVisible(checked)
+        )
+        self.toolbar.addWidget(self.project_toggle_btn)
 
     # ---------- Project Menu Actions ----------
     def new_project(self):
@@ -170,12 +178,15 @@ class VasoAnalyzerApp(QMainWindow):
 
     def open_project_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Project", "", "Vaso Project (*.vasoproj)"
+            self, "Open Project", "", "Vaso Files (*.vaso)"
         )
         if path:
-            self.current_project = load_project(path)
+            self.current_project = open_project(path)
             self.refresh_project_tree()
             self.project_dock.show()
+            self.statusBar().showMessage(
+                f"\u2713 Project loaded: {self.current_project.name}", 3000
+            )
             # Auto-load the first sample if available
             if (
                 self.current_project.experiments
@@ -186,7 +197,8 @@ class VasoAnalyzerApp(QMainWindow):
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
-            save_project(self.current_project, self.current_project.path)
+            save_project_file(self.current_project)
+            self.statusBar().showMessage("\u2713 Project saved", 3000)
         elif self.current_project:
             self.save_project_file_as()
 
@@ -194,12 +206,13 @@ class VasoAnalyzerApp(QMainWindow):
         if not self.current_project:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project As", "", "Vaso Project (*.vasoproj)"
+            self, "Save Project As", "", "Vaso Files (*.vaso)"
         )
         if path:
-            if not path.endswith(".vasoproj"):
-                path += ".vasoproj"
-            save_project(self.current_project, path)
+            if not path.endswith(".vaso"):
+                path += ".vaso"
+            save_project_file(self.current_project, path)
+            self.statusBar().showMessage("\u2713 Project saved", 3000)
 
     def refresh_project_tree(self):
         if not self.project_tree:
@@ -209,16 +222,22 @@ class VasoAnalyzerApp(QMainWindow):
             return
         root = QTreeWidgetItem([self.current_project.name])
         root.setData(0, Qt.UserRole, self.current_project)
+        root.setFlags(root.flags() | Qt.ItemIsEditable)
+        root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
         self.project_tree.addTopLevelItem(root)
         for exp in self.current_project.experiments:
             exp_item = QTreeWidgetItem([exp.name])
             exp_item.setData(0, Qt.UserRole, exp)
+            exp_item.setFlags(exp_item.flags() | Qt.ItemIsEditable)
+            exp_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogListView))
             root.addChild(exp_item)
             for s in exp.samples:
                 has_data = s.trace_path or s.trace_data is not None
                 status = "✓" if has_data else "✗"
                 item = QTreeWidgetItem([f"{s.name} {status}"])
                 item.setData(0, Qt.UserRole, s)
+                item.setFlags(item.flags() | Qt.ItemIsEditable)
+                item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
                 exp_item.addChild(item)
         self.project_tree.expandAll()
 
@@ -1863,11 +1882,20 @@ class VasoAnalyzerApp(QMainWindow):
     def dropEvent(self, event):
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
 
-        # Check for dropped .vaso project first
+        # Check for dropped .vaso file first
         for p in paths:
             if p.endswith(".vaso"):
-                self.open_analysis(p)
-                return
+                try:
+                    self.current_project = open_project(p)
+                    self.refresh_project_tree()
+                    self.project_dock.show()
+                    self.statusBar().showMessage(
+                        f"\u2713 Project loaded: {self.current_project.name}", 3000
+                    )
+                    return
+                except Exception:
+                    self.open_analysis(p)
+                    return
 
         idx = self.modeStack.currentIndex()
 
