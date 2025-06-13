@@ -84,3 +84,10 @@ def test_embedded_data_persistence(tmp_path):
 
     pd.testing.assert_frame_equal(ls.trace_data, loaded_trace)
     pd.testing.assert_frame_equal(ls.events_data, events_df)
+
+def test_ui_state_persistence(tmp_path):
+    proj = Project(name="P", ui_state={"geometry": "abcd"})
+    path = tmp_path / "proj.vaso"
+    save_project(proj, path)
+    loaded = load_project(path)
+    assert loaded.ui_state == {"geometry": "abcd"}
