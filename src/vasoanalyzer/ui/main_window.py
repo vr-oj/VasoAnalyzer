@@ -154,6 +154,9 @@ class VasoAnalyzerApp(QMainWindow):
         )
         self.project_dock.setWidget(self.project_tree)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.project_dock)
+        self.project_dock.hide()
+        if hasattr(self, "showhide_menu"):
+            self.showhide_menu.addAction(self.project_dock.toggleViewAction())
 
     # ---------- Project Menu Actions ----------
     def new_project(self):
@@ -161,6 +164,7 @@ class VasoAnalyzerApp(QMainWindow):
         if ok and name:
             self.current_project = Project(name=name)
             self.refresh_project_tree()
+            self.project_dock.show()
 
     def open_project_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -169,6 +173,7 @@ class VasoAnalyzerApp(QMainWindow):
         if path:
             self.current_project = load_project(path)
             self.refresh_project_tree()
+            self.project_dock.show()
             # Auto-load the first sample if available
             if (
                 self.current_project.experiments
@@ -617,13 +622,13 @@ class VasoAnalyzerApp(QMainWindow):
         view_menu.addSeparator()
 
         # 3) Show / Hide ▶
-        showhide = view_menu.addMenu("Show/Hide ▶")
+        self.showhide_menu = view_menu.addMenu("Show/Hide ▶")
         evt_tbl = QAction("Event Table", self, checkable=True, checked=True)
         snap_vw = QAction("Snapshot Viewer", self, checkable=True, checked=True)
         evt_tbl.triggered.connect(self.toggle_event_table)
         snap_vw.triggered.connect(self.toggle_snapshot_viewer)
-        showhide.addAction(evt_tbl)
-        showhide.addAction(snap_vw)
+        self.showhide_menu.addAction(evt_tbl)
+        self.showhide_menu.addAction(snap_vw)
 
         view_menu.addSeparator()
 
