@@ -139,7 +139,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.setMouseTracking(True)
 
         self.check_for_updates_at_startup()
-        self.show_tutorial_if_first_time()
         self.show_welcome_dialog()
 
     def setup_project_sidebar(self):
