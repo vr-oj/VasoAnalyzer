@@ -93,6 +93,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.trace_data = None
         self.trace_file_path = None
         self.snapshot_frames = []
+        self.frame_times = []
+        self.frame_trace_indices = []
         self.current_frame = 0
         self.event_labels = []
         self.event_times = []
@@ -1341,7 +1343,10 @@ class VasoAnalyzerApp(QMainWindow):
                         round(diam_evt, 2),
                         idx_evt,
                     )
-                )
+                    )
+
+        # Map TIFF frames to trace indices now that both are loaded
+        self.compute_frame_trace_indices()
 
         # 6) Refresh the UI
         self.update_plot()  # draws trace + event lines
@@ -1413,6 +1418,9 @@ class VasoAnalyzerApp(QMainWindow):
             else:
                 for idx in range(len(self.snapshot_frames)):
                     self.frame_times.append(idx * self.recording_interval)
+
+            # Map each frame time to the closest trace index if a trace is loaded
+            self.compute_frame_trace_indices()
 
             # 5) Initialize the image viewer & slider
             self.display_frame(0)
@@ -1580,6 +1588,7 @@ class VasoAnalyzerApp(QMainWindow):
         import pandas as pd
 
         self.trace_data = pd.DataFrame({"Time (s)": t, "Inner Diameter": d})
+        self.compute_frame_trace_indices()
         self.update_plot()
         self.update_scroll_slider()
 
@@ -1607,10 +1616,23 @@ class VasoAnalyzerApp(QMainWindow):
     def load_snapshots(self, stack):
         self.snapshot_frames = [frame for frame in stack]
         if self.snapshot_frames:
+            self.frame_times = [idx * self.recording_interval for idx in range(len(self.snapshot_frames))]
+            self.compute_frame_trace_indices()
             self.slider.setMinimum(0)
             self.slider.setMaximum(len(self.snapshot_frames) - 1)
             self.slider.setValue(0)
             self.display_frame(0)
+
+    def compute_frame_trace_indices(self):
+        """Map each frame time to the closest index in the loaded trace."""
+        if self.trace_data is None or not self.frame_times:
+            self.frame_trace_indices = []
+            return
+
+        t_trace = self.trace_data["Time (s)"].values
+        idx = np.searchsorted(t_trace, self.frame_times, side="left")
+        idx = np.clip(idx, 0, len(t_trace) - 1)
+        self.frame_trace_indices = idx
 
     def apply_style(self, style):
         self.ax.set_xlim(*style.get("xlim", self.ax.get_xlim()))
@@ -1742,32 +1764,11 @@ class VasoAnalyzerApp(QMainWindow):
         # 1) Get the current slider index
         idx = self.slider.value()
 
-        # 2) Convert index → time (seconds)
-        current_frame_idx = self.slider.value()
-
-        # Get the actual frame number from metadata if available
-        if hasattr(self, "frames_metadata") and current_frame_idx < len(
-            self.frames_metadata
-        ):
-            frame_meta = self.frames_metadata[current_frame_idx]
-
-            if "FrameNumber" in frame_meta:
-                # Use the actual frame number from metadata
-                frame_number = frame_meta["FrameNumber"]
-                # Convert frame number to time using recording interval
-                t_current = frame_number
-                log.info("Using FrameNumber %s → time: %.2fs", frame_number, t_current)
-            else:
-                # Fall back to slider index if frame number isn't available
-                t_current = current_frame_idx
-                log.info(
-                    "No FrameNumber in metadata, using slider index: %.2fs",
-                    t_current,
-                )
+        # 2) Lookup the timestamp for this frame
+        if idx < len(self.frame_times):
+            t_current = self.frame_times[idx]
         else:
-            # Fall back to slider index if no metadata is available
-            t_current = current_frame_idx
-            log.info("No metadata available, using slider index: %.2fs", t_current)
+            t_current = idx * self.recording_interval
 
         # 3) Draw or move the red line at that time
         if self.slider_marker is None:
