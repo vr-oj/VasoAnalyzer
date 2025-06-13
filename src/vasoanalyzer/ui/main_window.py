@@ -108,6 +108,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_files = []
         self.settings = QSettings("TykockiLab", "VasoAnalyzer")
         self.load_recent_files()
+        self.recent_projects = []
+        self.load_recent_projects()
         self.setAcceptDrops(True)
         self.setStatusBar(QStatusBar(self))
         self.setAcceptDrops(True)
@@ -138,6 +140,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.check_for_updates_at_startup()
         self.show_tutorial_if_first_time()
+        self.show_welcome_dialog()
 
     def setup_project_sidebar(self):
         from .project_explorer import ProjectExplorerWidget
@@ -182,11 +185,13 @@ class VasoAnalyzerApp(QMainWindow):
         )
         if path:
             self.current_project = open_project(path)
+            self.apply_ui_state(getattr(self.current_project, "ui_state", None))
             self.refresh_project_tree()
             self.project_dock.show()
             self.statusBar().showMessage(
                 f"\u2713 Project loaded: {self.current_project.name}", 3000
             )
+            self.update_recent_projects(path)
             # Auto-load the first sample if available
             if (
                 self.current_project.experiments
@@ -197,7 +202,9 @@ class VasoAnalyzerApp(QMainWindow):
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
+            self.current_project.ui_state = self.gather_ui_state()
             save_project_file(self.current_project)
+            self.update_recent_projects(self.current_project.path)
             self.statusBar().showMessage("\u2713 Project saved", 3000)
         elif self.current_project:
             self.save_project_file_as()
@@ -211,7 +218,9 @@ class VasoAnalyzerApp(QMainWindow):
         if path:
             if not path.endswith(".vaso"):
                 path += ".vaso"
+            self.current_project.ui_state = self.gather_ui_state()
             save_project_file(self.current_project, path)
+            self.update_recent_projects(path)
             self.statusBar().showMessage("\u2713 Project saved", 3000)
 
     def refresh_project_tree(self):
@@ -356,6 +365,29 @@ class VasoAnalyzerApp(QMainWindow):
             )
             return
         self.add_sample(self.current_experiment)
+
+    def add_data_to_current_experiment(self):
+        if not self.current_experiment:
+            QMessageBox.warning(
+                self,
+                "No Experiment Selected",
+                "Please select an experiment first.",
+            )
+            return
+
+        nname, ok = QInputDialog.getText(self, "Sample Name", "Name:")
+        if not ok or not nname:
+            return
+        sample = SampleN(name=nname)
+        self.current_experiment.samples.append(sample)
+        self.refresh_project_tree()
+        self.load_data_into_sample(sample)
+        self.statusBar().showMessage(
+            f"\u2713 {nname} loaded into Experiment '{self.current_experiment.name}'",
+            3000,
+        )
+        if self.current_project and self.current_project.path:
+            save_project(self.current_project, self.current_project.path)
 
     def load_data_into_sample(self, sample: SampleN):
         trace_path, _ = QFileDialog.getOpenFileName(
@@ -837,6 +869,19 @@ class VasoAnalyzerApp(QMainWindow):
             recent = []
         self.recent_files = recent
 
+    def load_recent_projects(self):
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        recent = settings.value("recentProjects", [])
+        if recent is None:
+            recent = []
+        self.recent_projects = recent
+
+    def update_recent_projects(self, path):
+        if path not in self.recent_projects:
+            self.recent_projects = [path] + self.recent_projects[:4]
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            settings.setValue("recentProjects", self.recent_projects)
+
     def check_for_updates_at_startup(self):
         latest = check_for_new_version(f"v{APP_VERSION}")
         if latest:
@@ -943,6 +988,30 @@ class VasoAnalyzerApp(QMainWindow):
             dont_show = dlg.exec_()
             if dont_show:
                 settings.setValue("tutorialShown", True)
+
+    def show_welcome_dialog(self):
+        from .dialogs.welcome_dialog import WelcomeDialog
+
+        dlg = WelcomeDialog(self.recent_projects, self)
+        result = dlg.exec_()
+        if result == WelcomeDialog.GETTING_STARTED:
+            self.show_tutorial()
+        elif result == WelcomeDialog.CREATE_PROJECT:
+            self.new_project()
+            if self.current_project:
+                self.add_experiment()
+        elif result == WelcomeDialog.OPEN_PROJECT:
+            path = dlg.selected_project
+            if not path:
+                path, _ = QFileDialog.getOpenFileName(
+                    self, "Open Project", "", "Vaso Files (*.vaso)"
+                )
+            if path:
+                self.current_project = open_project(path)
+                self.apply_ui_state(getattr(self.current_project, "ui_state", None))
+                self.refresh_project_tree()
+                self.project_dock.show()
+                self.update_recent_projects(path)
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
@@ -1262,6 +1331,13 @@ class VasoAnalyzerApp(QMainWindow):
             grid_btn.setChecked(self.grid_visible)
             grid_btn.clicked.connect(self.toggle_grid)
             toolbar.insertWidget(visible_buttons[7], grid_btn)
+
+            # Add Data button
+            data_btn = QToolButton()
+            data_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogNewFolder))
+            data_btn.setToolTip("Add Data")
+            data_btn.clicked.connect(self.add_data_to_current_experiment)
+            toolbar.insertWidget(visible_buttons[7], data_btn)
 
             # Override Save
             save_btn = visible_buttons[7]
@@ -3044,4 +3120,28 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax.grid(True, color=CURRENT_THEME["grid_color"])
         else:
             self.ax.grid(False)
+        self.canvas.draw_idle()
+
+    # ---------- UI State Persistence ----------
+    def gather_ui_state(self):
+        return {
+            "geometry": self.saveGeometry().data().hex(),
+            "window_state": self.saveState().data().hex(),
+            "axis_xlim": list(self.ax.get_xlim()),
+            "axis_ylim": list(self.ax.get_ylim()),
+        }
+
+    def apply_ui_state(self, state):
+        if not state:
+            return
+        geom = state.get("geometry")
+        if geom:
+            self.restoreGeometry(bytes.fromhex(geom))
+        wstate = state.get("window_state")
+        if wstate:
+            self.restoreState(bytes.fromhex(wstate))
+        if "axis_xlim" in state:
+            self.ax.set_xlim(state["axis_xlim"])
+        if "axis_ylim" in state:
+            self.ax.set_ylim(state["axis_ylim"])
         self.canvas.draw_idle()

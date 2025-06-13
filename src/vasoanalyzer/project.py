@@ -41,6 +41,7 @@ class Project:
     name: str
     experiments: List[Experiment] = field(default_factory=list)
     path: Optional[str] = None
+    ui_state: Optional[dict] = None
 
 
 # JSON I/O --------------------------------------------------------------
@@ -56,7 +57,12 @@ def sample_to_dict(sample: SampleN) -> dict:
 
 
 def project_to_dict(project: Project) -> dict:
-    proj_dict = {"name": project.name, "path": project.path, "experiments": []}
+    proj_dict = {
+        "name": project.name,
+        "path": project.path,
+        "experiments": [],
+        "ui_state": project.ui_state,
+    }
     for exp in project.experiments:
         exp_dict = {
             "name": exp.name,
@@ -102,7 +108,10 @@ def project_from_dict(data: dict) -> Project:
             )
         )
     return Project(
-        name=data.get("name", ""), experiments=experiments, path=data.get("path")
+        name=data.get("name", ""),
+        experiments=experiments,
+        path=data.get("path"),
+        ui_state=data.get("ui_state"),
     )
 
 
