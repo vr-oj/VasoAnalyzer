@@ -125,6 +125,16 @@ QHeaderView::section {{
 }}
 QSlider::groove:horizontal, QSlider::groove:vertical {{
     background: {theme['grid_color']};
+    height: 6px;
+    border-radius: 3px;
+}}
+QSlider::handle:horizontal, QSlider::handle:vertical {{
+    background: {theme['button_bg']};
+    border: 1px solid {theme['grid_color']};
+    width: 12px;
+    height: 12px;
+    margin: -4px;
+    border-radius: 6px;
 }}
 """
 
