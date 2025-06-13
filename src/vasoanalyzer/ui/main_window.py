@@ -198,7 +198,8 @@ class VasoAnalyzerApp(QMainWindow):
             exp_item.setData(0, Qt.UserRole, exp)
             root.addChild(exp_item)
             for s in exp.samples:
-                status = "✓" if s.trace_path else "✗"
+                has_data = s.trace_path or s.trace_data is not None
+                status = "✓" if has_data else "✗"
                 item = QTreeWidgetItem([f"{s.name} {status}"])
                 item.setData(0, Qt.UserRole, s)
                 exp_item.addChild(item)
@@ -2826,30 +2827,22 @@ class VasoAnalyzerApp(QMainWindow):
         if not ok or not name:
             return
 
-        trace_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Trace CSV", f"{name}_trace.csv", "CSV Files (*.csv)"
-        )
-        if not trace_path:
-            return
-
-        events_path, _ = QFileDialog.getSaveFileName(
-            self, "Save Events CSV", f"{name}_events.csv", "CSV Files (*.csv)"
-        )
-        if not events_path:
-            return
-
+        # Embed the current trace and event data directly into the project
         try:
-            self.trace_data.to_csv(trace_path, index=False)
-            df = pd.DataFrame(
+            events_df = pd.DataFrame(
                 self.event_table_data,
                 columns=["Event", "Time (s)", "ID (µm)", "Frame"],
             )
-            df.to_csv(events_path, index=False)
+            sample = SampleN(
+                name=name,
+                trace_data=self.trace_data.copy(),
+                events_data=events_df,
+            )
         except Exception as e:
             QMessageBox.critical(self, "Save Failed", str(e))
             return
 
-        exp.samples.append(SampleN(name=name, trace_path=trace_path, events_path=events_path))
+        exp.samples.append(sample)
         self.refresh_project_tree()
         if self.current_project.path:
             save_project(self.current_project, self.current_project.path)
