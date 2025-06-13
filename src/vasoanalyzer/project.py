@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import List, Optional
+
+import pandas as pd
 
 __all__ = [
     "Project",
@@ -22,6 +24,8 @@ class SampleN:
     diameter_data: Optional[List[float]] = None
     exported: bool = False
     column: Optional[str] = None
+    trace_data: Optional[pd.DataFrame] = None
+    events_data: Optional[pd.DataFrame] = None
 
 
 @dataclass
@@ -42,14 +46,53 @@ class Project:
 # JSON I/O --------------------------------------------------------------
 
 
+def sample_to_dict(sample: SampleN) -> dict:
+    data = asdict(sample)
+    if isinstance(sample.trace_data, pd.DataFrame):
+        data["trace_data"] = sample.trace_data.to_dict(orient="list")
+    if isinstance(sample.events_data, pd.DataFrame):
+        data["events_data"] = sample.events_data.to_dict(orient="list")
+    return data
+
+
 def project_to_dict(project: Project) -> dict:
-    return asdict(project)
+    proj_dict = {"name": project.name, "path": project.path, "experiments": []}
+    for exp in project.experiments:
+        exp_dict = {
+            "name": exp.name,
+            "excel_path": exp.excel_path,
+            "next_column": exp.next_column,
+            "samples": [sample_to_dict(s) for s in exp.samples],
+        }
+        proj_dict["experiments"].append(exp_dict)
+    return proj_dict
+
+
+def sample_from_dict(data: dict) -> SampleN:
+    trace_data = data.get("trace_data")
+    if isinstance(trace_data, dict):
+        trace_data = pd.DataFrame(trace_data)
+
+    events_data = data.get("events_data")
+    if isinstance(events_data, dict):
+        events_data = pd.DataFrame(events_data)
+
+    return SampleN(
+        name=data.get("name", ""),
+        trace_path=data.get("trace_path"),
+        events_path=data.get("events_path"),
+        diameter_data=data.get("diameter_data"),
+        exported=data.get("exported", False),
+        column=data.get("column"),
+        trace_data=trace_data,
+        events_data=events_data,
+    )
 
 
 def project_from_dict(data: dict) -> Project:
     experiments = []
     for exp in data.get("experiments", []):
-        samples = [SampleN(**s) for s in exp.get("samples", [])]
+        samples = [sample_from_dict(s) for s in exp.get("samples", [])]
         experiments.append(
             Experiment(
                 name=exp.get("name", ""),

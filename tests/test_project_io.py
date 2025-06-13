@@ -1,12 +1,17 @@
 import json
+
+import pandas as pd
+
+from vasoanalyzer.event_loader import load_events
 from vasoanalyzer.project import (
-    Project,
     Experiment,
+    Project,
     SampleN,
-    save_project,
-    load_project,
     export_sample,
+    load_project,
+    save_project,
 )
+from vasoanalyzer.trace_loader import load_trace
 
 
 def test_project_save_load(tmp_path):
@@ -43,3 +48,39 @@ def test_trace_event_paths_persist(tmp_path):
     loaded_s = loaded.experiments[0].samples[0]
     assert loaded_s.trace_path == "trace.csv"
     assert loaded_s.events_path == "events.csv"
+
+
+def test_embedded_data_persistence(tmp_path):
+    trace_path = tmp_path / "trace.csv"
+    df_trace = pd.DataFrame({"Time (s)": [0, 1], "Inner Diameter": [10, 11]})
+    df_trace.to_csv(trace_path, index=False)
+
+    events_path = tmp_path / "events.csv"
+    df_events = pd.DataFrame({"label": ["A"], "time": [0.5], "frame": [5]})
+    df_events.to_csv(events_path, index=False)
+
+    loaded_trace = load_trace(str(trace_path))
+    labels, times, frames = load_events(str(events_path))
+    events_df = pd.DataFrame({"label": labels, "time": times, "frame": frames})
+
+    sample = SampleN(
+        name="N1",
+        trace_path=str(trace_path),
+        events_path=str(events_path),
+        trace_data=loaded_trace,
+        events_data=events_df,
+    )
+    exp = Experiment(name="E", samples=[sample])
+    proj = Project(name="P", experiments=[exp])
+
+    save_path = tmp_path / "proj.vasoproj"
+    save_project(proj, save_path)
+
+    trace_path.unlink()
+    events_path.unlink()
+
+    loaded_proj = load_project(save_path)
+    ls = loaded_proj.experiments[0].samples[0]
+
+    pd.testing.assert_frame_equal(ls.trace_data, loaded_trace)
+    pd.testing.assert_frame_equal(ls.events_data, events_df)
