@@ -135,8 +135,15 @@ class ExcelMappingDialog(QDialog):
                 self.wb = load_workbook(path)
                 self.ws = self.wb.active
                 self.excel_path = path
+                # Ensure the first column remains visible when scrolling
+                if not self.ws.freeze_panes:
+                    self.ws.freeze_panes = "B1"
+                    self.wb.save(path)
+
                 self.column_selector.setEnabled(True)
-                self.instructions.setText("<b>Step 2:</b> File loaded. Now select column and assign values.")
+                self.instructions.setText(
+                    "<b>Step 2:</b> File loaded. Now select column and assign values."
+                )
                 self.update_cell_label()
                 self.update_preview_table()
             except Exception as e:
