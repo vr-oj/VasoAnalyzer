@@ -159,7 +159,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_project = Project(name=name)
             self.refresh_project_tree()
 
-    def open_project(self):
+    def open_project_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Project", "", "Vaso Project (*.vasoproj)"
         )
@@ -167,13 +167,13 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_project = load_project(path)
             self.refresh_project_tree()
 
-    def save_project(self):
+    def save_project_file(self):
         if self.current_project and self.current_project.path:
             save_project(self.current_project, self.current_project.path)
         elif self.current_project:
-            self.save_project_as()
+            self.save_project_file_as()
 
-    def save_project_as(self):
+    def save_project_file_as(self):
         if not self.current_project:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -385,15 +385,15 @@ class VasoAnalyzerApp(QMainWindow):
         proj_menu.addAction(new_act)
 
         open_act = QAction("Open Project…", self)
-        open_act.triggered.connect(self.open_project)
+        open_act.triggered.connect(self.open_project_file)
         proj_menu.addAction(open_act)
 
         save_act = QAction("Save Project", self)
-        save_act.triggered.connect(self.save_project)
+        save_act.triggered.connect(self.save_project_file)
         proj_menu.addAction(save_act)
 
         save_as_act = QAction("Save Project As…", self)
-        save_as_act.triggered.connect(self.save_project_as)
+        save_as_act.triggered.connect(self.save_project_file_as)
         proj_menu.addAction(save_as_act)
 
         add_exp_act = QAction("Add Experiment", self)
@@ -1394,7 +1394,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         msg.exec_()
 
-    def save_project(self):
+    def save_analysis(self):
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Project", "", "Vaso Projects (*.vaso)"
         )
@@ -1447,7 +1447,7 @@ class VasoAnalyzerApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
-    def open_project(self, path=None):
+    def open_analysis(self, path=None):
         # QAction.triggered passes a boolean 'checked' argument. If this method
         # is connected directly to that signal, ``path`` may receive a bool
         # instead of the actual file path. Guard against that by treating a
@@ -1733,7 +1733,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Check for dropped .vaso project first
         for p in paths:
             if p.endswith(".vaso"):
-                self.open_project(p)
+                self.open_analysis(p)
                 return
 
         idx = self.modeStack.currentIndex()
