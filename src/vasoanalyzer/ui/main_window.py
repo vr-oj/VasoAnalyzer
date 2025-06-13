@@ -145,6 +145,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree = QTreeWidget()
         self.project_tree.setHeaderHidden(True)
         self.project_tree.itemClicked.connect(self.on_tree_item_clicked)
+        self.project_tree.itemDoubleClicked.connect(
+            self.on_tree_item_double_clicked
+        )
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_tree.customContextMenuRequested.connect(
             self.show_project_context_menu
@@ -166,6 +169,13 @@ class VasoAnalyzerApp(QMainWindow):
         if path:
             self.current_project = load_project(path)
             self.refresh_project_tree()
+            # Auto-load the first sample if available
+            if (
+                self.current_project.experiments
+                and self.current_project.experiments[0].samples
+            ):
+                first_sample = self.current_project.experiments[0].samples[0]
+                self.load_sample_into_view(first_sample)
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
@@ -217,6 +227,57 @@ class VasoAnalyzerApp(QMainWindow):
         else:
             self.current_sample = None
             self.current_experiment = None
+
+    def on_tree_item_double_clicked(self, item, _):
+        obj = item.data(0, Qt.UserRole)
+        if isinstance(obj, SampleN):
+            self.load_sample_into_view(obj)
+
+    def load_sample_into_view(self, sample: SampleN):
+        """Load a sample's trace and events into the main view."""
+        try:
+            if sample.trace_data is not None:
+                trace = sample.trace_data.copy()
+            elif sample.trace_path:
+                trace = load_trace(sample.trace_path)
+            else:
+                QMessageBox.warning(self, "No Trace", "Sample has no trace data.")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Trace Load Error", str(e))
+            return
+
+        labels, times, frames, diam = [], [], [], []
+        try:
+            if sample.events_data is not None:
+                df = sample.events_data
+                labels = df[df.columns[0]].tolist()
+                times = (
+                    df["Time (s)"].tolist()
+                    if "Time (s)" in df.columns
+                    else [0.0] * len(labels)
+                )
+                diam = (
+                    df["ID (µm)"].tolist()
+                    if "ID (µm)" in df.columns
+                    else []
+                )
+                frames = df["Frame"].tolist() if "Frame" in df.columns else None
+            elif sample.events_path:
+                labels, times, frames = load_events(sample.events_path)
+            # Compute diameters if not provided
+            if times and not diam:
+                arr_t = trace["Time (s)"].values
+                arr_d = trace["Inner Diameter"].values
+                for t in times:
+                    idx_evt = int(np.argmin(np.abs(arr_t - t)))
+                    diam.append(float(arr_d[idx_evt]))
+        except Exception as e:
+            QMessageBox.warning(self, "Event Load Error", str(e))
+
+        self.trace_data = trace
+        self.update_plot()
+        self.load_project_events(labels, times, frames, diam)
 
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
@@ -1532,6 +1593,8 @@ class VasoAnalyzerApp(QMainWindow):
         font = self.event_table.font()
         font.setPointSize(style.get("table_fontsize", font.pointSize()))
         self.event_table.setFont(font)
+        # Ensure the scroll slider visibility matches the restored limits
+        self.update_scroll_slider()
         self.canvas.draw_idle()
 
     def set_current_frame(self, idx):
