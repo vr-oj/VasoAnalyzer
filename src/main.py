@@ -112,6 +112,7 @@ class VasoAnalyzerLauncher:
             print("🚀 Attempting to create VasoAnalyzerApp window...")
             self.window = VasoAnalyzerApp()
             self.window.show()
+            QTimer.singleShot(100, self.window.show_welcome_dialog)
             print("✅ Main window shown successfully!")
         except Exception as e:
             print(f"❗ Error launching main window: {e}")

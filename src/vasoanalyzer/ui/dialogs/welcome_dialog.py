@@ -22,6 +22,7 @@ class WelcomeDialog(QDialog):
     GETTING_STARTED = 1
     CREATE_PROJECT = 2
     OPEN_PROJECT = 3
+    QUICK_ANALYSIS = 4
 
     def __init__(self, recent_projects: list[str] | None = None, parent=None) -> None:
         super().__init__(parent)
@@ -42,11 +43,13 @@ class WelcomeDialog(QDialog):
         l0 = QVBoxLayout(page0)
         l0.addWidget(QLabel("<b>Welcome! Choose an option:</b>"))
         btn_start = QPushButton("Getting Started")
+        btn_quick = QPushButton("Quick Analysis")
         btn_create = QPushButton("Create New Project")
         btn_open = QPushButton("Open Project")
-        for btn in (btn_start, btn_create, btn_open):
+        for btn in (btn_start, btn_quick, btn_create, btn_open):
             btn.setMinimumHeight(40)
         l0.addWidget(btn_start)
+        l0.addWidget(btn_quick)
         l0.addWidget(btn_create)
         l0.addWidget(btn_open)
         self.dont_show_chk = QCheckBox("Don't show this again")
@@ -90,6 +93,7 @@ class WelcomeDialog(QDialog):
 
         # Connections ------------------------------------------------------
         btn_start.clicked.connect(lambda: self.done(self.GETTING_STARTED))
+        btn_quick.clicked.connect(lambda: self.done(self.QUICK_ANALYSIS))
         btn_create.clicked.connect(lambda: self.stack.setCurrentIndex(1))
         btn_open.clicked.connect(lambda: self.stack.setCurrentIndex(2))
 

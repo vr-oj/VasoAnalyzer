@@ -139,7 +139,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.setMouseTracking(True)
 
         self.check_for_updates_at_startup()
-        self.show_welcome_dialog()
 
     def setup_project_sidebar(self):
         from .project_explorer import ProjectExplorerWidget
@@ -997,33 +996,43 @@ class VasoAnalyzerApp(QMainWindow):
         from .dialogs.welcome_dialog import WelcomeDialog
 
         dlg = WelcomeDialog(self.recent_projects, self)
-        result = dlg.exec_()
-        if dlg.dont_show:
-            settings.setValue("welcomeShown", True)
+        while True:
+            result = dlg.exec_()
+            if dlg.dont_show:
+                settings.setValue("welcomeShown", True)
 
-        if result == WelcomeDialog.GETTING_STARTED:
-            self.show_tutorial()
-        elif result == WelcomeDialog.CREATE_PROJECT:
-            if dlg.project_name:
-                self.current_project = Project(name=dlg.project_name)
-                self.refresh_project_tree()
-                self.project_dock.show()
-                if dlg.experiment_name:
-                    exp = Experiment(name=dlg.experiment_name)
-                    self.current_project.experiments.append(exp)
+            if result == WelcomeDialog.GETTING_STARTED:
+                self.show_tutorial()
+                dlg.stack.setCurrentIndex(0)
+                continue
+            elif result == getattr(WelcomeDialog, "QUICK_ANALYSIS", -1):
+                self.load_trace_and_events()
+                break
+            elif result == WelcomeDialog.CREATE_PROJECT:
+                if dlg.project_name:
+                    self.current_project = Project(name=dlg.project_name)
                     self.refresh_project_tree()
-        elif result == WelcomeDialog.OPEN_PROJECT:
-            path = dlg.selected_project
-            if not path:
-                path, _ = QFileDialog.getOpenFileName(
-                    self, "Open Project", "", "Vaso Files (*.vaso)"
-                )
-            if path:
-                self.current_project = open_project(path)
-                self.apply_ui_state(getattr(self.current_project, "ui_state", None))
-                self.refresh_project_tree()
-                self.project_dock.show()
-                self.update_recent_projects(path)
+                    self.project_dock.show()
+                    if dlg.experiment_name:
+                        exp = Experiment(name=dlg.experiment_name)
+                        self.current_project.experiments.append(exp)
+                        self.refresh_project_tree()
+                break
+            elif result == WelcomeDialog.OPEN_PROJECT:
+                path = dlg.selected_project
+                if not path:
+                    path, _ = QFileDialog.getOpenFileName(
+                        self, "Open Project", "", "Vaso Files (*.vaso)"
+                    )
+                if path:
+                    self.current_project = open_project(path)
+                    self.apply_ui_state(getattr(self.current_project, "ui_state", None))
+                    self.refresh_project_tree()
+                    self.project_dock.show()
+                    self.update_recent_projects(path)
+                break
+            else:
+                break
 
     # [C] ========================= UI SETUP (initUI) ======================================
     def initUI(self):
