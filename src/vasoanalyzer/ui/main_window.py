@@ -920,7 +920,7 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_annotation(self, kind: str):
         if kind == "lines":
             for line in self.ax.get_lines():
-                if line.get_linestyle() == "--" and line.get_color() == "black":
+                if line.get_gid() == "event_line":
                     line.set_visible(not line.get_visible())
         elif kind == "evt_labels":
             for txt, _ in self.event_text_objects:
@@ -2201,12 +2201,13 @@ class VasoAnalyzerApp(QMainWindow):
                 else:
                     frame_number = idx_ev
 
-                self.ax.axvline(
+                line = self.ax.axvline(
                     x=evt_time,
                     color=CURRENT_THEME["text"],
                     linestyle="--",
                     linewidth=0.8,
                 )
+                line.set_gid("event_line")
 
                 txt = self.ax.text(
                     evt_time,
@@ -2474,7 +2475,56 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.populate_table()
         self.auto_export_table()
+        self.update_plot()
         log.info("Inserted new event: %s", new_entry)
+
+    def manual_add_event(self):
+        if not self.trace_data:
+            QMessageBox.warning(self, "No Trace", "Load a trace before adding events.")
+            return
+
+        insert_labels = [f"{lbl} at {t:.2f}s" for lbl, t, _, _ in self.event_table_data]
+        insert_labels.append("↘️ Add to end")
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Insert Event",
+            "Insert new event before which existing event?",
+            insert_labels,
+            0,
+            False,
+        )
+        if not ok or not selected:
+            return
+
+        label, l_ok = QInputDialog.getText(self, "New Event Label", "Enter label for the new event:")
+        if not l_ok or not label.strip():
+            return
+
+        t_val, t_ok = QInputDialog.getDouble(self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2)
+        if not t_ok:
+            return
+
+        id_val, id_ok = QInputDialog.getDouble(self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2)
+        if not id_ok:
+            return
+
+        insert_idx = insert_labels.index(selected)
+        frame_number = int(t_val / self.recording_interval)
+        new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), frame_number)
+
+        if insert_idx == len(self.event_table_data):
+            self.event_labels.append(label.strip())
+            self.event_times.append(t_val)
+            self.event_table_data.append(new_entry)
+        else:
+            self.event_labels.insert(insert_idx, label.strip())
+            self.event_times.insert(insert_idx, t_val)
+            self.event_table_data.insert(insert_idx, new_entry)
+
+        self.populate_table()
+        self.update_plot()
+        self.auto_export_table()
+        log.info("Manually inserted event: %s", new_entry)
 
     # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
@@ -2823,31 +2873,34 @@ class VasoAnalyzerApp(QMainWindow):
 
     def show_event_table_context_menu(self, position):
         index = self.event_table.indexAt(position)
-        if not index.isValid():
-            return
-
-        row = index.row()
+        row = index.row() if index.isValid() else len(self.event_table_data)
         menu = QMenu()
 
         # Group 1: Edit & Delete
-        edit_action = menu.addAction("✏️ Edit ID (µm)…")
-        delete_action = menu.addAction("🗑️ Delete Event")
+        if index.isValid():
+            edit_action = menu.addAction("✏️ Edit ID (µm)…")
+            delete_action = menu.addAction("🗑️ Delete Event")
         menu.addSeparator()
 
         # Group 2: Plot Navigation
-        jump_action = menu.addAction("🔍 Jump to Event on Plot")
-        pin_action = menu.addAction("📌 Pin to Plot")
+        if index.isValid():
+            jump_action = menu.addAction("🔍 Jump to Event on Plot")
+            pin_action = menu.addAction("📌 Pin to Plot")
         menu.addSeparator()
 
         # Group 3: Pin Utilities
-        replace_with_pin_action = menu.addAction("🔄 Replace ID with Pinned Value")
+        if index.isValid():
+            replace_with_pin_action = menu.addAction("🔄 Replace ID with Pinned Value")
         clear_pins_action = menu.addAction("❌ Clear All Pins")
+        menu.addSeparator()
+
+        add_event_action = menu.addAction("➕ Add Event…")
 
         # Show menu
         action = menu.exec_(self.event_table.viewport().mapToGlobal(position))
 
         # Group 1 actions
-        if action == edit_action:
+        if index.isValid() and action == edit_action:
             old_val = self.event_table.item(row, 2).text()
             new_val, ok = QInputDialog.getDouble(
                 self, "Edit ID", "Enter new ID (µm):", float(old_val), 0, 10000, 2
@@ -2862,7 +2915,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self.populate_table()
                 self.auto_export_table()
 
-        elif action == delete_action:
+        elif index.isValid() and action == delete_action:
             confirm = QMessageBox.question(
                 self,
                 "Delete Event",
@@ -2877,7 +2930,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self.update_plot()
 
         # Group 2 actions
-        elif action == jump_action:
+        elif index.isValid() and action == jump_action:
             t = self.event_table_data[row][1]
             if self.selected_event_marker:
                 self.selected_event_marker.remove()
@@ -2886,7 +2939,7 @@ class VasoAnalyzerApp(QMainWindow):
             )
             self.canvas.draw()
 
-        elif action == pin_action:
+        elif index.isValid() and action == pin_action:
             t = self.event_table_data[row][1]
             id_val = self.event_table_data[row][2]
             marker = self.ax.plot(t, id_val, "ro", markersize=6)[0]
@@ -2907,7 +2960,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.canvas.draw_idle()
 
         # Group 3 actions
-        elif action == replace_with_pin_action:
+        elif index.isValid() and action == replace_with_pin_action:
             t_event = self.event_table_data[row][1]
             if not self.pinned_points:
                 QMessageBox.information(
@@ -2951,6 +3004,9 @@ class VasoAnalyzerApp(QMainWindow):
             self.pinned_points.clear()
             self.canvas.draw_idle()
             log.info("Cleared all pins.")
+
+        elif action == add_event_action:
+            self.manual_add_event()
 
     def save_recent_files(self):
         self.settings.setValue("recentFiles", self.recent_files)
