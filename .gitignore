@@ -38,3 +38,5 @@ src/dist/VasoAnalyzer_2.1.app/Contents/
 vasoenv/
 /vaso
 src.zip
+/.vasoenv
+/.venv
