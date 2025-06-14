@@ -2,6 +2,7 @@
 import os
 import sys
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
 
 # decide platform‐specific icon
 if sys.platform == 'darwin':
@@ -14,6 +15,8 @@ else:
 project_dir = os.getcwd()
 req_subs = collect_submodules('requests')
 xl_subs  = collect_submodules('openpyxl')
+icon_dir = os.path.join(project_dir, 'icons')
+icon_datas = [(os.path.join(icon_dir, f), 'icons') for f in os.listdir(icon_dir)]
 
 a = Analysis(
     ['main.py'],
@@ -24,7 +27,7 @@ a = Analysis(
         # include whichever icon file(s) you ship
         ('vasoanalyzer/VasoAnalyzerIcon.icns', 'vasoanalyzer'),
         ('vasoanalyzer/VasoAnalyzerIcon.ico',  'vasoanalyzer'),
-    ],
+    ] + icon_datas,
     hiddenimports=[
         'tkinter',
         'tkinter.filedialog',
