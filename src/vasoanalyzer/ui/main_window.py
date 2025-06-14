@@ -147,7 +147,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree = self.project_dock.tree
         self.project_tree.setHeaderHidden(True)
         self.project_tree.itemClicked.connect(self.on_tree_item_clicked)
-        self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
+        # Single-click opens a sample; double-click is reserved for editing
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_tree.customContextMenuRequested.connect(
             self.show_project_context_menu
@@ -254,6 +254,8 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_sample = obj
             parent = item.parent()
             self.current_experiment = parent.data(0, Qt.UserRole) if parent else None
+            # Open the sample on single-click
+            self.load_sample_into_view(obj)
         elif isinstance(obj, Experiment):
             self.current_experiment = obj
             self.current_sample = None
@@ -262,6 +264,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_experiment = None
 
     def on_tree_item_double_clicked(self, item, _):
+        """Deprecated handler kept for backward compatibility."""
         obj = item.data(0, Qt.UserRole)
         if isinstance(obj, SampleN):
             self.load_sample_into_view(obj)
@@ -1472,6 +1475,22 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_btn.setEnabled(bool(self.event_table_data))
         self.update_scroll_slider()  # shows or hides the pan‑slider
         self.style_event_table()
+
+        # 7) If a project and experiment are active, auto-add this dataset
+        if self.current_project and self.current_experiment:
+            sample_name = os.path.splitext(os.path.basename(file_path))[0]
+            sample = SampleN(name=sample_name, trace_path=file_path)
+            if os.path.exists(event_path):
+                sample.events_path = event_path
+            self.current_experiment.samples.append(sample)
+            self.current_sample = sample
+            self.refresh_project_tree()
+            if self.current_project.path:
+                save_project_file(self.current_project, self.current_project.path)
+            self.statusBar().showMessage(
+                f"\u2713 {sample_name} loaded into Experiment '{self.current_experiment.name}'",
+                3000,
+            )
 
     def populate_table_widget(self, table_widget, data):
         table_widget.setRowCount(len(data))
