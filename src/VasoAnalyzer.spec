@@ -15,8 +15,9 @@ else:
 spec_dir = os.path.dirname(__file__)
 project_dir = os.getcwd()
 req_subs = collect_submodules('requests')
-xl_subs  = collect_submodules('openpyxl')
-icon_dir = os.path.join(spec_dir, 'icons')
+xl_subs = collect_submodules('openpyxl')
+# Collect toolbar icon SVGs from the project root.
+icon_dir = os.path.join(project_dir, 'icons')
 icon_datas = [(os.path.join(icon_dir, f), 'icons') for f in os.listdir(icon_dir)]
 
 a = Analysis(
