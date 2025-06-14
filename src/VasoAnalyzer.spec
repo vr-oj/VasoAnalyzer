@@ -15,6 +15,7 @@ else:
 
 spec_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
 project_dir = os.path.abspath(os.path.join(spec_dir, '..'))
+src_dir = os.path.join(project_dir, 'src')
 
 req_subs = collect_submodules('requests')
 xl_subs = collect_submodules('openpyxl')
@@ -28,8 +29,8 @@ qt_plugins_dir = QLibraryInfo.location(QLibraryInfo.PluginsPath)
 qt_plugin_datas = [(os.path.join(qt_plugins_dir, 'platforms'), 'PyQt5/Qt/plugins/platforms')]
 
 a = Analysis(
-    ['main.py'],
-    pathex=[project_dir],
+    [os.path.join(src_dir, 'main.py')],
+    pathex=[src_dir],
     binaries=[],
     datas=[
         ('vasoanalyzer/VasoAnalyzerSplashScreen.png', 'vasoanalyzer'),
