@@ -78,7 +78,7 @@ coll = COLLECT(
 
 if sys.platform == 'darwin':
     app = BUNDLE(
-        exe,
+        coll,
         name='VasoAnalyzer 1.7.app',
         icon='vasoanalyzer/VasoAnalyzerIcon.icns',
         bundle_identifier=None,
