@@ -79,7 +79,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.setMouseTracking(True)
 
         # ===== Setup App Window =====
-        self.setWindowTitle("VasoAnalyzer 1.6 - Python Edition")
+        self.setWindowTitle("VasoAnalyzer 1.7 - Python Edition")
         self.setGeometry(100, 100, 1280, 720)
         screen_size = QDesktopWidget().availableGeometry()
         self.resize(screen_size.width(), screen_size.height())
@@ -710,7 +710,7 @@ class VasoAnalyzerApp(QMainWindow):
             lambda: QMessageBox.information(
                 self,
                 "About VasoAnalyzer",
-                "VasoAnalyzer 1.6 (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer",
+                "VasoAnalyzer 1.7 (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer",
             )
         )
         help_menu.addAction(self.action_about)
@@ -965,7 +965,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def show_release_notes(self):
         # You could load a local CHANGELOG.md and display it
-        QMessageBox.information(self, "Release Notes", "Release 1.6:\n- Foo\n- Bar\n")
+        QMessageBox.information(self, "Release Notes", "Release 1.7:\n- Foo\n- Bar\n")
 
     def show_tutorial(self):
         from .dialogs.tutorial_dialog import TutorialDialog

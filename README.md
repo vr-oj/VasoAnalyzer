@@ -1,16 +1,16 @@
-# VasoAnalyzer 1.6
+# VasoAnalyzer 1.7
 
 🧪 *Bladder Vasculature Analysis Toolkit — Python Edition*  
 Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State University
 
-[![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_macOS.zip)
-[![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_Windows.zip)
+[![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.7/VasoAnalyzer.1.7_macOS.zip)
+[![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.7/VasoAnalyzer.1.7_Windows.zip)
 
 ---
 
 ## 🌟 What is VasoAnalyzer?
 
-**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **1.6** brings a host of new UX improvements, analysis‑ready exports, and a full dual‑view mode for side‑by‑side comparisons.
+**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **1.7** brings a host of new UX improvements, analysis‑ready exports, and a full dual‑view mode for side‑by‑side comparisons.
 
 Designed for researchers. Powered by Python. Zero coding required.
 
@@ -27,7 +27,7 @@ Designed for researchers. Powered by Python. Zero coding required.
 – Sync or swap pickles via drag‑and‑drop.
   - Improved TIFF loading, slider syncing, tooltip display
 
-## 🧰 Key Features in v1.6
+## 🧰 Key Features in v1.7
 
 - **📊 Load & visualize trace data** from `.csv`  
 - **📍 Import & display event tables** (CSV/TXT)  
@@ -77,8 +77,8 @@ Organize related experiments together in a single `.vaso` file. Each project can
 
 ### ✅ Option 1: No Python Needed — Use the App!
 
-- [![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_macOS.zip)
-- [![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.6/VasoAnalyzer.1.6_Windows.zip)
+- [![Download macOS App](https://img.shields.io/badge/Download-macOS-blue?logo=apple&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.7/VasoAnalyzer.1.7_macOS.zip)
+- [![Download Windows App](https://img.shields.io/badge/Download-Windows-blue?logo=windows&style=for-the-badge)](https://github.com/vr-oj/VasoAnalyzer/releases/download/v1.7/VasoAnalyzer.1.7_Windows.zip)
 
 After downloading:
 
@@ -90,7 +90,7 @@ After downloading:
 
 - **Windows**:  
   1. Unzip the folder.  
-  2. Double-click `VasoAnalyzer_1.6.exe` to launch the app.
+  2. Double-click `VasoAnalyzer_1.7.exe` to launch the app.
 
 ---
 
@@ -109,10 +109,10 @@ This is a common issue for unsigned apps on macOS — it does **not** mean the a
 Open the **Terminal** app and run:
 
 ```bash
-xattr -rd com.apple.quarantine /path/to/VasoAnalyzer 1.6.app
+xattr -rd com.apple.quarantine /path/to/VasoAnalyzer 1.7.app
 ```
 Replace /path/to/VasoAnalyzer.app with the actual path where you placed the app
-(e.g., ~/Applications/VasoAnalyzer 1.6.app).
+(e.g., ~/Applications/VasoAnalyzer 1.7.app).
 
 Then try launching the app again.  
 > You only need to do this once per computer or per download.
