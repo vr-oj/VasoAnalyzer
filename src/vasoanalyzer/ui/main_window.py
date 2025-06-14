@@ -3241,3 +3241,12 @@ class VasoAnalyzerApp(QMainWindow):
         if "axis_ylim" in state:
             self.ax.set_ylim(state["axis_ylim"])
         self.canvas.draw_idle()
+
+    def closeEvent(self, event):
+        if self.current_project and self.current_project.path:
+            try:
+                self.current_project.ui_state = self.gather_ui_state()
+                save_project_file(self.current_project)
+            except Exception as e:
+                log.error("Failed to auto-save project:\n%s", e)
+        super().closeEvent(event)
