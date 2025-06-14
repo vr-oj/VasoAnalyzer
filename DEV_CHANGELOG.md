@@ -1,10 +1,10 @@
-# Development Changelog — VasoAnalyzer v1.6
+# Development Changelog — VasoAnalyzer v1.7
 
-This changelog documents all feature additions, fixes, and improvements implemented in VasoAnalyzer v1.6.
+This changelog documents all feature additions, fixes, and improvements implemented in VasoAnalyzer v1.7.
 
 ---
 
-## v1.6 (May 2025)
+## v1.7 (May 2025)
 
 ### ✅ Application Core
 
@@ -103,10 +103,10 @@ This changelog documents all feature additions, fixes, and improvements implemen
 * Cleaned up `.gitignore` and removed `.vscode/`, `vasoenv/` from Git tracking.
 * Ready for Windows/macOS build and standalone installer creation.
 
-## \[Branch: `v1.6-dev`] Summary
+## \[Branch: `v1.7-dev`] Summary
 
 * All features above completed and verified across platforms.
-* Final build tagged as `v1.6` on GitHub.
+* Final build tagged as `v1.7` on GitHub.
 
 ### May 8, 2025 — Dual View Refactor & Plot Style Integration
 
@@ -163,7 +163,7 @@ This changelog documents all feature additions, fixes, and improvements implemen
 * Noted sluggish performance and UI unresponsiveness when both panels are active.
 * Planned tomorrow: profile rendering and callback overhead, batch `draw_event` updates, and optimize shared resources to improve responsiveness.
 
-## v1.6-dev (May 12, 2025)
+## v1.7-dev (May 12, 2025)
 
 ### 🗂️ Menu Bar Enhancements
 

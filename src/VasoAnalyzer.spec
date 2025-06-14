@@ -46,7 +46,7 @@ exe = EXE(
     a.scripts,
     [],                    # no extra binaries here
     exclude_binaries=True,
-    name='VasoAnalyzer 1.6',   # base name; extension/platform is automatic
+    name='VasoAnalyzer 1.7',   # base name; extension/platform is automatic
     debug=False,
     strip=False,
     upx=True,
@@ -61,14 +61,14 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    name='VasoAnalyzer 1.6',
+    name='VasoAnalyzer 1.7',
 )
 
 # Only on macOS do we wrap into a .app bundle
 if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
-        name='VasoAnalyzer 1.6.app',
+        name='VasoAnalyzer 1.7.app',
         icon='vasoanalyzer/VasoAnalyzerIcon.icns',
         bundle_identifier=None,
     )
