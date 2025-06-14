@@ -12,8 +12,12 @@ elif sys.platform.startswith('win'):
 else:
     ICON = None
 
-spec_dir = os.path.dirname(__file__)
-project_dir = os.getcwd()
+# Path handling must work whether the build is invoked from the project root or
+# from the ``src`` directory where this spec lives. ``__file__`` is not defined
+# when the spec is executed by PyInstaller, so ``sys.argv[0]`` is used instead.
+spec_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+# The project root is one directory above ``src``.
+project_dir = os.path.abspath(os.path.join(spec_dir, '..'))
 req_subs = collect_submodules('requests')
 xl_subs = collect_submodules('openpyxl')
 # Collect toolbar icon SVGs from the project root.
