@@ -153,13 +153,20 @@ python src/main.py
 ```
 VasoAnalyzer/
 ├── src/
-│   ├── main.py                 # App launcher
-│   └── vasoanalyzer/           # App modules and logic
-│       ├── gui.py              # UI logic (PyQt5)
-│       ├── trace_loader.py     # Load trace CSV
-│       ├── event_loader.py     # Load event files
-│       ├── tiff_loader.py      # Load TIFFs
-│       └── VasoAnalyzerIcon.icns
+│   ├── main.py                     # App entry point
+│   ├── utils/                      # Configuration helpers
+│   ├── icons/                      # Toolbar and UI icons
+│   └── vasoanalyzer/               # Application modules
+│       ├── ui/                     # Qt widgets and dialogs
+│       ├── trace_loader.py         # Load trace CSV
+│       ├── event_loader.py         # Load event tables
+│       ├── tiff_loader.py          # Load TIFF snapshots
+│       ├── project.py              # Project data structures
+│       ├── project_controller.py   # Logic for saving/loading projects
+│       └── version_checker.py      # GitHub update checker
+├── tests/                          # Unit tests
+├── docs/                           # Documentation and license
+├── icons/                          # Standalone icons
 └── requirements.txt
 ```
 
