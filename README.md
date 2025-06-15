@@ -29,7 +29,8 @@ Designed for researchers. Powered by Python. Zero coding required.
 
 ## 🧰 Key Features in v1.7
 
-- **📊 Load & visualize trace data** from `.csv`  
+- **📊 Load & visualize trace data** from `.csv`
+- **⬅️ Legacy file support** automatically detects old VasoTracker columns and event filenames
 - **📍 Import & display event tables** (CSV/TXT)  
 - **🖼️ Synchronized TIFF snapshots** with red trace‑time markers  
 - **🧠 Interactive plotting**: zoom, pan, hover‑to‑read, and pin points  

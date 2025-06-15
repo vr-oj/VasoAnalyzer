@@ -1,5 +1,8 @@
 """Helper routines for loading diameter trace CSV files."""
 
+import csv
+import re
+
 import pandas as pd
 
 
@@ -18,16 +21,39 @@ def load_trace(file_path):
         pandas.errors.ParserError: If the CSV cannot be parsed.
     """
 
-    # Try to auto-detect delimiter from the first line
+    # Auto-detect delimiter using the CSV sniffer
     with open(file_path, "r", encoding="utf-8-sig") as f:
-        first_line = f.readline()
-        delimiter = "," if "," in first_line else "\t"
+        sample = f.read(1024)
+        try:
+            delimiter = csv.Sniffer().sniff(sample).delimiter
+        except csv.Error:
+            if "," in sample:
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+            else:
+                delimiter = ";"
 
     df = pd.read_csv(file_path, delimiter=delimiter, encoding="utf-8-sig")
 
-    # Locate time and diameter columns
-    time_col = next((c for c in df.columns if "time" in c.lower()), None)
-    diam_col = next((c for c in df.columns if "inner" in c.lower() and "diam" in c.lower()), None)
+    def _normalize(col):
+        return re.sub(r"[^a-z0-9]", "", col.lower())
+
+    # Locate time and diameter columns using flexible matching for legacy files
+    time_col = None
+    diam_col = None
+    for c in df.columns:
+        norm = _normalize(c)
+        if time_col is None and ("time" in norm or "sec" in norm or norm == "t"):
+            time_col = c
+        if diam_col is None and (
+            ("inner" in norm and "diam" in norm)
+            or "diam" in norm
+            or norm in {"id", "diameter"}
+        ):
+            diam_col = c
+        if time_col and diam_col:
+            break
 
     if time_col is None or diam_col is None:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")

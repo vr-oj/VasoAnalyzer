@@ -12,7 +12,7 @@ import numpy as np
 import os
 
 from vasoanalyzer.trace_loader import load_trace
-from vasoanalyzer.event_loader import load_events
+from vasoanalyzer.event_loader import load_events, find_matching_event_file
 
 
 class DataViewPanel(QWidget):
@@ -199,14 +199,13 @@ class DataViewPanel(QWidget):
         if not file_path:
             return
         df = load_trace(file_path)
-        base = os.path.splitext(os.path.basename(file_path))[0]
-        evp = os.path.join(os.path.dirname(file_path), f"{base}_table.csv")
+        evp = find_matching_event_file(file_path)
         events = []
-        if os.path.exists(evp):
+        if evp and os.path.exists(evp):
             try:
                 lbls, tms, _ = load_events(evp)
                 events = list(zip(lbls, tms))
-            except:
+            except Exception:
                 pass
         # delegate to panel loader
         self.load_trace_and_events(df, events)
