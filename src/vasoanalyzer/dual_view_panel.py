@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QTableWidget,
     QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton,
-    QMessageBox, QSplitter, QLabel, QHeaderView
+    QMessageBox, QLabel, QHeaderView
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QSize
@@ -137,13 +137,13 @@ class DataViewPanel(QWidget):
         right_widget.setLayout(QVBoxLayout())
         right_widget.layout().addWidget(self.event_table)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 1)
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(left_widget, stretch=4)
+        content_layout.addWidget(right_widget, stretch=1)
 
-        main_layout.addWidget(splitter)
+        main_layout.addLayout(content_layout)
 
         # — Hover Label (exact same logic as main view) —
         self.hover_label = QLabel("", self)

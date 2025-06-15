@@ -43,7 +43,6 @@ from PyQt5.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QStyle,
-    QSplitter,
 )
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QCursor
@@ -1274,15 +1273,14 @@ class VasoAnalyzerApp(QMainWindow):
         right_widget = QWidget()
         right_widget.setLayout(right_layout)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 1)
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(0)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(left_widget, stretch=4)
+        content_layout.addWidget(right_widget, stretch=1)
 
-        self.splitter = splitter
         self.default_main_layout = self.rebuild_default_main_layout()
-        self.main_layout.addWidget(splitter)
+        self.main_layout.addLayout(content_layout)
 
         # ===== Canvas Interactions =====
         self.canvas.mpl_connect("draw_event", self.update_event_label_positions)
@@ -3067,18 +3065,17 @@ class VasoAnalyzerApp(QMainWindow):
         right_layout.addLayout(snapshot_layout)
         right_layout.addWidget(self.event_table)
 
-        # Combine left + right into splitter for user-resizable panels
         left_widget = QWidget()
         left_widget.setLayout(left_layout)
         right_widget = QWidget()
         right_widget.setLayout(right_layout)
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left_widget)
-        splitter.addWidget(right_widget)
-        splitter.setStretchFactor(0, 4)
-        splitter.setStretchFactor(1, 1)
-        return splitter
+        layout = QHBoxLayout()
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(left_widget, stretch=4)
+        layout.addWidget(right_widget, stretch=1)
+        return layout
 
     # [K] ========================= EXPORT LOGIC (CSV, FIG) ==============================
     def auto_export_table(self):
