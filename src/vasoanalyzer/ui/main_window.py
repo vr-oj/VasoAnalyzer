@@ -51,7 +51,7 @@ from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
 from vasoanalyzer.trace_loader import load_trace
 from vasoanalyzer.tiff_loader import load_tiff, load_tiff_preview
-from vasoanalyzer.event_loader import load_events
+from vasoanalyzer.event_loader import load_events, find_matching_event_file
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
 from vasoanalyzer.theme_manager import (
@@ -1417,9 +1417,8 @@ class VasoAnalyzerApp(QMainWindow):
             self.update_recent_files_menu()
 
         # 4) Load the matching events CSV (if it exists)
-        base = os.path.splitext(os.path.basename(file_path))[0]
-        event_path = os.path.join(self.trace_file_path, f"{base}_table.csv")
-        if os.path.exists(event_path):
+        event_path = find_matching_event_file(file_path)
+        if event_path and os.path.exists(event_path):
             try:
                 self.event_labels, self.event_times, self.event_frames = load_events(
                     event_path
@@ -1443,7 +1442,7 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.information(
                 self,
                 "Event File Not Found",
-                f"No matching event file:\n{base}_table.csv",
+                "No matching event file found",
             )
             self.event_labels = []
             self.event_times = []
@@ -2122,14 +2121,13 @@ class VasoAnalyzerApp(QMainWindow):
         df = load_trace(file_path)
 
         # Attempt to find matching events file
-        base = os.path.splitext(os.path.basename(file_path))[0]
-        ev_path = os.path.join(os.path.dirname(file_path), f"{base}_table.csv")
+        ev_path = find_matching_event_file(file_path)
         events = []
-        if os.path.exists(ev_path):
+        if ev_path and os.path.exists(ev_path):
             try:
                 labels, times, _ = load_events(ev_path)
                 events = list(zip(labels, times))
-            except:
+            except Exception:
                 pass
 
         # Feed into the chosen panel
