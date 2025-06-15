@@ -105,6 +105,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_auto_path = None  # Path to Excel file for auto-update
         self.excel_auto_column = None  # Column letter to use for auto-update
         self.grid_visible = True  # Track grid visibility
+        self.show_outer = False  # Whether to display outer diameter
         self.recent_files = []
         self.settings = QSettings("TykockiLab", "VasoAnalyzer")
         self.load_recent_files()
@@ -680,6 +681,10 @@ class VasoAnalyzerApp(QMainWindow):
         snap_vw.triggered.connect(self.toggle_snapshot_viewer)
         self.showhide_menu.addAction(evt_tbl)
         self.showhide_menu.addAction(snap_vw)
+        outer_diam = QAction("Show Outer Diameter", self, checkable=True)
+        outer_diam.triggered.connect(self.toggle_outer_diameter)
+        self.showhide_menu.addAction(outer_diam)
+        self.outer_diam_action = outer_diam
 
         view_menu.addSeparator()
 
@@ -939,6 +944,12 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_snapshot_viewer(self, checked: bool):
         self.snapshot_label.setVisible(checked)
         self.slider.setVisible(checked)
+
+    def toggle_outer_diameter(self, checked: bool):
+        """Switch between inner and outer diameter display."""
+        self.show_outer = checked
+        self.update_plot()
+        self.populate_table()
 
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -1501,6 +1512,13 @@ class VasoAnalyzerApp(QMainWindow):
 
     def populate_table(self):
         self.event_table.blockSignals(True)
+        header = [
+            "Event",
+            "Time (s)",
+            "OD (µm)" if self.show_outer else "ID (µm)",
+            "Frame",
+        ]
+        self.event_table.setHorizontalHeaderLabels(header)
         self.event_table.setRowCount(len(self.event_table_data))
         for row, (label, t, idval, frame) in enumerate(self.event_table_data):
             self.event_table.setItem(row, 0, QTableWidgetItem(str(label)))
@@ -2168,10 +2186,15 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Plot trace and keep a handle for .contains()
         t = self.trace_data["Time (s)"]
-        d = self.trace_data["Inner Diameter"]
+        col = (
+            "Outer Diameter"
+            if self.show_outer and "Outer Diameter" in self.trace_data
+            else "Inner Diameter"
+        )
+        d = self.trace_data[col]
         (self.trace_line,) = self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Inner Diameter (µm)")
+        self.ax.set_ylabel(f"{col} (µm)")
         self.ax.grid(True, color=CURRENT_THEME["grid_color"])
 
         # Plot events if available
@@ -2180,7 +2203,12 @@ class VasoAnalyzerApp(QMainWindow):
             self.event_table_data = []
             offset_sec = 2
             nEv = len(self.event_times)
-            diam_trace = self.trace_data["Inner Diameter"]
+            col = (
+                "Outer Diameter"
+                if self.show_outer and "Outer Diameter" in self.trace_data
+                else "Inner Diameter"
+            )
+            diam_trace = self.trace_data[col]
             time_trace = self.trace_data["Time (s)"]
 
             for i in range(nEv):
