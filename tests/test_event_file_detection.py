@@ -20,6 +20,14 @@ def test_find_matching_event_file_legacy(tmp_path):
     assert find_matching_event_file(str(trace)) == str(events)
 
 
+def test_find_matching_event_file_dash(tmp_path):
+    trace = tmp_path / "20210309 H89 + 8BcAMP-Hist.csv"
+    trace.touch()
+    events = tmp_path / "20210309 H89 + 8BcAMP-Hist - Table.csv"
+    events.touch()
+    assert find_matching_event_file(str(trace)) == str(events)
+
+
 def test_load_trace_legacy_columns(tmp_path):
     csv_path = tmp_path / "trace.csv"
     df = pd.DataFrame({"T": [0, 1], "I.D.": [10, 11]})
