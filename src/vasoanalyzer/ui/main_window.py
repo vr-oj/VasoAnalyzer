@@ -59,7 +59,13 @@ from vasoanalyzer.theme_manager import (
     apply_light_theme,
     css_rgba_to_mpl,
 )
-from vasoanalyzer.project import Project, Experiment, SampleN, export_sample
+from vasoanalyzer.project import (
+    Project,
+    Experiment,
+    SampleN,
+    export_sample,
+    save_project,
+)
 from vasoanalyzer.project_controller import open_project, save_project_file
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.plot_style_dialog import PlotStyleDialog

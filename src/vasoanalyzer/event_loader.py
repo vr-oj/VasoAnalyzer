@@ -36,10 +36,21 @@ def load_events(file_path):
 
     df = pd.read_csv(file_path, delimiter=delimiter)
 
-    # Auto-detect columns
-    label_col = next((col for col in df.columns if "label" in col.lower()), df.columns[0])
-    time_col = next((col for col in df.columns if "time" in col.lower()), df.columns[1])
-    frame_col = next((col for col in df.columns if "frame" in col.lower()), None)
+    # Auto-detect columns with fallback for legacy headers
+    def _find_col(keywords, default=None):
+        for col in df.columns:
+            normalized = col.lower().replace(" ", "")
+            if any(k in normalized for k in keywords):
+                return col
+        return default
+
+    label_col = _find_col(["label", "event", "name"], df.columns[0])
+    if len(df.columns) > 1:
+        default_time = df.columns[1]
+    else:
+        default_time = df.columns[0]
+    time_col = _find_col(["time"], default_time)
+    frame_col = _find_col(["frame"])
 
     # Convert time to seconds
     time_series = df[time_col]

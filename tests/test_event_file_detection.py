@@ -54,3 +54,15 @@ def test_load_events_numeric_strings(tmp_path):
     pd.DataFrame({"Label": ["A", "B"], "Time": ["1", "2"]}).to_csv(event_path, index=False)
     labels, times, frames = load_events(str(event_path))
     assert times == [1.0, 2.0]
+
+
+def test_load_events_legacy_event_column(tmp_path):
+    event_path = tmp_path / "events_legacy.csv"
+    # Legacy tables often place the time column first
+    df = pd.DataFrame({"Time": [0.5, 1.0], "Event": ["A", "B"]})
+    df.to_csv(event_path, index=False)
+
+    labels, times, frames = load_events(str(event_path))
+
+    assert labels == ["A", "B"]
+    assert times == [0.5, 1.0]
