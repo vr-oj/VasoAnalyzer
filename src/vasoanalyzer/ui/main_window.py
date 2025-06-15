@@ -1246,8 +1246,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
-        for i in range(4):
-            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for i in range(1, 4):
+            header.setSectionResizeMode(i, QHeaderView.Stretch)
         self.event_table.cellClicked.connect(self.table_row_clicked)
         self.event_table.itemChanged.connect(self.handle_table_edit)
         self.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1268,19 +1269,14 @@ class VasoAnalyzerApp(QMainWindow):
         right_layout.addWidget(self.event_table)
 
         # ===== Top-Level Layout (Left + Right) =====
-        left_widget = QWidget()
-        left_widget.setLayout(left_layout)
-        right_widget = QWidget()
-        right_widget.setLayout(right_layout)
-
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(0)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.addWidget(left_widget, stretch=4)
-        content_layout.addWidget(right_widget, stretch=1)
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(0, 0, 10, 0)
+        top_layout.setSpacing(0)
+        top_layout.addLayout(left_layout, 4)
+        top_layout.addLayout(right_layout, 1)
 
         self.default_main_layout = self.rebuild_default_main_layout()
-        self.main_layout.addLayout(content_layout)
+        self.main_layout.addLayout(self.default_main_layout)
 
         # ===== Canvas Interactions =====
         self.canvas.mpl_connect("draw_event", self.update_event_label_positions)
@@ -1515,16 +1511,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.style_event_table()
 
     def style_event_table(self):
-        """Ensure all columns start with equal width and remain resizable."""
-        header = self.event_table.horizontalHeader()
-        col_count = self.event_table.columnCount()
-        total_width = self.event_table.viewport().width()
-        if total_width <= 0:
-            total_width = self.event_table.minimumWidth()
-        width = max(1, total_width // col_count)
-        for i in range(col_count):
-            self.event_table.setColumnWidth(i, width)
-            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        """Placeholder styling function (no-op)."""
+        return
 
     def load_snapshot(self):
         # 1) Prompt for TIFF
@@ -2506,21 +2494,15 @@ class VasoAnalyzerApp(QMainWindow):
         if not ok or not selected:
             return
 
-        label, l_ok = QInputDialog.getText(
-            self, "New Event Label", "Enter label for the new event:"
-        )
+        label, l_ok = QInputDialog.getText(self, "New Event Label", "Enter label for the new event:")
         if not l_ok or not label.strip():
             return
 
-        t_val, t_ok = QInputDialog.getDouble(
-            self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2
-        )
+        t_val, t_ok = QInputDialog.getDouble(self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2)
         if not t_ok:
             return
 
-        id_val, id_ok = QInputDialog.getDouble(
-            self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2
-        )
+        id_val, id_ok = QInputDialog.getDouble(self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2)
         if not id_ok:
             return
 
@@ -3065,17 +3047,14 @@ class VasoAnalyzerApp(QMainWindow):
         right_layout.addLayout(snapshot_layout)
         right_layout.addWidget(self.event_table)
 
-        left_widget = QWidget()
-        left_widget.setLayout(left_layout)
-        right_widget = QWidget()
-        right_widget.setLayout(right_layout)
+        # Combine left + right into top layout
+        top_layout = QHBoxLayout()
+        top_layout.setContentsMargins(0, 0, 10, 0)
+        top_layout.setSpacing(0)
+        top_layout.addLayout(left_layout, 4)
+        top_layout.addLayout(right_layout, 1)
 
-        layout = QHBoxLayout()
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(left_widget, stretch=4)
-        layout.addWidget(right_widget, stretch=1)
-        return layout
+        return top_layout
 
     # [K] ========================= EXPORT LOGIC (CSV, FIG) ==============================
     def auto_export_table(self):

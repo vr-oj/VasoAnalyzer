@@ -36,7 +36,7 @@ class TutorialDialog(QDialog):
             "5. <b>Customize Your View</b>"
             "<br>• Zoom and pan the plot by click-dragging on the axes."
             "<br>• Go to <b>View → Plot Style</b> to adjust axis labels, fonts, and line styles."
-            "<br>• Resize panels using standard window controls."
+            "<br>• Drag the splitter bars to resize the trace, image viewer, and table."
             "<br><br>"
             "6. <b>Save & Pick Up Later</b>"
             "<br>• Click the <b>Save</b> icon (or press ⌘ S) to store both your data <b>and</b> exactly how you’ve arranged the window."

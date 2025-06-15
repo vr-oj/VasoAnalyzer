@@ -1,8 +1,8 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QTableWidget,
-    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton,
-    QMessageBox, QLabel, QHeaderView
+    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton, QMessageBox
 )
+from PyQt5.QtWidgets import QLabel
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QSize
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
@@ -112,9 +112,6 @@ class DataViewPanel(QWidget):
         self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", "ID (µm)"])
         self.event_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        header = self.event_table.horizontalHeader()
-        for i in range(3):
-            header.setSectionResizeMode(i, QHeaderView.Interactive)
 
         # --- Layout ---
         main_layout = QVBoxLayout(self)
@@ -130,20 +127,11 @@ class DataViewPanel(QWidget):
         plot_layout = QVBoxLayout()
         plot_layout.addWidget(self.canvas)
         plot_layout.addWidget(self.scroll_slider)
-
-        left_widget = QWidget()
-        left_widget.setLayout(plot_layout)
-        right_widget = QWidget()
-        right_widget.setLayout(QVBoxLayout())
-        right_widget.layout().addWidget(self.event_table)
-
-        content_layout = QHBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
-        content_layout.addWidget(left_widget, stretch=4)
-        content_layout.addWidget(right_widget, stretch=1)
-
-        main_layout.addLayout(content_layout)
+        # Combine with table
+        row = QHBoxLayout()
+        row.addLayout(plot_layout, 4)
+        row.addWidget(self.event_table, 1)
+        main_layout.addLayout(row)
 
         # — Hover Label (exact same logic as main view) —
         self.hover_label = QLabel("", self)
