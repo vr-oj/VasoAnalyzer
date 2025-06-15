@@ -71,10 +71,14 @@ def find_matching_event_file(trace_file: str) -> str | None:
         f"{base}_Table.csv",
         f"{base} table.csv",
         f"{base} Table.csv",
+        f"{base} - table.csv",
+        f"{base} - Table.csv",
         f"{base}_table.txt",
         f"{base}_Table.txt",
         f"{base} table.txt",
         f"{base} Table.txt",
+        f"{base} - table.txt",
+        f"{base} - Table.txt",
     ]
 
     for p in patterns:

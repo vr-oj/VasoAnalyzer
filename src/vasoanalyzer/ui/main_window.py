@@ -1450,13 +1450,48 @@ class VasoAnalyzerApp(QMainWindow):
                 self.event_labels = []
                 self.event_times = []
         else:
-            QMessageBox.information(
-                self,
-                "Event File Not Found",
-                "No matching event file found",
-            )
-            self.event_labels = []
-            self.event_times = []
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle("Event File Not Found")
+            msg.setText("No matching event file found")
+            manual_btn = msg.addButton("Select Manually", QMessageBox.AcceptRole)
+            msg.addButton(QMessageBox.Close)
+            msg.exec_()
+
+            if msg.clickedButton() == manual_btn:
+                manual_path, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select Event File",
+                    os.path.dirname(file_path),
+                    "CSV or TXT Files (*.csv *.txt)",
+                )
+                if manual_path:
+                    try:
+                        (
+                            self.event_labels,
+                            self.event_times,
+                            self.event_frames,
+                        ) = load_events(manual_path)
+                        if self.event_frames is None:
+                            trace_times = self.trace_data["Time (s)"].values
+                            self.event_frames = [
+                                int(np.argmin(np.abs(trace_times - t)))
+                                for t in self.event_times
+                            ]
+                    except Exception as e:
+                        QMessageBox.warning(
+                            self,
+                            "Event Load Error",
+                            f"Trace loaded, but failed to load events:\n{e}",
+                        )
+                        self.event_labels = []
+                        self.event_times = []
+                else:
+                    self.event_labels = []
+                    self.event_times = []
+            else:
+                self.event_labels = []
+                self.event_times = []
 
         # 5) Build event_table_data purely from trace times & diameters
         self.event_table_data = []
