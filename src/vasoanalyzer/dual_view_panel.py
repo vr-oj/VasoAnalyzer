@@ -19,6 +19,9 @@ class DataViewPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        # Which diameter column to display
+        self.diam_col = "Inner Diameter"
+
         # --- Matplotlib Figure & Canvas ---
         self.fig = Figure(facecolor="white")
         self.canvas = FigureCanvas(self.fig)
@@ -97,7 +100,8 @@ class DataViewPanel(QWidget):
         # --- Event Table (3 columns) ---
         self.event_table = QTableWidget()
         self.event_table.setColumnCount(3)
-        self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", "ID (µm)"])
+        label = "OD (µm)" if self.diam_col == "Outer Diameter" else "ID (µm)"
+        self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", label])
         self.event_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
 
@@ -173,6 +177,18 @@ class DataViewPanel(QWidget):
                 pass
         self.pins = []
 
+    def update_table_header(self):
+        label = "OD (µm)" if self.diam_col == "Outer Diameter" else "ID (µm)"
+        self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", label])
+
+    def set_diameter_column(self, column):
+        if self.trace_data is not None and column not in self.trace_data.columns:
+            return
+        self.diam_col = column
+        self.update_plot()
+        self.populate_table()
+        self.update_table_header()
+
     def _on_load(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Trace File", "", "CSV Files (*.csv)"
@@ -198,6 +214,10 @@ class DataViewPanel(QWidget):
         Load a pandas DataFrame and associated events into this panel.
         """
         self.trace_data = trace_df
+        if "Inner Diameter" in trace_df.columns:
+            self.diam_col = "Inner Diameter"
+        elif "Outer Diameter" in trace_df.columns:
+            self.diam_col = "Outer Diameter"
         if events:
             self.event_labels, self.event_times = zip(*events)
         else:
@@ -206,16 +226,18 @@ class DataViewPanel(QWidget):
         self.update_plot()
         self.populate_table()
         self.update_scroll_slider()
+        self.update_table_header()
 
     def update_plot(self):
         """Plot the trace and events on the canvas."""
         self.ax.clear()
         self.event_text_objects = []                  # ← reset the list
         t = self.trace_data["Time (s)"]
-        d = self.trace_data["Inner Diameter"]
+        d = self.trace_data[self.diam_col]
         self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Inner Diameter (µm)")
+        ylabel = "OD (µm)" if self.diam_col == "Outer Diameter" else "Inner Diameter (µm)"
+        self.ax.set_ylabel(ylabel)
         self.ax.grid(self.grid_visible)
 
         for lbl, t_evt in zip(self.event_labels, self.event_times):
@@ -237,7 +259,7 @@ class DataViewPanel(QWidget):
         # assume an offset of 2 seconds
         offset = 2.0
         times = self.trace_data["Time (s)"].values
-        diam  = self.trace_data["Inner Diameter"].values
+        diam  = self.trace_data[self.diam_col].values
         self.event_table_data = []
         for i, (lbl, t_evt) in enumerate(zip(self.event_labels, self.event_times)):
             if i < len(self.event_times) - 1:
@@ -254,6 +276,7 @@ class DataViewPanel(QWidget):
             self.event_table.setItem(row, 0, QTableWidgetItem(lbl))
             self.event_table.setItem(row, 1, QTableWidgetItem(str(t_evt)))
             self.event_table.setItem(row, 2, QTableWidgetItem(str(idval)))
+        self.update_table_header()
 
     def sync_slider_with_plot(self, event=None):
         if self.trace_data is None:
@@ -367,12 +390,13 @@ class DataViewPanel(QWidget):
 
         # find nearest sample
         times = self.trace_data["Time (s)"].values
-        diams = self.trace_data["Inner Diameter"].values
+        diams = self.trace_data[self.diam_col].values
         idx = int(np.argmin(np.abs(times - event.xdata)))
         t_near = times[idx]
         d_near = diams[idx]
 
-        self.hover_label.setText(f"Time: {t_near:.2f} s\nID: {d_near:.2f} µm")
+        label = "OD" if self.diam_col == "Outer Diameter" else "ID"
+        self.hover_label.setText(f"Time: {t_near:.2f} s\n{label}: {d_near:.2f} µm")
 
         # now position it using the canvas geometry + cursor offset
         cr = self.canvas.geometry()
