@@ -85,6 +85,14 @@ class DataViewPanel(QWidget):
             grid_btn.setChecked(True)
             grid_btn.clicked.connect(self._toggle_grid)
             self.toolbar.insertWidget(visible[7], grid_btn)
+            # Inject Outer Diameter toggle
+            outer_btn = QToolButton()
+            outer_btn.setIcon(QIcon(self.window().icon_path("Subplots.svg")))
+            outer_btn.setToolTip("Show Outer Diameter")
+            outer_btn.setCheckable(True)
+            outer_btn.setChecked(False)
+            outer_btn.clicked.connect(self._toggle_outer_diameter)
+            self.toolbar.insertWidget(visible[7], outer_btn)
             # Override save
             save_btn = visible[7]
             save_btn.setToolTip("Save As… Export plot or save to N")
@@ -168,6 +176,7 @@ class DataViewPanel(QWidget):
         self.event_table_data = []
         self.slider_marker = None
         self.grid_visible = True
+        self.show_outer = False
         
         # Dual Clearing
         self._original_title = self.ax.get_title()
@@ -237,10 +246,15 @@ class DataViewPanel(QWidget):
         self.ax.clear()
         self.event_text_objects = []                  # ← reset the list
         t = self.trace_data["Time (s)"]
-        d = self.trace_data["Inner Diameter"]
+        col = (
+            "Outer Diameter"
+            if self.show_outer and "Outer Diameter" in self.trace_data
+            else "Inner Diameter"
+        )
+        d = self.trace_data[col]
         self.ax.plot(t, d, "k-", linewidth=1.5)
         self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Inner Diameter (µm)")
+        self.ax.set_ylabel(f"{col} (µm)")
         self.ax.grid(self.grid_visible)
 
         for lbl, t_evt in zip(self.event_labels, self.event_times):
@@ -262,7 +276,12 @@ class DataViewPanel(QWidget):
         # assume an offset of 2 seconds
         offset = 2.0
         times = self.trace_data["Time (s)"].values
-        diam  = self.trace_data["Inner Diameter"].values
+        col = (
+            "Outer Diameter"
+            if self.show_outer and "Outer Diameter" in self.trace_data
+            else "Inner Diameter"
+        )
+        diam  = self.trace_data[col].values
         self.event_table_data = []
         for i, (lbl, t_evt) in enumerate(zip(self.event_labels, self.event_times)):
             if i < len(self.event_times) - 1:
@@ -274,6 +293,8 @@ class DataViewPanel(QWidget):
             sampled_dia = float(diam[idx])
             self.event_table_data.append((lbl, round(t_evt,2), round(sampled_dia,2)))
 
+        header = ["Event", "Time (s)", "OD (µm)" if self.show_outer else "ID (µm)"]
+        self.event_table.setHorizontalHeaderLabels(header)
         self.event_table.setRowCount(len(self.event_table_data))
         for row, (lbl, t_evt, idval) in enumerate(self.event_table_data):
             self.event_table.setItem(row, 0, QTableWidgetItem(lbl))
@@ -393,12 +414,18 @@ class DataViewPanel(QWidget):
 
         # find nearest sample
         times = self.trace_data["Time (s)"].values
-        diams = self.trace_data["Inner Diameter"].values
+        col = (
+            "Outer Diameter"
+            if self.show_outer and "Outer Diameter" in self.trace_data
+            else "Inner Diameter"
+        )
+        diams = self.trace_data[col].values
         idx = int(np.argmin(np.abs(times - event.xdata)))
         t_near = times[idx]
         d_near = diams[idx]
 
-        self.hover_label.setText(f"Time: {t_near:.2f} s\nID: {d_near:.2f} µm")
+        label = "OD" if self.show_outer and "Outer Diameter" in self.trace_data else "ID"
+        self.hover_label.setText(f"Time: {t_near:.2f} s\n{label}: {d_near:.2f} µm")
 
         # now position it using the canvas geometry + cursor offset
         cr = self.canvas.geometry()
@@ -430,6 +457,11 @@ class DataViewPanel(QWidget):
         self.grid_visible = not self.grid_visible
         self.ax.grid(self.grid_visible, color="#CCC")
         self.canvas.draw_idle()
+
+    def _toggle_outer_diameter(self):
+        self.show_outer = not self.show_outer
+        self.update_plot()
+        self.populate_table()
 
     def _export_high_res_plot(self):
         file_path, _ = QFileDialog.getSaveFileName(
