@@ -1246,9 +1246,8 @@ class VasoAnalyzerApp(QMainWindow):
 
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for i in range(1, 4):
-            header.setSectionResizeMode(i, QHeaderView.Stretch)
+        for i in range(4):
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
         self.event_table.cellClicked.connect(self.table_row_clicked)
         self.event_table.itemChanged.connect(self.handle_table_edit)
         self.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1269,14 +1268,20 @@ class VasoAnalyzerApp(QMainWindow):
         right_layout.addWidget(self.event_table)
 
         # ===== Top-Level Layout (Left + Right) =====
-        top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(0, 0, 10, 0)
-        top_layout.setSpacing(0)
-        top_layout.addLayout(left_layout, 4)
-        top_layout.addLayout(right_layout, 1)
+        left_widget = QWidget()
+        left_widget.setLayout(left_layout)
+        right_widget = QWidget()
+        right_widget.setLayout(right_layout)
 
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+
+        self.splitter = splitter
         self.default_main_layout = self.rebuild_default_main_layout()
-        self.main_layout.addLayout(self.default_main_layout)
+        self.main_layout.addWidget(splitter)
 
         # ===== Canvas Interactions =====
         self.canvas.mpl_connect("draw_event", self.update_event_label_positions)
@@ -1511,8 +1516,16 @@ class VasoAnalyzerApp(QMainWindow):
         self.style_event_table()
 
     def style_event_table(self):
-        """Placeholder styling function (no-op)."""
-        return
+        """Ensure all columns start with equal width and remain resizable."""
+        header = self.event_table.horizontalHeader()
+        col_count = self.event_table.columnCount()
+        total_width = self.event_table.viewport().width()
+        if total_width <= 0:
+            total_width = self.event_table.minimumWidth()
+        width = max(1, total_width // col_count)
+        for i in range(col_count):
+            self.event_table.setColumnWidth(i, width)
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
 
     def load_snapshot(self):
         # 1) Prompt for TIFF
@@ -3047,14 +3060,18 @@ class VasoAnalyzerApp(QMainWindow):
         right_layout.addLayout(snapshot_layout)
         right_layout.addWidget(self.event_table)
 
-        # Combine left + right into top layout
-        top_layout = QHBoxLayout()
-        top_layout.setContentsMargins(0, 0, 10, 0)
-        top_layout.setSpacing(0)
-        top_layout.addLayout(left_layout, 4)
-        top_layout.addLayout(right_layout, 1)
+        # Combine left + right into splitter for user-resizable panels
+        left_widget = QWidget()
+        left_widget.setLayout(left_layout)
+        right_widget = QWidget()
+        right_widget.setLayout(right_layout)
 
-        return top_layout
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(1, 1)
+        return splitter
 
     # [K] ========================= EXPORT LOGIC (CSV, FIG) ==============================
     def auto_export_table(self):
