@@ -1490,7 +1490,7 @@ class VasoAnalyzerApp(QMainWindow):
         if self.current_project and self.current_experiment:
             sample_name = os.path.splitext(os.path.basename(file_path))[0]
             sample = SampleN(name=sample_name, trace_path=file_path)
-            if os.path.exists(event_path):
+            if event_path and os.path.exists(event_path):
                 sample.events_path = event_path
             self.current_experiment.samples.append(sample)
             self.current_sample = sample
