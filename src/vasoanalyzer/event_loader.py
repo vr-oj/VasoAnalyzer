@@ -2,6 +2,7 @@
 
 import csv
 import os
+import re
 import pandas as pd
 
 
@@ -37,11 +38,17 @@ def load_events(file_path):
     df = pd.read_csv(file_path, delimiter=delimiter)
 
     # Auto-detect columns with fallback for legacy headers
+    def _normalize(col: str) -> str:
+        """Return a simplified column name for matching."""
+        return re.sub(r"[^a-z0-9]", "", col.lower())
+
     def _find_col(keywords, default=None):
-        for col in df.columns:
-            normalized = col.lower().replace(" ", "")
-            if any(k in normalized for k in keywords):
-                return col
+        normed_cols = {col: _normalize(col) for col in df.columns}
+        for col, norm in normed_cols.items():
+            for kw in keywords:
+                kw_norm = _normalize(kw)
+                if norm == kw_norm or norm.startswith(kw_norm):
+                    return col
         return default
 
     label_col = _find_col(["label", "event", "name"], df.columns[0])
