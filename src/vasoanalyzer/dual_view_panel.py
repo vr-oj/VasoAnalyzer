@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSlider, QTableWidget,
-    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog, QToolButton, QMessageBox
+    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog,
+    QToolButton, QMessageBox, QHeaderView
 )
 from PyQt5.QtWidgets import QLabel
 from PyQt5.QtGui import QIcon
@@ -112,6 +113,12 @@ class DataViewPanel(QWidget):
         self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", "ID (µm)"])
         self.event_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+
+        header = self.event_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        for i in range(3):
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        header.setDefaultSectionSize(100)
 
         # --- Layout ---
         main_layout = QVBoxLayout(self)

@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QPushButton, QFileDialog, QComboBox,
-    QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QFrame
+    QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QFrame,
+    QHeaderView
 )
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
@@ -80,7 +81,11 @@ class ExcelMappingDialog(QDialog):
         self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.event_table.cellClicked.connect(self.map_event_to_excel)
         self.event_table.setMinimumWidth(420)
-        self.event_table.horizontalHeader().setStretchLastSection(True)
+        header = self.event_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        for i in range(4):
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        header.setDefaultSectionSize(100)
         self.layout.addWidget(self.event_table)
         self.populate_event_table()
 
@@ -88,7 +93,10 @@ class ExcelMappingDialog(QDialog):
         self.preview_table = QTableWidget()
         self.preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.preview_table.setMinimumWidth(420)
-        self.preview_table.horizontalHeader().setStretchLastSection(True)
+        pheader = self.preview_table.horizontalHeader()
+        pheader.setStretchLastSection(False)
+        pheader.setSectionResizeMode(QHeaderView.Interactive)
+        pheader.setDefaultSectionSize(100)
         self.layout.addWidget(self.preview_table)
 
         self.button_layout = QHBoxLayout()

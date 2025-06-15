@@ -1246,9 +1246,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        for i in range(1, 4):
-            header.setSectionResizeMode(i, QHeaderView.Stretch)
+        for i in range(4):
+            header.setSectionResizeMode(i, QHeaderView.Interactive)
+        header.setDefaultSectionSize(100)
         self.event_table.cellClicked.connect(self.table_row_clicked)
         self.event_table.itemChanged.connect(self.handle_table_edit)
         self.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
