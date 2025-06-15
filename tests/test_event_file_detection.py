@@ -46,4 +46,3 @@ def test_load_events_numeric_strings(tmp_path):
     pd.DataFrame({"Label": ["A", "B"], "Time": ["1", "2"]}).to_csv(event_path, index=False)
     labels, times, frames = load_events(str(event_path))
     assert times == [1.0, 2.0]
-
