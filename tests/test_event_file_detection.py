@@ -66,3 +66,18 @@ def test_load_events_legacy_event_column(tmp_path):
 
     assert labels == ["A", "B"]
     assert times == [0.5, 1.0]
+
+
+def test_load_events_frame_column_not_label(tmp_path):
+    event_path = tmp_path / "events_with_frame.csv"
+    df = pd.DataFrame({
+        "Time": [0.1, 0.2],
+        "Frame Number": [1, 2],
+        "Label": ["A", "B"],
+    })
+    df.to_csv(event_path, index=False)
+
+    labels, times, frames = load_events(str(event_path))
+
+    assert labels == ["A", "B"]
+    assert frames == [1, 2]
