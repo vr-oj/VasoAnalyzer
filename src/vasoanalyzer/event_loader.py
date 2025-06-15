@@ -1,5 +1,6 @@
 """Utility to load event annotations from CSV or TXT files."""
 
+import os
 import pandas as pd
 
 
@@ -45,3 +46,29 @@ def load_events(file_path):
         frames = df[frame_col].tolist()
 
     return labels, times, frames
+
+
+def find_matching_event_file(trace_file: str) -> str | None:
+    """Return the path to a matching event file if it exists."""
+    base = os.path.splitext(os.path.basename(trace_file))[0]
+    folder = os.path.dirname(trace_file)
+
+    patterns = [
+        f"{base}_table.csv",
+        f"{base}_Table.csv",
+        f"{base} table.csv",
+        f"{base} Table.csv",
+        f"{base}_table.txt",
+        f"{base}_Table.txt",
+        f"{base} table.txt",
+        f"{base} Table.txt",
+    ]
+
+    for p in patterns:
+        candidate = os.path.join(folder, p)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+__all__ = ["load_events", "find_matching_event_file"]
