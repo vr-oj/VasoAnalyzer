@@ -13,3 +13,18 @@ def test_load_trace_column_detection(tmp_path):
     assert loaded["Time (s)"].tolist() == [0, 1, 2]
     assert loaded["Inner Diameter"].tolist() == [10, 11, 12]
 
+
+def test_load_trace_duplicate_columns(tmp_path):
+    csv_path = tmp_path / "dup.csv"
+    df = pd.DataFrame({
+        "Time": [0, 1],
+        "Inner Diameter": [5, 6],
+        "Time (s)": [0, 1],
+    })
+    df.to_csv(csv_path, index=False)
+
+    loaded = load_trace(str(csv_path))
+    assert loaded.shape[1] == 2
+    assert loaded["Time (s)"].tolist() == [0, 1]
+    assert loaded["Inner Diameter"].tolist() == [5, 6]
+

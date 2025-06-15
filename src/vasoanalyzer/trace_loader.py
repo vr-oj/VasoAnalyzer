@@ -37,6 +37,9 @@ def load_trace(file_path):
 
     df = pd.read_csv(file_path, delimiter=delimiter, encoding="utf-8-sig")
 
+    # Drop any entirely empty columns that may appear due to malformed files
+    df = df.dropna(axis=1, how="all")
+
     def _normalize(col):
         return re.sub(r"[^a-z0-9]", "", col.lower())
 
@@ -56,11 +59,12 @@ def load_trace(file_path):
         if time_col and diam_col:
             break
 
-    if time_col is None or diam_col is None:
+    if time_col is None or diam_col is None or time_col == diam_col:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")
 
     # Rename to standardized column names
     df = df.rename(columns={time_col: "Time (s)", diam_col: "Inner Diameter"})
+    df = df.loc[:, ~df.columns.duplicated()]
 
     # Ensure numeric types
     df["Time (s)"] = pd.to_numeric(df["Time (s)"], errors="coerce")
