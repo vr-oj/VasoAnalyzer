@@ -43,6 +43,7 @@ from PyQt5.QtWidgets import (
     QTreeWidget,
     QTreeWidgetItem,
     QStyle,
+    QSplitter,
 )
 
 from PyQt5.QtGui import QPixmap, QImage, QIcon, QCursor
@@ -2507,15 +2508,21 @@ class VasoAnalyzerApp(QMainWindow):
         if not ok or not selected:
             return
 
-        label, l_ok = QInputDialog.getText(self, "New Event Label", "Enter label for the new event:")
+        label, l_ok = QInputDialog.getText(
+            self, "New Event Label", "Enter label for the new event:"
+        )
         if not l_ok or not label.strip():
             return
 
-        t_val, t_ok = QInputDialog.getDouble(self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2)
+        t_val, t_ok = QInputDialog.getDouble(
+            self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2
+        )
         if not t_ok:
             return
 
-        id_val, id_ok = QInputDialog.getDouble(self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2)
+        id_val, id_ok = QInputDialog.getDouble(
+            self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2
+        )
         if not id_ok:
             return
 
