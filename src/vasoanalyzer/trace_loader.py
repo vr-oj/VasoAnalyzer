@@ -1,5 +1,7 @@
 """Helper routines for loading diameter trace CSV files."""
 
+
+import csv
 import re
 
 import pandas as pd
@@ -20,10 +22,18 @@ def load_trace(file_path):
         pandas.errors.ParserError: If the CSV cannot be parsed.
     """
 
-    # Try to auto-detect delimiter from the first line
+    # Auto-detect delimiter using the CSV sniffer
     with open(file_path, "r", encoding="utf-8-sig") as f:
-        first_line = f.readline()
-        delimiter = "," if "," in first_line else "\t"
+        sample = f.read(1024)
+        try:
+            delimiter = csv.Sniffer().sniff(sample).delimiter
+        except csv.Error:
+            if "," in sample:
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+            else:
+                delimiter = ";"
 
     df = pd.read_csv(file_path, delimiter=delimiter, encoding="utf-8-sig")
 

@@ -1,5 +1,6 @@
 """Utility to load event annotations from CSV or TXT files."""
 
+import csv
 import os
 import pandas as pd
 
@@ -20,10 +21,18 @@ def load_events(file_path):
         ValueError: If time values cannot be converted to seconds.
     """
 
-    # Try to auto-detect delimiter
-    with open(file_path, "r") as f:
-        first_line = f.readline()
-        delimiter = "," if "," in first_line else "\t"
+    # Auto-detect delimiter using csv.Sniffer
+    with open(file_path, "r", encoding="utf-8-sig") as f:
+        sample = f.read(1024)
+        try:
+            delimiter = csv.Sniffer().sniff(sample).delimiter
+        except csv.Error:
+            if "," in sample:
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+            else:
+                delimiter = ";"
 
     df = pd.read_csv(file_path, delimiter=delimiter)
 
@@ -33,10 +42,14 @@ def load_events(file_path):
     frame_col = next((col for col in df.columns if "frame" in col.lower()), None)
 
     # Convert time to seconds
-    if df[time_col].dtype == "object":
-        time_sec = pd.to_timedelta(df[time_col]).dt.total_seconds()
-    else:
-        time_sec = df[time_col]
+    time_series = df[time_col]
+    if not pd.api.types.is_numeric_dtype(time_series):
+        numeric = pd.to_numeric(time_series, errors="coerce")
+        if numeric.notna().all():
+            time_series = numeric
+        else:
+            time_series = pd.to_timedelta(time_series, errors="coerce").dt.total_seconds()
+    time_sec = time_series
 
     labels = df[label_col].astype(str).tolist()
     times = time_sec.tolist()
