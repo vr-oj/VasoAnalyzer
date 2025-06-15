@@ -105,6 +105,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.selected_event_marker = None
         self.pinned_points = []
         self.slider_marker = None
+        self.trace_line = None
         # Default time between frames when metadata is unavailable
         self.recording_interval = 0.14  # 140 ms per frame
         self.last_replaced_event = None
@@ -2550,7 +2551,7 @@ class VasoAnalyzerApp(QMainWindow):
     # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
         # only over the main axes and with data loaded
-        if event.inaxes != self.ax or self.trace_data is None:
+        if event.inaxes != self.ax or self.trace_data is None or self.trace_line is None:
             if self.hover_annotation.get_visible():
                 self.hover_annotation.set_visible(False)
                 self.canvas.draw_idle()
@@ -2880,6 +2881,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.pinned_points = []
         self.selected_event_marker = None
         self.slider_marker = None
+        self.trace_line = None
         self.ax.clear()
         self.canvas.draw()
         self.event_table.setRowCount(0)
