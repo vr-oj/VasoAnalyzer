@@ -404,17 +404,16 @@ class VasoAnalyzerApp(QMainWindow):
         if not trace_path:
             return
 
-        events_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Events File (optional)",
-            os.path.dirname(trace_path),
-            "CSV Files (*.csv)",
-        )
-        if not events_path:
-            events_path = None
+        try:
+            df = self.load_trace_and_event_files(trace_path)
+        except Exception:
+            return
 
         sample.trace_path = trace_path
-        sample.events_path = events_path
+        sample.trace_data = df
+        event_path = find_matching_event_file(trace_path)
+        if event_path and os.path.exists(event_path):
+            sample.events_path = event_path
 
         self.refresh_project_tree()
 
@@ -1406,6 +1405,53 @@ class VasoAnalyzerApp(QMainWindow):
         menu.exec_(self.snapshot_label.mapToGlobal(pos))
 
     # [D] ========================= FILE LOADERS: TRACE / EVENTS / TIFF =====================
+    def load_trace_and_event_files(self, trace_path):
+        """Load a trace file and its matching events if available."""
+
+        df = load_trace(trace_path)
+        self.trace_file_path = os.path.dirname(trace_path)
+        trace_filename = os.path.basename(trace_path)
+        self.trace_file_label.setText(f"🧪 {trace_filename}")
+
+        event_path = find_matching_event_file(trace_path)
+        if event_path and os.path.exists(event_path):
+            try:
+                labels, times, frames = load_events(event_path)
+                if frames is None:
+                    arr_t = df["Time (s)"].values
+                    frames = [int(np.argmin(np.abs(arr_t - t))) for t in times]
+
+                arr_t = df["Time (s)"].values
+                arr_d = df["Inner Diameter"].values
+                diam = [float(arr_d[int(np.argmin(np.abs(arr_t - t)))]) for t in times]
+
+                self.load_project_events(labels, times, frames, diam)
+            except Exception as e:
+                QMessageBox.warning(
+                    self,
+                    "Event Load Error",
+                    f"Trace loaded, but failed to load events:\n{e}",
+                )
+                self.event_labels = []
+                self.event_times = []
+                self.event_frames = []
+                self.event_table_data = []
+                self.populate_table()
+                self.update_plot()
+        else:
+            self.event_labels = []
+            self.event_times = []
+            self.event_frames = []
+            self.event_table_data = []
+            self.populate_table()
+            self.update_plot()
+
+        self.compute_frame_trace_indices()
+        self.update_scroll_slider()
+        self.style_event_table()
+
+        return df
+
     def load_trace_and_events(self, file_path=None):
         # 1) Prompt for CSV if needed
         if file_path is None:
@@ -1415,12 +1461,9 @@ class VasoAnalyzerApp(QMainWindow):
             if not file_path:
                 return
 
-        # 2) Load the trace
+        # 2) Load trace and events using helper
         try:
-            self.trace_data = load_trace(file_path)
-            self.trace_file_path = os.path.dirname(file_path)
-            trace_filename = os.path.basename(file_path)
-            self.trace_file_label.setText(f"🧪 {trace_filename}")
+            self.trace_data = self.load_trace_and_event_files(file_path)
         except Exception as e:
             QMessageBox.critical(
                 self, "Trace Load Error", f"Failed to load trace file:\n{e}"
@@ -1433,104 +1476,15 @@ class VasoAnalyzerApp(QMainWindow):
             self.settings.setValue("recentFiles", self.recent_files)
             self.update_recent_files_menu()
 
-        # 4) Load the matching events CSV (if it exists)
-        event_path = find_matching_event_file(file_path)
-        if event_path and os.path.exists(event_path):
-            try:
-                self.event_labels, self.event_times, self.event_frames = load_events(
-                    event_path
-                )
-                # If event_frames column was absent, derive frames from times
-                if self.event_frames is None:
-                    trace_times = self.trace_data["Time (s)"].values
-                    self.event_frames = [
-                        int(np.argmin(np.abs(trace_times - t)))
-                        for t in self.event_times
-                    ]
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Event Load Error",
-                    f"Trace loaded, but failed to load events:\n{e}",
-                )
-                self.event_labels = []
-                self.event_times = []
-        else:
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Information)
-            msg.setWindowTitle("Event File Not Found")
-            msg.setText("No matching event file found")
-            manual_btn = msg.addButton("Select Manually", QMessageBox.AcceptRole)
-            msg.addButton(QMessageBox.Close)
-            msg.exec_()
+        # 4) Helper already populated events & UI
 
-            if msg.clickedButton() == manual_btn:
-                manual_path, _ = QFileDialog.getOpenFileName(
-                    self,
-                    "Select Event File",
-                    os.path.dirname(file_path),
-                    "CSV or TXT Files (*.csv *.txt)",
-                )
-                if manual_path:
-                    try:
-                        (
-                            self.event_labels,
-                            self.event_times,
-                            self.event_frames,
-                        ) = load_events(manual_path)
-                        if self.event_frames is None:
-                            trace_times = self.trace_data["Time (s)"].values
-                            self.event_frames = [
-                                int(np.argmin(np.abs(trace_times - t)))
-                                for t in self.event_times
-                            ]
-                    except Exception as e:
-                        QMessageBox.warning(
-                            self,
-                            "Event Load Error",
-                            f"Trace loaded, but failed to load events:\n{e}",
-                        )
-                        self.event_labels = []
-                        self.event_times = []
-                else:
-                    self.event_labels = []
-                    self.event_times = []
-            else:
-                self.event_labels = []
-                self.event_times = []
-
-        # 5) Build event_table_data purely from trace times & diameters
-        self.event_table_data = []
-        if self.event_times:
-            times = self.trace_data["Time (s)"].values
-            diam = self.trace_data["Inner Diameter"].values
-            for i, t_evt in enumerate(self.event_times):
-                # sample diameter at the event time
-                idx_evt = int(np.argmin(np.abs(times - t_evt)))
-                diam_evt = float(diam[idx_evt])
-                self.event_table_data.append(
-                    (
-                        self.event_labels[i],
-                        round(t_evt, 2),
-                        round(diam_evt, 2),
-                        idx_evt,
-                    )
-                )
-
-        # Map TIFF frames to trace indices now that both are loaded
-        self.compute_frame_trace_indices()
-
-        # 6) Refresh the UI
-        self.update_plot()  # draws trace + event lines
-        self.populate_table()  # populates the QTableWidget
         self.excel_btn.setEnabled(bool(self.event_table_data))
-        self.update_scroll_slider()  # shows or hides the pan‑slider
-        self.style_event_table()
 
         # 7) If a project and experiment are active, auto-add this dataset
         if self.current_project and self.current_experiment:
             sample_name = os.path.splitext(os.path.basename(file_path))[0]
             sample = SampleN(name=sample_name, trace_path=file_path)
+            event_path = find_matching_event_file(file_path)
             if event_path and os.path.exists(event_path):
                 sample.events_path = event_path
             self.current_experiment.samples.append(sample)
