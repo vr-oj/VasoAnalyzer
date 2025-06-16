@@ -84,6 +84,15 @@ def load_events(file_path):
     # Normalize headers for legacy files
     df = _standardize_headers(df)
 
+    if "EventLabel" in df.columns and df["EventLabel"].eq("-").all():
+        possible_labels = df.index.astype(str)
+        if any(
+            l != "-" and not l.replace(".", "", 1).isdigit()
+            for l in possible_labels
+        ):
+            df = df.reset_index()
+            df.rename(columns={"index": "EventLabel"}, inplace=True)
+
     # Auto-detect columns with fallback for legacy headers
     def _normalize(col: str) -> str:
         """Return a simplified column name for matching."""
