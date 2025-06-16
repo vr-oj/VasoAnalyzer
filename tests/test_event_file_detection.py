@@ -139,3 +139,18 @@ def test_standardize_headers_additional_aliases():
     std = _standardize_headers(df)
 
     assert list(std.columns) == ["EventLabel", "Time", "DiamBefore"]
+
+
+def test_load_events_multiheader(tmp_path):
+    event_path = tmp_path / "multi.csv"
+    df = pd.DataFrame(
+        [["A", 0.1], ["B", 0.2]],
+        columns=pd.MultiIndex.from_tuples([("Label", ""), ("Time", "(s)")]),
+    )
+    df.to_csv(event_path, index=False)
+
+    labels, times, frames = load_events(str(event_path))
+
+    assert labels == ["A", "B"]
+    assert times == [0.1, 0.2]
+    assert frames is None
