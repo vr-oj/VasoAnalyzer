@@ -137,13 +137,21 @@ def load_events(file_path):
 
         return default
 
+    if len(df.columns) > 1:
+        fallback_label = df.columns[1]
+        if df.columns[0].startswith("col"):
+            fallback_label = df.columns[0]
+    else:
+        fallback_label = df.columns[0]
+
     label_col = _find_col(
         ["label", "event", "name"],
-        df.columns[0],
+        fallback_label,
         exclude=["time"],
     )
+
     if len(df.columns) > 1:
-        default_time = df.columns[1]
+        default_time = next(c for c in df.columns if c != label_col)
     else:
         default_time = df.columns[0]
     time_col = _find_col(["time"], default_time)
