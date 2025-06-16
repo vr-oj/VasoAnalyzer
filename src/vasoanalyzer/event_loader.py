@@ -13,12 +13,20 @@ def _standardize_headers(df: pd.DataFrame) -> pd.DataFrame:
     """Return ``df`` with legacy headers renamed to current names."""
     rename_map = {}
     for col in df.columns:
-        norm = col.lower().replace(" ", "")
-        if norm == "event":
+        norm = (
+            col.lower()
+            .strip()
+            .replace(" ", "")
+            .replace("(", "")
+            .replace(")", "")
+        )
+        if norm in {"event", "label"}:
             rename_map[col] = "EventLabel"
-        elif norm in {"t(s)", "t", "ts"}:
+        elif norm in {"t", "ts", "time", "times", "timesec"}:
             rename_map[col] = "Time"
-        elif norm in {"diameterbefore", "diambefore"} or norm.startswith("diameterbefore"):
+        elif norm in {"diameterbefore", "diambefore", "id", "diameter"} or norm.startswith(
+            "diameterbefore"
+        ):
             rename_map[col] = "DiamBefore"
     if rename_map:
         df = df.rename(columns=rename_map)
