@@ -279,6 +279,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def load_sample_into_view(self, sample: SampleN):
         """Load a sample's trace and events into the main view."""
+        log.info("Loading sample %s", sample.name)
         try:
             if sample.trace_data is not None:
                 trace = sample.trace_data.copy()
@@ -319,6 +320,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.update_plot()
         self.compute_frame_trace_indices()
         self.load_project_events(labels, times, frames, diam)
+        log.info("Sample loaded with %d events", len(labels))
 
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
@@ -399,6 +401,7 @@ class VasoAnalyzerApp(QMainWindow):
             save_project(self.current_project, self.current_project.path)
 
     def load_data_into_sample(self, sample: SampleN):
+        log.info("Loading data into sample %s", sample.name)
         trace_path, _ = QFileDialog.getOpenFileName(
             self, "Select Trace File", "", "CSV Files (*.csv)"
         )
@@ -417,6 +420,8 @@ class VasoAnalyzerApp(QMainWindow):
             sample.events_path = event_path
 
         self.refresh_project_tree()
+
+        log.info("Sample %s updated with data", sample.name)
 
         if self.current_project and self.current_project.path:
             save_project(self.current_project, self.current_project.path)
@@ -1399,7 +1404,7 @@ class VasoAnalyzerApp(QMainWindow):
     # [D] ========================= FILE LOADERS: TRACE / EVENTS / TIFF =====================
     def load_trace_and_event_files(self, trace_path):
         """Load a trace file and its matching events if available."""
-
+        log.info("Importing trace file %s", trace_path)
         df, labels, times, frames, diam = load_trace_and_events(trace_path)
 
         self.trace_data = df
@@ -1420,6 +1425,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.compute_frame_trace_indices()
         self.update_scroll_slider()
         self.style_event_table()
+
+        log.info("Trace import complete with %d events", len(labels))
 
         return df
 
