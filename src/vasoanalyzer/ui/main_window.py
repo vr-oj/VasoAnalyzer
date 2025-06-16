@@ -1410,6 +1410,8 @@ class VasoAnalyzerApp(QMainWindow):
         """Load a trace file and its matching events if available."""
 
         df = load_trace(trace_path)
+        # Ensure trace data is available before any UI updates
+        self.trace_data = df
         self.trace_file_path = os.path.dirname(trace_path)
         trace_filename = os.path.basename(trace_path)
         self.trace_file_label.setText(f"🧪 {trace_filename}")
