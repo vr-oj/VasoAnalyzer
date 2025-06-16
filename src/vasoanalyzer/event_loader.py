@@ -81,27 +81,44 @@ def load_events(file_path):
         """Return a simplified column name for matching."""
         return re.sub(r"[^a-z0-9]", "", col.lower())
 
-    def _find_col(keywords, default=None):
-        """Return the column matching ``keywords`` with priority to exact names."""
+    def _find_col(keywords, default=None, *, exclude=None):
+        """Return the column matching ``keywords`` with priority to exact names.
+
+        ``exclude`` is an optional iterable of substrings that, when present in
+        the normalized column name, cause that column to be skipped.  This helps
+        avoid false matches like selecting ``"Event Time"`` when searching for a
+        label column.
+        """
+
         normed_cols = {col: _normalize(col) for col in df.columns}
+        exclude = [
+            _normalize(e) for e in exclude
+        ] if exclude else []
+
+        def _valid(norm_name):
+            return not any(ex in norm_name for ex in exclude)
 
         # 1) Look for exact keyword matches first
         for kw in keywords:
             kw_norm = _normalize(kw)
             for col, norm in normed_cols.items():
-                if norm == kw_norm:
+                if norm == kw_norm and _valid(norm):
                     return col
 
         # 2) Fallback to prefix matches (e.g. ``EventLabel`` for ``Event``)
         for kw in keywords:
             kw_norm = _normalize(kw)
             for col, norm in normed_cols.items():
-                if norm.startswith(kw_norm):
+                if norm.startswith(kw_norm) and _valid(norm):
                     return col
 
         return default
 
-    label_col = _find_col(["label", "event", "name"], df.columns[0])
+    label_col = _find_col(
+        ["label", "event", "name"],
+        df.columns[0],
+        exclude=["time"],
+    )
     if len(df.columns) > 1:
         default_time = df.columns[1]
     else:
