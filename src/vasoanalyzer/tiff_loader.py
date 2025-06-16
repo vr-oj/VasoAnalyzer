@@ -70,6 +70,8 @@ def load_tiff(file_path, max_frames=300, metadata=True):
         OSError: If the file cannot be read as a TIFF.
     """
 
+    log.info("Loading TIFF from %s", file_path)
+
     frames = []
     frames_metadata = []
 
@@ -85,6 +87,7 @@ def load_tiff(file_path, max_frames=300, metadata=True):
             else:
                 for frame in frames_array:
                     frames.append(np.array(frame))
+            log.info("Loaded %d preview frames", len(frames))
             return frames, frames_metadata
 
         for i in range(0, total_frames, skip):
@@ -109,10 +112,12 @@ def load_tiff(file_path, max_frames=300, metadata=True):
 
             frames_metadata.append(frame_meta)
 
+    log.info("Loaded %d frames", len(frames))
     return frames, frames_metadata
 
 
 def load_tiff_preview(file_path, max_frames=300):
     """Fast loading without metadata for quick previews."""
 
+    log.info("Loading TIFF preview from %s", file_path)
     return load_tiff(file_path, max_frames=max_frames, metadata=False)

@@ -3,8 +3,11 @@
 
 import csv
 import re
+import logging
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 
 def load_trace(file_path):
@@ -21,6 +24,8 @@ def load_trace(file_path):
         ValueError: If no time or inner diameter column can be found.
         pandas.errors.ParserError: If the CSV cannot be parsed.
     """
+
+    log.info("Loading trace from %s", file_path)
 
     # Auto-detect delimiter using the CSV sniffer
     with open(file_path, "r", encoding="utf-8-sig") as f:
@@ -82,4 +87,5 @@ def load_trace(file_path):
     if "Outer Diameter" in df.columns:
         df = df.drop(columns=["Outer Diameter"])
 
+    log.info("Loaded trace with %d rows", len(df))
     return df

@@ -3,7 +3,10 @@
 import csv
 import os
 import re
+import logging
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 
 def _standardize_headers(df: pd.DataFrame) -> pd.DataFrame:
@@ -37,6 +40,8 @@ def load_events(file_path):
         pandas.errors.ParserError: If the file cannot be parsed.
         ValueError: If time values cannot be converted to seconds.
     """
+
+    log.info("Loading events from %s", file_path)
 
     # Auto-detect delimiter using csv.Sniffer
     with open(file_path, "r", encoding="utf-8-sig") as f:
@@ -121,6 +126,7 @@ def load_events(file_path):
     if frame_col:
         frames = df[frame_col].tolist()
 
+    log.info("Loaded %d events", len(labels))
     return labels, times, frames
 
 
