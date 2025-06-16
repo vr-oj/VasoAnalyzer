@@ -66,6 +66,12 @@ def load_events(file_path):
 
     df = pd.read_csv(file_path, delimiter=delimiter)
 
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            " ".join(str(part) for part in col if pd.notna(part))
+            for col in df.columns
+        ]
+
     def _looks_like_number_or_time(val: str) -> bool:
         """Return ``True`` if ``val`` resembles a numeric value or timestamp."""
         s = str(val).strip()
