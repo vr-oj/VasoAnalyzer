@@ -1,13 +1,37 @@
 import os
-import numpy as np
+import csv
 import logging
+import numpy as np
+import pandas as pd
+
 from .trace_loader import load_trace
-from .event_loader import load_events, find_matching_event_file
+from .event_loader import (
+    load_events,
+    find_matching_event_file,
+    _standardize_headers,
+)
+
+
+def _read_event_dataframe(path: str) -> pd.DataFrame:
+    """Return ``path`` loaded into a DataFrame with normalized headers."""
+    with open(path, "r", encoding="utf-8-sig") as f:
+        sample = f.read(1024)
+        try:
+            delimiter = csv.Sniffer().sniff(sample).delimiter
+        except csv.Error:
+            if "," in sample:
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+            else:
+                delimiter = ";"
+    df = pd.read_csv(path, delimiter=delimiter)
+    return _standardize_headers(df)
 
 log = logging.getLogger(__name__)
 
 
-def load_trace_and_events(trace_path: str, events_path: str | None = None):
+def load_trace_and_events(trace_path: str, events_path: str | pd.DataFrame | None = None):
     """Load a trace CSV and its matching event table.
 
     Parameters
@@ -28,24 +52,54 @@ def load_trace_and_events(trace_path: str, events_path: str | None = None):
     log.info("Loading trace and events for %s", trace_path)
     df = load_trace(trace_path)
 
-    if events_path is None:
-        events_path = find_matching_event_file(trace_path)
+    events_df = None
+    ev_path = None
 
-    if events_path and os.path.exists(events_path):
-        log.info("Found event file: %s", events_path)
+    if isinstance(events_path, pd.DataFrame):
+        events_df = _standardize_headers(events_path.copy())
     else:
+        ev_path = events_path
+
+    if ev_path is None and events_df is None:
+        ev_path = find_matching_event_file(trace_path)
+
+    if ev_path and os.path.exists(ev_path):
+        log.info("Found event file: %s", ev_path)
+    elif events_df is None:
         log.info("No event file found for %s", trace_path)
 
-    labels, times, frames, diam = [], [], None, []
-    if events_path and os.path.exists(events_path):
-        labels, times, frames = load_events(events_path)
+    labels: list[str] = []
+    times: list[float] = []
+    frames: list[int] | None = None
+    diam: list[float] = []
+
+    if events_df is not None or (ev_path and os.path.exists(ev_path)):
+        if events_df is None:
+            events_df = _read_event_dataframe(ev_path)
+            labels, times, frames = load_events(ev_path)
+        else:
+            labels = events_df[events_df.columns[0]].astype(str).tolist()
+            if "Time" in events_df.columns:
+                times = pd.to_numeric(events_df["Time"], errors="coerce").tolist()
+            elif "Time (s)" in events_df.columns:
+                times = pd.to_numeric(events_df["Time (s)"], errors="coerce").tolist()
+            else:
+                times = pd.to_numeric(events_df[events_df.columns[1]], errors="coerce").tolist()
+            frames = (
+                events_df["Frame"].astype(int).tolist() if "Frame" in events_df.columns else None
+            )
+
         log.info("Loaded %d events", len(labels))
-        if frames is None:
-            arr_t = df["Time (s)"].values
-            frames = [int(np.argmin(np.abs(arr_t - t))) for t in times]
+
         arr_t = df["Time (s)"].values
-        arr_d = df["Inner Diameter"].values
-        diam = [float(arr_d[int(np.argmin(np.abs(arr_t - t)))]) for t in times]
+        if "DiamBefore" in events_df.columns:
+            diam = pd.to_numeric(events_df["DiamBefore"], errors="coerce").astype(float).tolist()
+        else:
+            arr_d = df["Inner Diameter"].values
+            diam = [float(arr_d[int(np.argmin(np.abs(arr_t - t)))]) for t in times]
+
+        if frames is None:
+            frames = [int(np.argmin(np.abs(arr_t - t))) for t in times]
 
     log.info("Trace and events loaded: %d events", len(labels))
     return df, labels, times, frames, diam
