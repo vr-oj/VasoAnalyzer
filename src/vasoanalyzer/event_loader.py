@@ -6,6 +6,22 @@ import re
 import pandas as pd
 
 
+def _standardize_headers(df: pd.DataFrame) -> pd.DataFrame:
+    """Return ``df`` with legacy headers renamed to current names."""
+    rename_map = {}
+    for col in df.columns:
+        norm = col.lower().replace(" ", "")
+        if norm == "event":
+            rename_map[col] = "EventLabel"
+        elif norm in {"t(s)", "t", "ts"}:
+            rename_map[col] = "Time"
+        elif norm in {"diameterbefore", "diambefore"} or norm.startswith("diameterbefore"):
+            rename_map[col] = "DiamBefore"
+    if rename_map:
+        df = df.rename(columns=rename_map)
+    return df
+
+
 def load_events(file_path):
     """Return event labels, times and optional frames from a table file.
 
@@ -36,6 +52,9 @@ def load_events(file_path):
                 delimiter = ";"
 
     df = pd.read_csv(file_path, delimiter=delimiter)
+
+    # Normalize headers for legacy files
+    df = _standardize_headers(df)
 
     # Auto-detect columns with fallback for legacy headers
     def _normalize(col: str) -> str:

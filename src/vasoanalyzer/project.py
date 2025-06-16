@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
 import pandas as pd
+from .event_loader import _standardize_headers
 
 __all__ = [
     "Project",
@@ -82,6 +83,8 @@ def sample_from_dict(data: dict) -> SampleN:
     events_data = data.get("events_data")
     if isinstance(events_data, dict):
         events_data = pd.DataFrame(events_data)
+    if isinstance(events_data, pd.DataFrame):
+        events_data = _standardize_headers(events_data)
 
     return SampleN(
         name=data.get("name", ""),
