@@ -12,8 +12,7 @@ import pickle
 import numpy as np
 import os
 
-from vasoanalyzer.trace_loader import load_trace
-from vasoanalyzer.event_loader import load_events, find_matching_event_file
+from vasoanalyzer.trace_event_loader import load_trace_and_events
 
 
 class DataViewPanel(QWidget):
@@ -214,18 +213,10 @@ class DataViewPanel(QWidget):
         )
         if not file_path:
             return
-        df = load_trace(file_path)
-        evp = find_matching_event_file(file_path)
-        events = []
-        if evp and os.path.exists(evp):
-            try:
-                lbls, tms, _ = load_events(evp)
-                events = list(zip(lbls, tms))
-            except Exception:
-                pass
+        df, labels, times, _frames, _diam = load_trace_and_events(file_path)
+        events = list(zip(labels, times))
         # delegate to panel loader
         self.load_trace_and_events(df, events)
-        self.load_trace_and_events
 
     def load_trace_and_events(self, trace_df, events):
         """

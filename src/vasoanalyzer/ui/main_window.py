@@ -52,6 +52,7 @@ from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
 from vasoanalyzer.trace_loader import load_trace
 from vasoanalyzer.tiff_loader import load_tiff, load_tiff_preview
 from vasoanalyzer.event_loader import load_events, find_matching_event_file
+from vasoanalyzer.trace_event_loader import load_trace_and_events
 from vasoanalyzer.excel_mapper import ExcelMappingDialog, update_excel_file
 from vasoanalyzer.version_checker import check_for_new_version
 from vasoanalyzer.theme_manager import (
@@ -1409,38 +1410,15 @@ class VasoAnalyzerApp(QMainWindow):
     def load_trace_and_event_files(self, trace_path):
         """Load a trace file and its matching events if available."""
 
-        df = load_trace(trace_path)
-        # Ensure trace data is available before any UI updates
+        df, labels, times, frames, diam = load_trace_and_events(trace_path)
+
         self.trace_data = df
         self.trace_file_path = os.path.dirname(trace_path)
         trace_filename = os.path.basename(trace_path)
         self.trace_file_label.setText(f"🧪 {trace_filename}")
 
-        event_path = find_matching_event_file(trace_path)
-        if event_path and os.path.exists(event_path):
-            try:
-                labels, times, frames = load_events(event_path)
-                if frames is None:
-                    arr_t = df["Time (s)"].values
-                    frames = [int(np.argmin(np.abs(arr_t - t))) for t in times]
-
-                arr_t = df["Time (s)"].values
-                arr_d = df["Inner Diameter"].values
-                diam = [float(arr_d[int(np.argmin(np.abs(arr_t - t)))]) for t in times]
-
-                self.load_project_events(labels, times, frames, diam)
-            except Exception as e:
-                QMessageBox.warning(
-                    self,
-                    "Event Load Error",
-                    f"Trace loaded, but failed to load events:\n{e}",
-                )
-                self.event_labels = []
-                self.event_times = []
-                self.event_frames = []
-                self.event_table_data = []
-                self.populate_table()
-                self.update_plot()
+        if labels:
+            self.load_project_events(labels, times, frames, diam)
         else:
             self.event_labels = []
             self.event_times = []
@@ -2133,18 +2111,9 @@ class VasoAnalyzerApp(QMainWindow):
             self.dualMode.panelA if choice == QMessageBox.Yes else self.dualMode.panelB
         )
 
-        # Load the trace DataFrame
-        df = load_trace(file_path)
-
-        # Attempt to find matching events file
-        ev_path = find_matching_event_file(file_path)
-        events = []
-        if ev_path and os.path.exists(ev_path):
-            try:
-                labels, times, _ = load_events(ev_path)
-                events = list(zip(labels, times))
-            except Exception:
-                pass
+        # Use common loader for consistency
+        df, labels, times, _frames, _diam = load_trace_and_events(file_path)
+        events = list(zip(labels, times))
 
         # Feed into the chosen panel
         panel.load_trace_and_events(df, events)
