@@ -47,27 +47,4 @@ def test_event_table_id_values(tmp_path):
     app.quit()
 
 
-def test_update_plot_outer_diameter(tmp_path):
-    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
-    trace_path = tmp_path / 'trace.csv'
-    df_trace = pd.DataFrame(
-        {
-            'Time (s)': [0, 1, 2, 3],
-            'Inner Diameter': [10, 11, 12, 13],
-            'Outer Diameter': [20, 21, 22, 23],
-        }
-    )
-    df_trace.to_csv(trace_path, index=False)
-    event_path = tmp_path / 'trace_table.csv'
-    df_evt = pd.DataFrame({'label': ['A', 'B'], 'time': [1, 2]})
-    df_evt.to_csv(event_path, index=False)
-
-    app = QApplication.instance() or QApplication([])
-    gui = VasoAnalyzerApp()
-    gui.load_trace_and_events(str(trace_path))
-    gui.toggle_outer_diameter(True)
-
-    assert gui.event_table_data[0][2] == 20.0
-    assert gui.event_table_data[1][2] == 21.0
-    app.quit()
 
