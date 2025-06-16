@@ -302,12 +302,12 @@ class VasoAnalyzerApp(QMainWindow):
                     if "Time (s)" in df.columns
                     else [0.0] * len(labels)
                 )
-                diam = df["ID (µm)"].tolist() if "ID (µm)" in df.columns else []
                 frames = df["Frame"].tolist() if "Frame" in df.columns else None
             elif sample.events_path:
                 labels, times, frames = load_events(sample.events_path)
-            # Compute diameters if not provided
-            if times and not diam:
+            # Always compute diameter at each event time from the trace
+            diam = []
+            if times:
                 arr_t = trace["Time (s)"].values
                 arr_d = trace["Inner Diameter"].values
                 for t in times:
@@ -1758,10 +1758,32 @@ class VasoAnalyzerApp(QMainWindow):
             list(frames) if frames is not None else [0] * len(self.event_times)
         )
         self.event_table_data = []
-        for lbl, t, fr, diam in zip(
-            self.event_labels, self.event_times, self.event_frames, diam_before
-        ):
-            self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
+
+        if self.trace_data is not None and self.event_times:
+            col = (
+                "Outer Diameter"
+                if self.show_outer and "Outer Diameter" in self.trace_data
+                else "Inner Diameter"
+            )
+            arr_t = self.trace_data["Time (s)"].values
+            arr_d = self.trace_data[col].values
+            for lbl, t, fr in zip(
+                self.event_labels,
+                self.event_times,
+                self.event_frames,
+            ):
+                idx = int(np.argmin(np.abs(arr_t - t)))
+                diam = float(arr_d[idx])
+                self.event_table_data.append((lbl, float(t), diam, int(fr)))
+        else:
+            for lbl, t, fr, diam in zip(
+                self.event_labels,
+                self.event_times,
+                self.event_frames,
+                diam_before,
+            ):
+                self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
+
         self.populate_table()
         self.update_plot()
 
@@ -2184,11 +2206,10 @@ class VasoAnalyzerApp(QMainWindow):
 
                 if i < nEv - 1:
                     t_sample = self.event_times[i + 1] - offset_sec
-                    idx_pre = np.argmin(np.abs(time_trace - t_sample))
                 else:
-                    idx_pre = -1
-
-                diam_pre = diam_trace.iloc[idx_pre]
+                    t_sample = time_trace.iloc[-1] - offset_sec
+                idx_pre = np.argmin(np.abs(time_trace - t_sample))
+                diam_val = diam_trace.iloc[idx_pre]
                 if self.event_frames:
                     frame_number = self.event_frames[i]
                 else:
@@ -2219,7 +2240,7 @@ class VasoAnalyzerApp(QMainWindow):
                     (
                         self.event_labels[i],
                         round(evt_time, 2),
-                        round(diam_pre, 2),
+                        round(diam_val, 2),
                         frame_number,
                     )
                 )

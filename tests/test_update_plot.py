@@ -41,9 +41,9 @@ def test_event_table_id_values(tmp_path):
     gui = VasoAnalyzerApp()
     gui.load_trace_and_events(str(trace_path))
 
-    # Expected diameters at event times 1 and 2 seconds
-    assert gui.event_table_data[0][2] == 11.0
-    assert gui.event_table_data[1][2] == 12.0
+    # Expected diameters sampled 2s before next event or end
+    assert gui.event_table_data[0][2] == 10.0
+    assert gui.event_table_data[1][2] == 11.0
     app.quit()
 
 
@@ -67,7 +67,7 @@ def test_update_plot_outer_diameter(tmp_path):
     gui.load_trace_and_events(str(trace_path))
     gui.toggle_outer_diameter(True)
 
-    assert gui.event_table_data[0][2] == 21.0
-    assert gui.event_table_data[1][2] == 22.0
+    assert gui.event_table_data[0][2] == 20.0
+    assert gui.event_table_data[1][2] == 21.0
     app.quit()
 
