@@ -2241,15 +2241,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.draw_idle()
 
     # [F] ========================= EVENT TABLE MANAGEMENT ================================
-    def populate_table(self):
-        self.event_table.blockSignals(True)
-        self.event_table.setRowCount(len(self.event_table_data))
-        for row, (label, t, idval, frame) in enumerate(self.event_table_data):
-            self.event_table.setItem(row, 0, QTableWidgetItem(str(label)))
-            self.event_table.setItem(row, 1, QTableWidgetItem(str(t)))
-            self.event_table.setItem(row, 2, QTableWidgetItem(str(idval)))
-            self.event_table.setItem(row, 3, QTableWidgetItem(str(frame)))
-        self.event_table.blockSignals(False)
 
     def handle_table_edit(self, item):
         row = item.row()
