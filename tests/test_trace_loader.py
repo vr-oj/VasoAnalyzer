@@ -44,6 +44,22 @@ def test_load_trace_ignores_outer_diameter(tmp_path):
     assert "Outer Diameter" not in loaded.columns
 
 
+def test_load_trace_prefers_inner_over_outer(tmp_path):
+    csv_path = tmp_path / "mixed.csv"
+    df = pd.DataFrame(
+        {
+            "Time": [0, 1, 2],
+            "Outer Diameter": [15, 16, 17],
+            "Inner Diameter": [10, 11, 12],
+        }
+    )
+    df.to_csv(csv_path, index=False)
+
+    loaded = load_trace(str(csv_path))
+    assert loaded["Inner Diameter"].tolist() == [10, 11, 12]
+    assert "Outer Diameter" not in loaded.columns
+
+
 def test_load_trace_legacy_time_column(tmp_path):
     csv_path = tmp_path / "legacy.csv"
     df = pd.DataFrame({"T (s)": [0, 1, 2], "ID": [5, 6, 7]})

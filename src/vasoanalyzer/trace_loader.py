@@ -46,6 +46,9 @@ def load_trace(file_path):
     # Locate time and diameter columns using flexible matching for legacy files
     time_col = None
     diam_col = None
+    inner_candidates = []
+    diam_candidates = []
+
     for c in df.columns:
         norm = _normalize(c)
         if time_col is None and (
@@ -54,14 +57,16 @@ def load_trace(file_path):
             or norm in {"t", "ts"}
         ):
             time_col = c
-        if diam_col is None and (
-            ("inner" in norm and "diam" in norm)
-            or "diam" in norm
-            or norm in {"id", "diameter"}
-        ):
-            diam_col = c
-        if time_col and diam_col:
-            break
+
+        if "inner" in norm and "diam" in norm:
+            inner_candidates.append(c)
+        elif "diam" in norm or norm in {"id", "diameter"}:
+            diam_candidates.append(c)
+
+    if inner_candidates:
+        diam_col = inner_candidates[0]
+    elif diam_candidates:
+        diam_col = diam_candidates[0]
 
     if time_col is None or diam_col is None or time_col == diam_col:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")
