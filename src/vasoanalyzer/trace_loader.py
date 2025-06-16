@@ -49,7 +49,11 @@ def load_trace(file_path):
     outer_col = None
     for c in df.columns:
         norm = _normalize(c)
-        if time_col is None and ("time" in norm or "sec" in norm or norm == "t"):
+        if time_col is None and (
+            "time" in norm
+            or "sec" in norm
+            or norm in {"t", "ts"}
+        ):
             time_col = c
         if diam_col is None and (
             ("inner" in norm and "diam" in norm)

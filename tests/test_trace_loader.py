@@ -44,3 +44,13 @@ def test_load_trace_outer_diameter(tmp_path):
     assert "Outer Diameter" in loaded.columns
     assert loaded["Outer Diameter"].tolist() == [15, 16, 17]
 
+
+def test_load_trace_legacy_time_column(tmp_path):
+    csv_path = tmp_path / "legacy.csv"
+    df = pd.DataFrame({"T (s)": [0, 1, 2], "ID": [5, 6, 7]})
+    df.to_csv(csv_path, index=False)
+
+    loaded = load_trace(str(csv_path))
+    assert loaded["Time (s)"].tolist() == [0, 1, 2]
+    assert loaded["Inner Diameter"].tolist() == [5, 6, 7]
+
