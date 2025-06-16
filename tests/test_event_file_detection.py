@@ -1,6 +1,10 @@
 import pandas as pd
 
-from vasoanalyzer.event_loader import find_matching_event_file, load_events
+from vasoanalyzer.event_loader import (
+    find_matching_event_file,
+    load_events,
+    _standardize_headers,
+)
 from vasoanalyzer.trace_loader import load_trace
 
 
@@ -123,3 +127,15 @@ def test_load_events_no_headers(tmp_path):
 
     assert labels == ["A", "B"]
     assert times == [0.1, 0.2]
+
+
+def test_standardize_headers_additional_aliases():
+    df = pd.DataFrame({
+        "Label": ["A"],
+        "Time (s)": [1.0],
+        "Diameter": [10],
+    })
+
+    std = _standardize_headers(df)
+
+    assert list(std.columns) == ["EventLabel", "Time", "DiamBefore"]
