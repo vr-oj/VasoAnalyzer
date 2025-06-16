@@ -62,12 +62,23 @@ def load_events(file_path):
         return re.sub(r"[^a-z0-9]", "", col.lower())
 
     def _find_col(keywords, default=None):
+        """Return the column matching ``keywords`` with priority to exact names."""
         normed_cols = {col: _normalize(col) for col in df.columns}
-        for col, norm in normed_cols.items():
-            for kw in keywords:
-                kw_norm = _normalize(kw)
-                if norm == kw_norm or norm.startswith(kw_norm):
+
+        # 1) Look for exact keyword matches first
+        for kw in keywords:
+            kw_norm = _normalize(kw)
+            for col, norm in normed_cols.items():
+                if norm == kw_norm:
                     return col
+
+        # 2) Fallback to prefix matches (e.g. ``EventLabel`` for ``Event``)
+        for kw in keywords:
+            kw_norm = _normalize(kw)
+            for col, norm in normed_cols.items():
+                if norm.startswith(kw_norm):
+                    return col
+
         return default
 
     label_col = _find_col(["label", "event", "name"], df.columns[0])
