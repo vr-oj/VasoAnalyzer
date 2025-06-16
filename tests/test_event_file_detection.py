@@ -98,3 +98,18 @@ def test_load_events_header_aliases(tmp_path):
     assert labels == ["A", "B"]
     assert times == [0.1, 0.2]
     assert frames == [1, 2]
+
+
+def test_load_events_ignore_event_time(tmp_path):
+    """Label column should not confuse 'Event Time' for an event label."""
+    event_path = tmp_path / "complex.csv"
+    df = pd.DataFrame({
+        "Event Time": [0.1, 0.2],
+        "EventLabel": ["A", "B"],
+    })
+    df.to_csv(event_path, index=False)
+
+    labels, times, _ = load_events(str(event_path))
+
+    assert labels == ["A", "B"]
+    assert times == [0.1, 0.2]
