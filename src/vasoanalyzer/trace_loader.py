@@ -46,7 +46,6 @@ def load_trace(file_path):
     # Locate time and diameter columns using flexible matching for legacy files
     time_col = None
     diam_col = None
-    outer_col = None
     for c in df.columns:
         norm = _normalize(c)
         if time_col is None and (
@@ -61,14 +60,7 @@ def load_trace(file_path):
             or norm in {"id", "diameter"}
         ):
             diam_col = c
-        if outer_col is None and (
-            "outerdiameter" in norm
-            or "outerdiam" in norm
-            or norm == "od"
-            or ("outer" in norm and "diam" in norm)
-        ):
-            outer_col = c
-        if time_col and diam_col and outer_col:
+        if time_col and diam_col:
             break
 
     if time_col is None or diam_col is None or time_col == diam_col:
@@ -76,8 +68,6 @@ def load_trace(file_path):
 
     # Rename to standardized column names
     rename_map = {time_col: "Time (s)", diam_col: "Inner Diameter"}
-    if outer_col is not None and outer_col not in {time_col, diam_col}:
-        rename_map[outer_col] = "Outer Diameter"
     df = df.rename(columns=rename_map)
     df = df.loc[:, ~df.columns.duplicated()]
 
@@ -85,6 +75,6 @@ def load_trace(file_path):
     df["Time (s)"] = pd.to_numeric(df["Time (s)"], errors="coerce")
     df["Inner Diameter"] = pd.to_numeric(df["Inner Diameter"], errors="coerce")
     if "Outer Diameter" in df.columns:
-        df["Outer Diameter"] = pd.to_numeric(df["Outer Diameter"], errors="coerce")
+        df = df.drop(columns=["Outer Diameter"])
 
     return df
