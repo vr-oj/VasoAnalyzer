@@ -13,20 +13,17 @@ def _standardize_headers(df: pd.DataFrame) -> pd.DataFrame:
     """Return ``df`` with legacy headers renamed to current names."""
     rename_map = {}
     for col in df.columns:
-        norm = (
-            col.lower()
-            .strip()
-            .replace(" ", "")
-            .replace("(", "")
-            .replace(")", "")
-        )
+        norm = col.lower().strip().replace(" ", "").replace("(", "").replace(")", "")
         if norm in {"event", "label"}:
             rename_map[col] = "EventLabel"
         elif norm in {"t", "ts", "time", "times", "timesec"}:
             rename_map[col] = "Time"
-        elif norm in {"diameterbefore", "diambefore", "id", "diameter"} or norm.startswith(
-            "diameterbefore"
-        ):
+        elif norm in {
+            "diameterbefore",
+            "diambefore",
+            "id",
+            "diameter",
+        } or norm.startswith("diameterbefore"):
             rename_map[col] = "DiamBefore"
     if rename_map:
         df = df.rename(columns=rename_map)
@@ -68,8 +65,7 @@ def load_events(file_path):
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [
-            " ".join(str(part) for part in col if pd.notna(part))
-            for col in df.columns
+            " ".join(str(part) for part in col if pd.notna(part)) for col in df.columns
         ]
 
     def _looks_like_number_or_time(val: str) -> bool:
@@ -93,8 +89,7 @@ def load_events(file_path):
     if "EventLabel" in df.columns and df["EventLabel"].eq("-").all():
         possible_labels = df.index.astype(str)
         if any(
-            l != "-" and not l.replace(".", "", 1).isdigit()
-            for l in possible_labels
+            l != "-" and not l.replace(".", "", 1).isdigit() for l in possible_labels
         ):
             df = df.reset_index()
             df.rename(columns={"index": "EventLabel"}, inplace=True)
@@ -114,9 +109,7 @@ def load_events(file_path):
         """
 
         normed_cols = {col: _normalize(col) for col in df.columns}
-        exclude = [
-            _normalize(e) for e in exclude
-        ] if exclude else []
+        exclude = [_normalize(e) for e in exclude] if exclude else []
 
         def _valid(norm_name):
             return not any(ex in norm_name for ex in exclude)
@@ -138,9 +131,9 @@ def load_events(file_path):
         return default
 
     if len(df.columns) > 1:
+        # legacy tables typically store labels in the second column, the first
+        # being a numeric index or time column
         fallback_label = df.columns[1]
-        if df.columns[0].startswith("col"):
-            fallback_label = df.columns[0]
     else:
         fallback_label = df.columns[0]
 
@@ -164,7 +157,9 @@ def load_events(file_path):
         if numeric.notna().all():
             time_series = numeric
         else:
-            time_series = pd.to_timedelta(time_series, errors="coerce").dt.total_seconds()
+            time_series = pd.to_timedelta(
+                time_series, errors="coerce"
+            ).dt.total_seconds()
     time_sec = time_series
 
     labels = df[label_col].astype(str).tolist()
