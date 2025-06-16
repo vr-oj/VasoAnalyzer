@@ -69,3 +69,18 @@ def test_load_trace_legacy_time_column(tmp_path):
     assert loaded["Time (s)"].tolist() == [0, 1, 2]
     assert loaded["Inner Diameter"].tolist() == [5, 6, 7]
 
+
+def test_load_trace_multiheader(tmp_path):
+    csv_path = tmp_path / "multi.csv"
+    df = pd.DataFrame(
+        [[0, 10], [1, 11]],
+        columns=pd.MultiIndex.from_tuples([("Time", "(s)"), ("Inner", "Diameter")]),
+    )
+    df.to_csv(csv_path, index=False)
+
+    loaded = load_trace(str(csv_path))
+    assert "Time (s)" in loaded.columns
+    assert "Inner Diameter" in loaded.columns
+    assert pd.api.types.is_numeric_dtype(loaded["Time (s)"])
+    assert pd.api.types.is_numeric_dtype(loaded["Inner Diameter"])
+

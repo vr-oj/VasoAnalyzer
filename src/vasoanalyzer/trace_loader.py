@@ -18,7 +18,8 @@ def load_trace(file_path):
 
     Returns:
         pandas.DataFrame: Data with ``"Time (s)"`` and ``"Inner Diameter"``
-        columns converted to numeric types.
+        columns converted to numeric types. Files with multiple header rows
+        are supported.
 
     Raises:
         ValueError: If no time or inner diameter column can be found.
@@ -40,7 +41,13 @@ def load_trace(file_path):
             else:
                 delimiter = ";"
 
-    df = pd.read_csv(file_path, delimiter=delimiter, encoding="utf-8-sig")
+    df = pd.read_csv(file_path, delimiter=delimiter, encoding="utf-8-sig", header=0)
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            " ".join(str(part) for part in col if pd.notna(part))
+            for col in df.columns
+        ]
 
     # Drop any entirely empty columns that may appear due to malformed files
     df = df.dropna(axis=1, how="all")
