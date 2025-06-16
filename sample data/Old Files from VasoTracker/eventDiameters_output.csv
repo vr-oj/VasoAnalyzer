@@ -1,0 +1,18 @@
+Event,Time (s),ID (µm),Frame
+15 mmHg,102.7,86.79,301
+Myogenic Tone,2286.4,102.26,6694
+1uM CCh,4461.8,113.98,13062
+Wash,4982.4,89.78,14587
+Recirculate PSS,5686.7,86.84,16648
+10uM Histamine,6073.1,114.27,17780
+Wash,6410.9,89.36,18769
+Recirculate PSS,7069.2,99.67,20696
+100 uM L-NNA (200 ul of 10 mM stock),8064.1,99.13,23609
+100 uM L-NNA (200 ul of 10 mM stock) + 10uM Histamine,10631.1,114.5,31124
+Wash,10854.2,114.32,31777
+recirc,14421.9,111.89,42222
+1 uM PE,15024.1,93.5,43985
+10 uM fexofenadine,15210.2,88.91,44530
+10 uM histamine,15778.8,109.89,46194
+10 uM cemetidine,16071.7,84.98,47052
+heat off 0Ca/EGTA,16705.8,111.8,48908
