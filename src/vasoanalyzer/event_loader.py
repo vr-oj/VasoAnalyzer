@@ -53,6 +53,21 @@ def load_events(file_path):
 
     df = pd.read_csv(file_path, delimiter=delimiter)
 
+    def _looks_like_number_or_time(val: str) -> bool:
+        """Return ``True`` if ``val`` resembles a numeric value or timestamp."""
+        s = str(val).strip()
+        if not s:
+            return False
+        if re.fullmatch(r"[-+]?\d*(?:\.\d+)?(?:e[-+]?\d+)?", s):
+            return True
+        if re.fullmatch(r"\d{1,2}(?::\d{2}){1,2}(?:\.\d+)?", s):
+            return True
+        return False
+
+    if any(_looks_like_number_or_time(c) for c in df.columns):
+        df = pd.read_csv(file_path, delimiter=delimiter, header=None)
+        df.columns = [f"col{i}" for i in range(df.shape[1])]
+
     # Normalize headers for legacy files
     df = _standardize_headers(df)
 

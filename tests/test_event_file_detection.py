@@ -113,3 +113,13 @@ def test_load_events_ignore_event_time(tmp_path):
 
     assert labels == ["A", "B"]
     assert times == [0.1, 0.2]
+
+
+def test_load_events_no_headers(tmp_path):
+    event_path = tmp_path / "no_headers.csv"
+    pd.DataFrame([["A", 0.1], ["B", 0.2]]).to_csv(event_path, index=False, header=False)
+
+    labels, times, _ = load_events(str(event_path))
+
+    assert labels == ["A", "B"]
+    assert times == [0.1, 0.2]
