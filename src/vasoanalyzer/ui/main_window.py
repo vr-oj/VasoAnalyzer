@@ -55,7 +55,6 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 
-from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
 from vasoanalyzer.trace_loader import load_trace
 from vasoanalyzer.tiff_loader import load_tiff, load_tiff_preview
 from vasoanalyzer.event_loader import load_events, find_matching_event_file
@@ -459,23 +458,14 @@ class VasoAnalyzerApp(QMainWindow):
             save_project(tmp_proj, path)
 
     def _wrap_views(self):
-        # Create the three modes:
-        self.singleMode = QWidget()  # placeholder for your existing GUI
-        self.dualMode = DualViewWidget(self)
+        """Wrap the main layout in a QStackedWidget."""
 
-        # Extract current central widget (your single view)
-        old = self.centralWidget().children()
-        # We’ll assume initUI placed everything inside self.main_layout of centralWidget()
-        # So just wrap the existing layout in a container:
         container = QWidget()
         container.setLayout(self.main_layout)
 
-        # Now set up the stack
         self.modeStack = QStackedWidget(self)
-        self.modeStack.addWidget(container)  # index 0: single view
-        self.modeStack.addWidget(self.dualMode)  # index 1: dual view
+        self.modeStack.addWidget(container)
 
-        # Replace central widget’s layout
         self.setCentralWidget(self.modeStack)
         self.modeStack.setCurrentIndex(0)
 
@@ -578,10 +568,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_new.setShortcut("Ctrl+N")
         self.action_new.triggered.connect(self.start_new_analysis)
         file_menu.addAction(self.action_new)
-
-        start_new = QAction("Start New Dual Analysis", self)
-        start_new.triggered.connect(self.clear_dual_view)
-        file_menu.addAction(start_new)
 
         # 2) Open Trace & Events…
         self.action_open_trace = QAction("Open Trace & Events…", self)
@@ -745,19 +731,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         view_menu.addSeparator()
 
-        # 4) Single / Dual
-        self.action_single = QAction("Single View", self, checkable=True)
-        self.action_dual = QAction("Dual View", self, checkable=True)
-        self.action_single.setShortcut("Ctrl+1")
-        self.action_dual.setShortcut("Ctrl+2")
-        self.action_single.setChecked(True)
-        self.action_single.triggered.connect(lambda: self._switch_mode(0))
-        self.action_dual.triggered.connect(lambda: self._switch_mode(1))
-        view_menu.addAction(self.action_single)
-        view_menu.addAction(self.action_dual)
-
-        view_menu.addSeparator()
-
         # 5) Full‑Screen
         fs_act = QAction("Full‑Screen Mode", self)
         fs_act.setShortcut("F11")
@@ -816,13 +789,6 @@ class VasoAnalyzerApp(QMainWindow):
         act_rel.triggered.connect(self.show_release_notes)
         help_menu.addAction(act_rel)
 
-    def clear_dual_view(self):
-        """
-        Clear both DataViewPanelA and DataViewPanelB for dual view.
-        """
-        # The DualViewWidget instance is `self.dualMode`, so use its `panelA` and `panelB` attributes
-        self.dualMode.panelA.clear_data()
-        self.dualMode.panelB.clear_data()
 
     def build_recent_files_menu(self):
         self.recent_menu.clear()
@@ -843,10 +809,6 @@ class VasoAnalyzerApp(QMainWindow):
         clear_action.triggered.connect(self.clear_recent_files)
         self.recent_menu.addAction(clear_action)
 
-    def _switch_mode(self, idx):
-        self.modeStack.setCurrentIndex(idx)
-        self.action_single.setChecked(idx == 0)
-        self.action_dual.setChecked(idx == 1)
 
     def open_preferences_dialog(self):
         QMessageBox.information(
@@ -2106,20 +2068,9 @@ class VasoAnalyzerApp(QMainWindow):
                     self.open_analysis(p)
                     return
 
-        idx = self.modeStack.currentIndex()
-
-        # SINGLE‑VIEW: unchanged
-        if idx == 0:
-            for p in paths:
-                if p.endswith(".fig.pickle"):
-                    self.load_pickle_session(p)
-            return
-
-        # DUAL‑VIEW: expect exactly two pickles
-        panels = [self.dualMode.panelA, self.dualMode.panelB]
-        for i, p in enumerate(paths[:2]):
+        for p in paths:
             if p.endswith(".fig.pickle"):
-                panels[i].load_pickle_session(p)
+                self.load_pickle_session(p)
 
     def load_pickle_session(self, file_path):
         try:
@@ -2192,31 +2143,7 @@ class VasoAnalyzerApp(QMainWindow):
         if not file_path:
             return
 
-        # SINGLE‑VIEW: just forward to your existing method
-        if self.modeStack.currentIndex() == 0:
-            self.load_trace_and_events(file_path)
-            return
-
-        # DUAL‑VIEW: decide which panel
-        from PyQt5.QtWidgets import QMessageBox
-
-        choice = QMessageBox.question(
-            self,
-            "Load Into…",
-            "Load this dataset into Panel A?\n(Select No to load into Panel B.)",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        panel = (
-            self.dualMode.panelA if choice == QMessageBox.Yes else self.dualMode.panelB
-        )
-
-        # Use common loader for consistency
-        df, labels, times, _frames, _diam = load_trace_and_events(file_path)
-        events = list(zip(labels, times))
-
-        # Feed into the chosen panel
-        panel.load_trace_and_events(df, events)
+        self.load_trace_and_events(file_path)
 
     # [E] ========================= PLOTTING AND EVENT SYNC ============================
     def update_plot(self):
