@@ -24,8 +24,22 @@ def test_diameter_toggle_visibility(tmp_path):
 
     # Toolbar should include diameter toggle actions
     toolbar_actions = gui.toolbar.actions()
-    assert gui.id_toggle_act in toolbar_actions
-    assert gui.od_toggle_act in toolbar_actions
+    assert any(
+        act is gui.id_toggle_act
+        or (
+            hasattr(act, "defaultWidget")
+            and act.defaultWidget().defaultAction() is gui.id_toggle_act
+        )
+        for act in toolbar_actions
+    )
+    assert any(
+        act is gui.od_toggle_act
+        or (
+            hasattr(act, "defaultWidget")
+            and act.defaultWidget().defaultAction() is gui.od_toggle_act
+        )
+        for act in toolbar_actions
+    )
 
     assert gui.trace_line.get_visible() is True
     assert gui.od_line.get_visible() is True
