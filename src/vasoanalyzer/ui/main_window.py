@@ -910,9 +910,17 @@ class VasoAnalyzerApp(QMainWindow):
     def rebuild_top_row_with_new_toolbar(self):
         top_row_layout = QHBoxLayout()
         top_row_layout.setContentsMargins(6, 4, 6, 2)
-        top_row_layout.setSpacing(8)
+        top_row_layout.setSpacing(16)
 
         top_row_layout.addWidget(self.toolbar)
+
+        id_btn = QToolButton()
+        id_btn.setDefaultAction(self.id_toggle_act)
+        od_btn = QToolButton()
+        od_btn.setDefaultAction(self.od_toggle_act)
+
+        top_row_layout.addWidget(id_btn)
+        top_row_layout.addWidget(od_btn)
         top_row_layout.addWidget(self.loadTraceBtn)
         top_row_layout.addWidget(self.load_snapshot_button)
         top_row_layout.addWidget(self.excel_btn)
@@ -1168,10 +1176,8 @@ class VasoAnalyzerApp(QMainWindow):
         top_row_layout.setContentsMargins(6, 4, 6, 2)
         top_row_layout.setSpacing(16)
 
-        toolbar_container = QVBoxLayout()
-        toolbar_container.setContentsMargins(0, 0, 0, 0)
-        toolbar_container.setSpacing(0)
-        toolbar_container.addWidget(self.toolbar)
+        # Keep the toolbar and toggle buttons on a single row
+        top_row_layout.addWidget(self.toolbar)
 
         self.loadTraceBtn = QPushButton("📂 Load Trace + Events")
         self.loadTraceBtn.setToolTip(
@@ -1202,14 +1208,8 @@ class VasoAnalyzerApp(QMainWindow):
         od_btn = QToolButton()
         od_btn.setDefaultAction(self.od_toggle_act)
 
-        toggle_row = QHBoxLayout()
-        toggle_row.setContentsMargins(0, 0, 0, 0)
-        toggle_row.setSpacing(0)
-        toggle_row.addWidget(id_btn)
-        toggle_row.addWidget(od_btn)
-
-        toolbar_container.addLayout(toggle_row)
-        top_row_layout.addLayout(toolbar_container)
+        top_row_layout.addWidget(id_btn)
+        top_row_layout.addWidget(od_btn)
         top_row_layout.addWidget(self.loadTraceBtn)
         top_row_layout.addWidget(self.load_snapshot_button)
         top_row_layout.addWidget(self.excel_btn)
@@ -1382,7 +1382,7 @@ class VasoAnalyzerApp(QMainWindow):
             data_btn.clicked.connect(self.add_data_to_current_experiment)
             toolbar.insertWidget(visible_buttons[7], data_btn)
 
-            # Diameter toggle actions now live in a separate toolbar row
+            # Diameter toggle actions are added next to the toolbar
 
             # Override Save
             save_btn = visible_buttons[7]
