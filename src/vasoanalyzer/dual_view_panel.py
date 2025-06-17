@@ -330,6 +330,7 @@ class DataViewPanel(QWidget):
 
     def populate_table(self):
         # Populate the event table with Event, Time, ID, (OD), Frame
+        self.event_table.blockSignals(True)
         self.event_table_data = []
         offset = 2.0
         times = self.trace_data["Time (s)"].to_numpy()
@@ -377,6 +378,7 @@ class DataViewPanel(QWidget):
         header_widget = self.event_table.horizontalHeader()
         for i in range(len(header)):
             header_widget.setSectionResizeMode(i, QHeaderView.Interactive)
+        self.event_table.blockSignals(False)
 
     def sync_slider_with_plot(self, event=None):
         if self.trace_data is None:
