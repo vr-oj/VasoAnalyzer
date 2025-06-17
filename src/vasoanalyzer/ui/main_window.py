@@ -2670,8 +2670,11 @@ class VasoAnalyzerApp(QMainWindow):
 
     # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
-        # only over the main axes and with data loaded
-        if event.inaxes != self.ax or self.trace_data is None or self.trace_line is None:
+        # only over the plot axes and with data loaded
+        valid_axes = [self.ax]
+        if self.ax2:
+            valid_axes.append(self.ax2)
+        if event.inaxes not in valid_axes or self.trace_data is None or self.trace_line is None:
             if self.hover_annotation.get_visible():
                 self.hover_annotation.set_visible(False)
                 self.canvas.draw_idle()
