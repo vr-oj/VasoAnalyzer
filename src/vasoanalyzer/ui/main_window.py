@@ -87,7 +87,7 @@ from .constants import PREVIOUS_PLOT_PATH, DEFAULT_STYLE
 
 # [B] ========================= MAIN CLASS DEFINITION ================================
 class VasoAnalyzerApp(QMainWindow):
-    def __init__(self):
+    def __init__(self, check_updates: bool = True):
         super().__init__()
         self.setWindowIcon(QIcon(self.icon_path("VasoAnalyzerIcon.icns")))
         self.setMouseTracking(True)
@@ -158,7 +158,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.modeStack.widget(0).setMouseTracking(True)
         self.canvas.setMouseTracking(True)
 
-        self.check_for_updates_at_startup()
+        if check_updates:
+            self.check_for_updates_at_startup()
 
     def setup_project_sidebar(self):
         from .project_explorer import ProjectExplorerWidget
@@ -377,7 +378,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.views = []
                 splitter = QSplitter(Qt.Vertical, self)
                 for s in pair:
-                    view = VasoAnalyzerApp()
+                    # Skip update checks for embedded dual views
+                    view = VasoAnalyzerApp(check_updates=False)
                     view.setParent(splitter)
                     view.project_dock.hide()
                     splitter.addWidget(view)
