@@ -1168,7 +1168,10 @@ class VasoAnalyzerApp(QMainWindow):
         top_row_layout.setContentsMargins(6, 4, 6, 2)
         top_row_layout.setSpacing(16)
 
-        top_row_layout.addWidget(self.toolbar)
+        toolbar_container = QVBoxLayout()
+        toolbar_container.setContentsMargins(0, 0, 0, 0)
+        toolbar_container.setSpacing(0)
+        toolbar_container.addWidget(self.toolbar)
 
         self.loadTraceBtn = QPushButton("📂 Load Trace + Events")
         self.loadTraceBtn.setToolTip(
@@ -1194,28 +1197,25 @@ class VasoAnalyzerApp(QMainWindow):
             QSizePolicy.Expanding, QSizePolicy.Preferred
         )
 
+        id_btn = QToolButton()
+        id_btn.setDefaultAction(self.id_toggle_act)
+        od_btn = QToolButton()
+        od_btn.setDefaultAction(self.od_toggle_act)
+
+        toggle_row = QHBoxLayout()
+        toggle_row.setContentsMargins(0, 0, 0, 0)
+        toggle_row.setSpacing(0)
+        toggle_row.addWidget(id_btn)
+        toggle_row.addWidget(od_btn)
+
+        toolbar_container.addLayout(toggle_row)
+        top_row_layout.addLayout(toolbar_container)
         top_row_layout.addWidget(self.loadTraceBtn)
         top_row_layout.addWidget(self.load_snapshot_button)
         top_row_layout.addWidget(self.excel_btn)
         top_row_layout.addWidget(self.trace_file_label)
 
         self.main_layout.addLayout(top_row_layout)
-
-        # ----- Diameter Toggle Row -----
-        toggle_row = QHBoxLayout()
-        toggle_row.setContentsMargins(6, 0, 6, 2)
-        # Reduce spacing so the buttons sit closer together
-        toggle_row.setSpacing(0)
-
-        id_btn = QToolButton()
-        id_btn.setDefaultAction(self.id_toggle_act)
-        od_btn = QToolButton()
-        od_btn.setDefaultAction(self.od_toggle_act)
-
-        toggle_row.addWidget(id_btn)
-        toggle_row.addWidget(od_btn)
-
-        self.main_layout.addLayout(toggle_row)
 
         # ===== Plot and Scroll Slider =====
         self.scroll_slider = QSlider(Qt.Horizontal)
