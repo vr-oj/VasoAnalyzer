@@ -84,6 +84,17 @@ log = logging.getLogger(__name__)
 
 from .constants import PREVIOUS_PLOT_PATH, DEFAULT_STYLE
 
+class CustomToolbar(NavigationToolbar):
+    """Navigation toolbar that resets using stored full limits."""
+
+    def __init__(self, canvas, parent, reset_callback):
+        super().__init__(canvas, parent)
+        self._reset_callback = reset_callback
+
+    def home(self):
+        self._reset_callback()
+
+
 
 # [B] ========================= MAIN CLASS DEFINITION ================================
 class VasoAnalyzerApp(QMainWindow):
@@ -119,6 +130,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.inner_line = None
         self.outer_line = None
         self.ax2 = None
+        self.xlim_full = None
+        self.ylim_full = None
         # Default time between frames when metadata is unavailable
         self.recording_interval = 0.14  # 140 ms per frame
         self.last_replaced_event = None
@@ -349,6 +362,8 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.warning(self, "Event Load Error", str(e))
 
         self.trace_data = trace
+        self.xlim_full = None
+        self.ylim_full = None
         self.update_plot()
         self.compute_frame_trace_indices()
         self.load_project_events(labels, times, frames, diam, od)
@@ -1086,8 +1101,14 @@ class VasoAnalyzerApp(QMainWindow):
 
         return load_events
 
+    def reset_to_full_view(self):
+        if self.xlim_full is not None and self.ylim_full is not None:
+            self.ax.set_xlim(self.xlim_full)
+            self.ax.set_ylim(self.ylim_full)
+            self.canvas.draw()
+
     def reset_view(self):
-        self.toolbar.home()  # same as the Home button
+        self.reset_to_full_view()
 
     def fit_to_data(self):
         self.ax.relim()
@@ -1440,7 +1461,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.mpl_connect("draw_event", self.sync_slider_with_plot)
 
     def build_toolbar_for_canvas(self, canvas):
-        toolbar = NavigationToolbar(canvas, self)
+        toolbar = CustomToolbar(canvas, self, reset_callback=self.reset_to_full_view)
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setContentsMargins(0, 0, 0, 0)
         toolbar.setStyleSheet(
@@ -1570,6 +1591,8 @@ class VasoAnalyzerApp(QMainWindow):
             self.event_frames = []
             self.event_table_data = []
             self.populate_table()
+            self.xlim_full = None
+            self.ylim_full = None
             self.update_plot()
 
         self.compute_frame_trace_indices()
@@ -1945,6 +1968,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.event_frames = frames
                 self.event_table_data = df_events.values.tolist()
                 self.populate_table()
+                self.xlim_full = None
+                self.ylim_full = None
                 self.update_plot()
             else:
                 self.load_project_events(labels, times, frames, diam_before, od_before)
@@ -1963,6 +1988,8 @@ class VasoAnalyzerApp(QMainWindow):
             data["Outer Diameter"] = od
         self.trace_data = pd.DataFrame(data)
         self.compute_frame_trace_indices()
+        self.xlim_full = None
+        self.ylim_full = None
         self.update_plot()
         self.update_scroll_slider()
 
@@ -2029,6 +2056,8 @@ class VasoAnalyzerApp(QMainWindow):
                     self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
 
         self.populate_table()
+        self.xlim_full = None
+        self.ylim_full = None
         self.update_plot()
 
     def load_snapshots(self, stack):
@@ -2302,8 +2331,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.apply_plot_style(plot_style)
             self.canvas.draw_idle()
 
-            # Redraw plot (this resets styles, so it must come before applying style)
-            self.update_plot()
+            # Redraw plot without overwriting full-view limits
+            self.update_plot(track_limits=False)
 
             # Restore axis labels, limits, grid
             self.ax.set_xlabel(state.get("xlabel", "Time (s)"))
@@ -2359,7 +2388,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_trace_and_events(file_path)
 
     # [E] ========================= PLOTTING AND EVENT SYNC ============================
-    def update_plot(self):
+    def update_plot(self, track_limits: bool = True):
         if self.trace_data is None:
             return
 
@@ -2407,6 +2436,15 @@ class VasoAnalyzerApp(QMainWindow):
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Inner Diameter (µm)")
         self.ax.grid(True, color=CURRENT_THEME["grid_color"])
+
+        if track_limits and self.xlim_full is None:
+            x_min, x_max = float(t.min()), float(t.max())
+            y_vals = [float(d.min()), float(d.max())]
+            if "Outer Diameter" in self.trace_data.columns:
+                od_tmp = self.trace_data["Outer Diameter"]
+                y_vals.extend([float(od_tmp.min()), float(od_tmp.max())])
+            self.xlim_full = (x_min, x_max)
+            self.ylim_full = (min(y_vals), max(y_vals))
 
         od_trace = None
         self.ax2 = None
