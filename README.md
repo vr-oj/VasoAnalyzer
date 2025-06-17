@@ -54,7 +54,7 @@ Designed for researchers. Powered by Python. Zero coding required.
 ---
 ## Projects & Ns
 
-Organize related experiments together in a single `.vaso` file. Each project can contain multiple experiments and each experiment holds your N‑samples. As of v1.8, `.vaso` files are ZIP archives bundling your metadata and experiment folders so projects are fully portable.
+Organize related experiments together in a single `.vaso` file. Each project can contain multiple experiments and each experiment holds your N‑samples. As of v1.7, `.vaso` files are ZIP archives bundling your metadata and experiment folders so projects are fully portable.
 
 ![Sidebar demo](docs/projects_demo.png)
 
