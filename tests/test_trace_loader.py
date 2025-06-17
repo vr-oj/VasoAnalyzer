@@ -45,6 +45,23 @@ def test_load_trace_loads_outer_diameter(tmp_path):
     assert loaded["Outer Diameter"].tolist() == [15, 16, 17]
 
 
+def test_load_trace_outer_diameter_with_units(tmp_path):
+    """Columns like 'OD (um)' should be detected as outer diameter."""
+    csv_path = tmp_path / "outer_units.csv"
+    df = pd.DataFrame(
+        {
+            "Time": [0, 1, 2],
+            "Inner Diameter": [10, 11, 12],
+            "OD (um)": [15, 16, 17],
+        }
+    )
+    df.to_csv(csv_path, index=False)
+
+    loaded = load_trace(str(csv_path))
+    assert "Outer Diameter" in loaded.columns
+    assert loaded["Outer Diameter"].tolist() == [15, 16, 17]
+
+
 def test_load_trace_prefers_inner_over_outer(tmp_path):
     csv_path = tmp_path / "mixed.csv"
     df = pd.DataFrame(
