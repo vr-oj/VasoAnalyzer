@@ -12,9 +12,9 @@ from PyQt5.QtWidgets import (
     QToolButton,
     QMessageBox,
     QHeaderView,
+    QLabel,
 )
-from PyQt5.QtWidgets import QLabel
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QImage, QPixmap
 from PyQt5.QtCore import Qt, QSize
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg as FigureCanvas,
@@ -107,9 +107,12 @@ class DataViewPanel(QWidget):
             save_btn.triggered.disconnect()
             save_btn.triggered.connect(self.window().show_save_menu)
 
-        # --- Load Button ---
+        # --- Load Buttons ---
         self.load_btn = QPushButton("📂 Load Trace + Events")
         self.load_btn.clicked.connect(self._on_load)
+
+        self.load_tiff_btn = QPushButton("🖼️ Load _Result.tiff")
+        self.load_tiff_btn.clicked.connect(self.load_snapshot)
 
         # --- Axes ---
         self.ax = self.fig.add_subplot(111)
@@ -151,16 +154,37 @@ class DataViewPanel(QWidget):
         control.setSpacing(8)
         control.addWidget(self.toolbar)
         control.addWidget(self.load_btn)
+        control.addWidget(self.load_tiff_btn)
         control.addStretch()
         main_layout.addLayout(control)
         # Plot and slider
         plot_layout = QVBoxLayout()
         plot_layout.addWidget(self.canvas)
         plot_layout.addWidget(self.scroll_slider)
-        # Combine with table
+
+        # Snapshot viewer
+        self.snapshot_label = QLabel("Snapshot will appear here")
+        self.snapshot_label.setAlignment(Qt.AlignCenter)
+        self.snapshot_label.setFixedSize(400, 250)
+        self.snapshot_label.hide()
+
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.valueChanged.connect(self.change_frame)
+        self.slider.hide()
+
+        snapshot_layout = QVBoxLayout()
+        snapshot_layout.addWidget(self.snapshot_label)
+        snapshot_layout.addWidget(self.slider)
+
+        right_layout = QVBoxLayout()
+        right_layout.addLayout(snapshot_layout)
+        right_layout.addWidget(self.event_table)
+
+        # Combine plot with right column
         row = QHBoxLayout()
         row.addLayout(plot_layout, 4)
-        row.addWidget(self.event_table, 1)
+        row.addLayout(right_layout, 1)
         main_layout.addLayout(row)
 
         # — Hover Label (exact same logic as main view) —
@@ -198,6 +222,12 @@ class DataViewPanel(QWidget):
         self.slider_marker = None
         self.grid_visible = True
         self.pins = []
+
+        self.recording_interval = 0.14
+        self.snapshot_frames = []
+        self.frame_times = []
+        self.frame_trace_indices = []
+        self.current_frame = 0
 
         # Dual Clearing
         self._original_title = self.ax.get_title()
@@ -256,6 +286,7 @@ class DataViewPanel(QWidget):
         self.update_plot()
         self.populate_table()
         self.update_scroll_slider()
+        self.compute_frame_trace_indices()
 
     def update_plot(self):
         """Plot the trace and events on the canvas."""
@@ -595,6 +626,118 @@ class DataViewPanel(QWidget):
         self.ax.grid(self.grid_visible, color="#CCC")
         if self.ax2:
             self.ax2.grid(self.grid_visible, color="#CCC")
+        self.canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Snapshot / TIFF handling
+
+    def load_snapshot(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Open Result TIFF", "", "TIFF Files (*.tif *.tiff)"
+        )
+        if not file_path:
+            return
+        try:
+            from vasoanalyzer.tiff_loader import load_tiff_preview
+
+            frames, _ = load_tiff_preview(file_path)
+            self.load_snapshots(frames)
+        except Exception as e:
+            QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
+
+    def load_snapshots(self, stack):
+        self.snapshot_frames = [f for f in stack if f is not None and f.size > 0]
+        if not self.snapshot_frames:
+            QMessageBox.warning(self, "TIFF", "No valid frames found in TIFF.")
+            return
+
+        self.frame_times = [i * self.recording_interval for i in range(len(self.snapshot_frames))]
+        self.compute_frame_trace_indices()
+
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(len(self.snapshot_frames) - 1)
+        self.slider.setValue(0)
+        self.slider.show()
+        self.snapshot_label.show()
+        self.display_frame(0)
+        self.update_slider_marker()
+
+    def compute_frame_trace_indices(self):
+        if self.trace_data is None or not self.frame_times:
+            self.frame_trace_indices = []
+            return
+
+        t_trace = self.trace_data["Time (s)"].values
+        frame_times = np.asarray(self.frame_times, dtype=float)
+
+        if len(frame_times) > 1:
+            dt_trace = float(t_trace[-1]) - float(t_trace[0])
+            dt_frames = float(frame_times[-1]) - float(frame_times[0])
+            scale = dt_trace / dt_frames if dt_frames != 0 else 1.0
+        else:
+            scale = 1.0
+
+        adjusted = (frame_times - frame_times[0]) * scale + t_trace[0]
+        idx = np.searchsorted(t_trace, adjusted, side="left")
+        idx = np.clip(idx, 0, len(t_trace) - 1)
+        self.frame_trace_indices = idx
+
+    def change_frame(self):
+        if not self.snapshot_frames:
+            return
+
+        idx = self.slider.value()
+        self.current_frame = idx
+        self.display_frame(idx)
+        self.update_slider_marker()
+
+    def display_frame(self, index):
+        if not self.snapshot_frames:
+            return
+
+        if index < 0 or index >= len(self.snapshot_frames):
+            return
+
+        frame = self.snapshot_frames[index]
+        try:
+            if frame.ndim == 2:
+                h, w = frame.shape
+                img = QImage(frame.data, w, h, QImage.Format_Grayscale8)
+            elif frame.ndim == 3 and frame.shape[2] == 3:
+                h, w, _ = frame.shape
+                img = QImage(frame.data, w, h, 3 * w, QImage.Format_RGB888)
+            else:
+                return
+
+            target_width = self.event_table.viewport().width() or self.snapshot_label.width()
+            pix = QPixmap.fromImage(img).scaledToWidth(target_width, Qt.SmoothTransformation)
+            self.snapshot_label.setFixedSize(pix.width(), pix.height())
+            self.snapshot_label.setPixmap(pix)
+        except Exception:
+            pass
+
+    def update_slider_marker(self):
+        if self.trace_data is None or not self.snapshot_frames:
+            return
+
+        idx = self.slider.value()
+        if idx < len(self.frame_trace_indices):
+            trace_idx = self.frame_trace_indices[idx]
+            t_current = self.trace_data["Time (s)"].iat[trace_idx]
+        else:
+            t_current = idx * self.recording_interval
+
+        if self.slider_marker is None:
+            self.slider_marker = self.ax.axvline(
+                x=t_current,
+                color="red",
+                linestyle="--",
+                linewidth=1.5,
+                label="TIFF Frame",
+            )
+        else:
+            self.slider_marker.set_xdata([t_current, t_current])
+
         self.canvas.draw_idle()
 
     def _export_high_res_plot(self):
