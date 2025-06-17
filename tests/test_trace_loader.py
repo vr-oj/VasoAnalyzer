@@ -29,7 +29,7 @@ def test_load_trace_duplicate_columns(tmp_path):
     assert loaded["Inner Diameter"].tolist() == [5, 6]
 
 
-def test_load_trace_ignores_outer_diameter(tmp_path):
+def test_load_trace_loads_outer_diameter(tmp_path):
     csv_path = tmp_path / "outer.csv"
     df = pd.DataFrame(
         {
@@ -41,7 +41,8 @@ def test_load_trace_ignores_outer_diameter(tmp_path):
     df.to_csv(csv_path, index=False)
 
     loaded = load_trace(str(csv_path))
-    assert "Outer Diameter" not in loaded.columns
+    assert "Outer Diameter" in loaded.columns
+    assert loaded["Outer Diameter"].tolist() == [15, 16, 17]
 
 
 def test_load_trace_prefers_inner_over_outer(tmp_path):
@@ -57,7 +58,7 @@ def test_load_trace_prefers_inner_over_outer(tmp_path):
 
     loaded = load_trace(str(csv_path))
     assert loaded["Inner Diameter"].tolist() == [10, 11, 12]
-    assert "Outer Diameter" not in loaded.columns
+    assert loaded["Outer Diameter"].tolist() == [15, 16, 17]
 
 
 

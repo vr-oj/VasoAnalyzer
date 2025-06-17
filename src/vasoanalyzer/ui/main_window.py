@@ -292,7 +292,7 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.critical(self, "Trace Load Error", str(e))
             return
 
-        labels, times, frames, diam = [], [], [], []
+        labels, times, frames, diam, od = [], [], [], [], []
         try:
             if sample.events_data is not None:
                 df = sample.events_data
@@ -310,16 +310,21 @@ class VasoAnalyzerApp(QMainWindow):
             if times:
                 arr_t = trace["Time (s)"].values
                 arr_d = trace["Inner Diameter"].values
+                arr_od = trace["Outer Diameter"].values if "Outer Diameter" in trace.columns else None
                 for t in times:
                     idx_evt = int(np.argmin(np.abs(arr_t - t)))
                     diam.append(float(arr_d[idx_evt]))
+                    if arr_od is not None:
+                        od_val = float(arr_od[idx_evt])
+                        od.append(od_val)
+                    
         except Exception as e:
             QMessageBox.warning(self, "Event Load Error", str(e))
 
         self.trace_data = trace
         self.update_plot()
         self.compute_frame_trace_indices()
-        self.load_project_events(labels, times, frames, diam)
+        self.load_project_events(labels, times, frames, diam, od)
         log.info("Sample loaded with %d events", len(labels))
 
     def show_project_context_menu(self, pos):
@@ -1405,7 +1410,7 @@ class VasoAnalyzerApp(QMainWindow):
     def load_trace_and_event_files(self, trace_path):
         """Load a trace file and its matching events if available."""
         log.info("Importing trace file %s", trace_path)
-        df, labels, times, frames, diam = load_trace_and_events(trace_path)
+        df, labels, times, frames, diam, od_diam = load_trace_and_events(trace_path)
 
         self.trace_data = df
         self.trace_file_path = os.path.dirname(trace_path)
@@ -1413,7 +1418,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.trace_file_label.setText(f"🧪 {trace_filename}")
 
         if labels:
-            self.load_project_events(labels, times, frames, diam)
+            self.load_project_events(labels, times, frames, diam, od_diam)
         else:
             self.event_labels = []
             self.event_times = []
@@ -1485,14 +1490,30 @@ class VasoAnalyzerApp(QMainWindow):
 
     def populate_table(self):
         self.event_table.blockSignals(True)
-        header = ["Event", "Time (s)", "ID (µm)", "Frame"]
+        has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        header = ["Event", "Time (s)", "ID (µm)"]
+        if has_od:
+            header.append("OD (µm)")
+        header.append("Frame")
         self.event_table.setHorizontalHeaderLabels(header)
         self.event_table.setRowCount(len(self.event_table_data))
-        for row, (label, t, idval, frame) in enumerate(self.event_table_data):
+        for row, data in enumerate(self.event_table_data):
+            label = data[0]
+            t = data[1]
+            idval = data[2]
+            if has_od:
+                odval = data[3]
+                frame = data[4]
+            else:
+                frame = data[3]
             self.event_table.setItem(row, 0, QTableWidgetItem(str(label)))
             self.event_table.setItem(row, 1, QTableWidgetItem(str(t)))
             self.event_table.setItem(row, 2, QTableWidgetItem(str(idval)))
-            self.event_table.setItem(row, 3, QTableWidgetItem(str(frame)))
+            if has_od:
+                self.event_table.setItem(row, 3, QTableWidgetItem(str(odval)))
+                self.event_table.setItem(row, 4, QTableWidgetItem(str(frame)))
+            else:
+                self.event_table.setItem(row, 3, QTableWidgetItem(str(frame)))
         self.event_table.blockSignals(False)
         self.style_event_table()
 
@@ -1651,11 +1672,18 @@ class VasoAnalyzerApp(QMainWindow):
                     grp.create_dataset(
                         "diameter", data=self.trace_data["Inner Diameter"].values
                     )
+                    if "Outer Diameter" in self.trace_data.columns:
+                        grp.create_dataset(
+                            "outer_diameter", data=self.trace_data["Outer Diameter"].values
+                        )
                 ev = f.create_group("events")
                 labels = np.array([row[0] for row in self.event_table_data], dtype="S")
                 ev.create_dataset("labels", data=labels)
                 diam_b = [row[2] for row in self.event_table_data]
                 ev.create_dataset("diam_before", data=diam_b)
+                if "Outer Diameter" in self.trace_data.columns:
+                    od_b = [row[3] for row in self.event_table_data]
+                    ev.create_dataset("od_before", data=od_b)
                 if self.event_times:
                     ev.create_dataset("times", data=self.event_times)
                 if getattr(self, "event_frames", None):
@@ -1703,8 +1731,14 @@ class VasoAnalyzerApp(QMainWindow):
             with h5py.File(path, "r") as f:
                 t = f["trace/time"][...]
                 d = f["trace/diameter"][...]
+                od = f["trace/outer_diameter"][...] if "outer_diameter" in f["trace"] else None
                 labels = [s.decode() for s in f["events/labels"][...]]
                 diam_before = f["events/diam_before"][...]
+                od_before = (
+                    f["events/od_before"][...]
+                    if "od_before" in f["events"]
+                    else None
+                )
                 times = (
                     f["events/times"][...]
                     if "events" in f and "times" in f["events"]
@@ -1719,8 +1753,8 @@ class VasoAnalyzerApp(QMainWindow):
                 raw = f["style_meta"][...].tobytes()
                 style = pickle.loads(raw)
                 idx = f.attrs.get("current_frame_idx", 0)
-            self.load_trace(t, d)
-            self.load_project_events(labels, times, frames, diam_before)
+            self.load_trace(t, d, od)
+            self.load_project_events(labels, times, frames, diam_before, od_before)
             if stack is not None:
                 self.load_snapshots(stack)
             self.apply_style(style)
@@ -1728,32 +1762,44 @@ class VasoAnalyzerApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
-    def load_trace(self, t, d):
+    def load_trace(self, t, d, od=None):
         import pandas as pd
 
-        self.trace_data = pd.DataFrame({"Time (s)": t, "Inner Diameter": d})
+        data = {"Time (s)": t, "Inner Diameter": d}
+        if od is not None:
+            data["Outer Diameter"] = od
+        self.trace_data = pd.DataFrame(data)
         self.compute_frame_trace_indices()
         self.update_plot()
         self.update_scroll_slider()
 
-    def load_events(self, labels, diam_before):
+    def load_events(self, labels, diam_before, od_before=None):
         self.event_labels = list(labels)
         self.event_table_data = []
-        for lbl, diam in zip(labels, diam_before):
-            self.event_table_data.append((lbl, 0.0, diam, 0))
+        has_od = od_before is not None
+        if not has_od:
+            for lbl, diam in zip(labels, diam_before):
+                self.event_table_data.append((lbl, 0.0, diam, 0))
+        else:
+            for lbl, diam_i, diam_o in zip(labels, diam_before, od_before):
+                self.event_table_data.append((lbl, 0.0, diam_i, diam_o, 0))
         self.populate_table()
 
-    def load_project_events(self, labels, times, frames, diam_before):
+    def load_project_events(self, labels, times, frames, diam_before, od_before=None):
         self.event_labels = list(labels)
         self.event_times = list(times) if times is not None else []
         self.event_frames = (
             list(frames) if frames is not None else [0] * len(self.event_times)
         )
         self.event_table_data = []
+        has_od = od_before is not None or "Outer Diameter" in self.trace_data.columns
 
         if self.trace_data is not None and self.event_times:
             arr_t = self.trace_data["Time (s)"].values
             arr_d = self.trace_data["Inner Diameter"].values
+            arr_od = (
+                self.trace_data["Outer Diameter"].values if "Outer Diameter" in self.trace_data.columns else None
+            )
             for lbl, t, fr in zip(
                 self.event_labels,
                 self.event_times,
@@ -1761,15 +1807,29 @@ class VasoAnalyzerApp(QMainWindow):
             ):
                 idx = int(np.argmin(np.abs(arr_t - t)))
                 diam = float(arr_d[idx])
-                self.event_table_data.append((lbl, float(t), diam, int(fr)))
+                if has_od and arr_od is not None:
+                    od_val = float(arr_od[idx])
+                    self.event_table_data.append((lbl, float(t), diam, od_val, int(fr)))
+                else:
+                    self.event_table_data.append((lbl, float(t), diam, int(fr)))
         else:
-            for lbl, t, fr, diam in zip(
-                self.event_labels,
-                self.event_times,
-                self.event_frames,
-                diam_before,
-            ):
-                self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
+            if has_od:
+                for lbl, t, fr, diam_i, diam_o in zip(
+                    self.event_labels,
+                    self.event_times,
+                    self.event_frames,
+                    diam_before,
+                    od_before,
+                ):
+                    self.event_table_data.append((lbl, float(t), float(diam_i), float(diam_o), int(fr)))
+            else:
+                for lbl, t, fr, diam in zip(
+                    self.event_labels,
+                    self.event_times,
+                    self.event_frames,
+                    diam_before,
+                ):
+                    self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
 
         self.populate_table()
         self.update_plot()
@@ -2168,6 +2228,15 @@ class VasoAnalyzerApp(QMainWindow):
         self.ax.set_ylabel("Inner Diameter (µm)")
         self.ax.grid(True, color=CURRENT_THEME["grid_color"])
 
+        od_trace = None
+        self.ax2 = None
+        if "Outer Diameter" in self.trace_data.columns:
+            od_trace = self.trace_data["Outer Diameter"]
+            self.ax2 = self.ax.twinx()
+            (self.od_line,) = self.ax2.plot(t, od_trace, color="tab:orange", linewidth=1.2)
+            self.ax2.set_ylabel("Outer Diameter (µm)")
+            self.ax2.tick_params(colors=CURRENT_THEME["text"])
+
         # Plot events if available
         if self.event_labels and self.event_times:
 
@@ -2176,6 +2245,7 @@ class VasoAnalyzerApp(QMainWindow):
             nEv = len(self.event_times)
             diam_trace = self.trace_data["Inner Diameter"]
             time_trace = self.trace_data["Time (s)"]
+            od_trace = self.trace_data["Outer Diameter"] if "Outer Diameter" in self.trace_data.columns else None
 
             for i in range(nEv):
                 evt_time = self.event_times[i]
@@ -2187,6 +2257,7 @@ class VasoAnalyzerApp(QMainWindow):
                     t_sample = time_trace.iloc[-1] - offset_sec
                 idx_pre = np.argmin(np.abs(time_trace - t_sample))
                 diam_val = diam_trace.iloc[idx_pre]
+                od_val = od_trace.iloc[idx_pre] if od_trace is not None else None
                 if self.event_frames:
                     frame_number = self.event_frames[i]
                 else:
@@ -2213,14 +2284,25 @@ class VasoAnalyzerApp(QMainWindow):
                 )
                 self.event_text_objects.append((txt, evt_time))
 
-                self.event_table_data.append(
-                    (
-                        self.event_labels[i],
-                        round(evt_time, 2),
-                        round(diam_val, 2),
-                        frame_number,
+                if od_val is not None:
+                    self.event_table_data.append(
+                        (
+                            self.event_labels[i],
+                            round(evt_time, 2),
+                            round(diam_val, 2),
+                            round(od_val, 2),
+                            frame_number,
+                        )
                     )
-                )
+                else:
+                    self.event_table_data.append(
+                        (
+                            self.event_labels[i],
+                            round(evt_time, 2),
+                            round(diam_val, 2),
+                            frame_number,
+                        )
+                    )
             self.populate_table()
             self.auto_export_table()
 
@@ -2265,12 +2347,17 @@ class VasoAnalyzerApp(QMainWindow):
             self.populate_table()
             return
 
+        has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
         label = self.event_table_data[row][0]
         time = self.event_table_data[row][1]
-        frame = self.event_table_data[row][3]
+        frame = self.event_table_data[row][4] if has_od else self.event_table_data[row][3]
         old_val = self.event_table_data[row][2]
         self.last_replaced_event = (row, old_val)
-        self.event_table_data[row] = (label, time, round(new_val, 2), frame)
+        if has_od:
+            od_val = self.event_table_data[row][3]
+            self.event_table_data[row] = (label, time, round(new_val, 2), od_val, frame)
+        else:
+            self.event_table_data[row] = (label, time, round(new_val, 2), frame)
 
         # Record the change for undo/redo functionality
         cmd = ReplaceEventCommand(self, row, old_val, round(new_val, 2))
@@ -2393,15 +2480,26 @@ class VasoAnalyzerApp(QMainWindow):
             )
 
             if confirm == QMessageBox.Yes:
+                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
                 old_value = self.event_table_data[index][2]
                 self.last_replaced_event = (index, old_value)
-                frame_num = self.event_table_data[index][3]
-                self.event_table_data[index] = (
-                    event_label,
-                    round(event_time, 2),
-                    round(y, 2),
-                    frame_num,
-                )
+                if has_od:
+                    frame_num = self.event_table_data[index][4]
+                    self.event_table_data[index] = (
+                        event_label,
+                        round(event_time, 2),
+                        round(y, 2),
+                        self.event_table_data[index][3],
+                        frame_num,
+                    )
+                else:
+                    frame_num = self.event_table_data[index][3]
+                    self.event_table_data[index] = (
+                        event_label,
+                        round(event_time, 2),
+                        round(y, 2),
+                        frame_num,
+                    )
                 self.populate_table()
                 self.auto_export_table()
 
@@ -2465,7 +2563,8 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.warning(self, "No Trace", "Load a trace before adding events.")
             return
 
-        insert_labels = [f"{lbl} at {t:.2f}s" for lbl, t, _, _ in self.event_table_data]
+        has_od = "Outer Diameter" in self.trace_data.columns
+        insert_labels = [f"{lbl} at {t:.2f}s" for lbl, t, *_ in self.event_table_data]
         insert_labels.append("↘️ Add to end")
         selected, ok = QInputDialog.getItem(
             self,
@@ -2492,7 +2591,13 @@ class VasoAnalyzerApp(QMainWindow):
 
         insert_idx = insert_labels.index(selected)
         frame_number = int(t_val / self.recording_interval)
-        new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), frame_number)
+        if has_od:
+            od_val, ok = QInputDialog.getDouble(self, "Outer Diameter", "OD (µm):", 0.0, 0, 1e6, 2)
+            if not ok:
+                return
+            new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), round(od_val,2), frame_number)
+        else:
+            new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), frame_number)
 
         if insert_idx == len(self.event_table_data):
             self.event_labels.append(label.strip())
@@ -2889,12 +2994,22 @@ class VasoAnalyzerApp(QMainWindow):
                 self, "Edit ID", "Enter new ID (µm):", float(old_val), 0, 10000, 2
             )
             if ok:
-                self.event_table_data[row] = (
-                    self.event_table_data[row][0],
-                    self.event_table_data[row][1],
-                    round(new_val, 2),
-                    self.event_table_data[row][3],
-                )
+                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                if has_od:
+                    self.event_table_data[row] = (
+                        self.event_table_data[row][0],
+                        self.event_table_data[row][1],
+                        round(new_val, 2),
+                        self.event_table_data[row][3],
+                        self.event_table_data[row][4],
+                    )
+                else:
+                    self.event_table_data[row] = (
+                        self.event_table_data[row][0],
+                        self.event_table_data[row][1],
+                        round(new_val, 2),
+                        self.event_table_data[row][3],
+                    )
                 self.populate_table()
                 self.auto_export_table()
 
@@ -2963,12 +3078,22 @@ class VasoAnalyzerApp(QMainWindow):
             )
             if confirm == QMessageBox.Yes:
                 self.last_replaced_event = (row, self.event_table_data[row][2])
-                self.event_table_data[row] = (
-                    self.event_table_data[row][0],
-                    t_event,
-                    round(pin_id, 2),
-                    self.event_table_data[row][3],
-                )
+                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                if has_od:
+                    self.event_table_data[row] = (
+                        self.event_table_data[row][0],
+                        t_event,
+                        round(pin_id, 2),
+                        self.event_table_data[row][3],
+                        self.event_table_data[row][4],
+                    )
+                else:
+                    self.event_table_data[row] = (
+                        self.event_table_data[row][0],
+                        t_event,
+                        round(pin_id, 2),
+                        self.event_table_data[row][3],
+                    )
                 self.populate_table()
                 self.auto_export_table()
                 log.info(
@@ -3050,9 +3175,12 @@ class VasoAnalyzerApp(QMainWindow):
         try:
             output_dir = os.path.abspath(self.trace_file_path)
             csv_path = os.path.join(output_dir, "eventDiameters_output.csv")
-            df = pd.DataFrame(
-                self.event_table_data, columns=["Event", "Time (s)", "ID (µm)", "Frame"]
-            )
+            has_od = "Outer Diameter" in self.trace_data.columns if self.trace_data is not None else False
+            columns = ["Event", "Time (s)", "ID (µm)"]
+            if has_od:
+                columns.append("OD (µm)")
+            columns.append("Frame")
+            df = pd.DataFrame(self.event_table_data, columns=columns)
             df.to_csv(csv_path, index=False)
             log.info("Event table auto-exported to:\n%s", csv_path)
         except Exception as e:
@@ -3146,10 +3274,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Embed the current trace and event data directly into the project
         try:
-            events_df = pd.DataFrame(
-                self.event_table_data,
-                columns=["Event", "Time (s)", "ID (µm)", "Frame"],
-            )
+            has_od = "Outer Diameter" in self.trace_data.columns
+            columns = ["Event", "Time (s)", "ID (µm)"]
+            if has_od:
+                columns.append("OD (µm)")
+            columns.append("Frame")
+            events_df = pd.DataFrame(self.event_table_data, columns=columns)
             sample = SampleN(
                 name=name,
                 trace_data=self.trace_data.copy(),
@@ -3183,10 +3313,18 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         # Format the data as dictionaries with all four fields
-        dialog_data = [
-            {"EventLabel": label, "Time (s)": time, "Frame": frame, "ID (µm)": idval}
-            for label, time, idval, frame in self.event_table_data
-        ]
+        has_od = "Outer Diameter" in self.trace_data.columns
+        dialog_data = []
+        for row in self.event_table_data:
+            if has_od:
+                label, time, idval, odval, frame = row
+            else:
+                label, time, idval, frame = row
+                odval = None
+            entry = {"EventLabel": label, "Time (s)": time, "Frame": frame, "ID (µm)": idval}
+            if has_od:
+                entry["OD (µm)"] = odval
+            dialog_data.append(entry)
 
         dialog = ExcelMappingDialog(self, dialog_data)
         if dialog.exec_():
