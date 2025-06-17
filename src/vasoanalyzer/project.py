@@ -119,31 +119,86 @@ def project_from_dict(data: dict) -> Project:
 
 
 def save_project(project: Project, path: str) -> None:
-    """Safely save ``project`` to ``path`` with a backup."""
+    """Save ``project`` to ``path`` as a zipped .vaso archive."""
     import os
     import shutil
+    import tempfile
+    import zipfile
 
     project.path = str(path)
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(project_to_dict(project), f, indent=2)
 
-    if os.path.exists(path):
-        shutil.copy2(path, f"{path}.bak")
-    os.replace(tmp_path, path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        meta_path = os.path.join(tmpdir, "metadata.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(project_to_dict(project), f, indent=2)
+
+        for exp in project.experiments:
+            exp_dir = os.path.join(tmpdir, exp.name)
+            os.makedirs(exp_dir, exist_ok=True)
+            for sample in exp.samples:
+                s_dir = os.path.join(exp_dir, sample.name)
+                os.makedirs(s_dir, exist_ok=True)
+
+                if sample.trace_data is not None:
+                    sample.trace_data.to_csv(
+                        os.path.join(s_dir, "trace.csv"), index=False
+                    )
+                elif sample.trace_path and os.path.exists(sample.trace_path):
+                    shutil.copy2(sample.trace_path, os.path.join(s_dir, "trace.csv"))
+
+                if sample.events_data is not None:
+                    sample.events_data.to_csv(
+                        os.path.join(s_dir, "events.csv"), index=False
+                    )
+                elif sample.events_path and os.path.exists(sample.events_path):
+                    shutil.copy2(sample.events_path, os.path.join(s_dir, "events.csv"))
+
+        tmp_zip = f"{path}.tmp"
+        with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as z:
+            for root, _dirs, files in os.walk(tmpdir):
+                for file in files:
+                    full = os.path.join(root, file)
+                    rel = os.path.relpath(full, tmpdir)
+                    z.write(full, rel)
+
+        if os.path.exists(path):
+            shutil.copy2(path, f"{path}.bak")
+        os.replace(tmp_zip, path)
 
 
 def load_project(path: str) -> Project:
-    """Load a project file, falling back to ``.bak`` if needed."""
+    """Load a zipped ``.vaso`` project, falling back to ``.bak`` if needed."""
+    import os
+    import tempfile
+    import zipfile
+
+    def _read_archive(archive_path: str) -> Project:
+        with zipfile.ZipFile(archive_path, "r") as z:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                z.extractall(tmpdir)
+                with open(os.path.join(tmpdir, "metadata.json"), "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                proj = project_from_dict(data)
+                for exp in proj.experiments:
+                    exp_dir = os.path.join(tmpdir, exp.name)
+                    for sample in exp.samples:
+                        s_dir = os.path.join(exp_dir, sample.name)
+                        t_path = os.path.join(s_dir, "trace.csv")
+                        if os.path.exists(t_path) and sample.trace_data is None:
+                            sample.trace_data = pd.read_csv(t_path)
+                        e_path = os.path.join(s_dir, "events.csv")
+                        if os.path.exists(e_path) and sample.events_data is None:
+                            df_evt = pd.read_csv(e_path)
+                            sample.events_data = _standardize_headers(df_evt)
+                return proj
+
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        proj = _read_archive(path)
     except Exception:
         bak = f"{path}.bak"
-        with open(bak, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        proj = _read_archive(bak)
         path = bak
-    proj = project_from_dict(data)
+
     proj.path = path
     return proj
 
