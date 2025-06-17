@@ -115,6 +115,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.slider_marker = None
         self.trace_line = None
         self.od_line = None
+        # Explicit references to the plotted lines
+        self.inner_line = None
+        self.outer_line = None
         self.ax2 = None
         # Default time between frames when metadata is unavailable
         self.recording_interval = 0.14  # 140 ms per frame
@@ -1000,13 +1003,13 @@ class VasoAnalyzerApp(QMainWindow):
         self.slider.setVisible(checked)
 
     def toggle_inner_diameter(self, checked: bool):
-        if self.trace_line:
-            self.trace_line.set_visible(checked)
+        if self.inner_line:
+            self.inner_line.set_visible(checked)
             self.canvas.draw_idle()
 
     def toggle_outer_diameter(self, checked: bool):
-        if self.od_line:
-            self.od_line.set_visible(checked)
+        if self.outer_line:
+            self.outer_line.set_visible(checked)
         if self.ax2:
             self.ax2.set_visible(checked)
         self.canvas.draw_idle()
@@ -2222,6 +2225,8 @@ class VasoAnalyzerApp(QMainWindow):
         t = self.trace_data["Time (s)"]
         d = self.trace_data["Inner Diameter"]
         (self.trace_line,) = self.ax.plot(t, d, "k-", linewidth=1.5)
+        # store an explicit reference for visibility toggles
+        self.inner_line = self.trace_line
         if hasattr(self, "id_toggle_act"):
             self.trace_line.set_visible(self.id_toggle_act.isChecked())
         self.ax.set_xlabel("Time (s)")
@@ -2236,6 +2241,8 @@ class VasoAnalyzerApp(QMainWindow):
             (self.od_line,) = self.ax2.plot(
                 t, od_trace, color="tab:orange", linewidth=1.2
             )
+            # store an explicit reference for visibility toggles
+            self.outer_line = self.od_line
             self.ax2.set_ylabel("Outer Diameter (µm)")
             self.ax2.tick_params(colors=CURRENT_THEME["text"])
             if hasattr(self, "od_toggle_act"):
@@ -3033,6 +3040,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.selected_event_marker = None
         self.slider_marker = None
         self.trace_line = None
+        self.inner_line = None
+        self.od_line = None
+        self.outer_line = None
+        self.ax2 = None
         self.ax.clear()
         self.canvas.draw()
         self.event_table.setRowCount(0)
