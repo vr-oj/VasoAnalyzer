@@ -1435,7 +1435,11 @@ class VasoAnalyzerApp(QMainWindow):
             toolbar.insertWidget(visible_buttons[7], data_btn)
 
             # Diameter toggle actions
-            toolbar.insertAction(visible_buttons[7], self.id_toggle_act)
+            id_btn = QToolButton()
+            id_btn.setDefaultAction(self.id_toggle_act)
+            id_btn.setToolTip("Toggle inner diameter visibility")
+            toolbar.insertWidget(visible_buttons[7], id_btn)
+
             toolbar.insertAction(visible_buttons[7], self.od_toggle_act)
 
             # Override Save
