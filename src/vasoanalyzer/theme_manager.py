@@ -12,6 +12,7 @@ LIGHT_THEME = {
     'text': '#000000',
     'button_bg': '#FFFFFF',
     'button_hover_bg': '#E6F0FF',
+    'button_active_bg': '#CCE0FF',
     'toolbar_bg': '#F0F0F0',
     'table_bg': '#FFFFFF',
     'table_text': '#000000',
@@ -109,6 +110,10 @@ QToolButton {{
 }}
 QToolButton:hover {{
     background-color: {theme['button_hover_bg']};
+}}
+QToolButton:checked,
+QPushButton:checked {{
+    background-color: {theme['button_active_bg']};
 }}
 QToolTip {{
     background-color: {theme['hover_label_bg']};
