@@ -916,8 +916,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         id_btn = QToolButton()
         id_btn.setDefaultAction(self.id_toggle_act)
+        id_btn.setIconSize(QSize(24, 24))
         od_btn = QToolButton()
         od_btn.setDefaultAction(self.od_toggle_act)
+        od_btn.setIconSize(QSize(24, 24))
 
         top_row_layout.addWidget(id_btn)
         top_row_layout.addWidget(od_btn)
@@ -1205,8 +1207,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         id_btn = QToolButton()
         id_btn.setDefaultAction(self.id_toggle_act)
+        id_btn.setIconSize(QSize(24, 24))
         od_btn = QToolButton()
         od_btn.setDefaultAction(self.od_toggle_act)
+        od_btn.setIconSize(QSize(24, 24))
 
         top_row_layout.addWidget(id_btn)
         top_row_layout.addWidget(od_btn)
