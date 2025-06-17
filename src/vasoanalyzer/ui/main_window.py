@@ -2680,8 +2680,15 @@ class VasoAnalyzerApp(QMainWindow):
                 self.canvas.draw_idle()
             return
 
-        # show only when cursor is actually on the line
+        # Determine if cursor is on the inner or outer diameter trace
         contains, info = self.trace_line.contains(event)
+        ydata_key = "Inner Diameter"
+
+        if not contains and self.ax2 and self.od_line:
+            contains, info = self.od_line.contains(event)
+            if contains:
+                ydata_key = "Outer Diameter"
+
         if not contains:
             if self.hover_annotation.get_visible():
                 self.hover_annotation.set_visible(False)
@@ -2691,7 +2698,7 @@ class VasoAnalyzerApp(QMainWindow):
         # get the exact index & value
         idx = info["ind"][0]
         times = self.trace_data["Time (s)"].values
-        diams = self.trace_data["Inner Diameter"].values
+        diams = self.trace_data[ydata_key].values
         x_near, y_near = times[idx], diams[idx]
 
         # update and show the annotation
@@ -2848,6 +2855,16 @@ class VasoAnalyzerApp(QMainWindow):
         # Tick Labels
         self.ax.tick_params(axis="x", labelsize=style["tick_font_size"])
         self.ax.tick_params(axis="y", labelsize=style["tick_font_size"])
+        if self.ax2:
+            self.ax2.yaxis.label.set_fontsize(style["axis_font_size"])
+            self.ax2.yaxis.label.set_fontname(style["axis_font_family"])
+            self.ax2.yaxis.label.set_fontstyle(
+                "italic" if style["axis_italic"] else "normal"
+            )
+            self.ax2.yaxis.label.set_fontweight(
+                "bold" if style["axis_bold"] else "normal"
+            )
+            self.ax2.tick_params(axis="y", labelsize=style["tick_font_size"])
 
         # Event Labels
         for txt, _ in self.event_text_objects:
