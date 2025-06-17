@@ -3059,6 +3059,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.inner_line = None
         self.od_line = None
         self.outer_line = None
+        if self.ax2:
+            self.ax2.remove()
         self.ax2 = None
         self.ax.clear()
         self.canvas.draw()
