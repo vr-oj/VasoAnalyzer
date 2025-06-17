@@ -735,8 +735,8 @@ class VasoAnalyzerApp(QMainWindow):
         )
         self.id_toggle_act.setIcon(self.text_icon("ID"))
         self.od_toggle_act.setIcon(self.text_icon("OD"))
-        self.id_toggle_act.triggered.connect(self.toggle_inner_diameter)
-        self.od_toggle_act.triggered.connect(self.toggle_outer_diameter)
+        self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
+        self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
         self.showhide_menu.addAction(self.id_toggle_act)
         self.showhide_menu.addAction(self.od_toggle_act)
 
@@ -1189,7 +1189,8 @@ class VasoAnalyzerApp(QMainWindow):
         # ----- Diameter Toggle Row -----
         toggle_row = QHBoxLayout()
         toggle_row.setContentsMargins(6, 0, 6, 2)
-        toggle_row.setSpacing(8)
+        # Reduce spacing so the buttons sit closer together
+        toggle_row.setSpacing(0)
 
         id_btn = QToolButton()
         id_btn.setDefaultAction(self.id_toggle_act)
