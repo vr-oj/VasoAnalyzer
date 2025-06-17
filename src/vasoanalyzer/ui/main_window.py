@@ -363,6 +363,40 @@ class VasoAnalyzerApp(QMainWindow):
             win.load_sample_into_view(sample_copy)
             self.compare_windows.append(win)
 
+    def open_samples_in_dual_view(self, samples):
+        """Display two samples side by side in a single window."""
+        if len(samples) != 2:
+            QMessageBox.warning(self, "Dual View", "Please select exactly two N's.")
+            return
+
+        class DualViewWindow(QMainWindow):
+            def __init__(self, parent, pair):
+                super().__init__(parent)
+                self.setWindowTitle("Dual View")
+                self.views = []
+                splitter = QSplitter(Qt.Horizontal, self)
+                for s in pair:
+                    view = VasoAnalyzerApp()
+                    view.setParent(splitter)
+                    view.project_dock.hide()
+                    splitter.addWidget(view)
+                    sample_copy = SampleN(
+                        name=s.name,
+                        trace_path=s.trace_path,
+                        events_path=s.events_path,
+                        diameter_data=s.diameter_data,
+                        exported=s.exported,
+                        column=s.column,
+                        trace_data=s.trace_data.copy() if s.trace_data is not None else None,
+                        events_data=s.events_data.copy() if s.events_data is not None else None,
+                    )
+                    view.load_sample_into_view(sample_copy)
+                    self.views.append(view)
+                self.setCentralWidget(splitter)
+
+        self.dual_window = DualViewWindow(self, samples)
+        self.dual_window.show()
+
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
         menu = QMenu()
@@ -373,8 +407,11 @@ class VasoAnalyzerApp(QMainWindow):
             if isinstance(it.data(0, Qt.UserRole), SampleN)
         ]
         open_act = None
+        dual_act = None
         if selected_samples:
             open_act = menu.addAction("Open Selected N's…")
+            if len(selected_samples) == 2:
+                dual_act = menu.addAction("Open Dual View…")
 
         if item is None:
             add_exp = menu.addAction("Add Experiment")
@@ -383,6 +420,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.add_experiment()
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
+            elif action == dual_act:
+                self.open_samples_in_dual_view(selected_samples)
             return
 
         obj = item.data(0, Qt.UserRole)
@@ -393,6 +432,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.add_experiment()
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
+            elif action == dual_act:
+                self.open_samples_in_dual_view(selected_samples)
         elif isinstance(obj, Experiment):
             add_n = menu.addAction("Add N")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
@@ -400,6 +441,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.add_sample(obj)
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
+            elif action == dual_act:
+                self.open_samples_in_dual_view(selected_samples)
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save N As…")
@@ -410,6 +453,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.save_sample_as(obj)
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
+            elif action == dual_act:
+                self.open_samples_in_dual_view(selected_samples)
         
     def add_experiment(self):
         if not self.current_project:
