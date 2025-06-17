@@ -1359,7 +1359,11 @@ class VasoAnalyzerApp(QMainWindow):
             axes_btn.setIcon(QIcon(self.icon_path("Customize:edit_axis_ranges.svg")))
             axes_btn.triggered.disconnect()
             axes_btn.triggered.connect(
-                lambda checked=False, c=canvas: self.open_axis_settings_dialog_for(c.figure.axes[0], c)
+                lambda checked=False, c=canvas: self.open_axis_settings_dialog_for(
+                    c.figure.axes[0],
+                    c,
+                    c.figure.axes[1] if len(c.figure.axes) > 1 else None,
+                )
             )
 
             # Inject custom "Aa" button
@@ -2783,10 +2787,10 @@ class VasoAnalyzerApp(QMainWindow):
 
     def open_axis_settings_dialog(self):
         """Open axis settings dialog for the main plot."""
-        self.open_axis_settings_dialog_for(self.ax, self.canvas)
+        self.open_axis_settings_dialog_for(self.ax, self.canvas, self.ax2)
 
-    def open_axis_settings_dialog_for(self, ax, canvas):
-        dialog = AxisSettingsDialog(self, ax, canvas)
+    def open_axis_settings_dialog_for(self, ax, canvas, ax2=None):
+        dialog = AxisSettingsDialog(self, ax, canvas, ax2)
         dialog.exec_()
 
     # [J] ========================= PLOT STYLE EDITOR ================================
