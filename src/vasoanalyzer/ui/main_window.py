@@ -343,14 +343,46 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_project_events(labels, times, frames, diam, od)
         log.info("Sample loaded with %d events", len(labels))
 
+    def open_samples_in_new_windows(self, samples):
+        """Open each sample in its own window for side-by-side comparison."""
+        if not hasattr(self, "compare_windows"):
+            self.compare_windows = []
+        for s in samples:
+            win = VasoAnalyzerApp()
+            win.show()
+            sample_copy = SampleN(
+                name=s.name,
+                trace_path=s.trace_path,
+                events_path=s.events_path,
+                diameter_data=s.diameter_data,
+                exported=s.exported,
+                column=s.column,
+                trace_data=s.trace_data.copy() if s.trace_data is not None else None,
+                events_data=s.events_data.copy() if s.events_data is not None else None,
+            )
+            win.load_sample_into_view(sample_copy)
+            self.compare_windows.append(win)
+
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
         menu = QMenu()
+
+        selected_samples = [
+            it.data(0, Qt.UserRole)
+            for it in self.project_tree.selectedItems()
+            if isinstance(it.data(0, Qt.UserRole), SampleN)
+        ]
+        open_act = None
+        if selected_samples:
+            open_act = menu.addAction("Open Selected N's…")
+
         if item is None:
             add_exp = menu.addAction("Add Experiment")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == add_exp:
                 self.add_experiment()
+            elif action == open_act:
+                self.open_samples_in_new_windows(selected_samples)
             return
 
         obj = item.data(0, Qt.UserRole)
@@ -359,11 +391,15 @@ class VasoAnalyzerApp(QMainWindow):
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == add_exp:
                 self.add_experiment()
+            elif action == open_act:
+                self.open_samples_in_new_windows(selected_samples)
         elif isinstance(obj, Experiment):
             add_n = menu.addAction("Add N")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == add_n:
                 self.add_sample(obj)
+            elif action == open_act:
+                self.open_samples_in_new_windows(selected_samples)
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save N As…")
@@ -372,7 +408,9 @@ class VasoAnalyzerApp(QMainWindow):
                 self.load_data_into_sample(obj)
             elif action == save_n:
                 self.save_sample_as(obj)
-
+            elif action == open_act:
+                self.open_samples_in_new_windows(selected_samples)
+        
     def add_experiment(self):
         if not self.current_project:
             return
