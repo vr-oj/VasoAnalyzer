@@ -319,14 +319,18 @@ class VasoAnalyzerApp(QMainWindow):
             if times:
                 arr_t = trace["Time (s)"].values
                 arr_d = trace["Inner Diameter"].values
-                arr_od = trace["Outer Diameter"].values if "Outer Diameter" in trace.columns else None
+                arr_od = (
+                    trace["Outer Diameter"].values
+                    if "Outer Diameter" in trace.columns
+                    else None
+                )
                 for t in times:
                     idx_evt = int(np.argmin(np.abs(arr_t - t)))
                     diam.append(float(arr_d[idx_evt]))
                     if arr_od is not None:
                         od_val = float(arr_od[idx_evt])
                         od.append(od_val)
-                    
+
         except Exception as e:
             QMessageBox.warning(self, "Event Load Error", str(e))
 
@@ -722,8 +726,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.showhide_menu.addAction(snap_vw)
 
         # Diameter visibility toggles
-        self.id_toggle_act = QAction("Inner Diameter", self, checkable=True, checked=True)
-        self.od_toggle_act = QAction("Outer Diameter", self, checkable=True, checked=True)
+        self.id_toggle_act = QAction(
+            "Inner Diameter", self, checkable=True, checked=True
+        )
+        self.od_toggle_act = QAction(
+            "Outer Diameter", self, checkable=True, checked=True
+        )
         self.id_toggle_act.setIcon(self.text_icon("ID"))
         self.od_toggle_act.setIcon(self.text_icon("OD"))
         self.id_toggle_act.triggered.connect(self.toggle_inner_diameter)
@@ -1002,7 +1010,6 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax2.set_visible(checked)
         self.canvas.draw_idle()
 
-
     def toggle_fullscreen(self):
         if self.isFullScreen():
             self.showNormal()
@@ -1112,8 +1119,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.setMouseTracking(True)
         self.canvas.toolbar = None
         self.ax = self.fig.add_subplot(111)
-        # ——— in‑canvas hover annotation ———
-        self.hover_annotation = self.ax.annotate(
+        # ——— in‑canvas hover annotations ———
+        self.hover_annotation_id = self.ax.annotate(
             text="",
             xy=(0, 0),
             xytext=(15, 15),
@@ -1128,7 +1135,8 @@ class VasoAnalyzerApp(QMainWindow):
             fontsize=9,
             color=CURRENT_THEME["text"],
         )
-        self.hover_annotation.set_visible(False)
+        self.hover_annotation_id.set_visible(False)
+        self.hover_annotation_od = None
         # ————————————————————————————————
         self.active_canvas = self.canvas
         self.default_main_layout = self.main_layout
@@ -1539,7 +1547,9 @@ class VasoAnalyzerApp(QMainWindow):
 
     def populate_table(self):
         self.event_table.blockSignals(True)
-        has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        has_od = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
         header = ["Event", "Time (s)", "ID (µm)"]
         if has_od:
             header.append("OD (µm)")
@@ -1723,7 +1733,8 @@ class VasoAnalyzerApp(QMainWindow):
                     )
                     if "Outer Diameter" in self.trace_data.columns:
                         grp.create_dataset(
-                            "outer_diameter", data=self.trace_data["Outer Diameter"].values
+                            "outer_diameter",
+                            data=self.trace_data["Outer Diameter"].values,
                         )
                 ev = f.create_group("events")
                 labels = np.array([row[0] for row in self.event_table_data], dtype="S")
@@ -1780,13 +1791,15 @@ class VasoAnalyzerApp(QMainWindow):
             with h5py.File(path, "r") as f:
                 t = f["trace/time"][...]
                 d = f["trace/diameter"][...]
-                od = f["trace/outer_diameter"][...] if "outer_diameter" in f["trace"] else None
+                od = (
+                    f["trace/outer_diameter"][...]
+                    if "outer_diameter" in f["trace"]
+                    else None
+                )
                 labels = [s.decode() for s in f["events/labels"][...]]
                 diam_before = f["events/diam_before"][...]
                 od_before = (
-                    f["events/od_before"][...]
-                    if "od_before" in f["events"]
-                    else None
+                    f["events/od_before"][...] if "od_before" in f["events"] else None
                 )
                 times = (
                     f["events/times"][...]
@@ -1847,7 +1860,9 @@ class VasoAnalyzerApp(QMainWindow):
             arr_t = self.trace_data["Time (s)"].values
             arr_d = self.trace_data["Inner Diameter"].values
             arr_od = (
-                self.trace_data["Outer Diameter"].values if "Outer Diameter" in self.trace_data.columns else None
+                self.trace_data["Outer Diameter"].values
+                if "Outer Diameter" in self.trace_data.columns
+                else None
             )
             for lbl, t, fr in zip(
                 self.event_labels,
@@ -1870,7 +1885,9 @@ class VasoAnalyzerApp(QMainWindow):
                     diam_before,
                     od_before,
                 ):
-                    self.event_table_data.append((lbl, float(t), float(diam_i), float(diam_o), int(fr)))
+                    self.event_table_data.append(
+                        (lbl, float(t), float(diam_i), float(diam_o), int(fr))
+                    )
             else:
                 for lbl, t, fr, diam in zip(
                     self.event_labels,
@@ -2244,8 +2261,8 @@ class VasoAnalyzerApp(QMainWindow):
         # clear everything (old lines, texts, etc)
         self.ax.clear()
 
-        # re‑create the in‑canvas hover annotation on this fresh axes
-        self.hover_annotation = self.ax.annotate(
+        # re‑create the in‑canvas hover annotations on this fresh axes
+        self.hover_annotation_id = self.ax.annotate(
             text="",
             xy=(0, 0),
             xytext=(6, 6),
@@ -2260,7 +2277,8 @@ class VasoAnalyzerApp(QMainWindow):
             fontsize=12,
             color=CURRENT_THEME["text"],
         )
-        self.hover_annotation.set_visible(False)
+        self.hover_annotation_id.set_visible(False)
+        self.hover_annotation_od = None
 
         self.ax.set_facecolor(CURRENT_THEME["window_bg"])
         self.ax.tick_params(colors=CURRENT_THEME["text"])
@@ -2284,13 +2302,31 @@ class VasoAnalyzerApp(QMainWindow):
         if "Outer Diameter" in self.trace_data.columns:
             od_trace = self.trace_data["Outer Diameter"]
             self.ax2 = self.ax.twinx()
-            (self.od_line,) = self.ax2.plot(t, od_trace, color="tab:orange", linewidth=1.2)
+            (self.od_line,) = self.ax2.plot(
+                t, od_trace, color="tab:orange", linewidth=1.2
+            )
             self.ax2.set_ylabel("Outer Diameter (µm)")
             self.ax2.tick_params(colors=CURRENT_THEME["text"])
             if hasattr(self, "od_toggle_act"):
                 vis = self.od_toggle_act.isChecked()
                 self.od_line.set_visible(vis)
                 self.ax2.set_visible(vis)
+            self.hover_annotation_od = self.ax2.annotate(
+                text="",
+                xy=(0, 0),
+                xytext=(6, 6),
+                textcoords="offset points",
+                bbox=dict(
+                    boxstyle="round,pad=0.3",
+                    fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                    ec=CURRENT_THEME["hover_label_border"],
+                    lw=1,
+                ),
+                arrowprops=dict(arrowstyle="->"),
+                fontsize=12,
+                color=CURRENT_THEME["text"],
+            )
+            self.hover_annotation_od.set_visible(False)
 
         # Plot events if available
         if self.event_labels and self.event_times:
@@ -2300,7 +2336,11 @@ class VasoAnalyzerApp(QMainWindow):
             nEv = len(self.event_times)
             diam_trace = self.trace_data["Inner Diameter"]
             time_trace = self.trace_data["Time (s)"]
-            od_trace = self.trace_data["Outer Diameter"] if "Outer Diameter" in self.trace_data.columns else None
+            od_trace = (
+                self.trace_data["Outer Diameter"]
+                if "Outer Diameter" in self.trace_data.columns
+                else None
+            )
 
             for i in range(nEv):
                 evt_time = self.event_times[i]
@@ -2402,10 +2442,14 @@ class VasoAnalyzerApp(QMainWindow):
             self.populate_table()
             return
 
-        has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        has_od = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
         label = self.event_table_data[row][0]
         time = self.event_table_data[row][1]
-        frame = self.event_table_data[row][4] if has_od else self.event_table_data[row][3]
+        frame = (
+            self.event_table_data[row][4] if has_od else self.event_table_data[row][3]
+        )
         old_val = self.event_table_data[row][2]
         self.last_replaced_event = (row, old_val)
         if has_od:
@@ -2535,7 +2579,10 @@ class VasoAnalyzerApp(QMainWindow):
             )
 
             if confirm == QMessageBox.Yes:
-                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                has_od = (
+                    self.trace_data is not None
+                    and "Outer Diameter" in self.trace_data.columns
+                )
                 old_value = self.event_table_data[index][2]
                 self.last_replaced_event = (index, old_value)
                 if has_od:
@@ -2632,25 +2679,39 @@ class VasoAnalyzerApp(QMainWindow):
         if not ok or not selected:
             return
 
-        label, l_ok = QInputDialog.getText(self, "New Event Label", "Enter label for the new event:")
+        label, l_ok = QInputDialog.getText(
+            self, "New Event Label", "Enter label for the new event:"
+        )
         if not l_ok or not label.strip():
             return
 
-        t_val, t_ok = QInputDialog.getDouble(self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2)
+        t_val, t_ok = QInputDialog.getDouble(
+            self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2
+        )
         if not t_ok:
             return
 
-        id_val, id_ok = QInputDialog.getDouble(self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2)
+        id_val, id_ok = QInputDialog.getDouble(
+            self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2
+        )
         if not id_ok:
             return
 
         insert_idx = insert_labels.index(selected)
         frame_number = int(t_val / self.recording_interval)
         if has_od:
-            od_val, ok = QInputDialog.getDouble(self, "Outer Diameter", "OD (µm):", 0.0, 0, 1e6, 2)
+            od_val, ok = QInputDialog.getDouble(
+                self, "Outer Diameter", "OD (µm):", 0.0, 0, 1e6, 2
+            )
             if not ok:
                 return
-            new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), round(od_val,2), frame_number)
+            new_entry = (
+                label.strip(),
+                round(t_val, 2),
+                round(id_val, 2),
+                round(od_val, 2),
+                frame_number,
+            )
         else:
             new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), frame_number)
 
@@ -2674,25 +2735,33 @@ class VasoAnalyzerApp(QMainWindow):
         valid_axes = [self.ax]
         if self.ax2:
             valid_axes.append(self.ax2)
-        if event.inaxes not in valid_axes or self.trace_data is None or self.trace_line is None:
-            if self.hover_annotation.get_visible():
-                self.hover_annotation.set_visible(False)
-                self.canvas.draw_idle()
+        if (
+            event.inaxes not in valid_axes
+            or self.trace_data is None
+            or self.trace_line is None
+        ):
+            for annot in (self.hover_annotation_id, self.hover_annotation_od):
+                if annot and annot.get_visible():
+                    annot.set_visible(False)
+                    self.canvas.draw_idle()
             return
 
         # Determine if cursor is on the inner or outer diameter trace
         contains, info = self.trace_line.contains(event)
         ydata_key = "Inner Diameter"
+        annot = self.hover_annotation_id
 
         if not contains and self.ax2 and self.od_line:
             contains, info = self.od_line.contains(event)
             if contains:
                 ydata_key = "Outer Diameter"
+                annot = self.hover_annotation_od
 
         if not contains:
-            if self.hover_annotation.get_visible():
-                self.hover_annotation.set_visible(False)
-                self.canvas.draw_idle()
+            for a in (self.hover_annotation_id, self.hover_annotation_od):
+                if a and a.get_visible():
+                    a.set_visible(False)
+                    self.canvas.draw_idle()
             return
 
         # get the exact index & value
@@ -2702,9 +2771,20 @@ class VasoAnalyzerApp(QMainWindow):
         x_near, y_near = times[idx], diams[idx]
 
         # update and show the annotation
-        self.hover_annotation.xy = (x_near, y_near)
-        self.hover_annotation.set_text(f"{x_near:.2f}s\n{y_near:.2f}µm")
-        self.hover_annotation.set_visible(True)
+        if annot is None:
+            return
+
+        annot.xy = (x_near, y_near)
+        annot.set_text(f"{x_near:.2f}s\n{y_near:.2f}µm")
+        annot.set_visible(True)
+
+        other = (
+            self.hover_annotation_od
+            if annot is self.hover_annotation_id
+            else self.hover_annotation_id
+        )
+        if other and other.get_visible():
+            other.set_visible(False)
         self.canvas.draw_idle()
 
     # [I] ========================= ZOOM + SLIDER LOGIC ================================
@@ -3069,7 +3149,10 @@ class VasoAnalyzerApp(QMainWindow):
                 self, "Edit ID", "Enter new ID (µm):", float(old_val), 0, 10000, 2
             )
             if ok:
-                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                has_od = (
+                    self.trace_data is not None
+                    and "Outer Diameter" in self.trace_data.columns
+                )
                 if has_od:
                     self.event_table_data[row] = (
                         self.event_table_data[row][0],
@@ -3153,7 +3236,10 @@ class VasoAnalyzerApp(QMainWindow):
             )
             if confirm == QMessageBox.Yes:
                 self.last_replaced_event = (row, self.event_table_data[row][2])
-                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                has_od = (
+                    self.trace_data is not None
+                    and "Outer Diameter" in self.trace_data.columns
+                )
                 if has_od:
                     self.event_table_data[row] = (
                         self.event_table_data[row][0],
@@ -3250,7 +3336,11 @@ class VasoAnalyzerApp(QMainWindow):
         try:
             output_dir = os.path.abspath(self.trace_file_path)
             csv_path = os.path.join(output_dir, "eventDiameters_output.csv")
-            has_od = "Outer Diameter" in self.trace_data.columns if self.trace_data is not None else False
+            has_od = (
+                "Outer Diameter" in self.trace_data.columns
+                if self.trace_data is not None
+                else False
+            )
             columns = ["Event", "Time (s)", "ID (µm)"]
             if has_od:
                 columns.append("OD (µm)")
@@ -3396,7 +3486,12 @@ class VasoAnalyzerApp(QMainWindow):
             else:
                 label, time, idval, frame = row
                 odval = None
-            entry = {"EventLabel": label, "Time (s)": time, "Frame": frame, "ID (µm)": idval}
+            entry = {
+                "EventLabel": label,
+                "Time (s)": time,
+                "Frame": frame,
+                "ID (µm)": idval,
+            }
             if has_od:
                 entry["OD (µm)"] = odval
             dialog_data.append(entry)
