@@ -630,6 +630,10 @@ class VasoAnalyzerApp(QMainWindow):
         open_act.triggered.connect(self.open_project_file)
         proj_menu.addAction(open_act)
 
+        # Recent Projects submenu
+        self.recent_projects_menu = proj_menu.addMenu("Recent Projects ▶")
+        self.build_recent_projects_menu()
+
         save_act = QAction("Save Project", self)
         save_act.triggered.connect(self.save_project_file)
         proj_menu.addAction(save_act)
@@ -895,6 +899,25 @@ class VasoAnalyzerApp(QMainWindow):
         clear_action.triggered.connect(self.clear_recent_files)
         self.recent_menu.addAction(clear_action)
 
+    def build_recent_projects_menu(self):
+        self.recent_projects_menu.clear()
+
+        if not self.recent_projects:
+            self.recent_projects_menu.addAction("No recent projects").setEnabled(False)
+            return
+
+        for path in self.recent_projects:
+            label = os.path.basename(path)
+            action = QAction(label, self)
+            action.setToolTip(path)
+            action.triggered.connect(partial(self.open_recent_project, path))
+            self.recent_projects_menu.addAction(action)
+
+        self.recent_projects_menu.addSeparator()
+        clear_action = QAction("Clear Recent Projects", self)
+        clear_action.triggered.connect(self.clear_recent_projects)
+        self.recent_projects_menu.addAction(clear_action)
+
 
     def open_preferences_dialog(self):
         QMessageBox.information(
@@ -1002,6 +1025,33 @@ class VasoAnalyzerApp(QMainWindow):
             self.recent_projects = [path] + self.recent_projects[:4]
             settings = QSettings("TykockiLab", "VasoAnalyzer")
             settings.setValue("recentProjects", self.recent_projects)
+        self.build_recent_projects_menu()
+
+    def save_recent_projects(self):
+        QSettings("TykockiLab", "VasoAnalyzer").setValue(
+            "recentProjects", self.recent_projects
+        )
+
+    def clear_recent_projects(self):
+        self.recent_projects = []
+        self.save_recent_projects()
+        self.build_recent_projects_menu()
+
+    def open_recent_project(self, path):
+        self.current_project = open_project(path)
+        self.apply_ui_state(getattr(self.current_project, "ui_state", None))
+        self.refresh_project_tree()
+        self.project_dock.show()
+        self.statusBar().showMessage(
+            f"\u2713 Project loaded: {self.current_project.name}", 3000
+        )
+        self.update_recent_projects(path)
+        if (
+            self.current_project.experiments
+            and self.current_project.experiments[0].samples
+        ):
+            first_sample = self.current_project.experiments[0].samples[0]
+            self.load_sample_into_view(first_sample)
 
     def check_for_updates_at_startup(self):
         latest = check_for_new_version(f"v{APP_VERSION}")
