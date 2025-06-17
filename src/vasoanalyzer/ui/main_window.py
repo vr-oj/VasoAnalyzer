@@ -107,6 +107,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.pinned_points = []
         self.slider_marker = None
         self.trace_line = None
+        self.od_line = None
+        self.ax2 = None
         # Default time between frames when metadata is unavailable
         self.recording_interval = 0.14  # 140 ms per frame
         self.last_replaced_event = None
@@ -698,6 +700,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.showhide_menu.addAction(evt_tbl)
         self.showhide_menu.addAction(snap_vw)
 
+        # Diameter visibility toggles
+        self.id_toggle_act = QAction("Inner Diameter", self, checkable=True, checked=True)
+        self.od_toggle_act = QAction("Outer Diameter", self, checkable=True, checked=True)
+        self.id_toggle_act.triggered.connect(self.toggle_inner_diameter)
+        self.od_toggle_act.triggered.connect(self.toggle_outer_diameter)
+        self.showhide_menu.addAction(self.id_toggle_act)
+        self.showhide_menu.addAction(self.od_toggle_act)
+
         view_menu.addSeparator()
 
         # 4) Single / Dual
@@ -956,6 +966,18 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_snapshot_viewer(self, checked: bool):
         self.snapshot_label.setVisible(checked)
         self.slider.setVisible(checked)
+
+    def toggle_inner_diameter(self, checked: bool):
+        if self.trace_line:
+            self.trace_line.set_visible(checked)
+            self.canvas.draw_idle()
+
+    def toggle_outer_diameter(self, checked: bool):
+        if self.od_line:
+            self.od_line.set_visible(checked)
+        if self.ax2:
+            self.ax2.set_visible(checked)
+        self.canvas.draw_idle()
 
 
     def toggle_fullscreen(self):
@@ -2224,6 +2246,8 @@ class VasoAnalyzerApp(QMainWindow):
         t = self.trace_data["Time (s)"]
         d = self.trace_data["Inner Diameter"]
         (self.trace_line,) = self.ax.plot(t, d, "k-", linewidth=1.5)
+        if hasattr(self, "id_toggle_act"):
+            self.trace_line.set_visible(self.id_toggle_act.isChecked())
         self.ax.set_xlabel("Time (s)")
         self.ax.set_ylabel("Inner Diameter (µm)")
         self.ax.grid(True, color=CURRENT_THEME["grid_color"])
@@ -2236,6 +2260,10 @@ class VasoAnalyzerApp(QMainWindow):
             (self.od_line,) = self.ax2.plot(t, od_trace, color="tab:orange", linewidth=1.2)
             self.ax2.set_ylabel("Outer Diameter (µm)")
             self.ax2.tick_params(colors=CURRENT_THEME["text"])
+            if hasattr(self, "od_toggle_act"):
+                vis = self.od_toggle_act.isChecked()
+                self.od_line.set_visible(vis)
+                self.ax2.set_visible(vis)
 
         # Plot events if available
         if self.event_labels and self.event_times:
