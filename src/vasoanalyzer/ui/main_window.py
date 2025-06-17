@@ -306,11 +306,12 @@ class VasoAnalyzerApp(QMainWindow):
             if sample.events_data is not None:
                 df = sample.events_data
                 labels = df[df.columns[0]].tolist()
-                times = (
-                    df["Time (s)"].tolist()
-                    if "Time (s)" in df.columns
-                    else [0.0] * len(labels)
-                )
+                if "Time (s)" in df.columns:
+                    times = df["Time (s)"].tolist()
+                elif "Time" in df.columns:
+                    times = df["Time"].tolist()
+                else:
+                    times = [0.0] * len(labels)
                 frames = df["Frame"].tolist() if "Frame" in df.columns else None
             elif sample.events_path:
                 labels, times, frames = load_events(sample.events_path)
@@ -1146,90 +1147,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.canvas.toolbar = self.toolbar
         self.canvas.setMouseTracking(True)
         self.toolbar.setMouseTracking(True)
-        self.toolbar.setIconSize(QSize(24, 24))
-        self.toolbar.setStyleSheet(
-            f"""
-            QToolBar {{
-                background-color: {CURRENT_THEME['toolbar_bg']};
-                padding: 2px;
-                border: none;
-            }}
-        """
-        )
-        self.toolbar.setContentsMargins(0, 0, 0, 0)
-
-        # Remove stray/empty buttons
-        if hasattr(self.toolbar, "coordinates"):
-            self.toolbar.coordinates = lambda *args, **kwargs: None
-            for act in self.toolbar.actions():
-                if isinstance(act, QAction) and act.text() == "":
-                    self.toolbar.removeAction(act)
-
-        visible_buttons = [a for a in self.toolbar.actions() if not a.icon().isNull()]
-        if len(visible_buttons) >= 8:
-            visible_buttons[0].setToolTip("Home: Reset zoom and pan")
-            visible_buttons[0].setIcon(QIcon(self.icon_path("Home.svg")))
-            visible_buttons[1].setToolTip("Back: Previous view")
-            visible_buttons[1].setIcon(QIcon(self.icon_path("Back.svg")))
-            visible_buttons[2].setToolTip("Forward: Next view")
-            visible_buttons[2].setIcon(QIcon(self.icon_path("Forward.svg")))
-            visible_buttons[3].setToolTip("Pan: Click and drag plot")
-            visible_buttons[3].setIcon(QIcon(self.icon_path("Pan.svg")))
-            visible_buttons[4].setToolTip("Zoom: Draw box to zoom in")
-            visible_buttons[4].setIcon(QIcon(self.icon_path("Zoom.svg")))
-
-            # [5] Subplot layout (borders + spacings)
-            layout_btn = visible_buttons[5]
-            layout_btn.setToolTip("Configure subplot layout")
-            layout_btn.setIcon(QIcon(self.icon_path("Subplots.svg")))
-            layout_btn.triggered.disconnect()
-            layout_btn.triggered.connect(
-                lambda: self.open_subplot_layout_dialog(self.fig)
-            )
-
-            # [6] Axes and title editor
-            axes_btn = visible_buttons[6]
-            axes_btn.setToolTip("Edit axis ranges and titles")
-            axes_btn.setIcon(QIcon(self.icon_path("Customize:edit_axis_ranges.svg")))
-            axes_btn.triggered.disconnect()
-            axes_btn.triggered.connect(
-                lambda: self.open_axis_settings_dialog_for(self.ax, self.canvas)
-            )
-
-            # [Inject] Aa: Plot style editor
-            style_btn = QToolButton()
-            style_btn.setIcon(QIcon(self.icon_path("Aa.svg")))
-            style_btn.setToolTip("Customize plot fonts and layout")
-            # Use global theme styling for toolbuttons
-            style_btn.clicked.connect(self.open_plot_style_editor)
-            self.toolbar.insertWidget(visible_buttons[7], style_btn)
-            # force the toolbar to re‑polish its children under the global QSS
-            self.toolbar.style().polish(self.toolbar)
-            for btn in self.toolbar.findChildren(QToolButton):
-                self.toolbar.style().polish(btn)
-
-            # [Inject] Grid toggle button
-            grid_btn = QToolButton()
-            grid_btn.setIcon(QIcon(self.icon_path("Grid.svg")))
-            grid_btn.setToolTip("Toggle grid visibility")
-            grid_btn.setCheckable(True)
-            grid_btn.setChecked(self.grid_visible)
-            grid_btn.clicked.connect(self.toggle_grid)
-            self.toolbar.insertWidget(visible_buttons[7], grid_btn)
-            # force the toolbar to re‑polish its children under the global QSS
-            self.toolbar.style().polish(self.toolbar)
-            for btn in self.toolbar.findChildren(QToolButton):
-                self.toolbar.style().polish(btn)
-
-            # [7] Save/export button
-            save_btn = visible_buttons[7]
-            save_btn.setToolTip("Save As… Export plot or save to N")
-            save_btn.setIcon(QIcon(self.icon_path("Save.svg")))
-            save_btn.triggered.disconnect()
-            save_btn.triggered.connect(self.show_save_menu)
-            self.toolbar.style().polish(self.toolbar)
-            for btn in self.toolbar.findChildren(QToolButton):
-                self.toolbar.style().polish(btn)
 
         # ===== Unified Top Row: Toolbar + Load Buttons =====
         top_row_layout = QHBoxLayout()
@@ -1268,6 +1185,21 @@ class VasoAnalyzerApp(QMainWindow):
         top_row_layout.addWidget(self.trace_file_label)
 
         self.main_layout.addLayout(top_row_layout)
+
+        # ----- Diameter Toggle Row -----
+        toggle_row = QHBoxLayout()
+        toggle_row.setContentsMargins(6, 0, 6, 2)
+        toggle_row.setSpacing(8)
+
+        id_btn = QToolButton()
+        id_btn.setDefaultAction(self.id_toggle_act)
+        od_btn = QToolButton()
+        od_btn.setDefaultAction(self.od_toggle_act)
+
+        toggle_row.addWidget(id_btn)
+        toggle_row.addWidget(od_btn)
+
+        self.main_layout.addLayout(toggle_row)
 
         # ===== Plot and Scroll Slider =====
         self.scroll_slider = QSlider(Qt.Horizontal)
@@ -1434,13 +1366,7 @@ class VasoAnalyzerApp(QMainWindow):
             data_btn.clicked.connect(self.add_data_to_current_experiment)
             toolbar.insertWidget(visible_buttons[7], data_btn)
 
-            # Diameter toggle actions
-            id_btn = QToolButton()
-            id_btn.setDefaultAction(self.id_toggle_act)
-            id_btn.setToolTip("Toggle inner diameter visibility")
-            toolbar.insertWidget(visible_buttons[7], id_btn)
-
-            toolbar.insertAction(visible_buttons[7], self.od_toggle_act)
+            # Diameter toggle actions now live in a separate toolbar row
 
             # Override Save
             save_btn = visible_buttons[7]
