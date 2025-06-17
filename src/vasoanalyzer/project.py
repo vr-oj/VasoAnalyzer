@@ -27,6 +27,7 @@ class SampleN:
     column: Optional[str] = None
     trace_data: Optional[pd.DataFrame] = None
     events_data: Optional[pd.DataFrame] = None
+    ui_state: Optional[dict] = None
 
 
 @dataclass
@@ -95,6 +96,7 @@ def sample_from_dict(data: dict) -> SampleN:
         column=data.get("column"),
         trace_data=trace_data,
         events_data=events_data,
+        ui_state=data.get("ui_state"),
     )
 
 

@@ -222,6 +222,8 @@ class VasoAnalyzerApp(QMainWindow):
     def save_project_file(self):
         if self.current_project and self.current_project.path:
             self.current_project.ui_state = self.gather_ui_state()
+            if self.current_sample:
+                self.current_sample.ui_state = self.gather_sample_state()
             save_project_file(self.current_project)
             self.update_recent_projects(self.current_project.path)
             self.statusBar().showMessage("\u2713 Project saved", 3000)
@@ -238,6 +240,8 @@ class VasoAnalyzerApp(QMainWindow):
             if not path.endswith(".vaso"):
                 path += ".vaso"
             self.current_project.ui_state = self.gather_ui_state()
+            if self.current_sample:
+                self.current_sample.ui_state = self.gather_sample_state()
             save_project_file(self.current_project, path)
             self.update_recent_projects(path)
             self.statusBar().showMessage("\u2713 Project saved", 3000)
@@ -272,6 +276,8 @@ class VasoAnalyzerApp(QMainWindow):
     def on_tree_item_clicked(self, item, _):
         obj = item.data(0, Qt.UserRole)
         if isinstance(obj, SampleN):
+            if self.current_sample and self.current_sample is not obj:
+                self.current_sample.ui_state = self.gather_sample_state()
             self.current_sample = obj
             parent = item.parent()
             self.current_experiment = parent.data(0, Qt.UserRole) if parent else None
@@ -293,6 +299,9 @@ class VasoAnalyzerApp(QMainWindow):
     def load_sample_into_view(self, sample: SampleN):
         """Load a sample's trace and events into the main view."""
         log.info("Loading sample %s", sample.name)
+        if self.current_sample and self.current_sample is not sample:
+            self.current_sample.ui_state = self.gather_sample_state()
+        self.current_sample = sample
         try:
             if sample.trace_data is not None:
                 trace = sample.trace_data.copy()
@@ -343,6 +352,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.update_plot()
         self.compute_frame_trace_indices()
         self.load_project_events(labels, times, frames, diam, od)
+        self.apply_sample_state(getattr(sample, "ui_state", None))
         log.info("Sample loaded with %d events", len(labels))
 
     def open_samples_in_new_windows(self, samples):
@@ -361,6 +371,7 @@ class VasoAnalyzerApp(QMainWindow):
                 column=s.column,
                 trace_data=s.trace_data.copy() if s.trace_data is not None else None,
                 events_data=s.events_data.copy() if s.events_data is not None else None,
+                ui_state=s.ui_state.copy() if s.ui_state is not None else None,
             )
             win.load_sample_into_view(sample_copy)
             self.compare_windows.append(win)
@@ -392,6 +403,7 @@ class VasoAnalyzerApp(QMainWindow):
                         column=s.column,
                         trace_data=s.trace_data.copy() if s.trace_data is not None else None,
                         events_data=s.events_data.copy() if s.events_data is not None else None,
+                        ui_state=s.ui_state.copy() if s.ui_state is not None else None,
                     )
                     view.load_sample_into_view(sample_copy)
                     self.views.append(view)
@@ -3602,6 +3614,14 @@ class VasoAnalyzerApp(QMainWindow):
             "axis_ylim": list(self.ax.get_ylim()),
         }
 
+    def gather_sample_state(self):
+        return {
+            "axis_xlim": list(self.ax.get_xlim()),
+            "axis_ylim": list(self.ax.get_ylim()),
+            "table_fontsize": self.event_table.font().pointSize(),
+            "event_table_data": list(self.event_table_data),
+        }
+
     def apply_ui_state(self, state):
         if not state:
             return
@@ -3617,10 +3637,28 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax.set_ylim(state["axis_ylim"])
         self.canvas.draw_idle()
 
+    def apply_sample_state(self, state):
+        if not state:
+            return
+        if "event_table_data" in state:
+            self.event_table_data = state["event_table_data"]
+            self.populate_table()
+        if "axis_xlim" in state:
+            self.ax.set_xlim(state["axis_xlim"])
+        if "axis_ylim" in state:
+            self.ax.set_ylim(state["axis_ylim"])
+        if "table_fontsize" in state:
+            font = self.event_table.font()
+            font.setPointSize(state["table_fontsize"])
+            self.event_table.setFont(font)
+        self.canvas.draw_idle()
+
     def closeEvent(self, event):
         if self.current_project and self.current_project.path:
             try:
                 self.current_project.ui_state = self.gather_ui_state()
+                if self.current_sample:
+                    self.current_sample.ui_state = self.gather_sample_state()
                 save_project_file(self.current_project)
             except Exception as e:
                 log.error("Failed to auto-save project:\n%s", e)
