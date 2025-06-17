@@ -45,7 +45,14 @@ from PyQt5.QtWidgets import (
     QStyle,
 )
 
-from PyQt5.QtGui import QPixmap, QImage, QIcon, QCursor
+from PyQt5.QtGui import (
+    QPixmap,
+    QImage,
+    QIcon,
+    QCursor,
+    QPainter,
+    QColor,
+)
 from PyQt5.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QPoint
 
 from vasoanalyzer.dual_view_panel import DataViewPanel, DualViewWidget
@@ -483,6 +490,20 @@ class VasoAnalyzerApp(QMainWindow):
 
         return resource_path("icons", filename)
 
+    def text_icon(self, text: str) -> QIcon:
+        """Return a simple text-based QIcon used for toolbar buttons."""
+        pix = QPixmap(24, 24)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setPen(QColor(0, 0, 0))
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(10)
+        painter.setFont(font)
+        painter.drawText(pix.rect(), Qt.AlignCenter, text)
+        painter.end()
+        return QIcon(pix)
+
     def sync_slider_with_plot(self, event=None):
         if self.trace_data is None:
             return
@@ -703,6 +724,8 @@ class VasoAnalyzerApp(QMainWindow):
         # Diameter visibility toggles
         self.id_toggle_act = QAction("Inner Diameter", self, checkable=True, checked=True)
         self.od_toggle_act = QAction("Outer Diameter", self, checkable=True, checked=True)
+        self.id_toggle_act.setIcon(self.text_icon("ID"))
+        self.od_toggle_act.setIcon(self.text_icon("OD"))
         self.id_toggle_act.triggered.connect(self.toggle_inner_diameter)
         self.od_toggle_act.triggered.connect(self.toggle_outer_diameter)
         self.showhide_menu.addAction(self.id_toggle_act)
@@ -1402,6 +1425,10 @@ class VasoAnalyzerApp(QMainWindow):
             data_btn.setToolTip("Add Data")
             data_btn.clicked.connect(self.add_data_to_current_experiment)
             toolbar.insertWidget(visible_buttons[7], data_btn)
+
+            # Diameter toggle actions
+            toolbar.insertAction(visible_buttons[7], self.id_toggle_act)
+            toolbar.insertAction(visible_buttons[7], self.od_toggle_act)
 
             # Override Save
             save_btn = visible_buttons[7]

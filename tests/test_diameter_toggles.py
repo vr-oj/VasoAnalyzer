@@ -22,6 +22,11 @@ def test_diameter_toggle_visibility(tmp_path):
     gui = VasoAnalyzerApp()
     gui.load_trace_and_events(str(trace_path))
 
+    # Toolbar should include diameter toggle actions
+    toolbar_actions = gui.toolbar.actions()
+    assert gui.id_toggle_act in toolbar_actions
+    assert gui.od_toggle_act in toolbar_actions
+
     assert gui.trace_line.get_visible() is True
     assert gui.od_line.get_visible() is True
 
