@@ -332,10 +332,10 @@ class DataViewPanel(QWidget):
         # Populate the event table with Event, Time, ID, (OD), Frame
         self.event_table_data = []
         offset = 2.0
-        times = self.trace_data["Time (s)"].values
-        diam_i = self.trace_data["Inner Diameter"].values
+        times = self.trace_data["Time (s)"].to_numpy()
+        diam_i = self.trace_data["Inner Diameter"].to_numpy()
         diam_o = (
-            self.trace_data["Outer Diameter"].values
+            self.trace_data["Outer Diameter"].to_numpy()
             if "Outer Diameter" in self.trace_data.columns
             else None
         )
@@ -490,15 +490,15 @@ class DataViewPanel(QWidget):
             self.hover_label.hide()
             return
 
-        times = self.trace_data["Time (s)"].values
+        times = self.trace_data["Time (s)"].to_numpy()
         idx = int(np.argmin(np.abs(times - event.xdata)))
         t_near = times[idx]
 
         if event.inaxes == self.ax2 and "Outer Diameter" in self.trace_data.columns:
-            val = self.trace_data["Outer Diameter"].values[idx]
+            val = self.trace_data["Outer Diameter"].to_numpy()[idx]
             label = "OD"
         else:
-            val = self.trace_data["Inner Diameter"].values[idx]
+            val = self.trace_data["Inner Diameter"].to_numpy()[idx]
             label = "ID"
 
         self.hover_label.setText(f"Time: {t_near:.2f} s\n{label}: {val:.2f} µm")
@@ -594,9 +594,9 @@ class DataViewPanel(QWidget):
             return
 
         if event.button == 1 and not self.toolbar.mode:
-            times = self.trace_data["Time (s)"].values
+            times = self.trace_data["Time (s)"].to_numpy()
             idx = int(np.argmin(np.abs(times - x)))
-            y = self.trace_data["Inner Diameter"].values[idx]
+            y = self.trace_data["Inner Diameter"].to_numpy()[idx]
             marker = self.ax.plot(x, y, "ro", markersize=6)[0]
             label = self.ax.annotate(
                 f"{x:.2f} s\n{y:.1f} µm",
@@ -667,7 +667,7 @@ class DataViewPanel(QWidget):
             self.frame_trace_indices = []
             return
 
-        t_trace = self.trace_data["Time (s)"].values
+        t_trace = self.trace_data["Time (s)"].to_numpy()
         frame_times = np.asarray(self.frame_times, dtype=float)
 
         if len(frame_times) > 1:
