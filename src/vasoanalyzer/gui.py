@@ -1920,26 +1920,20 @@ class VasoAnalyzerApp(QMainWindow):
 
 # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
-        # only over the main axes and with data loaded
-        if event.inaxes != self.ax or self.trace_data is None:
+        """Show nearest time/diameter under cursor."""
+        # only operate when mouse over the main axes and data is loaded
+        if event.inaxes != self.ax or self.trace_data is None or event.xdata is None:
             if self.hover_annotation.get_visible():
                 self.hover_annotation.set_visible(False)
                 self.canvas.draw_idle()
             return
 
-        # show only when cursor is actually on the line
-        contains, info = self.trace_line.contains(event)
-        if not contains:
-            if self.hover_annotation.get_visible():
-                self.hover_annotation.set_visible(False)
-                self.canvas.draw_idle()
-            return
-
-        # get the exact index & value
-        idx = info["ind"][0]
+        # find the index nearest to the cursor x‑position
         times = self.trace_data["Time (s)"].values
         diams = self.trace_data[self.diam_col].values
-        x_near, y_near = times[idx], diams[idx]
+        idx = int(np.argmin(np.abs(times - event.xdata)))
+        x_near = times[idx]
+        y_near = diams[idx]
 
         # update and show the annotation
         self.hover_annotation.xy = (x_near, y_near)
