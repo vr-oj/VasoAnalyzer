@@ -338,7 +338,7 @@ class DataViewPanel(QWidget):
     def _open_axis_dialog(self):
         main = self.window()
         if hasattr(main, "open_axis_settings_dialog_for"):
-            main.open_axis_settings_dialog_for(self.ax, self.canvas)
+            main.open_axis_settings_dialog_for(self.ax, self.canvas, None)
 
     def apply_plot_style(self, style):
         """Apply style dictionary to this panel's plot."""
