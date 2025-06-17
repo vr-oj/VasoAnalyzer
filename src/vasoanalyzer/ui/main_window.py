@@ -365,7 +365,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.compare_windows.append(win)
 
     def open_samples_in_dual_view(self, samples):
-        """Display two samples side by side in a single window."""
+        """Display two samples stacked vertically in a single window."""
         if len(samples) != 2:
             QMessageBox.warning(self, "Dual View", "Please select exactly two N's.")
             return
@@ -375,7 +375,7 @@ class VasoAnalyzerApp(QMainWindow):
                 super().__init__(parent)
                 self.setWindowTitle("Dual View")
                 self.views = []
-                splitter = QSplitter(Qt.Horizontal, self)
+                splitter = QSplitter(Qt.Vertical, self)
                 for s in pair:
                     view = VasoAnalyzerApp()
                     view.setParent(splitter)
