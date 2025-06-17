@@ -1,12 +1,24 @@
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSlider, QTableWidget,
-    QTableWidgetItem, QAbstractItemView, QPushButton, QFileDialog,
-    QToolButton, QMessageBox, QHeaderView
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QSlider,
+    QTableWidget,
+    QTableWidgetItem,
+    QAbstractItemView,
+    QPushButton,
+    QFileDialog,
+    QToolButton,
+    QMessageBox,
+    QHeaderView,
 )
 from PyQt5.QtWidgets import QLabel
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt, QSize
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas, NavigationToolbar2QT as NavigationToolbar
+from matplotlib.backends.backend_qt5agg import (
+    FigureCanvasQTAgg as FigureCanvas,
+    NavigationToolbar2QT as NavigationToolbar,
+)
 from matplotlib.figure import Figure
 import pickle
 import numpy as np
@@ -17,6 +29,7 @@ from vasoanalyzer.trace_event_loader import load_trace_and_events
 
 class DataViewPanel(QWidget):
     """A single plot + pan‑slider + event table view with full matplotlib toolbar."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -46,7 +59,7 @@ class DataViewPanel(QWidget):
                 "Back: Previous view",
                 "Forward: Next view",
                 "Pan: Click and drag plot",
-                "Zoom: Draw box to zoom in"
+                "Zoom: Draw box to zoom in",
             ]
             icons = [
                 "Home.svg",
@@ -67,7 +80,9 @@ class DataViewPanel(QWidget):
             # Edit parameters
             btn = visible[6]
             btn.setToolTip("Edit axis ranges and titles")
-            btn.setIcon(QIcon(self.window().icon_path("Customize:edit_axis_ranges.svg")))
+            btn.setIcon(
+                QIcon(self.window().icon_path("Customize:edit_axis_ranges.svg"))
+            )
             btn.triggered.disconnect()
             btn.triggered.connect(self._open_axis_dialog)
             # Inject Plot Style button
@@ -106,16 +121,19 @@ class DataViewPanel(QWidget):
         self.scroll_slider.valueChanged.connect(self.scroll_plot)
         self.scroll_slider.hide()
 
-        # --- Event Table (3 columns) ---
+        # --- Event Table ---
+        # Mirror main view defaults: Event, Time, ID, Frame
         self.event_table = QTableWidget()
-        self.event_table.setColumnCount(3)
-        self.event_table.setHorizontalHeaderLabels(["Event", "Time (s)", "ID (µm)"])
+        self.event_table.setColumnCount(4)
+        self.event_table.setHorizontalHeaderLabels(
+            ["Event", "Time (s)", "ID (µm)", "Frame"]
+        )
         self.event_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
 
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
-        for i in range(3):
+        for i in range(4):
             header.setSectionResizeMode(i, QHeaderView.Interactive)
         header.setDefaultSectionSize(100)
 
@@ -123,7 +141,7 @@ class DataViewPanel(QWidget):
         main_layout = QVBoxLayout(self)
         # Control row: toolbar + load
         control = QHBoxLayout()
-        control.setContentsMargins(0,0,0,0)
+        control.setContentsMargins(0, 0, 0, 0)
         control.setSpacing(8)
         control.addWidget(self.toolbar)
         control.addWidget(self.load_btn)
@@ -141,13 +159,15 @@ class DataViewPanel(QWidget):
 
         # — Hover Label (exact same logic as main view) —
         self.hover_label = QLabel("", self)
-        self.hover_label.setStyleSheet("""
+        self.hover_label.setStyleSheet(
+            """
             background-color: rgba(255, 255, 255, 220);
             border: 1px solid #888;
             border-radius: 5px;
             padding: 2px 6px;
             font-size: 12px;
-        """)
+        """
+        )
         self.hover_label.hide()
 
         # connect hover & table‐click events
@@ -157,17 +177,20 @@ class DataViewPanel(QWidget):
         # Hook draw event
         self.canvas.mpl_connect("draw_event", self.sync_slider_with_plot)
         # Only reposition labels on mouse release, not every draw
-        self.canvas.mpl_connect("button_release_event", self.update_event_label_positions)
-
+        self.canvas.mpl_connect(
+            "button_release_event", self.update_event_label_positions
+        )
 
         # State
         self.trace_data = None
         self.event_labels = []
         self.event_times = []
+        self.event_frames = []
         self.event_table_data = []
+        self.ax2 = None
         self.slider_marker = None
         self.grid_visible = True
-        
+
         # Dual Clearing
         self._original_title = self.ax.get_title()
 
@@ -184,6 +207,7 @@ class DataViewPanel(QWidget):
             style = main.get_current_plot_style()
         else:
             from .gui import DEFAULT_STYLE
+
             style = DEFAULT_STYLE
         self.apply_plot_style(style)
 
@@ -191,7 +215,7 @@ class DataViewPanel(QWidget):
         self.event_table.setRowCount(0)
 
         # Clear pins/highlights
-        for pin in getattr(self, 'pins', []):
+        for pin in getattr(self, "pins", []):
             try:
                 pin.remove()
             except Exception:
@@ -204,12 +228,12 @@ class DataViewPanel(QWidget):
         )
         if not file_path:
             return
-        df, labels, times, _frames, _diam = load_trace_and_events(file_path)
+        df, labels, times, frames, _diam, _od = load_trace_and_events(file_path)
         events = list(zip(labels, times))
         # delegate to panel loader
-        self.load_trace_and_events(df, events)
+        self.load_trace_and_events(df, events, frames)
 
-    def load_trace_and_events(self, trace_df, events):
+    def load_trace_and_events(self, trace_df, events, frames=None):
         """
         Load a pandas DataFrame and associated events into this panel.
         """
@@ -218,6 +242,7 @@ class DataViewPanel(QWidget):
             self.event_labels, self.event_times = zip(*events)
         else:
             self.event_labels, self.event_times = [], []
+        self.event_frames = list(frames) if frames is not None else []
         # Refresh view
         self.update_plot()
         self.populate_table()
@@ -226,7 +251,12 @@ class DataViewPanel(QWidget):
     def update_plot(self):
         """Plot the trace and events on the canvas."""
         self.ax.clear()
-        self.event_text_objects = []                  # ← reset the list
+        if self.ax2:
+            self.ax2.remove()
+            self.ax2 = None
+
+        self.event_text_objects = []  # reset the list
+
         t = self.trace_data["Time (s)"]
         d = self.trace_data["Inner Diameter"]
         self.ax.plot(t, d, "k-", linewidth=1.5)
@@ -234,44 +264,79 @@ class DataViewPanel(QWidget):
         self.ax.set_ylabel("Inner Diameter (µm)")
         self.ax.grid(self.grid_visible)
 
+        if "Outer Diameter" in self.trace_data.columns:
+            od = self.trace_data["Outer Diameter"]
+            self.ax2 = self.ax.twinx()
+            self.ax2.plot(t, od, color="tab:orange", linewidth=1.2)
+            self.ax2.set_ylabel("Outer Diameter (µm)")
+            self.ax2.grid(False)
+
         for lbl, t_evt in zip(self.event_labels, self.event_times):
             self.ax.axvline(t_evt, color="black", linestyle="--", linewidth=0.8)
             txt = self.ax.text(
-                t_evt, 0, lbl,
+                t_evt,
+                0,
+                lbl,
                 rotation=90,
                 verticalalignment="top",
                 horizontalalignment="right",
                 fontsize=8,
                 clip_on=True,
             )
-            self.event_text_objects.append((txt, t_evt))  # ← store both text object and its x
+            self.event_text_objects.append(
+                (txt, t_evt)
+            )  # ← store both text object and its x
         self.canvas.draw_idle()
 
     def populate_table(self):
-        # Populate the event table with Event, Time, ID
+        # Populate the event table with Event, Time, ID, (OD), Frame
         self.event_table_data = []
-        # assume an offset of 2 seconds
         offset = 2.0
         times = self.trace_data["Time (s)"].values
-        diam  = self.trace_data["Inner Diameter"].values
-        self.event_table_data = []
+        diam_i = self.trace_data["Inner Diameter"].values
+        diam_o = (
+            self.trace_data["Outer Diameter"].values
+            if "Outer Diameter" in self.trace_data.columns
+            else None
+        )
+
         for i, (lbl, t_evt) in enumerate(zip(self.event_labels, self.event_times)):
             if i < len(self.event_times) - 1:
-                t_sample = self.event_times[i+1] - offset
+                t_sample = self.event_times[i + 1] - offset
                 idx = np.argmin(np.abs(times - t_sample))
             else:
-                # for the last event just use the last sample
-                idx = -1
-            sampled_dia = float(diam[idx])
-            self.event_table_data.append((lbl, round(t_evt,2), round(sampled_dia,2)))
+                idx = len(times) - 1
 
+            id_val = float(diam_i[idx])
+            frame = int(self.event_frames[i]) if i < len(self.event_frames) else idx
+            if diam_o is not None:
+                od_val = float(diam_o[idx])
+                self.event_table_data.append(
+                    (lbl, round(t_evt, 2), round(id_val, 2), round(od_val, 2), frame)
+                )
+            else:
+                self.event_table_data.append(
+                    (lbl, round(t_evt, 2), round(id_val, 2), frame)
+                )
+
+        has_od = diam_o is not None
         header = ["Event", "Time (s)", "ID (µm)"]
+        if has_od:
+            header.extend(["OD (µm)", "Frame"])
+        else:
+            header.append("Frame")
+
+        self.event_table.setColumnCount(len(header))
         self.event_table.setHorizontalHeaderLabels(header)
         self.event_table.setRowCount(len(self.event_table_data))
-        for row, (lbl, t_evt, idval) in enumerate(self.event_table_data):
-            self.event_table.setItem(row, 0, QTableWidgetItem(lbl))
-            self.event_table.setItem(row, 1, QTableWidgetItem(str(t_evt)))
-            self.event_table.setItem(row, 2, QTableWidgetItem(str(idval)))
+        for row, data in enumerate(self.event_table_data):
+            for col, val in enumerate(data):
+                self.event_table.setItem(row, col, QTableWidgetItem(str(val)))
+
+        # adjust header sections
+        header_widget = self.event_table.horizontalHeader()
+        for i in range(len(header)):
+            header_widget.setSectionResizeMode(i, QHeaderView.Interactive)
 
     def sync_slider_with_plot(self, event=None):
         if self.trace_data is None:
@@ -281,8 +346,8 @@ class DataViewPanel(QWidget):
         xmin, xmax = self.ax.get_xlim()
         window = xmax - xmin
         scroll_max = tmax - window
-        val = 0 if scroll_max <= tmin else np.interp(
-            xmin, [tmin, scroll_max], [0, 1000]
+        val = (
+            0 if scroll_max <= tmin else np.interp(xmin, [tmin, scroll_max], [0, 1000])
         )
         self.scroll_slider.blockSignals(True)
         self.scroll_slider.setValue(int(val))
@@ -310,7 +375,6 @@ class DataViewPanel(QWidget):
         for txt, x in self.event_text_objects:
             txt.set_position((x, y_top))
         self.canvas.draw_idle()
-
 
     def update_scroll_slider(self):
         if self.trace_data is None:
@@ -363,45 +427,50 @@ class DataViewPanel(QWidget):
         self.ax.tick_params(axis="x", labelsize=style.get("tick_font_size", 12))
         self.ax.tick_params(axis="y", labelsize=style.get("tick_font_size", 12))
         # Event Labels
-        for txt, _ in getattr(self, 'event_text_objects', []):
+        for txt, _ in getattr(self, "event_text_objects", []):
             txt.set_fontsize(style.get("event_font_size", 10))
             txt.set_fontname(style.get("event_font_family", "Arial"))
-            txt.set_fontstyle(
-                "italic" if style.get("event_italic") else "normal"
-            )
-            txt.set_fontweight(
-                "bold" if style.get("event_bold") else "normal"
-            )
+            txt.set_fontstyle("italic" if style.get("event_italic") else "normal")
+            txt.set_fontweight("bold" if style.get("event_bold") else "normal")
         # Line width
         if self.ax.lines:
             self.ax.lines[0].set_linewidth(style.get("line_width", 2))
         self.canvas.draw_idle()
 
-
     def update_hover_label(self, event):
-        """Show Time & ID exactly under cursor, like main view."""
-        if event.inaxes != self.ax or self.trace_data is None or event.xdata is None:
+        """Show Time & ID/OD exactly under cursor, like main view."""
+        valid_axes = [self.ax]
+        if self.ax2:
+            valid_axes.append(self.ax2)
+        if (
+            event.inaxes not in valid_axes
+            or self.trace_data is None
+            or event.xdata is None
+        ):
             self.hover_label.hide()
             return
 
-        # find nearest sample
         times = self.trace_data["Time (s)"].values
-        diams = self.trace_data["Inner Diameter"].values
         idx = int(np.argmin(np.abs(times - event.xdata)))
         t_near = times[idx]
-        d_near = diams[idx]
 
-        self.hover_label.setText(f"Time: {t_near:.2f} s\nID: {d_near:.2f} µm")
+        if event.inaxes == self.ax2 and "Outer Diameter" in self.trace_data.columns:
+            val = self.trace_data["Outer Diameter"].values[idx]
+            label = "OD"
+        else:
+            val = self.trace_data["Inner Diameter"].values[idx]
+            label = "ID"
+
+        self.hover_label.setText(f"Time: {t_near:.2f} s\n{label}: {val:.2f} µm")
 
         # now position it using the canvas geometry + cursor offset
         cr = self.canvas.geometry()
         # event.guiEvent.pos() is QPoint relative to canvas
         gx = cr.left() + event.guiEvent.pos().x()
-        gy = cr.top()  + event.guiEvent.pos().y()
+        gy = cr.top() + event.guiEvent.pos().y()
         self.hover_label.move(int(gx + 10), int(gy - 30))
         self.hover_label.adjustSize()
         self.hover_label.show()
-
 
     def on_table_row_clicked(self, row, col):
         """Draw a blue vertical line at the selected event time."""
@@ -418,18 +487,19 @@ class DataViewPanel(QWidget):
         )
         self.canvas.draw_idle()
 
-    
     def _toggle_grid(self):
         self.grid_visible = not self.grid_visible
         self.ax.grid(self.grid_visible, color="#CCC")
+        if self.ax2:
+            self.ax2.grid(self.grid_visible, color="#CCC")
         self.canvas.draw_idle()
-
 
     def _export_high_res_plot(self):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save High-Resolution Plot",
-            "", "TIFF Image (*.tiff);;SVG Vector (*.svg)"
+            "",
+            "TIFF Image (*.tiff);;SVG Vector (*.svg)",
         )
         if file_path:
             ext = os.path.splitext(file_path)[1].lower()
@@ -453,15 +523,22 @@ class DataViewPanel(QWidget):
         # 1) Restore the trace & event lines
         trace_df = state.get("trace_data", None)
         labels = state.get("event_labels", [])
-        times  = state.get("event_times", [])
+        times = state.get("event_times", [])
+        frames = state.get("event_frames", None)
         events = list(zip(labels, times))
         if trace_df is not None:
-            self.load_trace_and_events(trace_df, events)
+            self.load_trace_and_events(trace_df, events, frames)
 
         # 2) Restore table contents if present
         ev_table = state.get("event_table_data", None)
         if ev_table is not None:
             self.event_table_data = ev_table
+            if ev_table:
+                f_idx = (
+                    4 if len(ev_table[0]) == 5 else 3 if len(ev_table[0]) >= 4 else None
+                )
+                if f_idx is not None:
+                    self.event_frames = [row[f_idx] for row in ev_table]
             self.populate_table()
 
         # 3) Restore plot style
@@ -482,9 +559,9 @@ class DataViewPanel(QWidget):
         self.canvas.draw_idle()
 
 
-
 class DualViewWidget(QWidget):
     """Holds two DataViewPanels, stacked vertically."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
