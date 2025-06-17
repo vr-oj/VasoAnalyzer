@@ -1008,10 +1008,22 @@ class VasoAnalyzerApp(QMainWindow):
             self.canvas.draw_idle()
 
     def toggle_outer_diameter(self, checked: bool):
+        log.info(
+            "toggle_outer_diameter called — checked=%s", checked
+        )
         if self.outer_line:
+            log.info(
+                "outer_line %s visible before: %s",
+                self.outer_line,
+                self.outer_line.get_visible(),
+            )
             self.outer_line.set_visible(checked)
+            log.info("outer_line visible after: %s", self.outer_line.get_visible())
+        else:
+            log.info("outer_line not set")
         if self.ax2:
             self.ax2.set_visible(checked)
+        log.info("ax.lines count: %d", len(self.ax.lines))
         self.canvas.draw_idle()
 
     def toggle_fullscreen(self):
