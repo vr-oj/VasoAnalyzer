@@ -736,8 +736,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.od_toggle_act = QAction(
             "Outer Diameter", self, checkable=True, checked=True
         )
-        self.id_toggle_act.setIcon(self.text_icon("ID"))
-        self.od_toggle_act.setIcon(self.text_icon("OD"))
+        self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
+        self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
         self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
         self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
         self.showhide_menu.addAction(self.id_toggle_act)
