@@ -2206,6 +2206,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         # clear everything (old lines, texts, etc)
         self.ax.clear()
+        if self.ax2:
+            self.ax2.remove()
+            self.ax2 = None
+            self.outer_line = None
 
         # re‑create the in‑canvas hover annotations on this fresh axes
         self.hover_annotation_id = self.ax.annotate(
