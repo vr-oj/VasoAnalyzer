@@ -1355,7 +1355,7 @@ class VasoAnalyzerApp(QMainWindow):
             axes_btn.setIcon(QIcon(self.icon_path("Customize:edit_axis_ranges.svg")))
             axes_btn.triggered.disconnect()
             axes_btn.triggered.connect(
-                lambda c=canvas: self.open_axis_settings_dialog_for(c.figure.axes[0], c)
+                lambda checked=False, c=canvas: self.open_axis_settings_dialog_for(c.figure.axes[0], c)
             )
 
             # Inject custom "Aa" button
