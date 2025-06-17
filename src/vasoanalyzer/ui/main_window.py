@@ -1120,8 +1120,13 @@ class VasoAnalyzerApp(QMainWindow):
         # for now just stub it to full‐data
         self.fit_to_data()
 
-    def zoom_out(self, factor: float = 1.2):
-        """Zoom out by the given factor around the center of the current view."""
+    def zoom_out(self, factor: float = 1.1):
+        """Zoom out by the given factor around the center of the current view.
+
+        The default factor has been lowered so that each click on the Zoom Out
+        button only slightly expands the current view, resulting in a more
+        gradual zoom out experience.
+        """
         xmin, xmax = self.ax.get_xlim()
         ymin, ymax = self.ax.get_ylim()
 
