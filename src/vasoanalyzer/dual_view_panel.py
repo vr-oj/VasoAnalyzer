@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QPushButton,
     QFileDialog,
+    QMenu,
     QToolButton,
     QMessageBox,
     QHeaderView,
@@ -128,8 +129,13 @@ class DataViewPanel(QWidget):
         self.event_table.setHorizontalHeaderLabels(
             ["Event", "Time (s)", "ID (µm)", "Frame"]
         )
-        self.event_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.event_table.setEditTriggers(QAbstractItemView.DoubleClicked)
         self.event_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.event_table.itemChanged.connect(self.handle_table_edit)
+        self.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.event_table.customContextMenuRequested.connect(
+            self.show_event_table_context_menu
+        )
 
         header = self.event_table.horizontalHeader()
         header.setStretchLastSection(False)
@@ -173,6 +179,7 @@ class DataViewPanel(QWidget):
         # connect hover & table‐click events
         self.canvas.mpl_connect("motion_notify_event", self.update_hover_label)
         self.event_table.cellClicked.connect(self.on_table_row_clicked)
+        self.canvas.mpl_connect("button_press_event", self.handle_click_on_plot)
 
         # Hook draw event
         self.canvas.mpl_connect("draw_event", self.sync_slider_with_plot)
@@ -190,6 +197,7 @@ class DataViewPanel(QWidget):
         self.ax2 = None
         self.slider_marker = None
         self.grid_visible = True
+        self.pins = []
 
         # Dual Clearing
         self._original_title = self.ax.get_title()
@@ -215,9 +223,10 @@ class DataViewPanel(QWidget):
         self.event_table.setRowCount(0)
 
         # Clear pins/highlights
-        for pin in getattr(self, "pins", []):
+        for marker, label in getattr(self, "pins", []):
             try:
-                pin.remove()
+                marker.remove()
+                label.remove()
             except Exception:
                 pass
         self.pins = []
@@ -486,6 +495,100 @@ class DataViewPanel(QWidget):
             x=t, color="blue", linestyle="--", linewidth=1.2
         )
         self.canvas.draw_idle()
+
+    def handle_table_edit(self, item):
+        row = item.row()
+        col = item.column()
+
+        if col != 2:
+            self.populate_table()
+            return
+
+        try:
+            new_val = float(item.text())
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", "Please enter a valid number.")
+            self.populate_table()
+            return
+
+        has_od = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
+        if has_od:
+            od_val = self.event_table_data[row][3]
+            frame = self.event_table_data[row][4]
+            self.event_table_data[row] = (
+                self.event_table_data[row][0],
+                self.event_table_data[row][1],
+                round(new_val, 2),
+                od_val,
+                frame,
+            )
+        else:
+            frame = self.event_table_data[row][3]
+            self.event_table_data[row] = (
+                self.event_table_data[row][0],
+                self.event_table_data[row][1],
+                round(new_val, 2),
+                frame,
+            )
+        self.populate_table()
+
+    def show_event_table_context_menu(self, pos):
+        index = self.event_table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+
+        menu = QMenu(self)
+        jump_action = menu.addAction("Jump to Event on Plot")
+        delete_action = menu.addAction("Delete Event")
+        action = menu.exec_(self.event_table.viewport().mapToGlobal(pos))
+
+        if action == jump_action:
+            self.on_table_row_clicked(row, 0)
+        elif action == delete_action:
+            del self.event_labels[row]
+            del self.event_times[row]
+            del self.event_table_data[row]
+            self.populate_table()
+            self.update_plot()
+
+    def handle_click_on_plot(self, event):
+        if event.inaxes != self.ax or self.trace_data is None:
+            return
+
+        x = event.xdata
+        if x is None:
+            return
+
+        if event.button == 1 and not self.toolbar.mode:
+            times = self.trace_data["Time (s)"].values
+            idx = int(np.argmin(np.abs(times - x)))
+            y = self.trace_data["Inner Diameter"].values[idx]
+            marker = self.ax.plot(x, y, "ro", markersize=6)[0]
+            label = self.ax.annotate(
+                f"{x:.2f} s\n{y:.1f} µm",
+                xy=(x, y),
+                xytext=(6, 6),
+                textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#000", lw=1),
+                fontsize=8,
+            )
+            self.pins.append((marker, label))
+            self.canvas.draw_idle()
+        elif event.button == 3:
+            click_x, click_y = event.x, event.y
+            for marker, label in list(self.pins):
+                data_x = marker.get_xdata()[0]
+                data_y = marker.get_ydata()[0]
+                px, py = self.ax.transData.transform((data_x, data_y))
+                if np.hypot(px - click_x, py - click_y) < 10:
+                    marker.remove()
+                    label.remove()
+                    self.pins.remove((marker, label))
+                    self.canvas.draw_idle()
+                    return
 
     def _toggle_grid(self):
         self.grid_visible = not self.grid_visible
