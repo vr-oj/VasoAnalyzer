@@ -10,7 +10,7 @@ Built by **Osvaldo J. Vega Rodríguez** | Tykocki Lab | Michigan State Universit
 
 ## 🌟 What is VasoAnalyzer?
 
-**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **1.7** brings a host of new UX improvements, analysis‑ready exports, and a full dual‑view mode for side‑by‑side comparisons.
+**VasoAnalyzer** is a standalone desktop app built to make pressure myography data analysis clean, fast, and intuitive. It visualizes diameter traces, and auto-extracts event-based inner diameter data. **1.7** brings a host of new UX improvements, analysis‑ready exports.
 
 Designed for researchers. Powered by Python. Zero coding required.
 
@@ -20,12 +20,6 @@ Designed for researchers. Powered by Python. Zero coding required.
 ### Single View  
 – Focus on one trace + event table + snapshot.  
 – Ideal for quick QC, event editing, exporting.
-
-### Dual View  
-– Compare two datasets side‑by‑side.  
-– Independent styling, zoom & pan in each panel.  
-– Sync or swap pickles via drag‑and‑drop.
-  - Improved TIFF loading, slider syncing, tooltip display
 
 ## 🧰 Key Features in v1.7
 
