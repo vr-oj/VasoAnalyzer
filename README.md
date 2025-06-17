@@ -66,7 +66,7 @@ Organize related experiments together in a single `.vaso` file. Each project can
 4. Save progress with **Project → Save Project** and reopen using **Project → Open Project…**.
 5. **Save N As…** exports a single sample to its own `.vaso` file for quick sharing.
 6. Use the **Save As** toolbar button to export a high‑res plot or choose **Save Data to Project** to embed the current trace and events as a new N in the selected experiment.
-7. Select two Ns, right‑click, and choose **Open Dual View…** to compare them side by side in one window.
+7. Select two Ns, right‑click, and choose **Open Dual View…** to compare them stacked vertically in one window.
 
 ---
 ## 🚀 Download & Install
