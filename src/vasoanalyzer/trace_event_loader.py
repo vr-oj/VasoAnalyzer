@@ -4,19 +4,11 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .trace_loader import load_trace as modern_load_trace
-from .legacy_trace_loader import (
-    load_trace as legacy_load_trace,
-    is_legacy_trace,
-)
+from .trace_loader import load_trace
 from .event_loader import (
     load_events,
     find_matching_event_file,
     _standardize_headers,
-)
-from .legacy_event_loader import (
-    load_events as legacy_load_events,
-    is_legacy_event,
 )
 
 
@@ -58,10 +50,7 @@ def load_trace_and_events(trace_path: str, events_path: str | pd.DataFrame | Non
         ``None`` if unavailable) and the diameter at each event time.
     """
     log.info("Loading trace and events for %s", trace_path)
-    if is_legacy_trace(trace_path):
-        df = legacy_load_trace(trace_path)
-    else:
-        df = modern_load_trace(trace_path)
+    df = load_trace(trace_path)
 
     events_df = None
     ev_path = None
@@ -87,10 +76,7 @@ def load_trace_and_events(trace_path: str, events_path: str | pd.DataFrame | Non
     if events_df is not None or (ev_path and os.path.exists(ev_path)):
         if events_df is None:
             events_df = _read_event_dataframe(ev_path)
-            if is_legacy_event(ev_path):
-                labels, times, frames, diam = legacy_load_events(ev_path, df)
-            else:
-                labels, times, frames = load_events(ev_path)
+            labels, times, frames = load_events(ev_path)
         else:
             labels = events_df[events_df.columns[0]].astype(str).tolist()
             if "Time" in events_df.columns:

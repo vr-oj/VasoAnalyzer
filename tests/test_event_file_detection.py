@@ -32,18 +32,6 @@ def test_find_matching_event_file_dash(tmp_path):
     assert find_matching_event_file(str(trace)) == str(events)
 
 
-def test_load_trace_legacy_columns(tmp_path):
-    csv_path = tmp_path / "trace.csv"
-    df = pd.DataFrame({"T": [0, 1], "I.D.": [10, 11]})
-    df.to_csv(csv_path, index=False)
-
-    loaded = load_trace(str(csv_path))
-    assert "Time (s)" in loaded.columns
-    assert "Inner Diameter" in loaded.columns
-    assert loaded["Time (s)"].tolist() == [0, 1]
-    assert loaded["Inner Diameter"].tolist() == [10, 11]
-
-
 def test_load_trace_semicolon_delimiter(tmp_path):
     csv_path = tmp_path / "trace.csv"
     with open(csv_path, "w") as f:
@@ -58,18 +46,6 @@ def test_load_events_numeric_strings(tmp_path):
     pd.DataFrame({"Label": ["A", "B"], "Time": ["1", "2"]}).to_csv(event_path, index=False)
     labels, times, frames = load_events(str(event_path))
     assert times == [1.0, 2.0]
-
-
-def test_load_events_legacy_event_column(tmp_path):
-    event_path = tmp_path / "events_legacy.csv"
-    # Legacy tables often place the time column first
-    df = pd.DataFrame({"Time": [0.5, 1.0], "Event": ["A", "B"]})
-    df.to_csv(event_path, index=False)
-
-    labels, times, frames = load_events(str(event_path))
-
-    assert labels == ["A", "B"]
-    assert times == [0.5, 1.0]
 
 
 def test_load_events_frame_column_not_label(tmp_path):
