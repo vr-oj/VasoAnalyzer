@@ -1278,6 +1278,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.customContextMenuRequested.connect(
             self.show_event_table_context_menu
         )
+        self.event_table.installEventFilter(self)
 
         snapshot_layout = QVBoxLayout()
         snapshot_layout.setSpacing(4)
@@ -1607,6 +1608,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.slider.setValue(0)
             self.snapshot_label.show()
             self.slider.show()
+            self.update_snapshot_size()
 
             # 6) Reset the red‑line marker so next scroll redraws it
             self.slider_marker = None
@@ -1988,15 +1990,24 @@ class VasoAnalyzerApp(QMainWindow):
             else:
                 raise ValueError(f"Unknown TIFF frame dimensions: {frame.shape}")
 
-            self.snapshot_label.setPixmap(
-                QPixmap.fromImage(q_img).scaled(
-                    self.snapshot_label.width(),
-                    self.snapshot_label.height(),
-                    Qt.KeepAspectRatio,
-                )
-            )
+            target_width = self.event_table.viewport().width()
+            if target_width <= 0:
+                target_width = self.snapshot_label.width()
+            pix = QPixmap.fromImage(q_img).scaledToWidth(target_width, Qt.SmoothTransformation)
+            self.snapshot_label.setFixedSize(pix.width(), pix.height())
+            self.snapshot_label.setPixmap(pix)
         except Exception as e:
             log.error("Error displaying frame %s: %s", index, e)
+
+    def update_snapshot_size(self):
+        if not self.snapshot_frames:
+            return
+        self.display_frame(self.current_frame)
+
+    def eventFilter(self, source, event):
+        if source is self.event_table and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self.update_snapshot_size)
+        return super().eventFilter(source, event)
 
     def change_frame(self):
         if not self.snapshot_frames:
