@@ -74,7 +74,7 @@ def load_trace(file_path):
 
         if "inner" in norm and "diam" in norm:
             inner_candidates.append(c)
-        elif "outer" in norm and "diam" in norm or norm == "od":
+        elif ("outer" in norm and "diam" in norm) or norm.startswith("od"):
             outer_candidates.append(c)
         elif "diam" in norm or norm in {"id", "diameter"}:
             diam_candidates.append(c)
