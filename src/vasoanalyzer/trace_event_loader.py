@@ -45,9 +45,9 @@ def load_trace_and_events(trace_path: str, events_path: str | pd.DataFrame | Non
 
     Returns
     -------
-    tuple[pandas.DataFrame, list[str], list[float], list[int] | None, list[float]]
+    tuple[pandas.DataFrame, list[str], list[float], list[int] | None, list[float], list[float]]
         The trace DataFrame followed by event labels, times, frame indices (or
-        ``None`` if unavailable) and the diameter at each event time.
+        ``None`` if unavailable) and the inner and outer diameter at each event time.
     """
     log.info("Loading trace and events for %s", trace_path)
     df = load_trace(trace_path)
@@ -72,6 +72,7 @@ def load_trace_and_events(trace_path: str, events_path: str | pd.DataFrame | Non
     times: list[float] = []
     frames: list[int] | None = None
     diam: list[float] = []
+    od_diam: list[float] = []
 
     if events_df is not None or (ev_path and os.path.exists(ev_path)):
         if events_df is None:
@@ -98,11 +99,14 @@ def load_trace_and_events(trace_path: str, events_path: str | pd.DataFrame | Non
             else:
                 arr_d = df["Inner Diameter"].values
                 diam = [float(arr_d[int(np.argmin(np.abs(arr_t - t)))]) for t in times]
+        if "Outer Diameter" in df.columns:
+            arr_od = df["Outer Diameter"].values
+            od_diam = [float(arr_od[int(np.argmin(np.abs(arr_t - t)))]) for t in times]
 
         if frames is None:
             frames = [int(np.argmin(np.abs(arr_t - t))) for t in times]
 
     log.info("Trace and events loaded: %d events", len(labels))
-    return df, labels, times, frames, diam
+    return df, labels, times, frames, diam, od_diam
 
 __all__ = ["load_trace_and_events"]
