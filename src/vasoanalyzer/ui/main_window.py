@@ -1664,8 +1664,34 @@ class VasoAnalyzerApp(QMainWindow):
                     ev.create_dataset("od_before", data=od_b)
                 if self.event_times:
                     ev.create_dataset("times", data=self.event_times)
+                else:
+                    times_col = [row[1] for row in self.event_table_data]
+                    ev.create_dataset("times", data=times_col)
                 if getattr(self, "event_frames", None):
                     ev.create_dataset("frames", data=self.event_frames)
+                else:
+                    frames_col = [
+                        row[4] if "Outer Diameter" in self.trace_data.columns else row[3]
+                        for row in self.event_table_data
+                    ]
+                    ev.create_dataset("frames", data=frames_col)
+                # Store full event table for reproducibility
+                try:
+                    import pandas as pd
+
+                    has_od = "Outer Diameter" in self.trace_data.columns
+                    cols = ["Event", "Time (s)", "ID (µm)"]
+                    if has_od:
+                        cols.append("OD (µm)")
+                    cols.append("Frame")
+                    df_evt = pd.DataFrame(self.event_table_data, columns=cols)
+                    ev.create_dataset(
+                        "table_json",
+                        data=df_evt.to_json().encode("utf-8"),
+                        dtype="uint8",
+                    )
+                except Exception:
+                    pass
                 if self.snapshot_frames:
                     f.create_dataset(
                         "snapshots/frames",
@@ -1714,27 +1740,43 @@ class VasoAnalyzerApp(QMainWindow):
                     if "outer_diameter" in f["trace"]
                     else None
                 )
-                labels = [s.decode() for s in f["events/labels"][...]]
-                diam_before = f["events/diam_before"][...]
+                evgrp = f["events"]
+                labels = [s.decode() for s in evgrp["labels"][...]]
+                diam_before = evgrp["diam_before"][...]
                 od_before = (
-                    f["events/od_before"][...] if "od_before" in f["events"] else None
+                    evgrp["od_before"][...] if "od_before" in evgrp else None
                 )
-                times = (
-                    f["events/times"][...]
-                    if "events" in f and "times" in f["events"]
-                    else None
-                )
-                frames = (
-                    f["events/frames"][...]
-                    if "events" in f and "frames" in f["events"]
-                    else None
-                )
+                df_events = None
+                if "table_json" in evgrp:
+                    import pandas as pd
+
+                    df_events = pd.read_json(
+                        evgrp["table_json"][...].tobytes().decode("utf-8")
+                    )
+                    times = df_events["Time (s)"].tolist()
+                    frames = df_events["Frame"].tolist()
+                    labels = df_events["Event"].astype(str).tolist()
+                    diam_before = df_events["ID (µm)"].tolist()
+                    if "OD (µm)" in df_events.columns:
+                        od_before = df_events["OD (µm)"].tolist()
+                else:
+                    times = evgrp["times"][...] if "times" in evgrp else None
+                    frames = evgrp["frames"][...] if "frames" in evgrp else None
+
                 stack = f["snapshots/frames"][...] if "snapshots/frames" in f else None
                 raw = f["style_meta"][...].tobytes()
                 style = pickle.loads(raw)
                 idx = f.attrs.get("current_frame_idx", 0)
             self.load_trace(t, d, od)
-            self.load_project_events(labels, times, frames, diam_before, od_before)
+            if df_events is not None:
+                self.event_labels = labels
+                self.event_times = times
+                self.event_frames = frames
+                self.event_table_data = df_events.values.tolist()
+                self.populate_table()
+                self.update_plot()
+            else:
+                self.load_project_events(labels, times, frames, diam_before, od_before)
             if stack is not None:
                 self.load_snapshots(stack)
             self.apply_style(style)
