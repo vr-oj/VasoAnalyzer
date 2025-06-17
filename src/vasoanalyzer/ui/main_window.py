@@ -1099,6 +1099,22 @@ class VasoAnalyzerApp(QMainWindow):
         # for now just stub it to full‐data
         self.fit_to_data()
 
+    def zoom_out(self, factor: float = 1.2):
+        """Zoom out by the given factor around the center of the current view."""
+        xmin, xmax = self.ax.get_xlim()
+        ymin, ymax = self.ax.get_ylim()
+
+        x_center = (xmin + xmax) / 2
+        y_center = (ymin + ymax) / 2
+
+        x_half = (xmax - xmin) * factor / 2
+        y_half = (ymax - ymin) * factor / 2
+
+        self.ax.set_xlim(x_center - x_half, x_center + x_half)
+        self.ax.set_ylim(y_center - y_half, y_center + y_half)
+        self.canvas.draw_idle()
+        self.update_scroll_slider()
+
     def toggle_annotation(self, kind: str):
         if kind == "lines":
             for line in self.ax.get_lines():
@@ -1456,6 +1472,13 @@ class VasoAnalyzerApp(QMainWindow):
             visible_buttons[3].setIcon(QIcon(self.icon_path("Pan.svg")))
             visible_buttons[4].setToolTip("Zoom: Draw box to zoom in")
             visible_buttons[4].setIcon(QIcon(self.icon_path("Zoom.svg")))
+
+            # Inject Zoom Out button directly after the built-in Zoom
+            zoom_out_btn = QToolButton()
+            zoom_out_btn.setIcon(QIcon(self.icon_path("ZoomOut.svg")))
+            zoom_out_btn.setToolTip("Zoom Out")
+            zoom_out_btn.clicked.connect(self.zoom_out)
+            toolbar.insertWidget(visible_buttons[5], zoom_out_btn)
 
             layout_btn = visible_buttons[5]
             layout_btn.setToolTip("Configure subplot layout")
