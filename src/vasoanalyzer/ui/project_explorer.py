@@ -1,4 +1,4 @@
-from PyQt5.QtWidgets import QDockWidget, QTreeWidget
+from PyQt5.QtWidgets import QDockWidget, QTreeWidget, QAbstractItemView
 
 
 class ProjectExplorerWidget(QDockWidget):
@@ -8,4 +8,5 @@ class ProjectExplorerWidget(QDockWidget):
         super().__init__("Project", parent)
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setWidget(self.tree)
