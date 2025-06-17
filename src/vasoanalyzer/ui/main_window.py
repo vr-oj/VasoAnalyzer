@@ -42,6 +42,7 @@ from PyQt5.QtWidgets import (
     QDockWidget,
     QTreeWidget,
     QTreeWidgetItem,
+    QSplitter,
     QStyle,
 )
 
