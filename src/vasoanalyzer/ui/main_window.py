@@ -1121,12 +1121,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.fit_to_data()
 
     def zoom_out(self, factor: float = 1.1):
-        """Zoom out by the given factor around the center of the current view.
+        """Zoom out by ``factor`` around the current view's center.
 
-        The default factor has been lowered so that each click on the Zoom Out
-        button only slightly expands the current view, resulting in a more
-        gradual zoom out experience.
+        ``factor`` is relative to the current axis span. Limits are clamped to
+        the full data range so repeated zooming never drifts beyond the
+        available data. This ensures zooming always begins from the current
+        view rather than an arbitrary level.
         """
+
         xmin, xmax = self.ax.get_xlim()
         ymin, ymax = self.ax.get_ylim()
 
@@ -1136,8 +1138,18 @@ class VasoAnalyzerApp(QMainWindow):
         x_half = (xmax - xmin) * factor / 2
         y_half = (ymax - ymin) * factor / 2
 
-        self.ax.set_xlim(x_center - x_half, x_center + x_half)
-        self.ax.set_ylim(y_center - y_half, y_center + y_half)
+        new_xmin, new_xmax = x_center - x_half, x_center + x_half
+        new_ymin, new_ymax = y_center - y_half, y_center + y_half
+
+        if self.xlim_full is not None:
+            new_xmin = max(new_xmin, self.xlim_full[0])
+            new_xmax = min(new_xmax, self.xlim_full[1])
+        if self.ylim_full is not None:
+            new_ymin = max(new_ymin, self.ylim_full[0])
+            new_ymax = min(new_ymax, self.ylim_full[1])
+
+        self.ax.set_xlim(new_xmin, new_xmax)
+        self.ax.set_ylim(new_ymin, new_ymax)
         self.canvas.draw_idle()
         self.update_scroll_slider()
 
