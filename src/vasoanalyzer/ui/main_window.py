@@ -1102,10 +1102,15 @@ class VasoAnalyzerApp(QMainWindow):
         return load_events
 
     def reset_to_full_view(self):
-        if self.xlim_full is not None and self.ylim_full is not None:
-            self.ax.set_xlim(self.xlim_full)
-            self.ax.set_ylim(self.ylim_full)
-            self.canvas.draw()
+        """Restore the plot to the stored full-view limits."""
+        if self.xlim_full is None:
+            self.xlim_full = self.ax.get_xlim()
+        if self.ylim_full is None:
+            self.ylim_full = self.ax.get_ylim()
+
+        self.ax.set_xlim(self.xlim_full)
+        self.ax.set_ylim(self.ylim_full)
+        self.canvas.draw()
 
     def reset_view(self):
         self.reset_to_full_view()
@@ -1120,7 +1125,7 @@ class VasoAnalyzerApp(QMainWindow):
         # for now just stub it to full‐data
         self.fit_to_data()
 
-    def zoom_out(self, factor: float = 1.1):
+    def zoom_out(self, factor: float = 1.5, x_only: bool = True):
         """Zoom out by ``factor`` around the current view's center.
 
         ``factor`` is relative to the current axis span. Limits are clamped to
@@ -1128,6 +1133,11 @@ class VasoAnalyzerApp(QMainWindow):
         available data. This ensures zooming always begins from the current
         view rather than an arbitrary level.
         """
+
+        if self.xlim_full is None:
+            self.xlim_full = self.ax.get_xlim()
+        if self.ylim_full is None:
+            self.ylim_full = self.ax.get_ylim()
 
         xmin, xmax = self.ax.get_xlim()
         ymin, ymax = self.ax.get_ylim()
@@ -1149,7 +1159,8 @@ class VasoAnalyzerApp(QMainWindow):
             new_ymax = min(new_ymax, self.ylim_full[1])
 
         self.ax.set_xlim(new_xmin, new_xmax)
-        self.ax.set_ylim(new_ymin, new_ymax)
+        if not x_only:
+            self.ax.set_ylim(new_ymin, new_ymax)
         self.canvas.draw_idle()
         self.update_scroll_slider()
 
@@ -2358,6 +2369,12 @@ class VasoAnalyzerApp(QMainWindow):
             self.ax.set_ylim(*state.get("ylim", self.ax.get_ylim()))
             self.grid_visible = state.get("grid_visible", True)
             self.ax.grid(self.grid_visible, color=CURRENT_THEME["grid_color"])
+
+            # Ensure full-view limits are available for Home/Zoom Out
+            if self.xlim_full is None:
+                self.xlim_full = self.ax.get_xlim()
+            if self.ylim_full is None:
+                self.ylim_full = self.ax.get_ylim()
 
             # Re-plot pinned points
             self.pinned_points.clear()
