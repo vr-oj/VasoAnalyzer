@@ -84,6 +84,7 @@ log = logging.getLogger(__name__)
 
 from .constants import PREVIOUS_PLOT_PATH, DEFAULT_STYLE
 
+
 class CustomToolbar(NavigationToolbar):
     """Navigation toolbar that resets using stored full limits."""
 
@@ -93,7 +94,6 @@ class CustomToolbar(NavigationToolbar):
 
     def home(self):
         self._reset_callback()
-
 
 
 # [B] ========================= MAIN CLASS DEFINITION ================================
@@ -416,8 +416,12 @@ class VasoAnalyzerApp(QMainWindow):
                         diameter_data=s.diameter_data,
                         exported=s.exported,
                         column=s.column,
-                        trace_data=s.trace_data.copy() if s.trace_data is not None else None,
-                        events_data=s.events_data.copy() if s.events_data is not None else None,
+                        trace_data=(
+                            s.trace_data.copy() if s.trace_data is not None else None
+                        ),
+                        events_data=(
+                            s.events_data.copy() if s.events_data is not None else None
+                        ),
                         ui_state=s.ui_state.copy() if s.ui_state is not None else None,
                     )
                     view.load_sample_into_view(sample_copy)
@@ -485,7 +489,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_new_windows(selected_samples)
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
-        
+
     def add_experiment(self):
         if not self.current_project:
             return
@@ -906,7 +910,6 @@ class VasoAnalyzerApp(QMainWindow):
         act_rel.triggered.connect(self.show_release_notes)
         help_menu.addAction(act_rel)
 
-
     def build_recent_files_menu(self):
         self.recent_menu.clear()
 
@@ -944,7 +947,6 @@ class VasoAnalyzerApp(QMainWindow):
         clear_action = QAction("Clear Recent Projects", self)
         clear_action.triggered.connect(self.clear_recent_projects)
         self.recent_projects_menu.addAction(clear_action)
-
 
     def open_preferences_dialog(self):
         QMessageBox.information(
@@ -1193,9 +1195,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.canvas.draw_idle()
 
     def toggle_outer_diameter(self, checked: bool):
-        log.info(
-            "toggle_outer_diameter called — checked=%s", checked
-        )
+        log.info("toggle_outer_diameter called — checked=%s", checked)
         if self.outer_line:
             log.info(
                 "outer_line %s visible before: %s",
@@ -1539,7 +1539,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             axes_btn = visible_buttons[6]
             axes_btn.setToolTip("Edit axis ranges and titles")
-            axes_btn.setIcon(QIcon(self.icon_path("Customize:edit_axis_ranges.svg")))
+            axes_btn.setIcon(QIcon(self.icon_path("Customize_edit_axis_ranges.svg")))
             axes_btn.triggered.disconnect()
             axes_btn.triggered.connect(
                 lambda checked=False, c=canvas: self.open_axis_settings_dialog_for(
@@ -1893,7 +1893,11 @@ class VasoAnalyzerApp(QMainWindow):
                     ev.create_dataset("frames", data=self.event_frames)
                 else:
                     frames_col = [
-                        row[4] if "Outer Diameter" in self.trace_data.columns else row[3]
+                        (
+                            row[4]
+                            if "Outer Diameter" in self.trace_data.columns
+                            else row[3]
+                        )
                         for row in self.event_table_data
                     ]
                     ev.create_dataset("frames", data=frames_col)
@@ -1965,9 +1969,7 @@ class VasoAnalyzerApp(QMainWindow):
                 evgrp = f["events"]
                 labels = [s.decode() for s in evgrp["labels"][...]]
                 diam_before = evgrp["diam_before"][...]
-                od_before = (
-                    evgrp["od_before"][...] if "od_before" in evgrp else None
-                )
+                od_before = evgrp["od_before"][...] if "od_before" in evgrp else None
                 df_events = None
                 if "table_json" in evgrp:
                     import pandas as pd
@@ -2225,7 +2227,9 @@ class VasoAnalyzerApp(QMainWindow):
             target_width = self.event_table.viewport().width()
             if target_width <= 0:
                 target_width = self.snapshot_label.width()
-            pix = QPixmap.fromImage(q_img).scaledToWidth(target_width, Qt.SmoothTransformation)
+            pix = QPixmap.fromImage(q_img).scaledToWidth(
+                target_width, Qt.SmoothTransformation
+            )
             self.snapshot_label.setFixedSize(pix.width(), pix.height())
             self.snapshot_label.setPixmap(pix)
         except Exception as e:
@@ -2856,9 +2860,7 @@ class VasoAnalyzerApp(QMainWindow):
         arr_t = self.trace_data["Time (s)"].values
         idx = int(np.argmin(np.abs(arr_t - x)))
         id_val = self.trace_data["Inner Diameter"].values[idx]
-        od_val = (
-            self.trace_data["Outer Diameter"].values[idx] if has_od else None
-        )
+        od_val = self.trace_data["Outer Diameter"].values[idx] if has_od else None
 
         if trace_type == "outer" and has_od:
             od_val = y
