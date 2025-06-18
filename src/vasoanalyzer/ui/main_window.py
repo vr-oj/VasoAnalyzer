@@ -1526,7 +1526,7 @@ class VasoAnalyzerApp(QMainWindow):
             zoom_out_btn = QToolButton()
             zoom_out_btn.setIcon(QIcon(self.icon_path("ZoomOut.svg")))
             zoom_out_btn.setToolTip("Zoom Out")
-            zoom_out_btn.clicked.connect(self.zoom_out)
+            zoom_out_btn.clicked.connect(lambda: self.zoom_out())
             toolbar.insertWidget(visible_buttons[5], zoom_out_btn)
 
             layout_btn = visible_buttons[5]
