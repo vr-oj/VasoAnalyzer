@@ -2649,7 +2649,10 @@ class VasoAnalyzerApp(QMainWindow):
 
     # [G] ========================= PIN INTERACTION LOGIC ================================
     def handle_click_on_plot(self, event):
-        if event.inaxes != self.ax:
+        valid_axes = [self.ax]
+        if self.ax2:
+            valid_axes.append(self.ax2)
+        if event.inaxes not in valid_axes:
             return
 
         x = event.xdata
