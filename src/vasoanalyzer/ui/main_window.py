@@ -2666,7 +2666,9 @@ class VasoAnalyzerApp(QMainWindow):
             for marker, label in self.pinned_points:
                 data_x = marker.get_xdata()[0]
                 data_y = marker.get_ydata()[0]
-                pixel_x, pixel_y = self.ax.transData.transform((data_x, data_y))
+                tr_type = getattr(marker, "trace_type", "inner")
+                ax_ref = self.ax2 if tr_type == "outer" and self.ax2 else self.ax
+                pixel_x, pixel_y = ax_ref.transData.transform((data_x, data_y))
                 pixel_distance = np.hypot(pixel_x - click_x, pixel_y - click_y)
 
                 if pixel_distance < 10:
@@ -2690,19 +2692,34 @@ class VasoAnalyzerApp(QMainWindow):
                         self.undo_last_replacement()
                         return
                     elif action == add_new_action:
-                        self.prompt_add_event(data_x, data_y)
+                        self.prompt_add_event(data_x, data_y, tr_type)
                         return
             return
 
         # 🟢 Left-click = add pin (unless toolbar zoom/pan is active)
         if event.button == 1 and not self.toolbar.mode:
-            time_array = self.trace_data["Time (s)"].values
-            id_array = self.trace_data["Inner Diameter"].values
-            nearest_idx = np.argmin(np.abs(time_array - x))
-            y = id_array[nearest_idx]
+            t_arr = self.trace_data["Time (s)"].values
+            idx = np.argmin(np.abs(t_arr - x))
 
-            marker = self.ax.plot(x, y, "ro", markersize=6)[0]
-            label = self.ax.annotate(
+            contains_id = self.trace_line.contains(event)[0]
+            contains_od = False
+            if self.ax2 and self.od_line:
+                contains_od = self.od_line.contains(event)[0]
+
+            tr_type = "inner"
+            ax_ref = self.ax
+            y_arr = self.trace_data["Inner Diameter"].values
+
+            if contains_od and (not contains_id or event.inaxes is self.ax2):
+                tr_type = "outer"
+                ax_ref = self.ax2
+                y_arr = self.trace_data["Outer Diameter"].values
+
+            y = y_arr[idx]
+
+            marker = ax_ref.plot(x, y, "ro", markersize=6)[0]
+            marker.trace_type = tr_type
+            label = ax_ref.annotate(
                 f"{x:.2f} s\n{y:.1f} µm",
                 xy=(x, y),
                 xytext=(6, 6),
@@ -2715,6 +2732,7 @@ class VasoAnalyzerApp(QMainWindow):
                 ),
                 fontsize=8,
             )
+            label.trace_type = tr_type
 
             self.pinned_points.append((marker, label))
             self.canvas.draw_idle()
@@ -2776,7 +2794,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self.populate_table()
                 self.auto_export_table()
 
-    def prompt_add_event(self, x, y):
+    def prompt_add_event(self, x, y, trace_type="inner"):
         if not self.event_table_data:
             QMessageBox.warning(
                 self, "No Events", "You must load events before adding new ones."
@@ -2785,7 +2803,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Build label options and insertion points
         insert_labels = [
-            f"{label} at {t:.2f}s" for label, t, _, _ in self.event_table_data
+            f"{label} at {t:.2f}s" for label, t, *_ in self.event_table_data
         ]
         insert_labels.append("↘️ Add to end")  # final option
 
@@ -2814,7 +2832,37 @@ class VasoAnalyzerApp(QMainWindow):
         # Calculate frame number based on time
         frame_number = int(x / self.recording_interval)
 
-        new_entry = (new_label.strip(), round(x, 2), round(y, 2), frame_number)
+        has_od = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
+
+        arr_t = self.trace_data["Time (s)"].values
+        idx = int(np.argmin(np.abs(arr_t - x)))
+        id_val = self.trace_data["Inner Diameter"].values[idx]
+        od_val = (
+            self.trace_data["Outer Diameter"].values[idx] if has_od else None
+        )
+
+        if trace_type == "outer" and has_od:
+            od_val = y
+        else:
+            id_val = y
+
+        if has_od:
+            new_entry = (
+                new_label.strip(),
+                round(x, 2),
+                round(id_val, 2),
+                round(od_val, 2),
+                frame_number,
+            )
+        else:
+            new_entry = (
+                new_label.strip(),
+                round(x, 2),
+                round(id_val, 2),
+                frame_number,
+            )
 
         # Insert into data
         if insert_idx == len(self.event_table_data):  # Add to end
