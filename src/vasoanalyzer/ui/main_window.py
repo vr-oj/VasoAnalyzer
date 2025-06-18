@@ -2521,7 +2521,7 @@ class VasoAnalyzerApp(QMainWindow):
                 idx_pre = np.argmin(np.abs(time_trace - t_sample))
                 diam_val = diam_trace.iloc[idx_pre]
                 od_val = od_trace.iloc[idx_pre] if od_trace is not None else None
-                if self.event_frames:
+                if self.event_frames and i < len(self.event_frames):
                     frame_number = self.event_frames[i]
                 else:
                     frame_number = idx_ev
@@ -2869,10 +2869,12 @@ class VasoAnalyzerApp(QMainWindow):
             self.event_labels.append(new_label.strip())
             self.event_times.append(x)
             self.event_table_data.append(new_entry)
+            self.event_frames.append(frame_number)
         else:
             self.event_labels.insert(insert_idx, new_label.strip())
             self.event_times.insert(insert_idx, x)
             self.event_table_data.insert(insert_idx, new_entry)
+            self.event_frames.insert(insert_idx, frame_number)
 
         self.populate_table()
         self.auto_export_table()
@@ -2938,10 +2940,12 @@ class VasoAnalyzerApp(QMainWindow):
             self.event_labels.append(label.strip())
             self.event_times.append(t_val)
             self.event_table_data.append(new_entry)
+            self.event_frames.append(frame_number)
         else:
             self.event_labels.insert(insert_idx, label.strip())
             self.event_times.insert(insert_idx, t_val)
             self.event_table_data.insert(insert_idx, new_entry)
+            self.event_frames.insert(insert_idx, frame_number)
 
         self.populate_table()
         self.update_plot()
@@ -3406,6 +3410,8 @@ class VasoAnalyzerApp(QMainWindow):
             if confirm == QMessageBox.Yes:
                 del self.event_labels[row]
                 del self.event_times[row]
+                if len(self.event_frames) > row:
+                    del self.event_frames[row]
                 del self.event_table_data[row]
                 self.populate_table()
                 self.update_plot()
