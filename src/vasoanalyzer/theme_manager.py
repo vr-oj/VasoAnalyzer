@@ -1,16 +1,18 @@
-from PyQt5.QtGui import QPalette, QColor, QFont
+from PyQt5.QtGui import QPalette, QColor
 from PyQt5.QtWidgets import QApplication
 from matplotlib import rcParams
+import re
 
 # -----------------------------------------------------------------------------
 # Centralized Theme Definitions for VasoAnalyzer
 # -----------------------------------------------------------------------------
-# Define color tokens for light and dark themes
+# Define color tokens for the application theme
 LIGHT_THEME = {
-    'window_bg': '#F5F5F5',
+    'window_bg': '#FFFFFF',
     'text': '#000000',
     'button_bg': '#FFFFFF',
     'button_hover_bg': '#E6F0FF',
+    'button_active_bg': '#CCE0FF',
     'toolbar_bg': '#F0F0F0',
     'table_bg': '#FFFFFF',
     'table_text': '#000000',
@@ -21,20 +23,8 @@ LIGHT_THEME = {
     'grid_color': '#CCCCCC',
 }
 
-DARK_THEME = {
-    'window_bg': '#2E2E2E',
-    'text': '#FFFFFF',
-    'button_bg': '#3C3C3C',
-    'button_hover_bg': '#505050',
-    'toolbar_bg': '#333333',
-    'table_bg': '#3C3C3C',
-    'table_text': '#FFFFFF',
-    'selection_bg': '#505470',
-    'alternate_bg': '#2A2A2A',
-    'hover_label_bg': 'rgba(60,60,60,220)',
-    'hover_label_border': '#AAAAAA',
-    'grid_color': '#444444',
-}
+# Currently applied theme; defaults to light until explicitly changed
+CURRENT_THEME = LIGHT_THEME
 
 # Font settings
 FONTS = {
@@ -47,6 +37,19 @@ FONTS = {
     'category_size': 15,
     'description_size': 17,
 }
+
+# -----------------------------------------------------------------------------
+# Utility
+# -----------------------------------------------------------------------------
+
+def css_rgba_to_mpl(color: str):
+    """Convert an ``rgba(r,g,b,a)`` CSS color string to a matplotlib RGBA tuple."""
+    if isinstance(color, str):
+        m = re.fullmatch(r"rgba\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", color)
+        if m:
+            r, g, b, a = map(int, m.groups())
+            return (r / 255, g / 255, b / 255, a / 255)
+    return color
 
 # -----------------------------------------------------------------------------
 # Qt Palette & Stylesheet Application
@@ -72,8 +75,10 @@ def apply_qt_palette(theme: dict):
     # Tooltips / hover labels
     palette.setColor(QPalette.ToolTipBase, QColor(theme['hover_label_bg']))
     palette.setColor(QPalette.ToolTipText, QColor(theme['text']))
-    # Apply globally
-    QApplication.setPalette(palette)
+    # Apply globally on the current application instance
+    app = QApplication.instance()
+    if app is not None:
+        app.setPalette(palette)
 
 
 def apply_qt_stylesheet(theme: dict):
@@ -106,6 +111,17 @@ QToolButton {{
 QToolButton:hover {{
     background-color: {theme['button_hover_bg']};
 }}
+QToolButton:checked,
+QPushButton:checked {{
+    background-color: {theme['button_active_bg']};
+}}
+QToolTip {{
+    background-color: {theme['hover_label_bg']};
+    color: {theme['text']};
+    border: 1px solid {theme['hover_label_border']};
+    padding: 2px 6px;
+    border-radius: 5px;
+}}
 QTableWidget {{
     background-color: {theme['table_bg']};
     color: {theme['table_text']};
@@ -121,6 +137,16 @@ QHeaderView::section {{
 }}
 QSlider::groove:horizontal, QSlider::groove:vertical {{
     background: {theme['grid_color']};
+    height: 6px;
+    border-radius: 3px;
+}}
+QSlider::handle:horizontal, QSlider::handle:vertical {{
+    background: {theme['button_bg']};
+    border: 1px solid {theme['grid_color']};
+    width: 12px;
+    height: 12px;
+    margin: -4px;
+    border-radius: 6px;
 }}
 """
 
@@ -149,12 +175,10 @@ def apply_matplotlib_style(theme: dict):
 # -----------------------------------------------------------------------------
 
 def apply_light_theme():
+    global CURRENT_THEME
+    CURRENT_THEME = LIGHT_THEME
     apply_qt_palette(LIGHT_THEME)
-    QApplication.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
+    app = QApplication.instance()
+    if app is not None:
+        app.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
     apply_matplotlib_style(LIGHT_THEME)
-
-
-def apply_dark_theme():
-    apply_qt_palette(DARK_THEME)
-    QApplication.setStyleSheet(apply_qt_stylesheet(DARK_THEME))
-    apply_matplotlib_style(DARK_THEME)

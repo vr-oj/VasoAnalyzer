@@ -1,9 +1,77 @@
-import tifffile
-import numpy as np
+"""Loading routines for TIFF stacks used for trace snapshots."""
+
+import logging
 import json
+import xml.etree.ElementTree as ET
+
+import numpy as np
+import tifffile
+
+log = logging.getLogger(__name__)
 
 
-def load_tiff(file_path, max_frames=300):
+def parse_description(desc: str) -> dict:
+    """Parse TIFF page descriptions which may contain JSON or OME-XML."""
+
+    if not desc:
+        return {}
+
+    try:
+        return json.loads(desc)
+    except json.JSONDecodeError:
+        pass
+
+    if desc.lstrip().startswith("<"):
+        try:
+            root = ET.fromstring(desc)
+        except ET.ParseError:
+            return {}
+
+        meta: dict[str, object] = {}
+
+        for elem in root.iter():
+            if elem.text and elem.text.strip() and not list(elem):
+                meta[elem.tag] = elem.text.strip()
+            for key, val in elem.attrib.items():
+                if key in meta:
+                    existing = meta[key]
+                    if isinstance(existing, list):
+                        existing.append(val)
+                    else:
+                        meta[key] = [existing, val]
+                else:
+                    meta[key] = val
+
+        for k, v in list(meta.items()):
+            if isinstance(v, list) and len(v) == 1:
+                meta[k] = v[0]
+
+        return meta
+
+    return {}
+
+
+def load_tiff(file_path, max_frames=300, metadata=True):
+    """Load a subset of frames from a TIFF file.
+
+    Args:
+        file_path (str or Path): Path to the TIFF stack.
+        max_frames (int, optional): Maximum number of frames to load. Frames are
+            sampled evenly across the stack if it contains more than this value.
+            Defaults to ``300``.
+        metadata (bool, optional): If ``True`` extract metadata for each frame.
+            Disabling metadata speeds up loading for preview-only usage.
+
+    Returns:
+        tuple[list[numpy.ndarray], list[dict]]: Extracted frames and metadata for
+            each sampled frame.
+
+    Raises:
+        OSError: If the file cannot be read as a TIFF.
+    """
+
+    log.info("Loading TIFF from %s", file_path)
+
     frames = []
     frames_metadata = []
 
@@ -11,39 +79,45 @@ def load_tiff(file_path, max_frames=300):
         total_frames = len(tif.pages)
         skip = max(1, round(total_frames / max_frames))
 
-        for i in range(0, total_frames, skip):
-            # Get the page
-            page = tif.pages[i]
+        if not metadata:
+            indices = list(range(0, total_frames, skip))
+            frames_array = tif.asarray(key=indices)
+            if frames_array.ndim == 2:
+                frames.append(np.array(frames_array))
+            else:
+                for frame in frames_array:
+                    frames.append(np.array(frame))
+            log.info("Loaded %d preview frames", len(frames))
+            return frames, frames_metadata
 
-            # Extract frame
+        for i in range(0, total_frames, skip):
+            page = tif.pages[i]
             frame = page.asarray()
             frames.append(frame)
 
-            # Extract metadata for this frame
             frame_meta = {}
-
-            # Get basic page info
             frame_meta["index"] = i
             frame_meta["shape"] = frame.shape
             frame_meta["dtype"] = str(frame.dtype)
 
-            # Try to extract the JSON metadata from the description field
             if hasattr(page, "description") and page.description:
-                try:
-                    # Parse JSON from description string
-                    json_metadata = json.loads(page.description)
-                    # Add all JSON metadata to our frame metadata
-                    frame_meta.update(json_metadata)
-                    print(f"Found JSON metadata in frame {i}")
-                except json.JSONDecodeError:
-                    print(
-                        f"Frame {i} has description but not valid JSON: {page.description[:100]}..."
-                    )
+                parsed = parse_description(page.description)
+                if parsed:
+                    frame_meta.update(parsed)
+                else:
+                    frame_meta["description_raw"] = page.description
 
-            # Also get regular TIFF tags
             for tag in page.tags.values():
                 frame_meta[tag.name] = tag.value
 
             frames_metadata.append(frame_meta)
 
+    log.info("Loaded %d frames", len(frames))
     return frames, frames_metadata
+
+
+def load_tiff_preview(file_path, max_frames=300):
+    """Fast loading without metadata for quick previews."""
+
+    log.info("Loading TIFF preview from %s", file_path)
+    return load_tiff(file_path, max_frames=max_frames, metadata=False)

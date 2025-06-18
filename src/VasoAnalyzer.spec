@@ -2,6 +2,8 @@
 import os
 import sys
 from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files
+from PyQt5.QtCore import QLibraryInfo
 
 # decide platform‐specific icon
 if sys.platform == 'darwin':
@@ -11,20 +13,30 @@ elif sys.platform.startswith('win'):
 else:
     ICON = None
 
-project_dir = os.getcwd()
+spec_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
+project_dir = os.path.abspath(os.path.join(spec_dir, '..'))
+src_dir = os.path.join(project_dir, 'src')
+
 req_subs = collect_submodules('requests')
-xl_subs  = collect_submodules('openpyxl')
+xl_subs = collect_submodules('openpyxl')
+
+# Collect toolbar icon SVGs from the project root
+icon_dir = os.path.join(project_dir, 'icons')
+icon_datas = [(os.path.join(icon_dir, f), 'icons') for f in os.listdir(icon_dir)]
+
+# Add Qt platform plugins for macOS
+qt_plugins_dir = QLibraryInfo.location(QLibraryInfo.PluginsPath)
+qt_plugin_datas = [(os.path.join(qt_plugins_dir, 'platforms'), 'PyQt5/Qt/plugins/platforms')]
 
 a = Analysis(
-    ['main.py'],
-    pathex=[project_dir],
+    [os.path.join(src_dir, 'main.py')],
+    pathex=[src_dir],
     binaries=[],
     datas=[
         ('vasoanalyzer/VasoAnalyzerSplashScreen.png', 'vasoanalyzer'),
-        # include whichever icon file(s) you ship
         ('vasoanalyzer/VasoAnalyzerIcon.icns', 'vasoanalyzer'),
         ('vasoanalyzer/VasoAnalyzerIcon.ico',  'vasoanalyzer'),
-    ],
+    ] + icon_datas + qt_plugin_datas,
     hiddenimports=[
         'tkinter',
         'tkinter.filedialog',
@@ -44,14 +56,14 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 exe = EXE(
     pyz,
     a.scripts,
-    [],                    # no extra binaries here
+    [],
     exclude_binaries=True,
-    name='VasoAnalyzer 1.6',   # base name; extension/platform is automatic
+    name='VasoAnalyzer 1.7',
     debug=False,
     strip=False,
     upx=True,
-    console=False,         # GUI only
-    icon=ICON,             # will be .icns on mac, .ico on Windows
+    console=False,
+    icon=ICON,
 )
 
 coll = COLLECT(
@@ -61,14 +73,13 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    name='VasoAnalyzer 1.6',
+    name='VasoAnalyzer 1.7',
 )
 
-# Only on macOS do we wrap into a .app bundle
 if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
-        name='VasoAnalyzer 1.6.app',
+        name='VasoAnalyzer 1.7.app',
         icon='vasoanalyzer/VasoAnalyzerIcon.icns',
         bundle_identifier=None,
     )

@@ -1,0 +1,4 @@
+from .axis_settings_dialog import AxisSettingsDialog
+from .plot_style_dialog import PlotStyleDialog
+from .subplot_layout_dialog import SubplotLayoutDialog
+from .tutorial_dialog import TutorialDialog
