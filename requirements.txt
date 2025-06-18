@@ -3,7 +3,8 @@ matplotlib>=3.0
 numpy>=1.18
 pandas>=1.0
 tifffile>=2020.7
-imagecodecs>=2021.3   # optional, for TIFF compression support
+imagecodecs>=2021.3
+h5py>=3.14.0
 
 # GUI
 PyQt5>=5.15
