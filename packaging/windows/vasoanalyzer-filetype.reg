@@ -1,0 +1,18 @@
+Windows Registry Editor Version 5.00
+
+; Associate .vaso extension with VasoAnalyzer Project
+[HKEY_CLASSES_ROOT\.vaso]
+@="VasoAnalyzer.Project"
+
+; Define the ProgID for VasoAnalyzer projects
+[HKEY_CLASSES_ROOT\VasoAnalyzer.Project]
+@="VasoAnalyzer Project File"
+"FriendlyTypeName"="VasoAnalyzer Project"
+
+; Set the custom icon (path relative to Program Files installation)
+[HKEY_CLASSES_ROOT\VasoAnalyzer.Project\DefaultIcon]
+@="\"%ProgramFiles%\\VasoAnalyzer\\VasoAnalyzerIcon.ico\",0"
+
+; Optional open command
+[HKEY_CLASSES_ROOT\VasoAnalyzer.Project\shell\open\command]
+@="\"%ProgramFiles%\\VasoAnalyzer\\VasoAnalyzer.exe\" \"%1\""
