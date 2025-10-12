@@ -32,6 +32,7 @@ def auto_export_editable_plot(self):
             "event_labels": self.event_labels,
             "event_times": self.event_times,
             "event_table_data": self.event_table_data,
+            "event_label_meta": getattr(self, "event_label_meta", []),
             "plot_style": self.get_current_plot_style(),
         }
         with open(pickle_path, "wb") as f:

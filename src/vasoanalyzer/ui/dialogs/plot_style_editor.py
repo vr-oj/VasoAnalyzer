@@ -6,6 +6,8 @@
 # PlotStyleEditor - redesigned dialog with live preview
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
@@ -21,21 +23,39 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QPushButton,
     QDialogButtonBox,
+    QListWidget,
+    QListWidgetItem,
+    QLabel,
 )
 from ..constants import DEFAULT_STYLE
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
+from ..event_label_editor import EventLabelEditor
+
 
 class PlotStyleEditor(QDialog):
-    """Dialog for adjusting plot fonts, colors and line styles."""
+    """Dialog for adjusting plot fonts, colors, lines, and per-event labels."""
 
-    def __init__(self, parent=None, initial=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        initial=None,
+        event_labels: Optional[Sequence[str]] = None,
+        event_times: Optional[Sequence[float]] = None,
+        event_meta: Optional[Sequence[Mapping[str, Any]]] = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Plot Style Editor")
         self.setFont(QFont("Arial", 10))
         self.initial = initial or {}
         self.apply_callback = None
+        self.event_update_callback = None
+        self._event_entries: List[Dict[str, Any]] = []
+        self._suppress_event_editor = False
+        self._event_updates_fired = False
+        self._load_event_entries(event_labels, event_times, event_meta)
 
         main = QVBoxLayout(self)
         main.setContentsMargins(12, 12, 12, 12)
@@ -109,6 +129,41 @@ class PlotStyleEditor(QDialog):
         main.addWidget(buttons)
 
         self._updating = False
+
+    # ------------------------------------------------------------------
+    # Event override helpers
+    def _load_event_entries(
+        self,
+        labels: Optional[Sequence[str]],
+        times: Optional[Sequence[float]],
+        meta: Optional[Sequence[Mapping[str, Any]]],
+    ) -> None:
+        self._event_entries.clear()
+        if not labels:
+            return
+
+        times_list: List[float] = []
+        if times is not None:
+            for value in times:
+                try:
+                    times_list.append(float(value))
+                except (TypeError, ValueError):
+                    times_list.append(0.0)
+        meta_list: List[Mapping[str, Any]] = list(meta or [])
+        if len(meta_list) < len(labels):
+            meta_list.extend({} for _ in range(len(labels) - len(meta_list)))
+
+        for idx, raw_label in enumerate(labels):
+            entry_meta = meta_list[idx] if idx < len(meta_list) else {}
+            time_val = times_list[idx] if idx < len(times_list) else 0.0
+            label_text = str(raw_label) if raw_label is not None else ""
+            self._event_entries.append(
+                {
+                    "label": label_text,
+                    "time": time_val,
+                    "meta": dict(entry_meta) if isinstance(entry_meta, Mapping) else {},
+                }
+            )
 
     # ------------------------------------------------------------------
     # Tab builders
@@ -262,8 +317,114 @@ class PlotStyleEditor(QDialog):
 
         grp.setLayout(form)
         layout.addWidget(grp)
+
+        overrides_header = QLabel("Per-Event Overrides")
+        overrides_header.setObjectName("EventOverridesHeader")
+        overrides_header.setStyleSheet("font-weight: 600;")
+        layout.addWidget(overrides_header)
+
+        overrides_container = QHBoxLayout()
+        overrides_container.setSpacing(10)
+
+        self.event_list = QListWidget()
+        self.event_list.setAlternatingRowColors(True)
+        self.event_list.setSelectionMode(QListWidget.SingleSelection)
+        self.event_list.currentRowChanged.connect(self._on_event_row_changed)
+        overrides_container.addWidget(self.event_list, 1)
+
+        self.event_editor = EventLabelEditor(self)
+        self.event_editor.styleChanged.connect(self._on_event_style_changed)
+        self.event_editor.labelTextChanged.connect(self._on_event_label_changed)
+        overrides_container.addWidget(self.event_editor, 2)
+
+        layout.addLayout(overrides_container)
+        self._refresh_event_list()
         layout.addStretch()
         return w
+
+    def _format_event_list_item(self, entry: Dict[str, Any]) -> str:
+        label = entry.get("label") or "(Untitled)"
+        try:
+            time_val = float(entry.get("time", 0.0))
+            return f"{label} — {time_val:.2f} s"
+        except (TypeError, ValueError):
+            return label
+
+    def _refresh_event_list(self) -> None:
+        if not hasattr(self, "event_list"):
+            return
+        self.event_list.blockSignals(True)
+        self.event_list.clear()
+        for entry in self._event_entries:
+            item = QListWidgetItem(self._format_event_list_item(entry))
+            self.event_list.addItem(item)
+        self.event_list.blockSignals(False)
+        has_events = bool(self._event_entries)
+        self.event_list.setEnabled(has_events)
+        if has_events:
+            self.event_list.setCurrentRow(0)
+        else:
+            self.event_editor.clear()
+
+    def _on_event_row_changed(self, row: int) -> None:
+        if self._suppress_event_editor:
+            return
+        if not (0 <= row < len(self._event_entries)):
+            self.event_editor.clear()
+            return
+        entry = self._event_entries[row]
+        self._suppress_event_editor = True
+        self.event_editor.set_event(
+            row,
+            entry.get("label", ""),
+            entry.get("time", 0.0),
+            entry.get("meta", {}),
+            max_lanes=2,
+        )
+        self._suppress_event_editor = False
+
+    def _on_event_style_changed(self, index: int, meta: Dict[str, Any]) -> None:
+        if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
+            return
+        self._event_entries[index]["meta"] = dict(meta or {})
+        self._event_updates_fired = False
+
+    def _on_event_label_changed(self, index: int, text: str) -> None:
+        if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
+            return
+        normalized = text.strip()
+        self._event_entries[index]["label"] = normalized
+        self._update_event_list_item(index)
+        self._event_updates_fired = False
+
+    def _update_event_list_item(self, index: int) -> None:
+        if not hasattr(self, "event_list"):
+            return
+        item = self.event_list.item(index)
+        if item is None:
+            return
+        item.setText(self._format_event_list_item(self._event_entries[index]))
+
+    def set_event_update_callback(self, callback) -> None:
+        self.event_update_callback = callback
+
+    def _emit_event_updates(self) -> None:
+        labels, meta = self.get_event_overrides()
+        if labels is None or meta is None:
+            return
+        if callable(self.event_update_callback):
+            self.event_update_callback(labels, meta)
+        self._event_updates_fired = True
+
+    def get_event_overrides(self) -> tuple[List[str], List[Dict[str, Any]]]:
+        if not self._event_entries:
+            return ([], [])
+        labels = [entry.get("label", "") for entry in self._event_entries]
+        meta = [dict(entry.get("meta", {})) for entry in self._event_entries]
+        return labels, meta
+
+    def event_updates_emitted(self) -> bool:
+        return bool(self._event_updates_fired)
 
     def _make_pinned_labels_tab(self):
         w = QWidget()
@@ -642,6 +803,7 @@ class PlotStyleEditor(QDialog):
             self.apply_callback(params)
         elif self.parent() is not None and hasattr(self.parent(), "apply_plot_style"):
             self.parent().apply_plot_style(params)
+        self._emit_event_updates()
         self._update_preview()
 
     def _reset(self):
@@ -693,3 +855,7 @@ class PlotStyleEditor(QDialog):
             tick.set_fontsize(p["tick_font_size"])
             tick.set_color(p["tick_color"])
         self.canvas.draw_idle()
+
+    def accept(self):
+        self._emit_event_updates()
+        super().accept()

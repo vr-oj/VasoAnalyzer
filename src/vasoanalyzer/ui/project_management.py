@@ -8,9 +8,7 @@ import pandas as pd
 from PyQt5.QtWidgets import (
     QMessageBox,
     QInputDialog,
-    QMenu,
 )
-from PyQt5.QtGui import QCursor
 from vasoanalyzer.core.project import SampleN, save_project
 from vasoanalyzer.ui.dialogs.excel_map_wizard import ExcelMapWizard
 
@@ -116,20 +114,6 @@ def save_data_as_n(self):
     self.refresh_project_tree()
     if self.current_project.path:
         save_project(self.current_project, self.current_project.path)
-
-
-def show_save_menu(self):
-    menu = QMenu(self)
-    act_plot = menu.addAction("High‑Res Plot…")
-    act_vaso = menu.addAction("Save Project (.vaso)…")
-    act_sample = menu.addAction("Save Data to Project…")
-    action = menu.exec_(QCursor.pos())
-    if action == act_plot:
-        self.export_high_res_plot()
-    elif action == act_vaso:
-        self.save_project_file_as()
-    elif action == act_sample:
-        self.save_data_as_n()
 
 
 def open_excel_mapping_dialog(self):

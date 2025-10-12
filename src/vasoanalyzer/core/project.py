@@ -49,6 +49,10 @@ log = logging.getLogger(__name__)
 SCHEMA_VERSION = 2
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
+# Snapshot media policy defaults
+EMBED_SNAPSHOT_TIFFS: bool = False
+EMBED_SNAPSHOT_MAX_MB: int = 4
+
 
 @dataclass
 class Attachment:
@@ -1397,12 +1401,20 @@ def _persist_sample_snapshots(
         payload["snapshot_path"] = rel_path
         if abs_path and abs_path.exists():
             try:
+                embed_tiff = False
+                if EMBED_SNAPSHOT_TIFFS:
+                    try:
+                        size_mb = abs_path.stat().st_size / (1024 * 1024)
+                    except OSError:
+                        size_mb = None
+                    else:
+                        embed_tiff = size_mb <= EMBED_SNAPSHOT_MAX_MB
                 sqlite_store.add_or_update_asset(
                     store,
                     dataset_id,
                     role="snapshot_tiff",
                     path_or_bytes=abs_path,
-                    embed=False,
+                    embed=embed_tiff,
                     mime="image/tiff",
                 )
                 payload["snapshot_tiff_role"] = "snapshot_tiff"
@@ -1968,8 +1980,26 @@ def _normalise_json_data(value: Any) -> Any:
         return [_normalise_json_data(v) for v in value]
     if isinstance(value, Path):
         return value.as_posix()
+    if isinstance(value, np.generic):
+        try:
+            return value.item()
+        except Exception:
+            return float(value)
     if isinstance(value, np.ndarray):
         return value.tolist()
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, pd.Timedelta):
+        return value.isoformat()
+    if isinstance(value, pd.Series):
+        return [_normalise_json_data(v) for v in value.tolist()]
+    if isinstance(value, pd.Index):
+        return [_normalise_json_data(v) for v in value.tolist()]
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            pass
     return value
 # Export helpers --------------------------------------------------------
 

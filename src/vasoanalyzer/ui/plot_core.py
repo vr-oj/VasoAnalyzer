@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import time
 
-import numpy as np
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.text import Text
-from matplotlib.transforms import blended_transform_factory
 from PyQt5.QtCore import QTimer
 
 from vasoanalyzer.core.trace_model import TraceModel
-from vasoanalyzer.ui.event_labels import EventLabelGutter
+from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.tracks import ChannelTrack, ChannelTrackSpec
 from vasoanalyzer.ui.overlays import (
@@ -54,14 +51,17 @@ class PlotHost:
         self._axes_map: Dict[Axes, ChannelTrack] = {}
         self._model: Optional[TraceModel] = None
         self._current_window: Optional[Tuple[float, float]] = None
-        self._event_gutter_ax: Optional[Axes] = None
-        self._event_gutter_pair: Optional[Tuple[str, str]] = None
         self._event_times: List[float] = []
         self._event_colors: Optional[List[str]] = None
         self._event_labels: List[str] = []
-        self._event_gutter_collection: Optional[LineCollection] = None
-        self._event_label_gutter: Optional[EventLabelGutter] = None
-        self._gutter_xlim_cid: Optional[int] = None
+        self._event_label_meta: List[Dict[str, Any]] = []
+        self._event_labeler: Optional[EventLabeler] = None
+        self._use_track_event_lines: bool = True
+        self._xlim_cid: Optional[int] = None
+        self._ylim_cid: Optional[int] = None
+        self._last_xlim: Optional[Tuple[float, float]] = None
+        self._last_ylim: Optional[Tuple[float, float]] = None
+        self._event_label_mode: str = "none"
         self._event_lines_visible: bool = True
         self._event_labels_visible: bool = False
         self._event_label_gap_px: int = 22
@@ -111,35 +111,17 @@ class PlotHost:
     def _rebuild_tracks(self) -> None:
         """Recreate axes and channel wrappers to match specs."""
 
-        self._dispose_event_gutter()
+        self._destroy_event_labeler()
         self.figure.clf()
         self.figure.subplots_adjust(left=0.095, right=0.985, top=0.985, bottom=0.115)
         self._tracks.clear()
         self._axes_map.clear()
-        self._event_gutter_ax = None
-        self._event_gutter_pair = None
         if not self._channel_specs:
             self._schedule_draw()
             return
 
         specs = self._channel_specs
-        gutter_index: Optional[int] = None
-        include_event_gutter = self._event_labels_visible and len(specs) >= 2
-        if include_event_gutter:
-            for idx in range(len(specs) - 1):
-                left = specs[idx]
-                right = specs[idx + 1]
-                if left.track_id == "inner" and right.track_id == "outer":
-                    gutter_index = idx + 1
-                    break
-
-        gutter_ratio = 0.12 if include_event_gutter else 0.0
-        height_ratios: List[float] = []
-        for idx, spec in enumerate(specs):
-            height_ratios.append(max(spec.height_ratio, 0.05))
-            if gutter_index is not None and idx == gutter_index - 1:
-                height_ratios.append(gutter_ratio)
-
+        height_ratios: List[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
         gs = self.figure.add_gridspec(
             nrows=row_count,
@@ -149,12 +131,9 @@ class PlotHost:
         )
 
         shared_ax = None
-        row_cursor = 0
-        event_gutter_ax: Optional[Axes] = None
-        gutter_pair: Optional[Tuple[str, str]] = None
         track_axes: List[Tuple[Axes, str]] = []
         for index, spec in enumerate(specs):
-            ax = self.figure.add_subplot(gs[row_cursor, 0], sharex=shared_ax)
+            ax = self.figure.add_subplot(gs[index, 0], sharex=shared_ax)
             if shared_ax is None:
                 shared_ax = ax
             else:
@@ -171,31 +150,9 @@ class PlotHost:
             self._tracks[spec.track_id] = track
             self._register_track_axes(track)
             track_axes.append((ax, spec.track_id))
-            row_cursor += 1
-
-            if gutter_index is not None and index == gutter_index - 1:
-                gutter = self.figure.add_subplot(gs[row_cursor, 0], sharex=shared_ax)
-                gutter.set_ylim(0, 1)
-                gutter.tick_params(left=False, right=False, labelleft=False)
-                gutter.tick_params(bottom=False, top=False, labelbottom=False)
-                gutter.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
-                for spine in gutter.spines.values():
-                    spine.set_visible(False)
-                gutter.patch.set_alpha(0.0)
-                event_gutter_ax = gutter
-                gutter_pair = (specs[index].track_id, specs[index + 1].track_id)
-                row_cursor += 1
-
-            if gutter_index is not None and index == gutter_index - 1:
-                # Hide the touching spines so vertical lines look continuous.
-                ax.spines["bottom"].set_visible(False)
-            if gutter_index is not None and index == gutter_index:
-                ax.spines["top"].set_visible(False)
 
         divider_color = CURRENT_THEME.get("text", "#000000")
-        for (upper_ax, upper_id), (lower_ax, lower_id) in zip(track_axes, track_axes[1:]):
-            if gutter_pair is not None and (upper_id, lower_id) == gutter_pair:
-                continue
+        for (upper_ax, _), (lower_ax, _) in zip(track_axes, track_axes[1:]):
             upper_spine = upper_ax.spines["bottom"]
             upper_spine.set_visible(True)
             upper_spine.set_color(divider_color)
@@ -218,11 +175,8 @@ class PlotHost:
             )
         else:
             self._event_highlight_overlay.clear()
-        self._event_gutter_ax = event_gutter_ax
-        self._event_gutter_pair = gutter_pair
-        self._configure_event_gutter()
         self._push_events_to_tracks()
-        self._push_events_to_gutter()
+        self._rebuild_event_labeler()
         self._apply_shared_x_layout()
         bottom_ax = self.bottom_axis()
         self._annotation_lane.attach(bottom_ax)
@@ -262,7 +216,7 @@ class PlotHost:
             track.update_window(x0, x1)
         self._time_cursor_overlay.refresh()
         self._event_highlight_overlay.refresh()
-        self._push_events_to_gutter()
+        self._redraw_event_labels()
         self._schedule_draw()
 
     def set_events(
@@ -270,6 +224,7 @@ class PlotHost:
         times: Sequence[float],
         colors: Optional[Sequence[str]] = None,
         labels: Optional[Sequence[str]] = None,
+        label_meta: Optional[Sequence[Mapping[str, Any]]] = None,
     ) -> None:
         """Propagate event markers (and labels) to all tracks and the gutter."""
 
@@ -301,10 +256,41 @@ class PlotHost:
         else:
             self._event_labels = []
 
+        self._assign_event_label_meta(label_meta, len(self._event_times))
+
         self._push_events_to_tracks()
-        self._refresh_event_label_gutter_data()
-        self._push_events_to_gutter()
+        self._rebuild_event_labeler()
         self._schedule_draw()
+
+    def _assign_event_label_meta(
+        self,
+        meta: Optional[Sequence[Mapping[str, Any]]],
+        count: int,
+    ) -> None:
+        if count <= 0:
+            self._event_label_meta = []
+            return
+        if not meta:
+            self._event_label_meta = [dict() for _ in range(count)]
+            return
+        normalised: List[Dict[str, Any]] = []
+        for idx in range(count):
+            payload: Any = {}
+            try:
+                payload = meta[idx]
+            except Exception:
+                payload = {}
+            if isinstance(payload, Mapping):
+                normalised.append(dict(payload))
+            else:
+                normalised.append({})
+        self._event_label_meta = normalised
+
+    def set_event_label_meta(self, meta: Sequence[Mapping[str, Any]]) -> None:
+        self._assign_event_label_meta(meta, len(self._event_times))
+        if self._event_labels_visible and self._event_label_mode != "none":
+            self._rebuild_event_labeler()
+            self._schedule_draw()
 
     def set_annotation_entries(self, entries: Sequence[AnnotationSpec]) -> None:
         """Populate the shared annotation lane above the primary track."""
@@ -392,7 +378,6 @@ class PlotHost:
         if not track:
             return
         track.set_visible(visible)
-        self._update_event_gutter_visibility()
         self._schedule_draw()
 
     def track(self, track_id: str) -> Optional[ChannelTrack]:
@@ -424,9 +409,6 @@ class PlotHost:
         track = self._tracks.get(last_id)
         return None if track is None else track.ax
 
-    def event_gutter_axis(self) -> Optional[Axes]:
-        return self._event_gutter_ax
-
     def layout_state(self) -> LayoutState:
         return LayoutState(
             order=[spec.track_id for spec in self._channel_specs],
@@ -435,21 +417,27 @@ class PlotHost:
         )
 
     def clear(self) -> None:
-        self._dispose_event_gutter()
+        self._destroy_event_labeler()
         self.figure.clf()
         self._tracks.clear()
         self._channel_specs.clear()
         self._axes_map.clear()
         self._model = None
         self._current_window = None
-        self._event_gutter_ax = None
-        self._event_gutter_pair = None
         self._event_times = []
         self._event_colors = None
         self._event_labels = []
+        self._event_label_meta = []
+        self._event_labeler = None
+        self._use_track_event_lines = True
+        self._xlim_cid = None
+        self._ylim_cid = None
+        self._last_xlim = None
+        self._last_ylim = None
         self._event_lines_visible = True
-        self._event_labels_visible = True
+        self._event_labels_visible = False
         self._event_label_gap_px = 22
+        self._event_label_mode = "none"
         self._annotation_lane.attach(None)
         self._annotation_entries.clear()
         self._time_cursor_overlay.clear()
@@ -548,7 +536,6 @@ class PlotHost:
             else:
                 ax.tick_params(bottom=False, labelbottom=False)
                 ax.set_xlabel("")
-        self._update_event_gutter_visibility()
 
     def set_shared_xlabel(self, text: str) -> None:
         axes = self.axes()
@@ -589,159 +576,108 @@ class PlotHost:
         self.canvas.draw_idle()
         self._last_draw_ts = time.perf_counter()
 
-    def _update_event_gutter_visibility(self) -> None:
-        if self._event_gutter_ax is None or self._event_gutter_pair is None:
+    def use_track_event_lines(self, flag: bool) -> None:
+        """When False, clear per-track LineCollections; the helper will draw shared lines."""
+        desired = bool(flag)
+        if desired == self._use_track_event_lines:
             return
-        left_id, right_id = self._event_gutter_pair
-        left_track = self._tracks.get(left_id)
-        right_track = self._tracks.get(right_id)
-        should_show = (
-            left_track is not None
-            and right_track is not None
-            and left_track.is_visible()
-            and right_track.is_visible()
-        )
-        self._event_gutter_ax.set_visible(should_show)
+        self._use_track_event_lines = desired
+        self._push_events_to_tracks()
+        self._schedule_draw()
 
-    def _dispose_event_gutter(self) -> None:
-        if self._event_label_gutter is not None:
-            self._event_label_gutter.dispose()
-            self._event_label_gutter = None
-        self._event_gutter_collection = None
-        if self._event_gutter_ax is not None and self._gutter_xlim_cid is not None:
+    def set_event_labeler(self, helper: Optional[EventLabeler]) -> None:
+        # Clean teardown of existing helper
+        current = self._event_labeler
+        if helper is current:
+            return
+        if current is not None:
+            self._detach_view_callbacks()
             try:
-                self._event_gutter_ax.callbacks.disconnect(self._gutter_xlim_cid)
+                current.destroy(remove_belt=True)
             except Exception:
                 pass
-        self._gutter_xlim_cid = None
-
-    def _configure_event_gutter(self) -> None:
-        if self._event_gutter_ax is None:
-            self._event_gutter_collection = None
-            self._event_label_gutter = None
-            self._gutter_xlim_cid = None
-            return
-        transform = blended_transform_factory(
-            self._event_gutter_ax.transData, self._event_gutter_ax.transAxes
-        )
-        collection = LineCollection(
-            [],
-            colors=[CURRENT_THEME.get("event_line", "#8A8A8A")],
-            linewidths=0.8,
-            linestyles=[(0, (4, 4))],
-            alpha=0.7,
-            transform=transform,
-            zorder=1,
-        )
-        self._event_gutter_ax.add_collection(collection)
-        self._event_gutter_collection = collection
-        if self._gutter_xlim_cid is not None:
-            try:
-                self._event_gutter_ax.callbacks.disconnect(self._gutter_xlim_cid)
-            except Exception:
-                pass
-        self._gutter_xlim_cid = self._event_gutter_ax.callbacks.connect(
-            "xlim_changed", self._on_gutter_xlim_changed
-        )
-        if self._event_label_gutter is not None:
-            self._event_label_gutter.dispose()
-        self._event_label_gutter = EventLabelGutter(
-            self._event_gutter_ax,
-            self._event_times,
-            self._normalized_event_labels(),
-            lanes_initial=2,
-            min_gap_px=self._event_label_gap_px,
-            fontsize=8,
-        )
-        if not self._event_labels_visible:
-            self._event_label_gutter.set_events([], [])
-        self._refresh_event_label_gutter_data()
-
-    def _refresh_event_label_gutter_data(self) -> None:
-        if self._event_label_gutter is None:
-            return
-        if not self._event_labels_visible:
-            self._event_label_gutter.set_events([], [])
-            return
-        self._event_label_gutter.set_events(
-            self._event_times,
-            self._normalized_event_labels(),
-        )
+        else:
+            self._detach_view_callbacks()
+        self._event_labeler = helper
+        if helper is None:
+            self._last_xlim = None
+            self._last_ylim = None
 
     def _push_events_to_tracks(self) -> None:
         if not self._tracks:
+            return
+        if not self._event_lines_visible or not self._use_track_event_lines:
+            for track in self._tracks.values():
+                try:
+                    track.set_events([], None, None)
+                except Exception:
+                    pass
             return
         colors = self._event_colors
         labels_payload = self._event_labels if self._event_labels else None
         for track in self._tracks.values():
             track.set_events(self._event_times, colors, labels_payload)
 
-    def _push_events_to_gutter(self) -> None:
-        if self._event_gutter_collection is None or self._event_gutter_ax is None:
-            return
-        times = np.asarray(self._event_times, dtype=float)
-        if times.size == 0:
-            self._event_gutter_collection.set_segments([])
-            if self._event_label_gutter is not None:
-                self._event_label_gutter.set_events([], [])
-            return
-        x0, x1 = self._event_gutter_ax.get_xlim()
-        mask = (times >= x0) & (times <= x1)
-        indices = np.flatnonzero(mask)
-        if indices.size:
-            ordered = indices[np.argsort(times[indices])]
-            segments = [((float(times[idx]), 0.0), (float(times[idx]), 1.0)) for idx in ordered]
-        else:
-            ordered = np.array([], dtype=int)
-            segments = []
-        if self._event_lines_visible:
-            self._event_gutter_collection.set_segments(segments)
-            if self._event_colors and len(self._event_colors) == len(self._event_times):
-                active_colors = [self._event_colors[idx] for idx in ordered]
-                if active_colors:
-                    self._event_gutter_collection.set_colors(active_colors)
-                else:
-                    self._event_gutter_collection.set_colors(
-                        [CURRENT_THEME.get("event_line", "#8A8A8A")]
-                    )
-            else:
-                self._event_gutter_collection.set_colors(
-                    [CURRENT_THEME.get("event_line", "#8A8A8A")]
-                )
-        else:
-            self._event_gutter_collection.set_segments([])
-        if self._event_label_gutter is not None:
-            self._event_label_gutter.layout()
-
     def set_event_lines_visible(self, visible: bool) -> None:
         self._event_lines_visible = bool(visible)
-        if self._event_gutter_collection is None:
-            return
-        if visible:
-            self._push_events_to_gutter()
-        else:
-            self._event_gutter_collection.set_segments([])
-            self._schedule_draw()
+        self._push_events_to_tracks()
+        self._rebuild_event_labeler()
+        self._schedule_draw()
 
     def set_event_labels_visible(self, visible: bool) -> None:
         new_state = bool(visible)
         if new_state == self._event_labels_visible:
-            if new_state and self._event_label_gutter is not None:
-                self._refresh_event_label_gutter_data()
-            elif not new_state and self._event_label_gutter is not None:
-                self._event_label_gutter.set_events([], [])
-                self._schedule_draw()
+            if new_state:
+                self._rebuild_event_labeler()
+            else:
+                self.set_event_labeler(None)
+                self.use_track_event_lines(True)
+            self._schedule_draw()
             return
         self._event_labels_visible = new_state
-        self._rebuild_tracks()
+        if new_state:
+            if self._event_label_mode != "none":
+                self.use_track_event_lines(False)
+                self._rebuild_event_labeler()
+            else:
+                self.use_track_event_lines(True)
+                self._destroy_event_labeler()
+        else:
+            self.set_event_labeler(None)
+            self.use_track_event_lines(True)
+        self._schedule_draw()
 
     def set_event_label_gap(self, pixels: int) -> None:
         self._event_label_gap_px = max(int(pixels), 1)
-        if self._event_label_gutter is not None:
-            self._event_label_gutter.set_min_gap(self._event_label_gap_px)
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
 
-    def _on_gutter_xlim_changed(self, _axes) -> None:
-        self._push_events_to_gutter()
+    def set_event_label_mode(self, mode: str) -> None:
+        normalized = str(mode).lower()
+        alias = {"auto": "vertical", "all": "horizontal_outside"}
+        normalized = alias.get(normalized, normalized)
+        if normalized not in {"vertical", "horizontal", "horizontal_outside", "none"}:
+            normalized = "vertical"
+
+        previous_mode = self._event_label_mode
+        if normalized == previous_mode and (
+            (normalized == "none" and self._event_labeler is None)
+            or (normalized != "none" and self._event_labeler is not None)
+        ):
+            self._event_labels_visible = normalized != "none"
+            return
+
+        self._event_label_mode = normalized
+        self._event_labels_visible = normalized != "none"
+
+        if normalized == "none":
+            self.use_track_event_lines(True)
+        else:
+            self.use_track_event_lines(False)
+
+        self._rebuild_event_labeler()
+        self._schedule_draw()
 
     def _normalized_event_labels(self) -> List[str]:
         if not self._event_times:
@@ -752,3 +688,113 @@ class PlotHost:
         if len(labels) < len(self._event_times):
             labels.extend([""] * (len(self._event_times) - len(labels)))
         return labels
+
+    def _destroy_event_labeler(self) -> None:
+        self.set_event_labeler(None)
+
+    def _rebuild_event_labeler(self) -> None:
+        if not self._event_labels_visible or self._event_label_mode == "none":
+            self.set_event_labeler(None)
+            return
+        if not getattr(self, "_event_times", None):
+            self.set_event_labeler(None)
+            return
+        labels = self._normalized_event_labels()
+        if not labels:
+            self.set_event_labeler(None)
+            return
+        options = LayoutOptions(
+            span_siblings=True,
+            label_host="auto_top",
+            min_px=self._event_label_gap_px,
+            max_labels_per_cluster=1,
+            top_pad_axes=0.05,
+            vertical_side="right",
+            vertical_x_pad_px=6,
+            max_lanes=2,
+            show_lines=self._event_lines_visible,
+            live=False,
+        )
+
+        anchor_ax: Optional[Axes] = self.primary_axis() or self.bottom_axis()
+        if anchor_ax is None:
+            tracks = list(self._tracks.values())
+            anchor_ax = tracks[0].ax if tracks else None
+        if anchor_ax is None:
+            self.set_event_labeler(None)
+            return
+
+        events_payload: List[Dict[str, Any]] = []
+        for idx, time_value in enumerate(self._event_times):
+            label_value = labels[idx] if idx < len(labels) else ""
+            meta_payload: Dict[str, Any] = {}
+            if idx < len(self._event_label_meta):
+                candidate = self._event_label_meta[idx] or {}
+                if isinstance(candidate, Mapping):
+                    meta_payload = dict(candidate)
+            events_payload.append({"time": time_value, "label": label_value, "meta": meta_payload})
+
+        if not events_payload:
+            self.set_event_labeler(None)
+            return
+
+        helper = EventLabeler(anchor_ax, events_payload, mode=self._event_label_mode, options=options)
+        helper.draw()
+
+        self.set_event_labeler(helper)
+        self._attach_view_callbacks(helper.host_axes)
+
+    def _attach_view_callbacks(self, host_ax: Axes) -> None:
+        self._detach_view_callbacks()
+        if host_ax is None:
+            return
+        try:
+            self._last_xlim = tuple(host_ax.get_xlim())
+            self._last_ylim = tuple(host_ax.get_ylim())
+        except Exception:
+            self._last_xlim = None
+            self._last_ylim = None
+        self._xlim_cid = host_ax.callbacks.connect("xlim_changed", self._on_view_changed)
+        self._ylim_cid = host_ax.callbacks.connect("ylim_changed", self._on_view_changed)
+
+    def _detach_view_callbacks(self) -> None:
+        host_ax = self._event_labeler.host_axes if self._event_labeler else None
+        if host_ax is not None:
+            if self._xlim_cid is not None:
+                try:
+                    host_ax.callbacks.disconnect(self._xlim_cid)
+                except Exception:
+                    pass
+            if self._ylim_cid is not None:
+                try:
+                    host_ax.callbacks.disconnect(self._ylim_cid)
+                except Exception:
+                    pass
+        self._xlim_cid = None
+        self._ylim_cid = None
+        self._last_xlim = None
+        self._last_ylim = None
+
+    def _on_view_changed(self, ax: Axes) -> None:
+        if not self._event_labeler or ax is None:
+            return
+        try:
+            xlim = tuple(ax.get_xlim())
+            ylim = tuple(ax.get_ylim())
+        except Exception:
+            return
+        if xlim == self._last_xlim and ylim == self._last_ylim:
+            return
+        self._last_xlim = xlim
+        self._last_ylim = ylim
+        try:
+            self._event_labeler.draw()
+        except Exception:
+            return
+        fig = ax.figure
+        if fig is not None and getattr(fig, "canvas", None) is not None:
+            fig.canvas.draw_idle()
+
+    def _redraw_event_labels(self) -> None:
+        if self._event_labeler is not None:
+            self._event_labeler.draw()

@@ -5,6 +5,8 @@
 
 """Combined dialog for subplot layout, axis settings and style."""
 
+from typing import Any, Dict, List, Mapping, Optional, Sequence
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QIcon, QColor
 from PyQt5.QtWidgets import (
@@ -29,6 +31,8 @@ from PyQt5.QtWidgets import (
     QStyle,
     QScrollArea,
     QSizePolicy,
+    QListWidget,
+    QListWidgetItem,
 )
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -39,6 +43,7 @@ from matplotlib.colors import to_hex
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.constants import DEFAULT_STYLE
+from vasoanalyzer.ui.event_label_editor import EventLabelEditor
 from utils import resource_path
 
 
@@ -54,6 +59,13 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._x_axis_target = None
         self.event_text_objects = event_text_objects or []
         self.pinned_points = pinned_points or []
+
+        self._font_choices: Sequence[str] = ("Arial", "Helvetica", "Times New Roman", "Courier New")
+        self._event_entries: List[Dict[str, Any]] = []
+        self._event_times: List[float] = []
+        self._suppress_event_editor = False
+        self._event_updates_fired = False
+        self._event_update_callback = None
 
         self.parent_window = parent
         self.style = DEFAULT_STYLE.copy()
@@ -71,6 +83,8 @@ class UnifiedPlotSettingsDialog(QDialog):
         current_xlabel = self._current_xlabel()
         if current_xlabel:
             self._set_shared_xlabel(current_xlabel)
+
+        self._initialize_event_sources(parent)
 
         self.setWindowTitle("Plot Settings")
         self.setWindowIcon(QIcon(resource_path("icons", "Aa.svg")))
@@ -100,6 +114,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.tabs.addTab(self._make_layout_tab(), "Layout")
         self.tabs.addTab(self._make_axis_tab(), "Axis")
         self.tabs.addTab(self._make_style_tab(), "Style")
+        self.tabs.addTab(self._make_event_labels_tab(), "Event Labels")
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -635,6 +650,240 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return scroll
 
+    def _make_event_labels_tab(self):
+        fonts = list(self._font_choices)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        intro = QLabel(
+            "Tune the default typography for all event markers or override specific labels "
+            "to adjust their wording, visibility, or placement."
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("EventLabelsIntro")
+        layout.addWidget(intro)
+
+        defaults_box = QGroupBox("Global Label Style")
+        defaults_form = QFormLayout(defaults_box)
+        defaults_form.setLabelAlignment(Qt.AlignRight)
+
+        self.event_font_family = QComboBox()
+        self.event_font_family.addItems(fonts)
+        self.event_font_family.setCurrentText(
+            self.style.get("event_font_family", DEFAULT_STYLE["event_font_family"])
+        )
+        defaults_form.addRow("Font Family:", self.event_font_family)
+
+        self.event_font_size = QSpinBox()
+        self.event_font_size.setRange(6, 32)
+        self.event_font_size.setValue(
+            int(self.style.get("event_font_size", DEFAULT_STYLE["event_font_size"]))
+        )
+        defaults_form.addRow("Font Size:", self.event_font_size)
+
+        event_style_row = QWidget()
+        event_style_layout = QHBoxLayout(event_style_row)
+        event_style_layout.setContentsMargins(0, 0, 0, 0)
+        event_style_layout.setSpacing(8)
+        self.event_bold = QCheckBox("Bold")
+        self.event_italic = QCheckBox("Italic")
+        event_style_layout.addWidget(self.event_bold)
+        event_style_layout.addWidget(self.event_italic)
+        event_style_layout.addStretch(1)
+        defaults_form.addRow("Text Style:", event_style_row)
+
+        self.event_color_btn = self._make_color_button(
+            self.style.get("event_color", DEFAULT_STYLE["event_color"])
+        )
+        defaults_form.addRow("Event Color:", self.event_color_btn)
+
+        layout.addWidget(defaults_box)
+
+        overrides_box = QGroupBox("Per-Event Overrides")
+        overrides_box.setObjectName("EventOverridesGroup")
+        overrides_layout = QHBoxLayout(overrides_box)
+        overrides_layout.setContentsMargins(12, 12, 12, 12)
+        overrides_layout.setSpacing(12)
+
+        self.event_list = QListWidget()
+        self.event_list.setAlternatingRowColors(True)
+        self.event_list.setSelectionMode(QListWidget.SingleSelection)
+        self.event_list.setMinimumWidth(220)
+        self.event_list.currentRowChanged.connect(self._on_event_row_changed)
+        overrides_layout.addWidget(self.event_list, 1)
+
+        self.event_editor = EventLabelEditor(self)
+        self.event_editor.styleChanged.connect(self._on_event_style_changed)
+        self.event_editor.labelTextChanged.connect(self._on_event_label_changed)
+        overrides_layout.addWidget(self.event_editor, 2)
+
+        layout.addWidget(overrides_box, 1)
+        self.event_overrides_box = overrides_box
+
+        self.event_empty_label = QLabel("No events found for this sample.")
+        self.event_empty_label.setAlignment(Qt.AlignCenter)
+        self.event_empty_label.setStyleSheet("color: #666666;")
+        layout.addWidget(self.event_empty_label)
+
+        layout.addStretch(1)
+
+        self._refresh_event_list()
+
+        return container
+
+    # ------------------------------------------------------------------
+    # Event override helpers -------------------------------------------
+    def _initialize_event_sources(self, parent: Optional[object]) -> None:
+        if parent is not None:
+            callback = getattr(parent, "apply_event_label_overrides", None)
+            if callable(callback):
+                self._event_update_callback = callback
+            labels = getattr(parent, "event_labels", None)
+            times = getattr(parent, "event_times", None)
+            meta = getattr(parent, "event_label_meta", None)
+        else:
+            labels = times = meta = None
+        self._load_event_entries(labels, times, meta)
+
+    def _load_event_entries(
+        self,
+        labels: Optional[Sequence[str]],
+        times: Optional[Sequence[float]],
+        meta: Optional[Sequence[Mapping[str, Any]]],
+    ) -> None:
+        self._event_entries.clear()
+        self._event_times = []
+        if not labels:
+            return
+
+        times_list: List[float] = []
+        if times is not None:
+            for value in times:
+                try:
+                    times_list.append(float(value))
+                except (TypeError, ValueError):
+                    times_list.append(0.0)
+        meta_list: List[Mapping[str, Any]] = list(meta or [])
+        if len(meta_list) < len(labels):
+            meta_list.extend({} for _ in range(len(labels) - len(meta_list)))
+
+        self._event_times = times_list[: len(labels)]
+
+        for idx, raw_label in enumerate(labels):
+            entry_meta = meta_list[idx] if idx < len(meta_list) else {}
+            label_text = str(raw_label) if raw_label is not None else ""
+            time_val = (
+                times_list[idx] if idx < len(times_list) else 0.0
+            )
+            self._event_entries.append(
+                {
+                    "label": label_text,
+                    "time": time_val,
+                    "meta": dict(entry_meta) if isinstance(entry_meta, Mapping) else {},
+                }
+            )
+
+    def set_event_update_callback(self, callback) -> None:
+        if callable(callback):
+            self._event_update_callback = callback
+
+    def event_updates_emitted(self) -> bool:
+        return bool(self._event_updates_fired)
+
+    def get_event_overrides(self) -> tuple[List[str], List[Dict[str, Any]]]:
+        if not self._event_entries:
+            return ([], [])
+        labels = [entry.get("label", "") for entry in self._event_entries]
+        metadata = [dict(entry.get("meta", {})) for entry in self._event_entries]
+        return labels, metadata
+
+    def _emit_event_updates(self) -> None:
+        labels, meta = self.get_event_overrides()
+        if labels is None or meta is None:
+            return
+        if callable(self._event_update_callback):
+            self._event_update_callback(labels, meta)
+        self._event_updates_fired = True
+
+    def _format_event_list_item(self, entry: Dict[str, Any]) -> str:
+        label = entry.get("label") or "(Untitled)"
+        try:
+            time_val = float(entry.get("time", 0.0))
+            return f"{label} — {time_val:.2f} s"
+        except (TypeError, ValueError):
+            return label
+
+    def _refresh_event_list(self) -> None:
+        if not hasattr(self, "event_list"):
+            return
+        self.event_list.blockSignals(True)
+        self.event_list.clear()
+        for entry in self._event_entries:
+            self.event_list.addItem(QListWidgetItem(self._format_event_list_item(entry)))
+        self.event_list.blockSignals(False)
+
+        has_events = bool(self._event_entries)
+        self.event_list.setEnabled(has_events)
+        if hasattr(self, "event_overrides_box"):
+            self.event_overrides_box.setVisible(has_events)
+        if hasattr(self, "event_empty_label"):
+            self.event_empty_label.setVisible(not has_events)
+
+        if not has_events:
+            if hasattr(self, "event_editor"):
+                self.event_editor.clear()
+            return
+
+        prev_block = self.event_list.blockSignals(True)
+        if self.event_list.currentRow() < 0:
+            self.event_list.setCurrentRow(0)
+        self.event_list.blockSignals(prev_block)
+        self._on_event_row_changed(self.event_list.currentRow())
+
+    def _on_event_row_changed(self, row: int) -> None:
+        if self._suppress_event_editor:
+            return
+        if not (0 <= row < len(self._event_entries)):
+            if hasattr(self, "event_editor"):
+                self.event_editor.clear()
+            return
+        entry = self._event_entries[row]
+        self._suppress_event_editor = True
+        if hasattr(self, "event_editor"):
+            self.event_editor.set_event(
+                row,
+                entry.get("label", ""),
+                entry.get("time", 0.0),
+                entry.get("meta", {}),
+                max_lanes=2,
+            )
+        self._suppress_event_editor = False
+
+    def _on_event_style_changed(self, index: int, meta: Dict[str, Any]) -> None:
+        if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
+            return
+        self._event_entries[index]["meta"] = dict(meta or {})
+        self._event_updates_fired = False
+
+    def _on_event_label_changed(self, index: int, text: str) -> None:
+        if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
+            return
+        normalized = text.strip()
+        self._event_entries[index]["label"] = normalized
+        self._update_event_list_item(index)
+        self._event_updates_fired = False
+
+    def _update_event_list_item(self, index: int) -> None:
+        if not hasattr(self, "event_list"):
+            return
+        item = self.event_list.item(index)
+        if item is None:
+            return
+        item.setText(self._format_event_list_item(self._event_entries[index]))
+
     def _pair(self, *widgets):
         row = QHBoxLayout()
         for w in widgets:
@@ -649,7 +898,7 @@ class UnifiedPlotSettingsDialog(QDialog):
     # ------------------------------------------------------------------
     # Style tab --------------------------------------------------------
     def _make_style_tab(self):
-        fonts = ["Arial", "Helvetica", "Times New Roman", "Courier New"]
+        fonts = list(self._font_choices)
 
         content = QWidget()
         grid = QGridLayout(content)
@@ -758,41 +1007,6 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         grid.addWidget(tick_box, 0, 1)
 
-        # Event annotations ---------------------------------------------
-        event_box = QGroupBox("Event Labels")
-        event_form = QFormLayout(event_box)
-        event_form.setLabelAlignment(Qt.AlignRight)
-
-        self.event_font_family = QComboBox()
-        self.event_font_family.addItems(fonts)
-        self.event_font_family.setCurrentText(
-            self.style.get("event_font_family", DEFAULT_STYLE["event_font_family"])
-        )
-        event_form.addRow("Font Family:", self.event_font_family)
-
-        self.event_font_size = QSpinBox()
-        self.event_font_size.setRange(6, 32)
-        self.event_font_size.setValue(int(self.style.get("event_font_size", DEFAULT_STYLE["event_font_size"])))
-        event_form.addRow("Font Size:", self.event_font_size)
-
-        event_style_row = QWidget()
-        event_style_layout = QHBoxLayout(event_style_row)
-        event_style_layout.setContentsMargins(0, 0, 0, 0)
-        event_style_layout.setSpacing(8)
-        self.event_bold = QCheckBox("Bold")
-        self.event_italic = QCheckBox("Italic")
-        event_style_layout.addWidget(self.event_bold)
-        event_style_layout.addWidget(self.event_italic)
-        event_style_layout.addStretch(1)
-        event_form.addRow("Text Style:", event_style_row)
-
-        self.event_color_btn = self._make_color_button(
-            self.style.get("event_color", DEFAULT_STYLE["event_color"])
-        )
-        event_form.addRow("Event Color:", self.event_color_btn)
-
-        grid.addWidget(event_box, 1, 0)
-
         # Pinned annotations -------------------------------------------
         pin_box = QGroupBox("Pinned Labels")
         pin_form = QFormLayout(pin_box)
@@ -831,7 +1045,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.pin_marker_size.setValue(int(self.style.get("pin_size", DEFAULT_STYLE["pin_size"])))
         pin_form.addRow("Marker Size:", self.pin_marker_size)
 
-        grid.addWidget(pin_box, 1, 1)
+        grid.addWidget(pin_box, 1, 0, 1, 2)
 
         # Trace lines ---------------------------------------------------
         line_box = QGroupBox("Trace Lines")
@@ -1343,6 +1557,8 @@ class UnifiedPlotSettingsDialog(QDialog):
                 self.style['outer_line_style'] = (self.od_line_style_combo.currentData() or DEFAULT_STYLE['outer_line_style']).lower()
             if hasattr(self, 'od_line_color_btn'):
                 self.style['outer_line_color'] = self.od_line_color_btn.color
+
+        self._emit_event_updates()
 
         if parent is not None and hasattr(parent, 'apply_plot_style'):
             parent.apply_plot_style(self.style, persist=True)

@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional, Sequence
 
 import pandas as pd
+from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
+from .sqlite_utils import optimize as _sqlite_optimize
 
 __all__ = [
     "ProjectStore",
@@ -130,6 +132,8 @@ def save_project(store: ProjectStore) -> None:
         ("modified_utc", now),
     )
     store.commit()
+    _sqlite_checkpoint_full(store.conn)
+    _sqlite_optimize(store.conn)
 
 
 def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> None:
@@ -158,6 +162,8 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     store.conn = conn
     store.path = dest_path
     store.dirty = False
+    _sqlite_checkpoint_full(store.conn)
+    _sqlite_optimize(store.conn)
 
 
 def close_project(store: ProjectStore) -> None:

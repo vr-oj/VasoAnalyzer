@@ -6,3 +6,6 @@
 *.pyc
 *.pyc
 .DS_Store
+*.pyc
+/src/vasoanalyzer/ui/dialogs/__pycache__
+*.pyc

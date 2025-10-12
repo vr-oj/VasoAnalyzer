@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import platform
 import shutil
 import sys
 from dataclasses import dataclass
@@ -12,9 +14,30 @@ from typing import Callable, Iterable, Optional
 
 import pandas as pd
 
-__all__ = ["DataCache", "cache_dir_for_project", "DEFAULT_CACHE_LIMIT_GB"]
+__all__ = ["DataCache", "cache_dir_for_project", "DEFAULT_CACHE_LIMIT_GB", "get_cache_root"]
 
 DEFAULT_CACHE_LIMIT_GB = 25
+
+
+def get_cache_root(app_name: str = "VasoAnalyzer") -> Optional[Path]:
+    """Return the system cache root when ``VASO_CACHE_MODE=system`` is set."""
+
+    mode = os.environ.get("VASO_CACHE_MODE", "").lower()
+    if mode != "system":
+        return None
+
+    system = platform.system().lower()
+    home = Path.home()
+
+    if system == "darwin":
+        base = home / "Library" / "Caches" / app_name
+    elif system == "windows":
+        base = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))) / app_name / "Cache"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", str(home / ".cache"))) / app_name
+
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 
 def cache_dir_for_project(project_path: Optional[str | os.PathLike[str]]) -> Path:
@@ -25,6 +48,22 @@ def cache_dir_for_project(project_path: Optional[str | os.PathLike[str]]) -> Pat
     is ``.vaso_cache`` within that directory.  A user-scoped fallback is used
     when no project path is available.
     """
+
+    system_root = get_cache_root()
+    if system_root is not None:
+        if project_path:
+            candidate = Path(project_path).expanduser().resolve(strict=False)
+            if candidate.is_dir():
+                stem = candidate.name or "project"
+                identifier_source = candidate.as_posix() + "/"
+            else:
+                stem = candidate.stem or "project"
+                identifier_source = candidate.as_posix()
+        else:
+            stem = "shared"
+            identifier_source = stem
+        digest = hashlib.sha1(identifier_source.encode("utf-8", "ignore")).hexdigest()[:10]
+        return system_root / "projects" / f"{stem}.vaso.cache-{digest}"
 
     if project_path:
         candidate = Path(project_path)

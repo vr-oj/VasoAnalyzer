@@ -24,6 +24,7 @@ from vasoanalyzer.core.project import (
     events_dataframe_from_rows,
     normalize_event_table_rows,
 )
+from vasoanalyzer.tools.portable_export import export_single_file
 from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.io.events import _standardize_headers
 import numpy as np
@@ -211,3 +212,28 @@ def import_project_bundle(bundle_path: str, dest_dir: Optional[str] = None) -> P
     """Unpack a bundle and return the loaded project."""
 
     return unpack_project_bundle(bundle_path, dest_dir)
+
+
+def export_project_single_file(
+    project: Project,
+    destination: Optional[str] = None,
+    *,
+    extract_tiffs_dir: Optional[str] = None,
+    ensure_saved: bool = True,
+) -> str:
+    """Export ``project`` as a DELETE-mode single-file .vaso copy."""
+
+    if project is None:
+        raise ValueError("Project is required")
+    if not project.path:
+        raise ValueError("Project path is not set; save the project first")
+
+    if ensure_saved:
+        save_project(project, project.path)
+
+    return export_single_file(
+        project.path,
+        out_path=destination,
+        link_snapshot_tiffs=True,
+        extract_tiffs_dir=extract_tiffs_dir,
+    )
