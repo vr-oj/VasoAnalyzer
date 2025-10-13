@@ -10,6 +10,9 @@ from vasoanalyzer.services.project_service import (
     restore_autosave,
     export_project_bundle,
     import_project_bundle,
+    open_project_repository,
+    create_project_repository,
+    SQLiteProjectRepository,
 )
 from vasoanalyzer.services.version import check_for_new_version
 
@@ -24,4 +27,7 @@ __all__ = [
     "import_project_bundle",
     "check_for_new_version",
     "service_types",
+    "open_project_repository",
+    "create_project_repository",
+    "SQLiteProjectRepository",
 ]

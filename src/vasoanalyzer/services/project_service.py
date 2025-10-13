@@ -10,6 +10,8 @@ from typing import Optional, Any, Callable, Dict, List, Tuple
 import logging
 import warnings
 
+from pathlib import Path
+from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.core.project import (
     Project,
     Experiment,
@@ -27,6 +29,7 @@ from vasoanalyzer.core.project import (
 from vasoanalyzer.tools.portable_export import export_single_file
 from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.io.events import _standardize_headers
+from vasoanalyzer.storage import sqlite_store
 import numpy as np
 import os
 import pandas as pd
@@ -198,6 +201,88 @@ def restore_autosave(project_path: str) -> Project:
     if not os.path.exists(autosave):
         raise FileNotFoundError(autosave)
     return restore_project_from_autosave(autosave, project_path)
+
+
+# ---------------------------------------------------------------------------
+# Repository façade ---------------------------------------------------------
+
+
+class SQLiteProjectRepository(ProjectRepository):
+    """Typed façade over :mod:`sqlite_store` for service-level consumers."""
+
+    def __init__(self, store: sqlite_store.ProjectStore):
+        self._store = store
+
+    # Context manager support
+    def __enter__(self) -> "SQLiteProjectRepository":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    # ProjectRepository interface
+    @property
+    def path(self) -> Optional[Path]:
+        return self._store.path
+
+    def mark_dirty(self) -> None:
+        self._store.mark_dirty()
+
+    def commit(self) -> None:
+        self._store.commit()
+
+    def close(self) -> None:
+        self._store.close()
+
+    # TraceProvider
+    def get_trace(
+        self,
+        dataset_id: int,
+        t0: Optional[float] = None,
+        t1: Optional[float] = None,
+    ) -> pd.DataFrame:
+        return sqlite_store.get_trace(self._store, dataset_id, t0, t1)
+
+    # EventProvider
+    def get_events(
+        self,
+        dataset_id: int,
+        t0: Optional[float] = None,
+        t1: Optional[float] = None,
+    ) -> pd.DataFrame:
+        return sqlite_store.get_events(self._store, dataset_id, t0, t1)
+
+    # AssetProvider
+    def list_assets(self, dataset_id: int) -> List[Dict[str, Any]]:
+        return sqlite_store.list_assets(self._store, dataset_id)
+
+    def get_asset_bytes(self, asset_id: int) -> bytes:
+        return sqlite_store.get_asset_bytes(self._store, asset_id)
+
+    @property
+    def store(self) -> sqlite_store.ProjectStore:
+        """Return the underlying :class:`ProjectStore`."""
+
+        return self._store
+
+
+def open_project_repository(path: str) -> SQLiteProjectRepository:
+    """Open an existing SQLite project as a typed repository façade."""
+
+    store = sqlite_store.open_project(path)
+    return SQLiteProjectRepository(store)
+
+
+def create_project_repository(
+    path: str,
+    *,
+    app_version: str,
+    timezone: str,
+) -> SQLiteProjectRepository:
+    """Create a new SQLite project and return the repository façade."""
+
+    store = sqlite_store.create_project(path, app_version=app_version, timezone=timezone)
+    return SQLiteProjectRepository(store)
 
 
 def export_project_bundle(project: Project, bundle_path: str, *, embed_threshold_mb: int = 64) -> str:
