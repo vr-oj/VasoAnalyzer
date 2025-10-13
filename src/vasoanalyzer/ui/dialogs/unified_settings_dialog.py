@@ -602,6 +602,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         from vasoanalyzer.ui.dialogs.settings.event_labels_tab import (
             create_event_labels_tab_widgets,
             populate_event_labels_tab,
+            wire_event_labels_tab,
         )
 
         refs = create_event_labels_tab_widgets(self, window)
@@ -619,9 +620,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.event_empty_label = refs.event_empty_label
 
         populate_event_labels_tab(self)
-        self.event_list.currentRowChanged.connect(self._on_event_row_changed)
-        self.event_editor.styleChanged.connect(self._on_event_style_changed)
-        self.event_editor.labelTextChanged.connect(self._on_event_label_changed)
+        wire_event_labels_tab(self)
 
         self._refresh_event_list()
 

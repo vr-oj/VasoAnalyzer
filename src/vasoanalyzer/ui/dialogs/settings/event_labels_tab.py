@@ -162,5 +162,26 @@ def populate_event_labels_tab(dialog: "DialogT") -> None:
     return
 
 def wire_event_labels_tab(dialog: "DialogT") -> None:
-    """Filled in Slice 3."""
+    """
+    Move ONLY the connect(...) lines from legacy.
+    Lines mapped from legacy: 715, 719–720 (+ any other .connect calls for this tab).
+    Guard with a sentinel so re-building the tab doesn’t double-connect.
+    """
+    event_list = getattr(dialog, "event_list", None)
+    event_editor = getattr(dialog, "event_editor", None)
+    current_refs = (event_list, event_editor)
+
+    if getattr(dialog, "_event_labels_tab_wired", None) == current_refs:
+        return
+
+    if event_list is not None:
+        event_list.currentRowChanged.connect(dialog._on_event_row_changed)
+
+    if event_editor is not None:
+        if hasattr(event_editor, "styleChanged"):
+            event_editor.styleChanged.connect(dialog._on_event_style_changed)
+        if hasattr(event_editor, "labelTextChanged"):
+            event_editor.labelTextChanged.connect(dialog._on_event_label_changed)
+
+    dialog._event_labels_tab_wired = current_refs
     return
