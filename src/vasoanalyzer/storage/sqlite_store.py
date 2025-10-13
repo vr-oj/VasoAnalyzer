@@ -24,6 +24,7 @@ from typing import Iterable, Iterator, Optional, Sequence
 import pandas as pd
 from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite.utils import open_db
+from vasoanalyzer.storage.sqlite import traces as _traces
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
 
@@ -226,7 +227,7 @@ def add_dataset(
         )
         dataset_id = cur.lastrowid
 
-        trace_rows = list(_prepare_trace_rows(dataset_id, trace_df))
+        trace_rows = list(_traces.prepare_trace_rows(dataset_id, trace_df))
         if trace_rows:
             store.conn.executemany(
                 """
@@ -386,22 +387,7 @@ def get_trace(
 ) -> pd.DataFrame:
     """Return a trace DataFrame for ``dataset_id`` filtered to ``[t0, t1]``."""
 
-    query = [
-        "SELECT t_seconds, inner_diam, outer_diam, p_avg, p1, p2",
-        "FROM trace",
-        "WHERE dataset_id = ?",
-    ]
-    params: list[object] = [dataset_id]
-    if t0 is not None:
-        query.append("AND t_seconds >= ?")
-        params.append(float(t0))
-    if t1 is not None:
-        query.append("AND t_seconds <= ?")
-        params.append(float(t1))
-    query.append("ORDER BY t_seconds ASC")
-    sql = " ".join(query)
-    df = pd.read_sql_query(sql, store.conn, params=params)
-    return df
+    return _traces.fetch_trace_dataframe(store.conn, dataset_id, t0, t1)
 
 
 def get_events(
@@ -774,44 +760,6 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _prepare_trace_rows(dataset_id: int, df: pd.DataFrame) -> Iterable[tuple]:
-    if df is None or df.empty:
-        return []
-
-    df_local = df.copy()
-    rename_map = _match_trace_columns(df_local.columns)
-    if rename_map:
-        df_local = df_local.rename(columns=rename_map)
-
-    required = "t_seconds"
-    if required not in df_local.columns:
-        raise ValueError("Trace DataFrame must contain a time column")
-
-    df_local["t_seconds"] = pd.to_numeric(df_local["t_seconds"], errors="coerce")
-    for col in ("inner_diam", "outer_diam", "p_avg", "p1", "p2"):
-        if col in df_local.columns:
-            df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
-            if col in ("inner_diam", "outer_diam"):
-                df_local.loc[df_local[col] < 0, col] = pd.NA
-
-    df_local = df_local.dropna(subset=["t_seconds"])
-
-    rows = []
-    for _, row in df_local.iterrows():
-        rows.append(
-            (
-                dataset_id,
-                float(row.get("t_seconds")),
-                _nullable_float(row.get("inner_diam")),
-                _nullable_float(row.get("outer_diam")),
-                _nullable_float(row.get("p_avg")),
-                _nullable_float(row.get("p1")),
-                _nullable_float(row.get("p2")),
-            )
-        )
-    return rows
-
-
 def _prepare_event_rows(dataset_id: int, df: pd.DataFrame) -> Iterable[tuple]:
     if df is None or df.empty:
         return []
@@ -846,25 +794,14 @@ def _prepare_event_rows(dataset_id: int, df: pd.DataFrame) -> Iterable[tuple]:
                 float(row.get("t_seconds")),
                 row.get("label"),
                 _nullable_int(row.get("frame")),
-                _nullable_float(row.get("p_avg")),
-                _nullable_float(row.get("p1")),
-                _nullable_float(row.get("p2")),
-                _nullable_float(row.get("temp")),
+                _traces.nullable_float(row.get("p_avg")),
+                _traces.nullable_float(row.get("p1")),
+                _traces.nullable_float(row.get("p2")),
+                _traces.nullable_float(row.get("temp")),
                 extra_json,
             )
         )
     return rows
-
-
-def _nullable_float(value) -> Optional[float]:
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
-    return float(value)
 
 
 def _nullable_int(value) -> Optional[int]:
@@ -881,42 +818,10 @@ def _nullable_int(value) -> Optional[int]:
         return None
 
 
-def _match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
-    mapping = {}
-    for col in columns:
-        norm = _normalise_label(col)
-        if norm in {"times", "tseconds", "t", "time", "timestamp"} and "t_seconds" not in mapping.values():
-            mapping[col] = "t_seconds"
-        elif norm in {"innerdiameter", "innerdiam"} and "inner_diam" not in mapping.values():
-            mapping[col] = "inner_diam"
-        elif norm in {"outerdiameter", "outerdiam"} and "outer_diam" not in mapping.values():
-            mapping[col] = "outer_diam"
-        elif norm in {"pressureavg", "pavg"} and "p_avg" not in mapping.values():
-            mapping[col] = "p_avg"
-        elif norm in {"pressure1", "p1"} and "p1" not in mapping.values():
-            mapping[col] = "p1"
-        elif norm in {"pressure2", "p2"} and "p2" not in mapping.values():
-            mapping[col] = "p2"
-        elif norm in {"time"} and "t_seconds" not in mapping.values():
-            mapping[col] = "t_seconds"
-    if mapping:
-        return mapping
-
-    defaults = {}
-    for col in columns:
-        if col.lower().startswith("time") and "t_seconds" not in defaults.values():
-            defaults[col] = "t_seconds"
-        elif "inner" in col.lower() and "diam" in col.lower() and "inner_diam" not in defaults.values():
-            defaults[col] = "inner_diam"
-        elif "outer" in col.lower() and "diam" in col.lower() and "outer_diam" not in defaults.values():
-            defaults[col] = "outer_diam"
-    return defaults
-
-
 def _match_event_columns(columns: Sequence[str]) -> dict[str, str]:
     mapping = {}
     for col in columns:
-        norm = _normalise_label(col)
+        norm = _traces.normalize_label(col)
         if norm in {"times", "time", "tseconds", "timestamp"} and "t_seconds" not in mapping.values():
             mapping[col] = "t_seconds"
         elif norm in {"event", "label"} and "label" not in mapping.values():
@@ -934,10 +839,6 @@ def _match_event_columns(columns: Sequence[str]) -> dict[str, str]:
     if mapping:
         return mapping
     return {}
-
-
-def _normalise_label(label: str) -> str:
-    return "".join(ch for ch in label.lower() if ch.isalnum())
 
 
 def _chunks_from_file(path: Path, chunk_size: int) -> Iterator[bytes]:
