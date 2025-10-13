@@ -25,6 +25,7 @@ import pandas as pd
 from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite.utils import open_db
 from vasoanalyzer.storage.sqlite import traces as _traces
+from vasoanalyzer.storage.sqlite import events as _events
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
 
@@ -238,7 +239,7 @@ def add_dataset(
             )
 
         if events_df is not None and not events_df.empty:
-            event_rows = list(_prepare_event_rows(dataset_id, events_df))
+            event_rows = list(_events.prepare_event_rows(dataset_id, events_df))
             if event_rows:
                 store.conn.executemany(
                     """
@@ -398,28 +399,7 @@ def get_events(
 ) -> pd.DataFrame:
     """Return events for ``dataset_id``."""
 
-    query = [
-        "SELECT t_seconds, label, frame, p_avg, p1, p2, temp, extra_json",
-        "FROM event",
-        "WHERE dataset_id = ?",
-    ]
-    params: list[object] = [dataset_id]
-    if t0 is not None:
-        query.append("AND t_seconds >= ?")
-        params.append(float(t0))
-    if t1 is not None:
-        query.append("AND t_seconds <= ?")
-        params.append(float(t1))
-    query.append("ORDER BY t_seconds ASC")
-
-    df = pd.read_sql_query(" ".join(query), store.conn, params=params)
-    if not df.empty and "extra_json" in df.columns:
-        extras = []
-        for payload in df["extra_json"]:
-            extras.append(json.loads(payload) if isinstance(payload, str) and payload else {})
-        df = df.drop(columns=["extra_json"])
-        df["extra"] = extras
-    return df
+    return _events.fetch_events_dataframe(store.conn, dataset_id, t0, t1)
 
 
 def add_result(
@@ -758,156 +738,3 @@ def restore_autosave(
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
-def _prepare_event_rows(dataset_id: int, df: pd.DataFrame) -> Iterable[tuple]:
-    if df is None or df.empty:
-        return []
-
-    df_local = df.copy()
-    rename_map = _match_event_columns(df_local.columns)
-    if rename_map:
-        df_local = df_local.rename(columns=rename_map)
-
-    if "t_seconds" not in df_local.columns or "label" not in df_local.columns:
-        raise ValueError("Events DataFrame must include time and label columns")
-
-    df_local["t_seconds"] = pd.to_numeric(df_local["t_seconds"], errors="coerce")
-    df_local = df_local.dropna(subset=["t_seconds"])
-    df_local["label"] = df_local["label"].astype(str)
-
-    for col in ("frame", "p_avg", "p1", "p2", "temp"):
-        if col in df_local.columns:
-            df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
-
-    rows = []
-    extra_cols = [c for c in df_local.columns if c not in {"t_seconds", "label", "frame", "p_avg", "p1", "p2", "temp"}]
-    for _, row in df_local.iterrows():
-        extra_json = None
-        if extra_cols:
-            payload = {c: row.get(c) for c in extra_cols if pd.notna(row.get(c))}
-            if payload:
-                extra_json = json.dumps(payload)
-        rows.append(
-            (
-                dataset_id,
-                float(row.get("t_seconds")),
-                row.get("label"),
-                _nullable_int(row.get("frame")),
-                _traces.nullable_float(row.get("p_avg")),
-                _traces.nullable_float(row.get("p1")),
-                _traces.nullable_float(row.get("p2")),
-                _traces.nullable_float(row.get("temp")),
-                extra_json,
-            )
-        )
-    return rows
-
-
-def _nullable_int(value) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _match_event_columns(columns: Sequence[str]) -> dict[str, str]:
-    mapping = {}
-    for col in columns:
-        norm = _traces.normalize_label(col)
-        if norm in {"times", "time", "tseconds", "timestamp"} and "t_seconds" not in mapping.values():
-            mapping[col] = "t_seconds"
-        elif norm in {"event", "label"} and "label" not in mapping.values():
-            mapping[col] = "label"
-        elif norm in {"frame", "frames"} and "frame" not in mapping.values():
-            mapping[col] = "frame"
-        elif norm in {"pavg", "pressureavg"} and "p_avg" not in mapping.values():
-            mapping[col] = "p_avg"
-        elif norm == "p1" and "p1" not in mapping.values():
-            mapping[col] = "p1"
-        elif norm == "p2" and "p2" not in mapping.values():
-            mapping[col] = "p2"
-        elif norm in {"temp", "temperature"} and "temp" not in mapping.values():
-            mapping[col] = "temp"
-    if mapping:
-        return mapping
-    return {}
-
-
-def _chunks_from_file(path: Path, chunk_size: int) -> Iterator[bytes]:
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-
-
-def _chunks_from_bytes(data: bytes, chunk_size: int) -> Iterator[bytes]:
-    buf = memoryview(data)
-    for idx in range(0, len(buf), chunk_size):
-        yield bytes(buf[idx : idx + chunk_size])
-
-
-def _write_blob_chunks(
-    conn: sqlite3.Connection, asset_id: int, chunks: Iterable[bytes]
-) -> None:
-    conn.execute("DELETE FROM blob_chunk WHERE asset_id = ?", (asset_id,))
-    for seq, chunk in enumerate(chunks):
-        conn.execute(
-            "INSERT INTO blob_chunk(asset_id, seq, data) VALUES(?, ?, ?)",
-            (asset_id, seq, sqlite3.Binary(chunk)),
-        )
-
-
-def _reassemble_blob(conn: sqlite3.Connection, asset_id: int) -> bytes:
-    rows = conn.execute(
-        "SELECT data FROM blob_chunk WHERE asset_id = ? ORDER BY seq ASC",
-        (asset_id,),
-    ).fetchall()
-    if not rows:
-        return b""
-    return b"".join(row[0] for row in rows if row[0] is not None)
-
-
-def _hash_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(8192), b""):
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _guess_mime(path: str | os.PathLike[str] | None) -> Optional[str]:
-    if path is None:
-        return None
-    path_obj = Path(path)
-    suffix = path_obj.suffix.lower()
-    suffixes = [s.lower() for s in path_obj.suffixes]
-    if suffixes[-2:] == [".ome", ".tif"] or suffixes[-2:] == [".ome", ".tiff"]:
-        return "image/tiff"
-    if suffix in {".tif", ".tiff"}:
-        return "image/tiff"
-    if suffix == ".png":
-        return "image/png"
-    if suffix == ".jpg" or suffix == ".jpeg":
-        return "image/jpeg"
-    return None
-
-
-def _extension_for_mime(mime: Optional[str]) -> str:
-    mapping = {
-        "image/tiff": ".tif",
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-    }
-    return mapping.get(mime, ".bin")
