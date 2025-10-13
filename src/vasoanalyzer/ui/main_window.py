@@ -109,6 +109,7 @@ from vasoanalyzer.services.project_service import (
     import_project_bundle,
     export_project_single_file,
 )
+from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.services.cache_service import DataCache, cache_dir_for_project
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.legend_settings_dialog import LegendSettingsDialog
@@ -170,7 +171,8 @@ class _SampleLoadJob(QRunnable):
 
     def __init__(
         self,
-        project_path: str,
+        repo: Optional[ProjectRepository],
+        project_path: Optional[str],
         sample: SampleN,
         token: object,
         *,
@@ -181,6 +183,7 @@ class _SampleLoadJob(QRunnable):
         super().__init__()
         self.setAutoDelete(True)
         self.signals = _SampleLoadSignals()
+        self._repo = repo
         self._project_path = project_path
         self._sample = sample
         self._token = token
@@ -198,24 +201,58 @@ class _SampleLoadJob(QRunnable):
             self.signals.finished.emit(self._token, self._sample, None, None, None)
             return
 
+        repo = self._repo
+        store = None
+        store_owned = False
+
         try:
-            store = sqlite_store.open_project(self._project_path)
-            try:
-                if self._load_trace:
-                    trace_raw = sqlite_store.get_trace(store, self._dataset_id)
-                    trace_df = project_module._format_trace_df(trace_raw)
-                if self._load_events:
-                    events_raw = sqlite_store.get_events(store, self._dataset_id)
-                    events_df = project_module._format_events_df(events_raw)
-                if self._load_results:
-                    analysis_results = project_module._load_sample_results(
-                        store, self._dataset_id
-                    )
-            finally:
-                store.close()
+            if repo is None:
+                if not self._project_path:
+                    raise RuntimeError("Project path unavailable for sample load")
+                store = sqlite_store.open_project(self._project_path)
+                store_owned = True
+            else:
+                store = getattr(repo, "store", None)
+                if store is None and self._project_path:
+                    store = sqlite_store.open_project(self._project_path)
+                    store_owned = True
+
+            if repo is None and store is None:
+                raise RuntimeError("Unable to obtain project store")
+
+            if self._load_trace:
+                trace_raw = (
+                    repo.get_trace(self._dataset_id)  # type: ignore[call-arg]
+                    if repo is not None
+                    else sqlite_store.get_trace(store, self._dataset_id)
+                )
+                trace_df = project_module._format_trace_df(trace_raw)
+
+            if self._load_events:
+                events_raw = (
+                    repo.get_events(self._dataset_id)  # type: ignore[call-arg]
+                    if repo is not None
+                    else sqlite_store.get_events(store, self._dataset_id)
+                )
+                events_df = project_module._format_events_df(events_raw)
+
+            if self._load_results:
+                backing_store = store or getattr(repo, "store", None)
+                if backing_store is None and self._project_path:
+                    backing_store = sqlite_store.open_project(self._project_path)
+                    store_owned = True
+                    store = backing_store
+                analysis_results = (
+                    project_module._load_sample_results(backing_store, self._dataset_id)
+                    if backing_store is not None
+                    else None
+                )
         except Exception as exc:  # pragma: no cover - defensive UI logging
             self.signals.error.emit(self._token, self._sample, str(exc))
             return
+        finally:
+            if store_owned and store is not None:
+                store.close()
 
         self.signals.finished.emit(
             self._token, self._sample, trace_df, events_df, analysis_results
@@ -1663,18 +1700,21 @@ class VasoAnalyzerApp(QMainWindow):
             )
         )
 
-        project_path = getattr(self.current_project, "path", None)
-        load_async = bool(
-            project_path and (needs_trace or needs_events or needs_results)
+        ctx = getattr(self, "project_ctx", None)
+        project_path = (
+            ctx.path if isinstance(ctx, ProjectContext) else getattr(self.current_project, "path", None)
         )
+        repo = ctx.repo if isinstance(ctx, ProjectContext) else None
+        load_async = bool((repo or project_path) and (needs_trace or needs_events or needs_results))
 
         self._prepare_sample_view(sample)
 
-        if load_async and project_path:
+        if load_async:
             self.statusBar().showMessage(f"Loading {sample.name}…", 2000)
             self._begin_sample_load_job(
                 sample,
                 token,
+                repo,
                 project_path,
                 load_trace=needs_trace,
                 load_events=needs_events,
@@ -1714,13 +1754,15 @@ class VasoAnalyzerApp(QMainWindow):
         self,
         sample: SampleN,
         token: object,
-        project_path: str,
+        repo: Optional[ProjectRepository],
+        project_path: Optional[str],
         *,
         load_trace: bool,
         load_events: bool,
         load_results: bool,
     ) -> None:
         job = _SampleLoadJob(
+            repo,
             project_path,
             sample,
             token,

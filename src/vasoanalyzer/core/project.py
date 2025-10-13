@@ -1267,7 +1267,7 @@ def _save_sample_to_store(
 def _resolve_trace_dataframe(
     sample: SampleN,
     base_dir: Path,
-    source_store: sqlite_store.ProjectStore | None = None,
+    source_store: ProjectRepository | sqlite_store.ProjectStore | None = None,
 ) -> pd.DataFrame:
     if isinstance(sample.trace_data, pd.DataFrame):
         return sample.trace_data
@@ -1278,7 +1278,19 @@ def _resolve_trace_dataframe(
                 return pd.read_csv(path)
             except Exception:
                 log.debug("Failed to reload trace CSV from %s", path, exc_info=True)
-    if source_store is not None and sample.dataset_id is not None:
+    if (
+        isinstance(source_store, ProjectRepository)
+        and sample.dataset_id is not None
+    ):
+        try:
+            return source_store.get_trace(sample.dataset_id)  # type: ignore[call-arg]
+        except Exception:
+            log.debug(
+                "Failed to copy trace data from source repo for dataset %s",
+                sample.dataset_id,
+                exc_info=True,
+            )
+    if isinstance(source_store, sqlite_store.ProjectStore) and sample.dataset_id is not None:
         try:
             return sqlite_store.get_trace(source_store, sample.dataset_id)
         except Exception:
@@ -1293,7 +1305,7 @@ def _resolve_trace_dataframe(
 def _resolve_events_dataframe(
     sample: SampleN,
     base_dir: Path,
-    source_store: sqlite_store.ProjectStore | None = None,
+    source_store: ProjectRepository | sqlite_store.ProjectStore | None = None,
 ) -> pd.DataFrame | None:
     if isinstance(sample.events_data, pd.DataFrame):
         return sample.events_data
@@ -1304,7 +1316,19 @@ def _resolve_events_dataframe(
                 return pd.read_csv(path)
             except Exception:
                 log.debug("Failed to reload events CSV from %s", path, exc_info=True)
-    if source_store is not None and sample.dataset_id is not None:
+    if (
+        isinstance(source_store, ProjectRepository)
+        and sample.dataset_id is not None
+    ):
+        try:
+            return source_store.get_events(sample.dataset_id)  # type: ignore[call-arg]
+        except Exception:
+            log.debug(
+                "Failed to copy events data from source repo for dataset %s",
+                sample.dataset_id,
+                exc_info=True,
+            )
+    if isinstance(source_store, sqlite_store.ProjectStore) and sample.dataset_id is not None:
         try:
             return sqlite_store.get_events(source_store, sample.dataset_id)
         except Exception:
