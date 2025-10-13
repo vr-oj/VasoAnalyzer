@@ -222,6 +222,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         from vasoanalyzer.ui.dialogs.settings.layout_tab import (
             create_layout_tab_widgets,
             populate_layout_tab,
+            wire_layout_tab,
         )
 
         refs = create_layout_tab_widgets(self, window)
@@ -234,8 +235,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.preview_ax = refs.preview_ax
 
         populate_layout_tab(self)
-        for control in self.layout_controls.values():
-            control.valueChanged.connect(self.update_preview)
+        wire_layout_tab(self)
 
         return tab
 

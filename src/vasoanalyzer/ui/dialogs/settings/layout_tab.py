@@ -179,4 +179,16 @@ def populate_layout_tab(dialog: "DialogT") -> None:
 
 def wire_layout_tab(dialog: "DialogT") -> None:
     """Filled in slice C (connect signals; guard duplicate wiring)."""
+    controls = getattr(dialog, "layout_controls", None)
+    if not controls:
+        return
+
+    sentinel = getattr(dialog, "_layout_tab_wired", None)
+    if sentinel is controls:
+        return
+
+    for control in controls.values():
+        control.valueChanged.connect(dialog.update_preview)
+
+    dialog._layout_tab_wired = controls
     return
