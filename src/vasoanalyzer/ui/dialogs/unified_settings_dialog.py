@@ -182,7 +182,7 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Frame & Origin tab ------------------------------------------------
-    def _make_frame_tab(self):
+    def _make_frame_tab_legacy(self):
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -269,6 +269,11 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return content
 
+    def _make_frame_tab(self):
+        from vasoanalyzer.ui.dialogs.settings.frame_tab import build_frame_tab
+
+        return build_frame_tab(self)
+
     def _toggle_origin_inputs(self):
         manual = self.origin_mode.currentText() == "Manual"
         self.origin_x.setEnabled(manual)
@@ -301,7 +306,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         row.addWidget(spin)
         return container, spin
 
-    def _make_layout_tab(self):
+    def _make_layout_tab_legacy(self):
         content = QWidget()
         main = QHBoxLayout(content)
         main.setContentsMargins(0, 0, 0, 0)
@@ -370,6 +375,11 @@ class UnifiedPlotSettingsDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
         return scroll
+
+    def _make_layout_tab(self):
+        from vasoanalyzer.ui.dialogs.settings.layout_tab import build_layout_tab
+
+        return build_layout_tab(self)
 
     def _get_initial_layout(self):
         sp = self.fig.subplotpars
@@ -524,7 +534,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             return visible_lines[0]
         return self.ax2.lines[0] if self.ax2.lines else None
 
-    def _make_axis_tab(self):
+    def _make_axis_tab_legacy(self):
         content = QWidget()
         grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -650,7 +660,17 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return scroll
 
-    def _make_event_labels_tab(self):
+    def _make_style_tab(self):
+        from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
+
+        return build_style_tab(self)
+
+    def _make_axis_tab(self):
+        from vasoanalyzer.ui.dialogs.settings.axis_tab import build_axis_tab
+
+        return build_axis_tab(self)
+
+    def _make_event_labels_tab_legacy(self):
         fonts = list(self._font_choices)
 
         container = QWidget()
@@ -733,6 +753,11 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._refresh_event_list()
 
         return container
+
+    def _make_event_labels_tab(self):
+        from vasoanalyzer.ui.dialogs.settings.event_labels_tab import build_event_labels_tab
+
+        return build_event_labels_tab(self)
 
     # ------------------------------------------------------------------
     # Event override helpers -------------------------------------------
@@ -897,7 +922,7 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Style tab --------------------------------------------------------
-    def _make_style_tab(self):
+    def _make_style_tab_legacy(self):
         fonts = list(self._font_choices)
 
         content = QWidget()

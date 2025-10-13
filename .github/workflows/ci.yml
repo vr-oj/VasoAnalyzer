@@ -50,3 +50,12 @@ jobs:
           PYTHONPATH: src
         run: pytest
         shell: bash
+
+      - name: Pytest (event_labels_v2)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          MPLBACKEND: Agg
+          PYTHONPATH: src
+          VA_FEATURES: event_labels_v2
+        run: pytest
+        shell: bash
