@@ -267,6 +267,26 @@ class SQLiteProjectRepository(ProjectRepository):
     def get_asset_bytes(self, asset_id: int) -> bytes:
         return sqlite_store.get_asset_bytes(self._store, asset_id)
 
+    def add_or_update_asset(
+        self,
+        dataset_id: int,
+        role: str,
+        payload: Any,
+        *,
+        embed: bool,
+        mime: Optional[str] = None,
+        chunk_size: int = 8 * 1024 * 1024,
+    ) -> int:
+        return sqlite_store.add_or_update_asset(
+            self._store,
+            dataset_id,
+            role=role,
+            path_or_bytes=payload,
+            embed=embed,
+            mime=mime,
+            chunk_size=chunk_size,
+        )
+
     def add_events(self, rows: Sequence[Mapping[str, Any]]) -> int:
         with transaction(self._store.conn):
             return _events.add_events(self._store.conn, rows)
@@ -279,9 +299,60 @@ class SQLiteProjectRepository(ProjectRepository):
         with transaction(self._store.conn):
             return _events.delete_events(self._store.conn, ids)
 
-    def write_trace(self, trace_id: str, data: Any) -> None:
+    def write_trace(self, trace_id: Any, data: Any) -> None:
         with transaction(self._store.conn):
             _traces.write_trace(self._store.conn, trace_id, data)
+
+    def write_meta(self, values: Mapping[str, Any]) -> None:
+        if not values:
+            return
+        _projects.write_meta(self._store.conn, values)
+        self._store.mark_dirty()
+
+    def add_dataset(
+        self,
+        name: str,
+        trace_data: Any,
+        events_data: Optional[Any],
+        *,
+        metadata: Optional[Mapping[str, Any]] = None,
+        tiff_path: Optional[str] = None,
+        embed_tiff: bool = False,
+        chunk_size: int = 8 * 1024 * 1024,
+        thumbnail_png: Optional[bytes] = None,
+    ) -> int:
+        return sqlite_store.add_dataset(
+            self._store,
+            name,
+            trace_data,
+            events_data,
+            metadata=dict(metadata) if metadata is not None else None,
+            tiff_path=tiff_path,
+            embed_tiff=embed_tiff,
+            chunk_size=chunk_size,
+            thumbnail_png=thumbnail_png,
+        )
+
+    def update_dataset_meta(self, dataset_id: int, **fields: Any) -> None:
+        sqlite_store.update_dataset_meta(self._store, dataset_id, **fields)
+
+    def add_result(self, dataset_id: int, kind: str, version: str, payload: Mapping[str, Any]) -> int:
+        return sqlite_store.add_result(
+            self._store,
+            dataset_id,
+            kind,
+            version,
+            dict(payload),
+        )
+
+    def get_results(self, dataset_id: int, kind: Optional[str] = None) -> Sequence[Mapping[str, Any]]:
+        return sqlite_store.get_results(self._store, dataset_id, kind)
+
+    def iter_datasets(self) -> Sequence[Mapping[str, Any]]:
+        return list(sqlite_store.iter_datasets(self._store))
+
+    def save(self) -> None:
+        sqlite_store.save_project(self._store)
 
     @property
     def store(self) -> sqlite_store.ProjectStore:
@@ -295,20 +366,6 @@ def open_project_repository(path: str) -> SQLiteProjectRepository:
 
     store = sqlite_store.open_project(path)
     return SQLiteProjectRepository(store)
-
-
-def create_project_repository(
-    path: str,
-    *,
-    app_version: str,
-    timezone: str,
-) -> SQLiteProjectRepository:
-    """Create a new SQLite project and return the repository façade."""
-
-    store = sqlite_store.create_project(path, app_version=app_version, timezone=timezone)
-    return SQLiteProjectRepository(store)
-
-
 def export_project_bundle(project: Project, bundle_path: str, *, embed_threshold_mb: int = 64) -> str:
     """Create a shareable bundle for ``project``."""
 
@@ -346,3 +403,22 @@ def export_project_single_file(
         link_snapshot_tiffs=True,
         extract_tiffs_dir=extract_tiffs_dir,
     )
+
+
+def pack_sqlite_bundle(path: str, bundle_path: str | Path, *, embed_threshold_mb: int = 64) -> str:
+    sqlite_store.pack_bundle(path, bundle_path, embed_threshold_mb=embed_threshold_mb)
+    return str(bundle_path)
+
+
+def unpack_sqlite_bundle(bundle_path: str | Path, dest_dir: str | Path) -> str:
+    return sqlite_store.unpack_bundle(bundle_path, dest_dir)
+
+
+def restore_sqlite_autosave(autosave_path: str | Path, dest_path: str | Path) -> None:
+    sqlite_store.restore_autosave(autosave_path, dest_path)
+
+
+def create_project_repository(path: str, *, app_version: str, timezone: str) -> SQLiteProjectRepository:
+    store = sqlite_store.create_project(path, app_version=app_version, timezone=timezone)
+    return SQLiteProjectRepository(store)
+

@@ -224,11 +224,8 @@ class _SampleLoadJob(QRunnable):
                 events_df = project_module._format_events_df(events_raw)
 
             if self._load_results:
-                backing_store = getattr(repo, "store", None)
-                if backing_store is None:
-                    raise RuntimeError("Repository does not expose backing store")
                 analysis_results = project_module._load_sample_results(
-                    backing_store, self._dataset_id
+                    repo, self._dataset_id
                 )
         except Exception as exc:  # pragma: no cover - defensive UI logging
             self.signals.error.emit(self._token, self._sample, str(exc))
