@@ -30,6 +30,7 @@ from vasoanalyzer.tools.portable_export import export_single_file
 from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.io.events import _standardize_headers
 from vasoanalyzer.storage import sqlite_store
+from vasoanalyzer.storage.sqlite import projects as _projects
 import numpy as np
 import os
 import pandas as pd
@@ -251,6 +252,9 @@ class SQLiteProjectRepository(ProjectRepository):
         t1: Optional[float] = None,
     ) -> pd.DataFrame:
         return sqlite_store.get_events(self._store, dataset_id, t0, t1)
+
+    def read_meta(self) -> Dict[str, Any]:
+        return dict(_projects.read_meta(self._store.conn))
 
     # AssetProvider
     def list_assets(self, dataset_id: int) -> List[Dict[str, Any]]:

@@ -25,6 +25,9 @@ import numpy as np
 from vasoanalyzer.io.events import _standardize_headers
 from utils.config import APP_VERSION
 from vasoanalyzer.storage import sqlite_store
+from vasoanalyzer.core.project_context import ProjectContext
+from vasoanalyzer.core.repo_factory import get_repo
+from vasoanalyzer.services.types import ProjectRepository
 
 __all__ = [
     "Project",
@@ -37,6 +40,10 @@ __all__ = [
     "write_project_autosave",
     "restore_project_from_autosave",
     "autosave_path_for",
+    "open_project_ctx",
+    "close_project_ctx",
+    "open_project",
+    "close_project",
     "Attachment",
     "export_sample",
     "events_dataframe_from_rows",
@@ -52,6 +59,45 @@ FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 # Snapshot media policy defaults
 EMBED_SNAPSHOT_TIFFS: bool = False
 EMBED_SNAPSHOT_MAX_MB: int = 4
+
+
+def open_project_ctx(path: str, repo: Optional[ProjectRepository] = None) -> ProjectContext:
+    """
+    Open ``path`` and return a :class:`ProjectContext`.
+
+    When ``repo`` is provided it is assumed to be pre-configured; otherwise the
+    default repository factory is used.
+    """
+
+    repository = repo or get_repo(path)
+    if repo is not None and hasattr(repository, "open"):
+        repository.open(path)  # type: ignore[call-arg]
+    meta: dict[str, Any] = {}
+    if hasattr(repository, "read_meta"):
+        try:
+            meta = dict(repository.read_meta())  # type: ignore[call-arg]
+        except Exception:
+            meta = {}
+    return ProjectContext(path=path, repo=repository, meta=meta)
+
+
+def close_project_ctx(ctx: ProjectContext) -> None:
+    """Close a :class:`ProjectContext`."""
+
+    ctx.close()
+
+
+def open_project(path: str, *args, **kwargs) -> ProjectContext:  # type: ignore[override]
+    """Backwards compatible project opener returning a context."""
+
+    return open_project_ctx(path, *args, **kwargs)
+
+
+def close_project(obj) -> None:
+    """Backwards compatible close wrapper accepting ProjectContext."""
+
+    if isinstance(obj, ProjectContext):
+        close_project_ctx(obj)
 
 
 @dataclass
