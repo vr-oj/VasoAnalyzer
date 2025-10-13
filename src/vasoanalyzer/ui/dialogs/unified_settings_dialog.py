@@ -660,10 +660,10 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return scroll
 
-    def _make_axis_tab(self):
+    def _make_axis_tab(self, window=None):
         from vasoanalyzer.ui.dialogs.settings.axis_tab import build_axis_tab
 
-        return build_axis_tab(self)
+        return build_axis_tab(self, window)
 
     def _make_event_labels_tab_legacy(self):
         fonts = list(self._font_choices)
