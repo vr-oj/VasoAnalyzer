@@ -31,6 +31,10 @@ from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.io.events import _standardize_headers
 from vasoanalyzer.storage import sqlite_store
 from vasoanalyzer.storage.sqlite import projects as _projects
+from vasoanalyzer.storage.sqlite import events as _events
+from vasoanalyzer.storage.sqlite import traces as _traces
+from vasoanalyzer.storage.sqlite import assets as _assets
+from vasoanalyzer.storage.sqlite.utils import transaction
 import numpy as np
 import os
 import pandas as pd
@@ -262,6 +266,22 @@ class SQLiteProjectRepository(ProjectRepository):
 
     def get_asset_bytes(self, asset_id: int) -> bytes:
         return sqlite_store.get_asset_bytes(self._store, asset_id)
+
+    def add_events(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        with transaction(self._store.conn):
+            return _events.add_events(self._store.conn, rows)
+
+    def update_event(self, event_id: int, values: Mapping[str, Any]) -> None:
+        with transaction(self._store.conn):
+            _events.update_event(self._store.conn, event_id, values)
+
+    def delete_events(self, ids: Sequence[int]) -> int:
+        with transaction(self._store.conn):
+            return _events.delete_events(self._store.conn, ids)
+
+    def write_trace(self, trace_id: str, data: Any) -> None:
+        with transaction(self._store.conn):
+            _traces.write_trace(self._store.conn, trace_id, data)
 
     @property
     def store(self) -> sqlite_store.ProjectStore:

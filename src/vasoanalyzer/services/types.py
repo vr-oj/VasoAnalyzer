@@ -49,6 +49,18 @@ class AssetProvider(Protocol):
     def get_asset_bytes(self, asset_id: int) -> bytes:
         ...
 
+    def add_events(self, rows: Sequence[Mapping[str, Any]]) -> int:
+        ...
+
+    def update_event(self, event_id: int, values: Mapping[str, Any]) -> None:
+        ...
+
+    def delete_events(self, ids: Sequence[int]) -> int:
+        ...
+
+    def write_trace(self, trace_id: str, data: Any) -> None:
+        ...
+
 
 @runtime_checkable
 class ProjectRepository(TraceProvider, EventProvider, AssetProvider, Protocol):

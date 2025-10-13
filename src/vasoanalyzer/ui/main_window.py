@@ -110,6 +110,7 @@ from vasoanalyzer.services.project_service import (
     export_project_single_file,
 )
 from vasoanalyzer.services.types import ProjectRepository
+from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.services.cache_service import DataCache, cache_dir_for_project
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.legend_settings_dialog import LegendSettingsDialog
