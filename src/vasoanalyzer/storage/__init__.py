@@ -1,5 +1,6 @@
 """Storage backends for the VasoAnalyzer project format."""
 
+from . import sqlite  # Skeleton package exposing upcoming modular split.
 from .sqlite_store import (
     ProjectStore,
     SCHEMA_VERSION,
@@ -25,6 +26,7 @@ from .sqlite_store import (
 )
 
 __all__ = [
+    "sqlite",
     "ProjectStore",
     "SCHEMA_VERSION",
     "add_dataset",
