@@ -221,6 +221,7 @@ class UnifiedPlotSettingsDialog(QDialog):
     def _make_layout_tab_legacy(self, window=None):
         from vasoanalyzer.ui.dialogs.settings.layout_tab import (
             create_layout_tab_widgets,
+            populate_layout_tab,
         )
 
         refs = create_layout_tab_widgets(self, window)
@@ -232,14 +233,8 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.preview_canvas = refs.preview_canvas
         self.preview_ax = refs.preview_ax
 
-        params = self._get_initial_layout()
-        self.initial_layout = dict(params)
-        for name, control in self.layout_controls.items():
-            value = float(params.get(name, control.value()))
-            slider = self._layout_sliders.get(name)
-            control.setValue(value)
-            if slider is not None:
-                slider.setValue(int(value * 100))
+        populate_layout_tab(self)
+        for control in self.layout_controls.values():
             control.valueChanged.connect(self.update_preview)
 
         return tab

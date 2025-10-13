@@ -21,6 +21,7 @@ from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.dialogs.settings._shared import block_signals
 
 if TYPE_CHECKING:  # pragma: no cover
     try:
@@ -155,6 +156,24 @@ def create_layout_tab_widgets(dialog: "DialogT", window) -> LayoutTabRefs:
 
 def populate_layout_tab(dialog: "DialogT") -> None:
     """Filled in slice B (set values using block_signals)."""
+    layout_controls = getattr(dialog, "layout_controls", None)
+    if not layout_controls:
+        dialog.initial_layout = dialog._get_initial_layout()
+        return
+
+    params = dialog._get_initial_layout()
+    dialog.initial_layout = dict(params)
+    sliders = getattr(dialog, "_layout_sliders", {}) or {}
+    widgets_to_block = list(layout_controls.values()) + list(sliders.values())
+
+    with block_signals(widgets_to_block):
+        for name, control in layout_controls.items():
+            value = float(params.get(name, control.value()))
+            slider = sliders.get(name)
+            if slider is not None:
+                slider.setValue(int(value * 100))
+            control.setValue(value)
+
     return
 
 
