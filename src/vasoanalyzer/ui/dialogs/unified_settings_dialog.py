@@ -660,11 +660,6 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return scroll
 
-    def _make_style_tab(self):
-        from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
-
-        return build_style_tab(self)
-
     def _make_axis_tab(self):
         from vasoanalyzer.ui.dialogs.settings.axis_tab import build_axis_tab
 
@@ -923,230 +918,25 @@ class UnifiedPlotSettingsDialog(QDialog):
     # ------------------------------------------------------------------
     # Style tab --------------------------------------------------------
     def _make_style_tab_legacy(self):
-        fonts = list(self._font_choices)
+        from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
+        return build_style_tab(self)
 
-        content = QWidget()
-        grid = QGridLayout(content)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
-
-        # Axis titles ---------------------------------------------------
-        axis_box = QGroupBox("Axis Titles")
-        axis_form = QFormLayout(axis_box)
-        axis_form.setLabelAlignment(Qt.AlignRight)
-
-        self.title_edit = QLineEdit(self.ax.get_title())
-        self.title_edit.setPlaceholderText("Plot title")
-        axis_form.addRow("Plot Title:", self.title_edit)
-
-        self.xlabel_edit = QLineEdit(self._current_xlabel())
-        self.xlabel_edit.setPlaceholderText("X axis title")
-        axis_form.addRow("X Axis Title:", self.xlabel_edit)
-
-        self.yi_label_edit = QLineEdit(self.ax.get_ylabel())
-        self.yi_label_edit.setPlaceholderText("Top plot axis title")
-        axis_form.addRow("Top Plot Axis Title:", self.yi_label_edit)
-
-        if self.ax2 is not None:
-            self.yo_label_edit = QLineEdit(self.ax2.get_ylabel())
-            self.yo_label_edit.setPlaceholderText("Bottom plot axis title")
-            axis_form.addRow("Bottom Plot Axis Title:", self.yo_label_edit)
-
-        self.axis_font_family = QComboBox()
-        self.axis_font_family.addItems(fonts)
-        self.axis_font_family.setCurrentText(self.style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"]))
-        axis_form.addRow("Font Family:", self.axis_font_family)
-
-        self.axis_font_size = QSpinBox()
-        self.axis_font_size.setRange(6, 48)
-        self.axis_font_size.setValue(int(self.style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])))
-        axis_form.addRow("Font Size:", self.axis_font_size)
-
-        axis_style_row = QWidget()
-        axis_style_layout = QHBoxLayout(axis_style_row)
-        axis_style_layout.setContentsMargins(0, 0, 0, 0)
-        axis_style_layout.setSpacing(8)
-        self.axis_bold = QCheckBox("Bold")
-        self.axis_italic = QCheckBox("Italic")
-        axis_style_layout.addWidget(self.axis_bold)
-        axis_style_layout.addWidget(self.axis_italic)
-        axis_style_layout.addStretch(1)
-        axis_form.addRow("Text Style:", axis_style_row)
-
-        x_color_source = self._x_axis_target or self.ax
-        x_color = None
-        if x_color_source is not None:
-            try:
-                x_color = self._normalize_color(
-                    x_color_source.xaxis.label.get_color(),
-                    self.style.get("x_axis_color"),
-                )
-            except Exception:
-                x_color = None
-        x_color = x_color or self._normalize_color(
-            self.style.get("x_axis_color", DEFAULT_STYLE.get("x_axis_color", "#000000")),
-            DEFAULT_STYLE.get("x_axis_color", "#000000"),
-        )
-        self.x_axis_color_btn = self._make_color_button(x_color)
-        axis_form.addRow("X Title Color:", self.x_axis_color_btn)
-
-        self.yi_axis_color_btn = self._make_color_button(
-            self.style.get("y_axis_color", self.ax.yaxis.label.get_color())
-        )
-        axis_form.addRow("Top Plot Title Color:", self.yi_axis_color_btn)
-
-        if self.ax2 is not None:
-            self.yo_axis_color_btn = self._make_color_button(
-                self.style.get("right_axis_color", self.ax2.yaxis.label.get_color())
-            )
-            axis_form.addRow("Bottom Plot Title Color:", self.yo_axis_color_btn)
-
-        grid.addWidget(axis_box, 0, 0)
-
-        # Tick labels ---------------------------------------------------
-        tick_box = QGroupBox("Tick Labels")
-        tick_form = QFormLayout(tick_box)
-        tick_form.setLabelAlignment(Qt.AlignRight)
-
-        self.tick_font_size = QSpinBox()
-        self.tick_font_size.setRange(6, 32)
-        self.tick_font_size.setValue(int(self.style.get("tick_font_size", DEFAULT_STYLE["tick_font_size"])))
-        tick_form.addRow("Font Size:", self.tick_font_size)
-
-        self.x_tick_color_btn = self._make_color_button(
-            self.style.get("x_tick_color", self.ax.xaxis.label.get_color())
-        )
-        tick_form.addRow("X Tick Color:", self.x_tick_color_btn)
-
-        self.yi_tick_color_btn = self._make_color_button(
-            self.style.get("y_tick_color", self.ax.yaxis.label.get_color())
-        )
-        tick_form.addRow("Top Plot Tick Color:", self.yi_tick_color_btn)
-
-        if self.ax2 is not None:
-            self.yo_tick_color_btn = self._make_color_button(
-                self.style.get("right_tick_color", self.ax2.yaxis.label.get_color())
-            )
-            tick_form.addRow("Bottom Plot Tick Color:", self.yo_tick_color_btn)
-
-        grid.addWidget(tick_box, 0, 1)
-
-        # Pinned annotations -------------------------------------------
-        pin_box = QGroupBox("Pinned Labels")
-        pin_form = QFormLayout(pin_box)
-        pin_form.setLabelAlignment(Qt.AlignRight)
-
-        self.pin_font_family = QComboBox()
-        self.pin_font_family.addItems(fonts)
-        self.pin_font_family.setCurrentText(
-            self.style.get("pin_font_family", DEFAULT_STYLE["pin_font_family"])
-        )
-        pin_form.addRow("Font Family:", self.pin_font_family)
-
-        self.pin_font_size = QSpinBox()
-        self.pin_font_size.setRange(6, 32)
-        self.pin_font_size.setValue(int(self.style.get("pin_font_size", DEFAULT_STYLE["pin_font_size"])))
-        pin_form.addRow("Font Size:", self.pin_font_size)
-
-        pin_style_row = QWidget()
-        pin_style_layout = QHBoxLayout(pin_style_row)
-        pin_style_layout.setContentsMargins(0, 0, 0, 0)
-        pin_style_layout.setSpacing(8)
-        self.pin_bold = QCheckBox("Bold")
-        self.pin_italic = QCheckBox("Italic")
-        pin_style_layout.addWidget(self.pin_bold)
-        pin_style_layout.addWidget(self.pin_italic)
-        pin_style_layout.addStretch(1)
-        pin_form.addRow("Text Style:", pin_style_row)
-
-        self.pin_color_btn = self._make_color_button(
-            self.style.get("pin_color", DEFAULT_STYLE["pin_color"])
-        )
-        pin_form.addRow("Label Color:", self.pin_color_btn)
-
-        self.pin_marker_size = QSpinBox()
-        self.pin_marker_size.setRange(2, 20)
-        self.pin_marker_size.setValue(int(self.style.get("pin_size", DEFAULT_STYLE["pin_size"])))
-        pin_form.addRow("Marker Size:", self.pin_marker_size)
-
-        grid.addWidget(pin_box, 1, 0, 1, 2)
-
-        # Trace lines ---------------------------------------------------
-        line_box = QGroupBox("Trace Lines")
-        line_form = QFormLayout(line_box)
-        line_form.setLabelAlignment(Qt.AlignRight)
-
-        self.line_width = QDoubleSpinBox()
-        self.line_width.setRange(0.5, 10)
-        self.line_width.setValue(float(self.style.get("line_width", DEFAULT_STYLE["line_width"])))
-        line_form.addRow("Inner Line Width:", self.line_width)
-
-        self.line_style_combo = QComboBox()
-        for code, label in (("solid", "Solid"), ("dashed", "Dashed"), ("dotted", "Dotted"), ("dashdot", "DashDot")):
-            self.line_style_combo.addItem(label, code)
-        line_form.addRow("Inner Line Style:", self.line_style_combo)
-
-        primary_line = self._primary_trace_line()
-        primary_color = None
-        if primary_line is not None:
-            primary_color = self._normalize_color(primary_line.get_color(), self.style.get("line_color"))
-        primary_color = primary_color or self._normalize_color(
-            self.style.get("line_color", DEFAULT_STYLE["line_color"]),
-            DEFAULT_STYLE["line_color"],
-        )
-        self.line_color_btn = self._make_color_button(primary_color)
-        line_form.addRow("Inner Line Color:", self.line_color_btn)
-
-        if self.ax2 is not None:
-            self.od_line_width = QDoubleSpinBox()
-            self.od_line_width.setRange(0.5, 10)
-            self.od_line_width.setValue(float(self.style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"])))
-            line_form.addRow("Outer Line Width:", self.od_line_width)
-
-            self.od_line_style_combo = QComboBox()
-            for code, label in (("solid", "Solid"), ("dashed", "Dashed"), ("dotted", "Dotted"), ("dashdot", "DashDot")):
-                self.od_line_style_combo.addItem(label, code)
-            line_form.addRow("Outer Line Style:", self.od_line_style_combo)
-
-            secondary_line = self._secondary_trace_line()
-            secondary_color = None
-            if secondary_line is not None:
-                secondary_color = self._normalize_color(
-                    secondary_line.get_color(),
-                    self.style.get("outer_line_color"),
-                )
-            secondary_color = secondary_color or self._normalize_color(
-                self.style.get("outer_line_color", DEFAULT_STYLE["outer_line_color"]),
-                DEFAULT_STYLE["outer_line_color"],
-            )
-            self.od_line_color_btn = self._make_color_button(secondary_color)
-            line_form.addRow("Outer Line Color:", self.od_line_color_btn)
-
-        grid.addWidget(line_box, 2, 0, 1, 2)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setRowStretch(3, 1)
-
-        scroll = QScrollArea()
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
-
-        return scroll
+    def _make_style_tab(self):
+        from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
+        return build_style_tab(self)
 
     # ------------------------------------------------------------------
     def update_preview(self, *_):
         params = {name: ctrl.value() for name, ctrl in self.layout_controls.items()}
         self.preview_ax.clear()
-        self.preview_ax.axis("off")
+        self.preview_ax.axis('off')
         self.preview_ax.add_patch(
             Rectangle(
-                (params["left"], params["bottom"]),
-                params["right"] - params["left"],
-                params["top"] - params["bottom"],
+                (params['left'], params['bottom']),
+                params['right'] - params['left'],
+                params['top'] - params['bottom'],
                 fill=False,
-                edgecolor="#4a90e2",
+                edgecolor='#4a90e2',
                 lw=2,
             )
         )
@@ -1155,7 +945,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.preview_ax.invert_yaxis()
         self.preview_canvas.draw_idle()
 
-    # ------------------------------------------------------------------
+
     def _populate_layout_controls(self, params):
         if not hasattr(self, "layout_controls"):
             return
