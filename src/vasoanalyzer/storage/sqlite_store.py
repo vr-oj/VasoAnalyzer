@@ -19,13 +19,15 @@ import zipfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional, Sequence
+from typing import Iterable, Iterator, Optional
 
+import mimetypes
 import pandas as pd
 from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite.utils import open_db
 from vasoanalyzer.storage.sqlite import traces as _traces
 from vasoanalyzer.storage.sqlite import events as _events
+from vasoanalyzer.storage.sqlite import assets as _assets
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
 
@@ -312,7 +314,7 @@ def add_or_update_asset(
         asset_path = Path(path_or_bytes)
         if not asset_path.exists():
             raise FileNotFoundError(asset_path)
-        sha256 = _hash_file(asset_path)
+        sha256 = _assets.hash_file(asset_path)
         size = asset_path.stat().st_size
         storage = "embedded" if embed else "external"
         rel_path = (
@@ -371,10 +373,18 @@ def add_or_update_asset(
 
         if storage == "embedded":
             if data_bytes is not None:
-                _write_blob_chunks(store.conn, asset_id, _chunks_from_bytes(data_bytes, chunk_size))
+                _assets.write_blob_chunks(
+                    store.conn,
+                    asset_id,
+                    _assets.iter_chunks_from_bytes(data_bytes, chunk_size),
+                )
             else:
                 assert not isinstance(path_or_bytes, (bytes, bytearray))
-                _write_blob_chunks(store.conn, asset_id, _chunks_from_file(Path(path_or_bytes), chunk_size))
+                _assets.write_blob_chunks(
+                    store.conn,
+                    asset_id,
+                    _assets.iter_chunks_from_file(Path(path_or_bytes), chunk_size),
+                )
 
     store.mark_dirty()
     return asset_id
@@ -457,45 +467,13 @@ def get_results(
 def list_assets(store: ProjectStore, dataset_id: int) -> list[dict]:
     """Return metadata for assets linked to ``dataset_id``."""
 
-    rows = store.conn.execute(
-        """
-        SELECT id, role, storage, rel_path, sha256, bytes, mime
-          FROM asset
-         WHERE dataset_id = ?
-         ORDER BY id ASC
-        """,
-        (dataset_id,),
-    ).fetchall()
-    return [
-        {
-            "id": row[0],
-            "role": row[1],
-            "storage": row[2],
-            "rel_path": row[3],
-            "sha256": row[4],
-            "bytes": row[5],
-            "mime": row[6],
-        }
-        for row in rows
-    ]
+    return _assets.list_assets(store.conn, dataset_id)
 
 
 def get_asset_bytes(store: ProjectStore, asset_id: int) -> bytes:
     """Return the binary payload for ``asset_id``."""
 
-    row = store.conn.execute(
-        "SELECT storage, rel_path FROM asset WHERE id = ?", (asset_id,)
-    ).fetchone()
-    if row is None:
-        raise KeyError(f"Asset {asset_id} does not exist")
-    storage, rel_path = row
-    if storage == "embedded":
-        return _reassemble_blob(store.conn, asset_id)
-    if storage == "external" and rel_path:
-        asset_path = store.path.parent / rel_path
-        if asset_path.exists():
-            return asset_path.read_bytes()
-    return b""
+    return _assets.fetch_asset_bytes(store.conn, store.path, asset_id)
 
 
 def iter_datasets(store: ProjectStore) -> Iterator[dict]:
@@ -599,10 +577,10 @@ def pack_bundle(
                 shutil.copy2(abs_path, target_path)
 
                 if size_mb <= embed_threshold_mb:
-                    _write_blob_chunks(
+                    _assets.write_blob_chunks(
                         conn,
                         asset_id,
-                        _chunks_from_file(abs_path, DEFAULT_CHUNK_SIZE),
+                        _assets.iter_chunks_from_file(abs_path, DEFAULT_CHUNK_SIZE),
                     )
                     conn.execute(
                         "UPDATE asset SET storage = ?, rel_path = ? WHERE id = ?",
@@ -664,7 +642,7 @@ def unpack_bundle(vasopack_path: str | os.PathLike[str], dest_dir: str | os.Path
                 "SELECT id, storage, rel_path, mime FROM asset WHERE storage = 'embedded' AND rel_path IS NULL"
             ).fetchall()
             for asset_id, _storage, _rel_path, mime in rows:
-                blob = _reassemble_blob(conn, asset_id)
+                blob = _assets.reassemble_blob(conn, asset_id)
                 if not blob:
                     continue
                 sha = hashlib.sha256(blob).hexdigest()
@@ -738,3 +716,17 @@ def restore_autosave(
 
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _guess_mime(path: str | os.PathLike[str] | None) -> Optional[str]:
+    if not path:
+        return None
+    guess, _ = mimetypes.guess_type(str(path))
+    return guess
+
+
+def _extension_for_mime(mime: Optional[str]) -> str:
+    if not mime:
+        return ''
+    ext = mimetypes.guess_extension(mime)
+    return ext or ''
