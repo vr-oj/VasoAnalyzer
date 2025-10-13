@@ -30,12 +30,9 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox,
     QStyle,
     QScrollArea,
-    QSizePolicy,
     QListWidget,
     QListWidgetItem,
 )
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator
 from matplotlib.lines import Line2D
@@ -221,100 +218,34 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Layout tab -------------------------------------------------------
-    def _make_slider_row(self, name, val):
-        container = QWidget()
-        row = QHBoxLayout(container)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 100)
-        spin = QDoubleSpinBox()
-        spin.setRange(0.0, 1.0)
-        spin.setSingleStep(0.01)
-        spin.setDecimals(2)
-        slider.setValue(int(val * 100))
-        spin.setValue(val)
-        slider.valueChanged.connect(lambda v, s=spin: s.setValue(v / 100))
-        spin.valueChanged.connect(lambda v, s=slider: s.setValue(int(v * 100)))
-        spin.valueChanged.connect(self.update_preview)
-        row.addWidget(slider, 1)
-        row.addWidget(spin)
-        return container, spin
-
-    def _make_layout_tab_legacy(self):
-        content = QWidget()
-        main = QHBoxLayout(content)
-        main.setContentsMargins(0, 0, 0, 0)
-        main.setSpacing(12)
-
-        controls_box = QGroupBox("Subplot Margins & Spacing")
-        controls_layout = QVBoxLayout(controls_box)
-        controls_layout.setContentsMargins(12, 12, 12, 12)
-        controls_layout.setSpacing(10)
-
-        help_lbl = QLabel(
-            "Adjust how the subplot fills the canvas. Values are in figure fraction (0 → edge, 1 → outside)."
+    def _make_layout_tab_legacy(self, window=None):
+        from vasoanalyzer.ui.dialogs.settings.layout_tab import (
+            create_layout_tab_widgets,
         )
-        help_lbl.setWordWrap(True)
-        help_lbl.setObjectName("PlotSettingsHint")
-        controls_layout.addWidget(help_lbl)
 
-        controls_form = QFormLayout()
-        controls_form.setLabelAlignment(Qt.AlignRight)
-        controls_form.setHorizontalSpacing(12)
-        controls_form.setVerticalSpacing(8)
+        refs = create_layout_tab_widgets(self, window)
+        tab = refs.tab
 
-        labels = [
-            ("left", "Left margin"),
-            ("right", "Right margin"),
-            ("top", "Top margin"),
-            ("bottom", "Bottom margin"),
-            ("wspace", "Width gap"),
-            ("hspace", "Height gap"),
-        ]
+        self.layout_controls = refs.layout_controls
+        self._layout_sliders = refs.layout_sliders
+        self.preview_fig = refs.preview_fig
+        self.preview_canvas = refs.preview_canvas
+        self.preview_ax = refs.preview_ax
 
-        self.layout_controls = {}
         params = self._get_initial_layout()
         self.initial_layout = dict(params)
-        for name, label_text in labels:
-            widget, spin = self._make_slider_row(name, params[name])
-            controls_form.addRow(f"{label_text}:", widget)
-            self.layout_controls[name] = spin
+        for name, control in self.layout_controls.items():
+            value = float(params.get(name, control.value()))
+            slider = self._layout_sliders.get(name)
+            control.setValue(value)
+            if slider is not None:
+                slider.setValue(int(value * 100))
+            control.valueChanged.connect(self.update_preview)
 
-        controls_layout.addLayout(controls_form)
-        controls_layout.addStretch(1)
+        return tab
 
-        main.addWidget(controls_box, 1)
-
-        preview_box = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_box)
-        preview_layout.setContentsMargins(12, 12, 12, 12)
-        preview_layout.setSpacing(8)
-
-        dpi = self.logicalDpiX()
-        self.preview_fig = Figure(
-            figsize=(2.5, 2.5), facecolor=CURRENT_THEME["window_bg"], dpi=dpi
-        )
-        self.preview_canvas = FigureCanvas(self.preview_fig)
-        self.preview_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.preview_ax = self.preview_fig.add_subplot(111)
-        self.preview_ax.axis("off")
-        preview_layout.addWidget(self.preview_canvas, 1)
-
-        main.addWidget(preview_box, 1)
-        main.setStretch(0, 1)
-        main.setStretch(1, 1)
-
-        scroll = QScrollArea()
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
-        return scroll
-
-    def _make_layout_tab(self):
-        from vasoanalyzer.ui.dialogs.settings.layout_tab import build_layout_tab
-
-        return build_layout_tab(self)
+    def _make_layout_tab(self, window=None):
+        return self._make_layout_tab_legacy(window)
 
     def _get_initial_layout(self):
         sp = self.fig.subplotpars
