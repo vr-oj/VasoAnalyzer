@@ -130,7 +130,7 @@ from .constants import PREVIOUS_PLOT_PATH, DEFAULT_STYLE
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.core.audit import serialize_edit_log
-from vasoanalyzer.ui.plot_core import PlotHost
+from vasoanalyzer.ui.plots.plot_host import PlotHost
 from vasoanalyzer.ui.interactions import InteractionController
 from vasoanalyzer.ui.zoom_window import ZoomWindowDock
 from vasoanalyzer.ui.scope_view import ScopeDock

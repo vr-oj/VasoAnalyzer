@@ -6,7 +6,7 @@ from typing import Callable, List, Optional, Tuple
 
 from PyQt5.QtCore import Qt
 
-from vasoanalyzer.ui.plot_core import PlotHost
+from vasoanalyzer.ui.plots.plot_host import PlotHost
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack
 
 
