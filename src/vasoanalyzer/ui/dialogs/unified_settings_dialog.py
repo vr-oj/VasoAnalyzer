@@ -601,6 +601,7 @@ class UnifiedPlotSettingsDialog(QDialog):
     def _make_event_labels_tab_legacy(self, window=None):
         from vasoanalyzer.ui.dialogs.settings.event_labels_tab import (
             create_event_labels_tab_widgets,
+            populate_event_labels_tab,
         )
 
         refs = create_event_labels_tab_widgets(self, window)
@@ -617,12 +618,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.event_overrides_box = refs.event_overrides_box
         self.event_empty_label = refs.event_empty_label
 
-        self.event_font_family.setCurrentText(
-            self.style.get("event_font_family", DEFAULT_STYLE["event_font_family"])
-        )
-        self.event_font_size.setValue(
-            int(self.style.get("event_font_size", DEFAULT_STYLE["event_font_size"]))
-        )
+        populate_event_labels_tab(self)
         self.event_list.currentRowChanged.connect(self._on_event_row_changed)
         self.event_editor.styleChanged.connect(self._on_event_style_changed)
         self.event_editor.labelTextChanged.connect(self._on_event_label_changed)

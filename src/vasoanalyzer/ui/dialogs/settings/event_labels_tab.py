@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QGroupBox, QFormLayout
 from PyQt5.QtCore import Qt
 
 from vasoanalyzer.ui.event_label_editor import EventLabelEditor
+from vasoanalyzer.ui.constants import DEFAULT_STYLE
+from vasoanalyzer.ui.dialogs.settings._shared import block_signals
 
 if TYPE_CHECKING:  # pragma: no cover
     try:
@@ -138,7 +140,25 @@ def create_event_labels_tab_widgets(dialog: "DialogT", window) -> EventLabelsTab
     )
 
 def populate_event_labels_tab(dialog: "DialogT") -> None:
-    """Filled in Slice 2."""
+    """
+    Move ONLY the value-setting lines from legacy:
+      - setCurrentText / setValue / setChecked that read from dialog.style or DEFAULT_STYLE
+    Lines mapped from legacy: 675–684 (and any similar set* calls in the elided region).
+    """
+    default_style = getattr(dialog, "DEFAULT_STYLE", DEFAULT_STYLE)
+    style = getattr(dialog, "style", {})
+
+    with block_signals([
+        getattr(dialog, "event_font_family", None),
+        getattr(dialog, "event_font_size", None),
+    ]):
+        dialog.event_font_family.setCurrentText(
+            style.get("event_font_family", default_style.get("event_font_family", "Arial"))
+        )
+        dialog.event_font_size.setValue(
+            int(style.get("event_font_size", default_style.get("event_font_size", 10)))
+        )
+
     return
 
 def wire_event_labels_tab(dialog: "DialogT") -> None:
