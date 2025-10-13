@@ -598,94 +598,41 @@ class UnifiedPlotSettingsDialog(QDialog):
     def _make_axis_tab(self):
         return self._make_axis_tab_legacy()
 
-    def _make_event_labels_tab_legacy(self):
-        fonts = list(self._font_choices)
-
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        intro = QLabel(
-            "Tune the default typography for all event markers or override specific labels "
-            "to adjust their wording, visibility, or placement."
+    def _make_event_labels_tab_legacy(self, window=None):
+        from vasoanalyzer.ui.dialogs.settings.event_labels_tab import (
+            create_event_labels_tab_widgets,
         )
-        intro.setWordWrap(True)
-        intro.setObjectName("EventLabelsIntro")
-        layout.addWidget(intro)
 
-        defaults_box = QGroupBox("Global Label Style")
-        defaults_form = QFormLayout(defaults_box)
-        defaults_form.setLabelAlignment(Qt.AlignRight)
+        refs = create_event_labels_tab_widgets(self, window)
+        container = refs.tab
 
-        self.event_font_family = QComboBox()
-        self.event_font_family.addItems(fonts)
+        # Reattach attributes so downstream code still finds them on self
+        self.event_font_family = refs.event_font_family
+        self.event_font_size = refs.event_font_size
+        self.event_bold = refs.event_bold
+        self.event_italic = refs.event_italic
+        self.event_color_btn = refs.event_color_btn
+        self.event_list = refs.event_list
+        self.event_editor = refs.event_editor
+        self.event_overrides_box = refs.event_overrides_box
+        self.event_empty_label = refs.event_empty_label
+
         self.event_font_family.setCurrentText(
             self.style.get("event_font_family", DEFAULT_STYLE["event_font_family"])
         )
-        defaults_form.addRow("Font Family:", self.event_font_family)
-
-        self.event_font_size = QSpinBox()
-        self.event_font_size.setRange(6, 32)
         self.event_font_size.setValue(
             int(self.style.get("event_font_size", DEFAULT_STYLE["event_font_size"]))
         )
-        defaults_form.addRow("Font Size:", self.event_font_size)
-
-        event_style_row = QWidget()
-        event_style_layout = QHBoxLayout(event_style_row)
-        event_style_layout.setContentsMargins(0, 0, 0, 0)
-        event_style_layout.setSpacing(8)
-        self.event_bold = QCheckBox("Bold")
-        self.event_italic = QCheckBox("Italic")
-        event_style_layout.addWidget(self.event_bold)
-        event_style_layout.addWidget(self.event_italic)
-        event_style_layout.addStretch(1)
-        defaults_form.addRow("Text Style:", event_style_row)
-
-        self.event_color_btn = self._make_color_button(
-            self.style.get("event_color", DEFAULT_STYLE["event_color"])
-        )
-        defaults_form.addRow("Event Color:", self.event_color_btn)
-
-        layout.addWidget(defaults_box)
-
-        overrides_box = QGroupBox("Per-Event Overrides")
-        overrides_box.setObjectName("EventOverridesGroup")
-        overrides_layout = QHBoxLayout(overrides_box)
-        overrides_layout.setContentsMargins(12, 12, 12, 12)
-        overrides_layout.setSpacing(12)
-
-        self.event_list = QListWidget()
-        self.event_list.setAlternatingRowColors(True)
-        self.event_list.setSelectionMode(QListWidget.SingleSelection)
-        self.event_list.setMinimumWidth(220)
         self.event_list.currentRowChanged.connect(self._on_event_row_changed)
-        overrides_layout.addWidget(self.event_list, 1)
-
-        self.event_editor = EventLabelEditor(self)
         self.event_editor.styleChanged.connect(self._on_event_style_changed)
         self.event_editor.labelTextChanged.connect(self._on_event_label_changed)
-        overrides_layout.addWidget(self.event_editor, 2)
-
-        layout.addWidget(overrides_box, 1)
-        self.event_overrides_box = overrides_box
-
-        self.event_empty_label = QLabel("No events found for this sample.")
-        self.event_empty_label.setAlignment(Qt.AlignCenter)
-        self.event_empty_label.setStyleSheet("color: #666666;")
-        layout.addWidget(self.event_empty_label)
-
-        layout.addStretch(1)
 
         self._refresh_event_list()
 
         return container
 
-    def _make_event_labels_tab(self):
-        from vasoanalyzer.ui.dialogs.settings.event_labels_tab import build_event_labels_tab
-
-        return build_event_labels_tab(self)
+    def _make_event_labels_tab(self, window=None):
+        return self._make_event_labels_tab_legacy(window)
 
     # ------------------------------------------------------------------
     # Event override helpers -------------------------------------------
