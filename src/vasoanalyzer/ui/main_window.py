@@ -131,10 +131,9 @@ from vasoanalyzer.ui.plot_core import PlotHost
 from vasoanalyzer.ui.interactions import InteractionController
 from vasoanalyzer.ui.zoom_window import ZoomWindowDock
 from vasoanalyzer.ui.scope_view import ScopeDock
-from vasoanalyzer.ui.tracks import ChannelTrackSpec
-from vasoanalyzer.ui.overlays import AnnotationSpec
+from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
+from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 
-from .widgets import CustomToolbar
 from .plotting import auto_export_editable_plot, export_high_res_plot, toggle_grid
 from .project_management import (
     save_data_as_n,
@@ -507,6 +506,11 @@ class VasoAnalyzerApp(QMainWindow):
             self.check_for_updates_at_startup()
 
         QTimer.singleShot(0, self._maybe_run_onboarding)
+
+    def initUI(self):
+        from vasoanalyzer.ui.shell.init_ui import init_ui as _init_ui_adapter
+
+        return _init_ui_adapter(self)
 
     def setup_project_sidebar(self):
         from .project_explorer import ProjectExplorerWidget
@@ -915,15 +919,16 @@ class VasoAnalyzerApp(QMainWindow):
             6000,
         )
 
-    def open_project_file(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open Project",
-            "",
-            "Vaso Projects (*.vaso *.vasopack);;All Files (*)",
-        )
-        if not path:
-            return
+    def _open_project_file_legacy(self, path: Optional[str] = None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Open Project",
+                "",
+                "Vaso Projects (*.vaso *.vasopack);;All Files (*)",
+            )
+            if not path:
+                return
 
         path_obj = Path(path).expanduser().resolve(strict=False)
         path = str(path_obj)
@@ -1063,6 +1068,11 @@ class VasoAnalyzerApp(QMainWindow):
                         self.on_tree_item_clicked(root, 0)
                 self.show_analysis_workspace()
         self._reset_session_dirty()
+
+    def open_project_file(self, path: Optional[str] = None):
+        from vasoanalyzer.app.openers import open_project_file as _open_project_file
+
+        return _open_project_file(self, path)
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
@@ -1966,7 +1976,7 @@ class VasoAnalyzerApp(QMainWindow):
             win.load_sample_into_view(sample_copy)
             self.compare_windows.append(win)
 
-    def open_samples_in_dual_view(self, samples):
+    def _open_samples_in_dual_view_legacy(self, samples):
         """Display two samples stacked vertically in a single window."""
         if len(samples) != 2:
             QMessageBox.warning(self, "Dual View", "Please select exactly two N's.")
@@ -2159,6 +2169,11 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.dual_window = DualViewWindow(self, samples)
         self.dual_window.show()
+
+    def open_samples_in_dual_view(self, samples):
+        from vasoanalyzer.app.openers import open_samples_in_dual_view as _open_dual_view
+
+        return _open_dual_view(self, samples)
 
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
@@ -3843,340 +3858,10 @@ class VasoAnalyzerApp(QMainWindow):
             self._welcome_dialog = None
 
     # [C] ========================= UI SETUP (initUI) ======================================
-    def initUI(self):
-        self.stack = QStackedWidget()
-        self.setCentralWidget(self.stack)
+    def _initUI_legacy(self):
+        from vasoanalyzer.ui.shell.init_ui import init_ui as _init_ui
 
-        self.home_page = self._build_home_page()
-        self.stack.addWidget(self.home_page)
-
-        self.data_page = QWidget()
-        self.data_page.setObjectName("DataPage")
-        self.stack.addWidget(self.data_page)
-
-        self.main_layout = QVBoxLayout(self.data_page)
-        self.main_layout.setContentsMargins(16, 8, 16, 16)
-        self.main_layout.setSpacing(12)
-
-        dpi = int(QApplication.primaryScreen().logicalDotsPerInch())
-        self.plot_host = PlotHost(dpi=dpi)
-        self.fig = self.plot_host.figure
-        self.canvas = self.plot_host.canvas
-        self.canvas.setMouseTracking(True)
-        self.canvas.toolbar = None
-        initial_specs = [
-            ChannelTrackSpec(
-                track_id="inner",
-                component="inner",
-                label="Inner Diameter (µm)",
-                height_ratio=1.0,
-            )
-        ]
-        self.plot_host.ensure_channels(initial_specs)
-        self.plot_host.set_event_highlight_style(
-            color=self._event_highlight_color,
-            alpha=self._event_highlight_base_alpha,
-        )
-        inner_track = self.plot_host.track("inner")
-        self.ax = inner_track.ax if inner_track else None
-        self.ax2 = None
-        self._bind_primary_axis_callbacks()
-
-        self._init_hover_artists()
-        self.active_canvas = self.canvas
-
-        self.toolbar = self.build_toolbar_for_canvas(self.canvas)
-        self.toolbar.setObjectName("PlotToolbar")
-        self.toolbar.setAllowedAreas(Qt.TopToolBarArea)
-        self.toolbar.setMovable(False)
-        self.canvas.toolbar = self.toolbar
-        self.toolbar.setMouseTracking(True)
-
-        self.trace_file_label = QLabel("No trace loaded")
-        self.trace_file_label.setObjectName("TraceChip")
-        self.trace_file_label.setSizePolicy(
-            QSizePolicy.Preferred, QSizePolicy.Preferred
-        )
-        self.trace_file_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.trace_file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.trace_file_label.setMinimumWidth(260)
-        self._status_base_label = "No trace loaded"
-        self.trace_file_label.installEventFilter(self)
-
-        self.primary_toolbar = self._create_primary_toolbar()
-        self.primary_toolbar.setAllowedAreas(Qt.TopToolBarArea)
-        self.addToolBar(Qt.TopToolBarArea, self.primary_toolbar)
-        self.addToolBarBreak(Qt.TopToolBarArea)
-        self.addToolBar(Qt.TopToolBarArea, self.toolbar)
-        self._interaction_controller = InteractionController(
-            self.plot_host,
-            toolbar=self.toolbar,
-            on_drag_state=self._set_plot_drag_state,
-        )
-
-        self.toolbar.addAction(self.id_toggle_act)
-        self.toolbar.addAction(self.od_toggle_act)
-        self.toolbar.addSeparator()
-
-        self._update_toolbar_compact_mode(self.width())
-
-        self.scroll_slider = QSlider(Qt.Horizontal)
-        self.scroll_slider.setMinimum(0)
-        self.scroll_slider.setMaximum(1000)
-        self.scroll_slider.setSingleStep(1)
-        self.scroll_slider.setValue(0)
-        self.scroll_slider.valueChanged.connect(self.scroll_plot)
-        self.scroll_slider.hide()
-        self.scroll_slider.setToolTip("Scroll timeline (X-axis)")
-
-        self.snapshot_label = QLabel("Snapshot preview")
-        self.snapshot_label.setObjectName("SnapshotPreview")
-        self.snapshot_label.setAlignment(Qt.AlignCenter)
-        self.snapshot_label.setMinimumHeight(220)
-        self.snapshot_label.hide()
-        self.snapshot_label.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.snapshot_label.customContextMenuRequested.connect(
-            self.show_snapshot_context_menu
-        )
-
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setMinimum(0)
-        self.slider.setValue(0)
-        self.slider.valueChanged.connect(self.change_frame)
-        self.slider.hide()
-        self.slider.setToolTip("Navigate TIFF frames")
-
-        # Snapshot playback controls
-        self.snapshot_controls = QWidget()
-        self.snapshot_controls.setObjectName("SnapshotControls")
-        controls_layout = QHBoxLayout(self.snapshot_controls)
-        controls_layout.setContentsMargins(0, 0, 0, 0)
-        controls_layout.setSpacing(8)
-
-        self.prev_frame_btn = QToolButton(self.snapshot_controls)
-        self.prev_frame_btn.setIcon(
-            self.style().standardIcon(QStyle.SP_MediaSkipBackward)
-        )
-        self.prev_frame_btn.setToolTip("Previous frame")
-        self.prev_frame_btn.clicked.connect(self.step_previous_frame)
-        self.prev_frame_btn.setEnabled(False)
-        controls_layout.addWidget(self.prev_frame_btn)
-
-        self.play_pause_btn = QToolButton(self.snapshot_controls)
-        self.play_pause_btn.setCheckable(True)
-        self.play_pause_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self.play_pause_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.play_pause_btn.setText("Play")
-        self.play_pause_btn.setToolTip("Play snapshot sequence")
-        self.play_pause_btn.clicked.connect(self.toggle_snapshot_playback)
-        self.play_pause_btn.setEnabled(False)
-        controls_layout.addWidget(self.play_pause_btn)
-
-        self.next_frame_btn = QToolButton(self.snapshot_controls)
-        self.next_frame_btn.setIcon(
-            self.style().standardIcon(QStyle.SP_MediaSkipForward)
-        )
-        self.next_frame_btn.setToolTip("Next frame")
-        self.next_frame_btn.clicked.connect(self.step_next_frame)
-        self.next_frame_btn.setEnabled(False)
-        controls_layout.addWidget(self.next_frame_btn)
-
-        self.snapshot_speed_label = QLabel("Speed:")
-        self.snapshot_speed_label.setObjectName("SnapshotSpeedLabel")
-        self.snapshot_speed_label.setEnabled(False)
-        controls_layout.addWidget(self.snapshot_speed_label)
-
-        self.snapshot_speed_combo = QComboBox(self.snapshot_controls)
-        self.snapshot_speed_combo.setObjectName("SnapshotSpeedCombo")
-        self.snapshot_speed_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-        self.snapshot_speed_presets = [
-            ("0.25x", 0.25),
-            ("0.5x", 0.5),
-            ("1x", 1.0),
-            ("1.5x", 1.5),
-            ("2x", 2.0),
-            ("3x", 3.0),
-            ("4x", 4.0),
-        ]
-        for label, value in self.snapshot_speed_presets:
-            self.snapshot_speed_combo.addItem(label, value)
-        self.snapshot_speed_default_index = next(
-            (
-                idx
-                for idx, (_, val) in enumerate(self.snapshot_speed_presets)
-                if val == 1.0
-            ),
-            0,
-        )
-        self.snapshot_speed_combo.setCurrentIndex(self.snapshot_speed_default_index)
-        self.snapshot_speed_combo.setEnabled(False)
-        self.snapshot_speed_label.setToolTip("Adjust snapshot playback speed")
-        self.snapshot_speed_combo.setToolTip("Adjust snapshot playback speed")
-        self.snapshot_speed_combo.currentIndexChanged.connect(
-            self.on_snapshot_speed_changed
-        )
-        controls_layout.addWidget(self.snapshot_speed_combo)
-
-        controls_layout.addStretch()
-
-        self.snapshot_time_label = QLabel("Frame 0 / 0")
-        self.snapshot_time_label.setObjectName("SnapshotStatusLabel")
-        self.snapshot_time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        controls_layout.addWidget(self.snapshot_time_label)
-        self.snapshot_controls.hide()
-
-        self.snapshot_timer = QTimer(self)
-        self.snapshot_timer.timeout.connect(self.advance_snapshot_frame)
-
-        self.metadata_panel = QFrame()
-        self.metadata_panel.setObjectName("MetadataPanel")
-        metadata_layout = QVBoxLayout(self.metadata_panel)
-        metadata_layout.setContentsMargins(10, 8, 10, 8)
-        metadata_layout.setSpacing(6)
-
-        self.metadata_scroll = QScrollArea()
-        self.metadata_scroll.setWidgetResizable(True)
-        self.metadata_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.metadata_scroll.setObjectName("MetadataScroll")
-        metadata_layout.addWidget(self.metadata_scroll)
-
-        metadata_inner = QWidget()
-        inner_layout = QVBoxLayout(metadata_inner)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
-        inner_layout.setSpacing(6)
-        self.metadata_details_label = QLabel("No metadata available.")
-        self.metadata_details_label.setObjectName("MetadataDetails")
-        self.metadata_details_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.metadata_details_label.setWordWrap(True)
-        self.metadata_details_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.metadata_details_label.setTextFormat(Qt.RichText)
-        inner_layout.addWidget(self.metadata_details_label)
-        inner_layout.addStretch()
-        self.metadata_scroll.setWidget(metadata_inner)
-
-        self.metadata_panel.hide()
-
-        self.event_table = EventTableWidget(self)
-        self.event_table.setMinimumWidth(560)
-        self.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.event_table.customContextMenuRequested.connect(
-            self.show_event_table_context_menu
-        )
-        self.event_table.installEventFilter(self)
-        self.event_table.cellClicked.connect(self.table_row_clicked)
-        self.event_table_controller = EventTableController(self.event_table, self)
-        self.event_table_controller.cell_edited.connect(self.handle_table_edit)
-        self.event_table_controller.rows_changed.connect(self._on_event_rows_changed)
-
-        self.header_frame = self._build_data_header()
-        self.main_layout.addWidget(self.header_frame)
-
-        self.data_splitter = self.rebuild_default_main_layout()
-        self.main_layout.addWidget(self.data_splitter, 1)
-        self.toggle_snapshot_viewer(False)
-
-        self._update_status_chip()
-
-        border_color = CURRENT_THEME["grid_color"]
-        text_color = CURRENT_THEME["text"]
-        header_bg = "#f5f7ff"
-        card_bg = CURRENT_THEME["button_bg"]
-        hover_bg = CURRENT_THEME["button_hover_bg"]
-        window_bg = CURRENT_THEME["window_bg"]
-
-        self.data_page.setStyleSheet(
-            self._shared_button_css()
-            + f"""
-QFrame#DataHeader {{
-    background: transparent;
-    border: none;
-    padding: 0px;
-}}
-QLabel#HeaderTitle {{
-    font-size: 18px;
-    font-weight: 600;
-}}
-QLabel#HeaderSubtitle {{
-    color: #5b6375;
-}}
-QLabel#TraceChip {{
-    background: {hover_bg};
-    color: {text_color};
-    border-radius: 12px;
-    padding: 4px 12px;
-    font-weight: 500;
-}}
-QFrame#PlotPanel, QFrame#SidePanel {{
-    background: transparent;
-    border: none;
-}}
-QFrame#PlotContainer {{
-    background: {window_bg};
-    border: 1px solid {border_color};
-    border-radius: 16px;
-}}
-QFrame#SnapshotCard, QFrame#TableCard {{
-    background: {window_bg};
-    border: 1px solid {border_color};
-    border-radius: 16px;
-}}
-QWidget#SnapshotControls {{
-    background: transparent;
-}}
-QLabel#SnapshotStatusLabel {{
-    color: #4d5466;
-    font-size: 12px;
-}}
-QLabel#SectionTitle {{
-    font-weight: 600;
-    color: #3a4255;
-    padding-bottom: 4px;
-}}
-QLabel#SnapshotPreview {{
-    background: {window_bg};
-    border: 1px dashed {border_color};
-    border-radius: 12px;
-    color: #7a8194;
-}}
-QSplitter#DataSplitter::handle {{
-    background: {border_color};
-    width: 6px;
-    border-radius: 3px;
-}}
-QFrame#MetadataPanel {{
-    background: {window_bg};
-    border: 1px solid {border_color};
-    border-radius: 12px;
-}}
-QScrollArea#MetadataScroll {{
-    border: none;
-    background: transparent;
-}}
-QScrollArea#MetadataScroll QWidget {{
-    background: transparent;
-}}
-QLabel#MetadataDetails {{
-    color: {text_color};
-}}
-"""
-        )
-
-        self.stack.setCurrentWidget(self.home_page)
-        self._set_toolbars_visible(False)
-
-        self.canvas.mpl_connect("draw_event", self.update_event_label_positions)
-        self.canvas.mpl_connect("draw_event", self.sync_slider_with_plot)
-        self.canvas.mpl_connect("motion_notify_event", self.update_hover_label)
-        self.canvas.mpl_connect("figure_leave_event", self._handle_figure_leave)
-        self.canvas.mpl_connect("button_press_event", self.handle_click_on_plot)
-        self.canvas.mpl_connect(
-            "button_release_event",
-            lambda event: QTimer.singleShot(100, lambda: self.on_mouse_release(event)),
-        )
-        self.canvas.mpl_connect("draw_event", self.sync_slider_with_plot)
-
-        self._refresh_home_recent()
-        QTimer.singleShot(0, lambda: self._update_toolbar_compact_mode(self.width()))
+        return _init_ui(self)
 
     def _create_primary_toolbar(self) -> QToolBar:
         toolbar = QToolBar("Primary")
@@ -4426,227 +4111,10 @@ QLabel#MetadataDetails {{
 
         return header
 
-    def _build_home_page(self):
-        page = QWidget()
-        page.setObjectName("HomePage")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(32, 32, 32, 32)
-        layout.setSpacing(24)
+    def _build_home_page_legacy(self, target_widget: Optional[QWidget] = None):
+        from vasoanalyzer.ui.panels.home_page import HomePage
 
-        hero = QFrame()
-        hero.setObjectName("HeroFrame")
-        hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(24, 24, 24, 24)
-        hero_layout.setSpacing(24)
-
-        brand_icon_path = self._brand_icon_path("svg")
-        hero_icon = (
-            QSvgWidget(brand_icon_path)
-            if brand_icon_path
-            else QSvgWidget(self.icon_path("Home.svg"))
-        )
-        hero_icon.setFixedSize(72, 72)
-        hero_layout.addWidget(hero_icon, alignment=Qt.AlignTop)
-
-        hero_text = QVBoxLayout()
-        hero_text.setSpacing(12)
-
-        title = QLabel("Welcome to VasoAnalyzer")
-        title.setObjectName("HeroTitle")
-        subtitle = QLabel(
-            "Follow the buttons below to import traces, continue a project, or review the welcome guide."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setObjectName("HeroSubtitle")
-        hero_text.addWidget(title)
-        hero_text.addWidget(subtitle)
-
-        action_row1 = QHBoxLayout()
-        action_row1.setSpacing(12)
-        self.home_resume_btn = self._make_home_button(
-            "Return to workspace",
-            "Back.svg",
-            self.show_analysis_workspace,
-            secondary=True,
-        )
-        self.home_resume_btn.hide()
-        action_row1.addWidget(self.home_resume_btn)
-        action_row1.addWidget(
-            self._make_home_button(
-                "Load trace & events",
-                "folder-open.svg",
-                self._handle_load_trace,
-                primary=True,
-            )
-        )
-        action_row1.addWidget(
-            self._make_home_button(
-                "Open Project",
-                "folder-open.svg",
-                self.open_project_file,
-                secondary=True,
-            )
-        )
-        hero_text.addLayout(action_row1)
-
-        action_row2 = QHBoxLayout()
-        action_row2.setSpacing(12)
-        action_row2.addWidget(
-            self._make_home_button(
-                "Create Project",
-                "folder-plus.svg",
-                self.new_project,
-                secondary=True,
-            )
-        )
-        action_row2.addWidget(
-            self._make_home_button(
-                "Welcome guide",
-                "info-circle.svg",
-                lambda: self.show_welcome_guide(modal=False),
-                secondary=True,
-            )
-        )
-        hero_text.addLayout(action_row2)
-        hero_text.addStretch()
-
-        hero_layout.addLayout(hero_text)
-        layout.addWidget(hero)
-
-        cards_row = QHBoxLayout()
-        cards_row.setSpacing(24)
-
-        recent_traces = QFrame()
-        recent_traces.setObjectName("HomeCard")
-        recent_traces_layout = QVBoxLayout(recent_traces)
-        recent_traces_layout.setContentsMargins(20, 20, 20, 20)
-        recent_traces_layout.setSpacing(12)
-        traces_header = QHBoxLayout()
-        traces_header.setContentsMargins(0, 0, 0, 0)
-        traces_header.setSpacing(8)
-        traces_title = QLabel("Recent Sessions")
-        traces_title.setObjectName("CardTitle")
-        traces_header.addWidget(traces_title)
-        traces_header.addStretch(1)
-        self.home_clear_sessions_button = QToolButton()
-        self.home_clear_sessions_button.setObjectName("HomeClearButton")
-        self.home_clear_sessions_button.setText("Clear all")
-        self.home_clear_sessions_button.setCursor(Qt.PointingHandCursor)
-        self.home_clear_sessions_button.clicked.connect(self.clear_recent_files)
-        self.home_clear_sessions_button.setVisible(False)
-        traces_header.addWidget(self.home_clear_sessions_button, 0, Qt.AlignRight)
-        recent_traces_layout.addLayout(traces_header)
-        self.home_recent_sessions_layout = QVBoxLayout()
-        self.home_recent_sessions_layout.setSpacing(8)
-        recent_traces_layout.addLayout(self.home_recent_sessions_layout)
-        recent_traces_layout.addStretch()
-
-        recent_projects = QFrame()
-        recent_projects.setObjectName("HomeCard")
-        recent_projects_layout = QVBoxLayout(recent_projects)
-        recent_projects_layout.setContentsMargins(20, 20, 20, 20)
-        recent_projects_layout.setSpacing(12)
-        projects_header = QHBoxLayout()
-        projects_header.setContentsMargins(0, 0, 0, 0)
-        projects_header.setSpacing(8)
-        projects_title = QLabel("Recent Projects")
-        projects_title.setObjectName("CardTitle")
-        projects_header.addWidget(projects_title)
-        projects_header.addStretch(1)
-        self.home_clear_projects_button = QToolButton()
-        self.home_clear_projects_button.setObjectName("HomeClearButton")
-        self.home_clear_projects_button.setText("Clear all")
-        self.home_clear_projects_button.setCursor(Qt.PointingHandCursor)
-        self.home_clear_projects_button.clicked.connect(self.clear_recent_projects)
-        self.home_clear_projects_button.setVisible(False)
-        projects_header.addWidget(self.home_clear_projects_button, 0, Qt.AlignRight)
-        recent_projects_layout.addLayout(projects_header)
-        self.home_recent_projects_layout = QVBoxLayout()
-        self.home_recent_projects_layout.setSpacing(8)
-        recent_projects_layout.addLayout(self.home_recent_projects_layout)
-        recent_projects_layout.addStretch()
-
-        cards_row.addWidget(recent_traces, 1)
-        cards_row.addWidget(recent_projects, 1)
-        layout.addLayout(cards_row)
-        layout.addStretch()
-
-        border_color = CURRENT_THEME["grid_color"]
-        text_color = CURRENT_THEME["text"]
-        window_bg = CURRENT_THEME["window_bg"]
-        hero_bg = CURRENT_THEME.get("button_bg", window_bg)
-        card_bg = CURRENT_THEME.get("table_bg", window_bg)
-        hover_bg = CURRENT_THEME.get("button_hover_bg", border_color)
-
-        def rgba_from_hex(color: str, alpha: float) -> str:
-            color = color.strip()
-            if color.startswith("rgba"):
-                return color
-            color = color.lstrip("#")
-            if len(color) == 3:
-                color = "".join(ch * 2 for ch in color)
-            try:
-                r, g, b = (int(color[i : i + 2], 16) for i in (0, 2, 4))
-            except ValueError:
-                return text_color
-            alpha = max(0.0, min(1.0, alpha))
-            return f"rgba({r}, {g}, {b}, {alpha:.2f})"
-
-        subtitle_color = rgba_from_hex(text_color, 0.72)
-        card_title_color = rgba_from_hex(text_color, 0.86)
-        placeholder_color = rgba_from_hex(text_color, 0.55)
-        muted_action_color = rgba_from_hex(text_color, 0.68)
-
-        page.setStyleSheet(
-            self._shared_button_css()
-            + f"""
-QWidget#HomePage {{
-    background: {window_bg};
-}}
-QFrame#HeroFrame {{
-    background: {hero_bg};
-    border: 1px solid {border_color};
-    border-radius: 16px;
-}}
-QFrame#HomeCard {{
-    background: {card_bg};
-    border: 1px solid {border_color};
-    border-radius: 14px;
-}}
-QLabel#HeroTitle {{
-    font-size: 24px;
-    font-weight: 600;
-}}
-QLabel#HeroSubtitle {{
-    color: {subtitle_color};
-}}
-QLabel#CardTitle {{
-    font-size: 16px;
-    font-weight: 600;
-    color: {card_title_color};
-}}
-QLabel#CardPlaceholder {{
-    color: {placeholder_color};
-}}
-QToolButton#HomeClearButton,
-QToolButton#HomeRemoveButton {{
-    background: transparent;
-    color: {muted_action_color};
-    border: none;
-    padding: 4px 6px;
-    font-weight: 500;
-}}
-QToolButton#HomeClearButton:hover,
-QToolButton#HomeRemoveButton:hover {{
-    color: {card_title_color};
-    background: {hover_bg};
-    border-radius: 6px;
-}}
-"""
-        )
-
-        self._refresh_home_recent()
-        return page
+        return HomePage(self)
 
     def _make_home_button(
         self,
@@ -5176,181 +4644,17 @@ QPushButton[isGhost="true"]:hover {
 
         self._update_home_resume_button()
 
-    def build_toolbar_for_canvas(self, canvas):
-        toolbar = CustomToolbar(canvas, self, reset_callback=self.reset_to_full_view)
-        toolbar.setIconSize(QSize(22, 22))
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        toolbar.setFloatable(False)
-        toolbar.setMovable(False)
-        toolbar.setStyleSheet(
-            f"""
-            QToolBar {{
-                background: transparent;
-                border: none;
-                padding: 0px;
-                spacing: 0px;
-            }}
-            QToolBar > QToolButton {{
-                background: transparent;
-                border: none;
-                border-radius: 8px;
-                margin: 0px 5px;
-                padding: 6px 8px;
-                color: {CURRENT_THEME['text']};
-            }}
-            QToolBar > QToolButton:hover {{
-                background: {CURRENT_THEME['button_hover_bg']};
-            }}
-            QToolBar > QToolButton:checked {{
-                background: {CURRENT_THEME['button_active_bg']};
-            }}
-        """
+    def _build_toolbar_for_canvas_legacy(self, canvas):
+        from vasoanalyzer.ui.shell.toolbars import (
+            build_canvas_toolbar as _build_canvas_toolbar,
         )
 
-        if hasattr(toolbar, "coordinates"):
-            toolbar.coordinates = lambda *args, **kwargs: None
-            for act in list(toolbar.actions()):
-                if isinstance(act, QAction) and act.text() == "":
-                    toolbar.removeAction(act)
+        return _build_canvas_toolbar(self, canvas)
 
-        base_actions = getattr(toolbar, "_actions", {})
-        home_act = base_actions.get("home")
-        back_act = base_actions.get("back")
-        forward_act = base_actions.get("forward")
-        pan_act = base_actions.get("pan")
-        zoom_act = base_actions.get("zoom")
-        subplots_act = base_actions.get("subplots")
-        save_act = base_actions.get("save")
+    def build_toolbar_for_canvas(self, *args, **kwargs):
+        from vasoanalyzer.ui.shell.toolbars import build_canvas_toolbar as _build_toolbar_adapter
 
-        # Clear default ordering; we'll re‑add in grouped clusters
-        for action in list(toolbar.actions()):
-            toolbar.removeAction(action)
-
-        if home_act:
-            home_act.setText("Reset view")
-            home_act.setShortcut(QKeySequence("R"))
-            home_act.setToolTip("Reset view (R) — show entire trace")
-            home_act.setStatusTip("Reset the plot to the full time range.")
-            home_act.setIcon(QIcon(self.icon_path("Home.svg")))
-
-        if back_act:
-            back_act.setText("Back")
-            back_act.setToolTip("Back — previous view")
-            back_act.setIcon(QIcon(self.icon_path("Back.svg")))
-
-        if forward_act:
-            forward_act.setText("Forward")
-            forward_act.setToolTip("Forward — next view")
-            forward_act.setIcon(QIcon(self.icon_path("Forward.svg")))
-
-        if pan_act:
-            pan_act.setText("Pan")
-            pan_act.setToolTip("Pan (P) — drag to move")
-            pan_act.setStatusTip("Drag to move the view. Press Esc to exit.")
-            pan_act.setIcon(QIcon(self.icon_path("Pan.svg")))
-            pan_act.setShortcut(QKeySequence("P"))
-            pan_act.setCheckable(True)
-
-        if zoom_act:
-            zoom_act.setText("Zoom")
-            zoom_act.setToolTip("Zoom (Z) — draw a box to zoom")
-            zoom_act.setStatusTip("Drag a rectangle to zoom in. Press Esc to exit.")
-            zoom_act.setIcon(QIcon(self.icon_path("Zoom.svg")))
-            zoom_act.setShortcut(QKeySequence("Z"))
-            zoom_act.setCheckable(True)
-
-        if subplots_act:
-            subplots_act.setVisible(False)
-
-        if save_act:
-            toolbar.removeAction(save_act)
-
-        self.actReset = home_act
-        self.actBack = back_act
-        self.actForward = forward_act
-        self.actPan = pan_act
-        self.actZoom = zoom_act
-
-        if self.actReset:
-            toolbar.addAction(self.actReset)
-        if self.actBack:
-            toolbar.addAction(self.actBack)
-        if self.actForward:
-            toolbar.addAction(self.actForward)
-
-        toolbar.addSeparator()
-
-        if self.actPan:
-            toolbar.addAction(self.actPan)
-        if self.actZoom:
-            toolbar.addAction(self.actZoom)
-
-        self._nav_mode_actions = [
-            act for act in (self.actPan, self.actZoom) if act is not None
-        ]
-        for action in self._nav_mode_actions:
-            try:
-                action.toggled.disconnect(self._handle_nav_mode_toggled)
-            except Exception:
-                pass
-            action.toggled.connect(self._handle_nav_mode_toggled)
-
-        toolbar.addSeparator()
-
-        self.actGrid = QAction(QIcon(self.icon_path("Grid.svg")), "Grid", self)
-        self.actGrid.setCheckable(True)
-        self.actGrid.setChecked(self.grid_visible)
-        self.actGrid.setShortcut(QKeySequence("G"))
-        self.actGrid.setToolTip("Toggle grid (G)")
-        try:
-            self.actGrid.triggered.disconnect(self._on_grid_action_triggered)
-        except Exception:
-            pass
-        self.actGrid.triggered.connect(self._on_grid_action_triggered)
-        toolbar.addAction(self.actGrid)
-
-        self.actStyle = QAction(
-            QIcon(self.icon_path("plot-settings.svg")), "Style", self
-        )
-        self.actStyle.setToolTip("Open plot style settings")
-        try:
-            self.actStyle.triggered.disconnect(self.open_unified_plot_settings_dialog)
-        except Exception:
-            pass
-        self.actStyle.triggered.connect(self.open_unified_plot_settings_dialog)
-        toolbar.addAction(self.actStyle)
-
-        self.actEditPoints = QAction(
-            QIcon(self.icon_path("tour-pencil.svg")), "Edit Points", self
-        )
-        self.actEditPoints.setToolTip(
-            "Edit raw points in the current view (opens the Point Editor)"
-        )
-        self.actEditPoints.setEnabled(False)
-        self.actEditPoints.triggered.connect(self._on_edit_points_triggered)
-        toolbar.addAction(self.actEditPoints)
-
-        self._ensure_event_label_actions()
-        label_menu = QMenu(self)
-        label_menu.addAction(self.actEventLabelsVertical)
-        label_menu.addAction(self.actEventLabelsHorizontal)
-        label_menu.addAction(self.actEventLabelsOutside)
-        label_menu.addSeparator()
-        label_menu.addAction(self.actEventLabelsNone)
-        self._toolbar_event_label_menu = label_menu
-
-        self.event_label_button = QToolButton()
-        self.event_label_button.setToolTip("Select event label mode")
-        self.event_label_button.setPopupMode(QToolButton.InstantPopup)
-        self.event_label_button.setMenu(label_menu)
-        toolbar.addWidget(self.event_label_button)
-
-        self._sync_event_controls()
-        self._sync_grid_action()
-        self._update_trace_controls_state()
-
-        return toolbar
+        return _build_toolbar_adapter(self, *args, **kwargs)
 
     def _handle_nav_mode_toggled(self, checked: bool) -> None:
         if not checked:
