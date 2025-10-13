@@ -13,6 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.text import Text
 from PyQt5.QtCore import QTimer
 
+from vasoanalyzer.app.flags import is_enabled
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -58,6 +59,7 @@ class PlotHost:
         self._event_labels: List[str] = []
         self._event_label_meta: List[Dict[str, Any]] = []
         self._event_labeler: Optional[EventLabeler] = None
+        self._event_label_v2_artists: List[Any] = []
         self._use_track_event_lines: bool = True
         self._xlim_cid: Optional[int] = None
         self._ylim_cid: Optional[int] = None
@@ -691,7 +693,67 @@ class PlotHost:
             labels.extend([""] * (len(self._event_times) - len(labels)))
         return labels
 
+    def _clear_event_label_v2(self) -> None:
+        if not self._event_label_v2_artists:
+            return
+        for artist in self._event_label_v2_artists:
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self._event_label_v2_artists = []
+
+    def _draw_event_labels_v2(self) -> bool:
+        if not is_enabled("event_labels_v2"):
+            self._clear_event_label_v2()
+            return False
+        if self._event_label_mode == "none" or not self._event_labels_visible:
+            self._clear_event_label_v2()
+            return True
+        if not self._event_times:
+            self._clear_event_label_v2()
+            return True
+
+        anchor_ax: Optional[Axes] = self.primary_axis() or self.bottom_axis()
+        if anchor_ax is None:
+            self._clear_event_label_v2()
+            return True
+
+        try:
+            renderer = self.canvas.get_renderer()
+        except Exception:
+            self.canvas.draw()
+            renderer = self.canvas.get_renderer()
+
+        try:
+            bbox = anchor_ax.get_window_extent(renderer)
+            ax_width_px = max(int(bbox.width), 1)
+        except Exception:
+            ax_width_px = max(int(self.canvas.width()), 1)
+
+        from vasoanalyzer.core.events.cluster import cluster_events
+        from vasoanalyzer.ui.plots.event_label_layer import draw_event_labels
+
+        clusters = cluster_events(
+            self._event_times,
+            anchor_ax.get_xlim(),
+            ax_width_px,
+            min_gap_px=max(self._event_label_gap_px, 1),
+            max_visible_per_cluster=1,
+        )
+
+        self._clear_event_label_v2()
+        self.set_event_labeler(None)
+        self._event_label_v2_artists = draw_event_labels(
+            anchor_ax,
+            clusters,
+            anchor_ax.get_xlim(),
+            mode=self._event_label_mode,
+        )
+        return True
+
     def _destroy_event_labeler(self) -> None:
+        self._clear_event_label_v2()
         self.set_event_labeler(None)
 
     def _rebuild_event_labeler(self) -> None:
@@ -704,6 +766,8 @@ class PlotHost:
         labels = self._normalized_event_labels()
         if not labels:
             self.set_event_labeler(None)
+            return
+        if self._draw_event_labels_v2():
             return
         options = LayoutOptions(
             span_siblings=True,

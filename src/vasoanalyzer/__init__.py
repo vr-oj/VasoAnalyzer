@@ -5,6 +5,8 @@
 
 """Public package interface for the VasoAnalyzer application."""
 
+from importlib import import_module
+
 from vasoanalyzer.core.project import (
     Project,
     Experiment,
@@ -28,13 +30,26 @@ from vasoanalyzer.services.project_service import (
     export_project_bundle,
     import_project_bundle,
 )
-from vasoanalyzer.ui.commands import ReplaceEventCommand
-from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
-from vasoanalyzer.ui.dialogs.plot_style_editor import PlotStyleEditor
-from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
-from vasoanalyzer.ui.dialogs.excel_map_wizard import ExcelMapWizard
-from vasoanalyzer.ui.main_window import VasoAnalyzerApp
-from vasoanalyzer.ui.project_explorer import ProjectExplorerWidget
+
+_UI_EXPORTS = {
+    "ReplaceEventCommand": ("vasoanalyzer.ui.commands", "ReplaceEventCommand"),
+    "AxisSettingsDialog": ("vasoanalyzer.ui.dialogs.axis_settings_dialog", "AxisSettingsDialog"),
+    "PlotStyleEditor": ("vasoanalyzer.ui.dialogs.plot_style_editor", "PlotStyleEditor"),
+    "SubplotLayoutDialog": ("vasoanalyzer.ui.dialogs.subplot_layout_dialog", "SubplotLayoutDialog"),
+    "ExcelMapWizard": ("vasoanalyzer.ui.dialogs.excel_map_wizard", "ExcelMapWizard"),
+    "VasoAnalyzerApp": ("vasoanalyzer.ui.main_window", "VasoAnalyzerApp"),
+    "ProjectExplorerWidget": ("vasoanalyzer.ui.project_explorer", "ProjectExplorerWidget"),
+}
+
+
+def __getattr__(name: str):
+    if name in _UI_EXPORTS:
+        module_name, attr = _UI_EXPORTS[name]
+        module = import_module(module_name)
+        value = getattr(module, attr)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module 'vasoanalyzer' has no attribute {name!r}")
 
 open_project = load_project
 
