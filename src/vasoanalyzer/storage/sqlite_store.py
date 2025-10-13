@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional, Sequence
 
 import pandas as pd
+from vasoanalyzer.storage.sqlite.utils import open_db
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
 
@@ -93,7 +94,7 @@ def create_project(path: str | os.PathLike[str], *, app_version: str, timezone: 
     project_path = Path(path)
     project_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(project_path.as_posix())
+    conn = open_db(project_path.as_posix(), apply_pragmas=False)
     _apply_pragmas(conn)
     _initialise_schema(conn, app_version=app_version, timezone=timezone)
     return ProjectStore(path=project_path, conn=conn, dirty=False)
@@ -106,7 +107,7 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
     if not project_path.exists():
         raise FileNotFoundError(path)
 
-    conn = sqlite3.connect(project_path.as_posix())
+    conn = open_db(project_path.as_posix(), apply_pragmas=False)
     _apply_pragmas(conn)
 
     version = _get_user_version(conn)
@@ -157,7 +158,7 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
 
     # Re-open connection so WAL and temp files point at the new location.
     store.conn.close()
-    conn = sqlite3.connect(dest_path.as_posix())
+    conn = open_db(dest_path.as_posix(), apply_pragmas=False)
     _apply_pragmas(conn)
     store.conn = conn
     store.path = dest_path
