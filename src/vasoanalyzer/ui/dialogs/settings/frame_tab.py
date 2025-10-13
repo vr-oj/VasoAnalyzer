@@ -23,7 +23,9 @@ else:  # pragma: no cover
     class DialogT:  # type: ignore
         pass
 
-__all__ = ["FrameTabRefs", "create_frame_tab_widgets"]
+from ._shared import block_signals
+
+__all__ = ["FrameTabRefs", "create_frame_tab_widgets", "populate_frame_tab", "wire_frame_tab"]
 
 
 @dataclass
@@ -124,3 +126,31 @@ def create_frame_tab_widgets(dialog: "DialogT", window) -> FrameTabRefs:
         fig_w=fig_w,
         fig_h=fig_h,
     )
+
+
+def populate_frame_tab(dialog: "DialogT") -> None:
+    """Populate Frame tab controls with the current dialog state."""
+
+    fig_w, fig_h = dialog.fig.get_size_inches()
+    widgets = [dialog.origin_mode, dialog.origin_x, dialog.origin_y, dialog.size_preset, dialog.fig_w, dialog.fig_h]
+
+    with block_signals(widgets):
+        dialog.origin_mode.setCurrentText("Automatic")
+        dialog.origin_x.setValue(0.0)
+        dialog.origin_y.setValue(0.0)
+
+        dialog.size_preset.setCurrentText("Auto (Wide)")
+        dialog.fig_w.setValue(round(fig_w, 1))
+        dialog.fig_h.setValue(round(fig_h, 1))
+
+
+def wire_frame_tab(dialog: "DialogT") -> None:
+    """Connect Frame tab signals (guarded to avoid duplicate wiring)."""
+
+    if getattr(dialog, "_frame_tab_wired", False):
+        return
+
+    dialog.origin_mode.currentTextChanged.connect(dialog._toggle_origin_inputs)
+    dialog.size_preset.currentTextChanged.connect(dialog._toggle_size_inputs)
+
+    dialog._frame_tab_wired = True

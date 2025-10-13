@@ -183,7 +183,11 @@ class UnifiedPlotSettingsDialog(QDialog):
     # ------------------------------------------------------------------
     # Frame & Origin tab ------------------------------------------------
     def _make_frame_tab_legacy(self):
-        from vasoanalyzer.ui.dialogs.settings.frame_tab import create_frame_tab_widgets
+        from vasoanalyzer.ui.dialogs.settings.frame_tab import (
+            create_frame_tab_widgets,
+            populate_frame_tab,
+            wire_frame_tab,
+        )
 
         refs = create_frame_tab_widgets(self, None)
         content = refs.tab
@@ -194,14 +198,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.fig_w = refs.fig_w
         self.fig_h = refs.fig_h
 
-        fig_w, fig_h = self.fig.get_size_inches()
-        self.fig_w.setValue(round(fig_w, 1))
-        self.fig_h.setValue(round(fig_h, 1))
-        self.origin_x.setValue(0.0)
-        self.origin_y.setValue(0.0)
+        populate_frame_tab(self)
 
-        self.origin_mode.currentTextChanged.connect(self._toggle_origin_inputs)
-        self.size_preset.currentTextChanged.connect(self._toggle_size_inputs)
+        wire_frame_tab(self)
         self._toggle_origin_inputs()
         self._toggle_size_inputs()
 
