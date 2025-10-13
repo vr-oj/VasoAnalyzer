@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Optional, Sequence
 
 import pandas as pd
+from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite.utils import open_db
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
@@ -95,8 +96,14 @@ def create_project(path: str | os.PathLike[str], *, app_version: str, timezone: 
     project_path.parent.mkdir(parents=True, exist_ok=True)
 
     conn = open_db(project_path.as_posix(), apply_pragmas=False)
-    _apply_pragmas(conn)
-    _initialise_schema(conn, app_version=app_version, timezone=timezone)
+    _projects.apply_default_pragmas(conn)
+    _projects.ensure_schema(
+        conn,
+        schema_version=SCHEMA_VERSION,
+        now=_utc_now(),
+        app_version=app_version,
+        timezone=timezone,
+    )
     return ProjectStore(path=project_path, conn=conn, dirty=False)
 
 
@@ -108,14 +115,23 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
         raise FileNotFoundError(path)
 
     conn = open_db(project_path.as_posix(), apply_pragmas=False)
-    _apply_pragmas(conn)
+    _projects.apply_default_pragmas(conn)
 
-    version = _get_user_version(conn)
+    version = _projects.get_user_version(conn)
     if version == 0:
         # A bare database; initialise it now.
-        _initialise_schema(conn)
+        _projects.ensure_schema(
+            conn,
+            schema_version=SCHEMA_VERSION,
+            now=_utc_now(),
+        )
     elif version < SCHEMA_VERSION:
-        _run_migrations(conn, version, SCHEMA_VERSION)
+        _projects.run_migrations(
+            conn,
+            version,
+            SCHEMA_VERSION,
+            now=_utc_now(),
+        )
     elif version > SCHEMA_VERSION:
         raise RuntimeError(
             f"Project schema version {version} is newer than supported {SCHEMA_VERSION}"
@@ -128,10 +144,7 @@ def save_project(store: ProjectStore) -> None:
     """Flush pending changes and update ``modified_utc`` metadata."""
 
     now = _utc_now()
-    store.conn.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-        ("modified_utc", now),
-    )
+    _projects.write_meta(store.conn, {"modified_utc": now})
     store.commit()
     _sqlite_checkpoint_full(store.conn)
     _sqlite_optimize(store.conn)
@@ -159,7 +172,7 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     # Re-open connection so WAL and temp files point at the new location.
     store.conn.close()
     conn = open_db(dest_path.as_posix(), apply_pragmas=False)
-    _apply_pragmas(conn)
+    _projects.apply_default_pragmas(conn)
     store.conn = conn
     store.path = dest_path
     store.dirty = False
@@ -595,7 +608,7 @@ def pack_bundle(
         shutil.copy2(project_path, temp_project)
 
         with sqlite3.connect(temp_project.as_posix()) as conn:
-            _apply_pragmas(conn)
+            _projects.apply_default_pragmas(conn)
             asset_rows = conn.execute(
                 "SELECT id, storage, rel_path, sha256, role FROM asset"
             ).fetchall()
@@ -638,10 +651,7 @@ def pack_bundle(
                         (new_rel, asset_id),
                     )
 
-            conn.execute(
-                "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-                ("packed_utc", _utc_now()),
-            )
+            _projects.write_meta(conn, {"packed_utc": _utc_now()})
             conn.commit()
 
         bundle_tmp = bundle_path.with_suffix(bundle_path.suffix + ".tmp")
@@ -683,7 +693,7 @@ def unpack_bundle(vasopack_path: str | os.PathLike[str], dest_dir: str | os.Path
     if assets_dir.exists():
         assets_dir.mkdir(exist_ok=True)
         with sqlite3.connect(final_path.as_posix()) as conn:
-            _apply_pragmas(conn)
+            _projects.apply_default_pragmas(conn)
             rows = conn.execute(
                 "SELECT id, storage, rel_path, mime FROM asset WHERE storage = 'embedded' AND rel_path IS NULL"
             ).fetchall()
@@ -758,137 +768,6 @@ def restore_autosave(
 
 # ---------------------------------------------------------------------------
 # Internal helpers
-
-
-def _apply_pragmas(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA mmap_size = 268435456;")
-    conn.execute("PRAGMA cache_size = -131072;")
-
-
-def _get_user_version(conn: sqlite3.Connection) -> int:
-    cur = conn.execute("PRAGMA user_version")
-    row = cur.fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
-
-
-def _initialise_schema(
-    conn: sqlite3.Connection,
-    *,
-    app_version: str | None = None,
-    timezone: str | None = None,
-) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS dataset (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_utc TEXT NOT NULL,
-            notes TEXT,
-            fps REAL,
-            pixel_size_um REAL,
-            t0_seconds REAL DEFAULT 0,
-            extra_json TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS trace (
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            t_seconds REAL NOT NULL,
-            inner_diam REAL,
-            outer_diam REAL,
-            p_avg REAL,
-            p1 REAL,
-            p2 REAL,
-            PRIMARY KEY (dataset_id, t_seconds)
-        ) WITHOUT ROWID;
-
-        CREATE INDEX IF NOT EXISTS trace_ds_t ON trace(dataset_id, t_seconds);
-
-        CREATE TABLE IF NOT EXISTS event (
-            id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            t_seconds REAL NOT NULL,
-            label TEXT NOT NULL,
-            frame INTEGER,
-            p_avg REAL,
-            p1 REAL,
-            p2 REAL,
-            temp REAL,
-            extra_json TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS event_ds_t ON event(dataset_id, t_seconds);
-
-        CREATE TABLE IF NOT EXISTS asset (
-            id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            storage TEXT NOT NULL,
-            rel_path TEXT,
-            sha256 TEXT NOT NULL,
-            bytes INTEGER,
-            mime TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS blob_chunk (
-            asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
-            seq INTEGER NOT NULL,
-            data BLOB NOT NULL,
-            PRIMARY KEY (asset_id, seq)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS result (
-            id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL,
-            version TEXT NOT NULL,
-            created_utc TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS thumbnail (
-            dataset_id INTEGER PRIMARY KEY REFERENCES dataset(id) ON DELETE CASCADE,
-            png BLOB NOT NULL
-        );
-        """
-    )
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-    now = _utc_now()
-    defaults = [
-        ("created_utc", now),
-        ("modified_utc", now),
-    ]
-    if app_version:
-        defaults.append(("app_version", app_version))
-    if timezone:
-        defaults.append(("timezone", timezone))
-
-    conn.executemany(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES(?, ?)",
-        defaults,
-    )
-    conn.commit()
-
-
-def _run_migrations(conn: sqlite3.Connection, start: int, target: int) -> None:
-    version = start
-    while version < target:
-        if version == 0:
-            _initialise_schema(conn)
-            version = SCHEMA_VERSION
-        else:
-            raise RuntimeError(f"No migration path from {version} to {target}")
-    conn.execute(f"PRAGMA user_version = {target}")
-    conn.commit()
 
 
 def _utc_now() -> str:
