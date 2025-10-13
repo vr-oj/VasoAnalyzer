@@ -183,84 +183,22 @@ class UnifiedPlotSettingsDialog(QDialog):
     # ------------------------------------------------------------------
     # Frame & Origin tab ------------------------------------------------
     def _make_frame_tab_legacy(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        from vasoanalyzer.ui.dialogs.settings.frame_tab import create_frame_tab_widgets
 
-        origin_box = QGroupBox("Axis Origin")
-        origin_layout = QVBoxLayout(origin_box)
-        origin_layout.setContentsMargins(12, 12, 12, 12)
-        origin_layout.setSpacing(8)
+        refs = create_frame_tab_widgets(self, None)
+        content = refs.tab
+        self.origin_mode = refs.origin_mode
+        self.origin_x = refs.origin_x
+        self.origin_y = refs.origin_y
+        self.size_preset = refs.size_preset
+        self.fig_w = refs.fig_w
+        self.fig_h = refs.fig_h
 
-        origin_hint = QLabel(
-            "Shift where the axes cross. Manual mode lets you anchor the axes to a specific data point."
-        )
-        origin_hint.setWordWrap(True)
-        origin_hint.setObjectName("PlotSettingsHint")
-        origin_layout.addWidget(origin_hint)
-
-        origin_form = QFormLayout()
-        origin_form.setLabelAlignment(Qt.AlignRight)
-        origin_form.setHorizontalSpacing(12)
-        origin_form.setVerticalSpacing(6)
-
-        self.origin_mode = QComboBox()
-        self.origin_mode.addItems(["Automatic", "Manual"])
-        origin_form.addRow("Mode:", self.origin_mode)
-
-        self.origin_x = QDoubleSpinBox()
-        self.origin_x.setDecimals(2)
-        self.origin_x.setRange(-1e6, 1e6)
-        self.origin_x.setValue(0.0)
-        origin_form.addRow("Y ↔ X at X:", self.origin_x)
-
-        self.origin_y = QDoubleSpinBox()
-        self.origin_y.setDecimals(2)
-        self.origin_y.setRange(-1e6, 1e6)
-        self.origin_y.setValue(0.0)
-        origin_form.addRow("X ↔ Y at Y:", self.origin_y)
-
-        origin_layout.addLayout(origin_form)
-        layout.addWidget(origin_box)
-
-        size_box = QGroupBox("Figure Size")
-        size_layout = QVBoxLayout(size_box)
-        size_layout.setContentsMargins(12, 12, 12, 12)
-        size_layout.setSpacing(8)
-
-        size_hint = QLabel(
-            "Choose a preset or enter custom width/height (inches) for export and layout decisions."
-        )
-        size_hint.setWordWrap(True)
-        size_hint.setObjectName("PlotSettingsHint")
-        size_layout.addWidget(size_hint)
-
-        size_form = QFormLayout()
-        size_form.setLabelAlignment(Qt.AlignRight)
-        size_form.setHorizontalSpacing(12)
-        size_form.setVerticalSpacing(6)
-
-        self.size_preset = QComboBox()
-        self.size_preset.addItems(["Auto (Wide)", "Square", "Custom"])
         fig_w, fig_h = self.fig.get_size_inches()
-        self.fig_w = QDoubleSpinBox()
-        self.fig_w.setRange(1, 30)
-        self.fig_w.setDecimals(1)
         self.fig_w.setValue(round(fig_w, 1))
-        self.fig_h = QDoubleSpinBox()
-        self.fig_h.setRange(1, 30)
-        self.fig_h.setDecimals(1)
         self.fig_h.setValue(round(fig_h, 1))
-
-        size_form.addRow("Preset:", self.size_preset)
-        size_form.addRow("Width (in):", self.fig_w)
-        size_form.addRow("Height (in):", self.fig_h)
-
-        size_layout.addLayout(size_form)
-        layout.addWidget(size_box)
-
-        layout.addStretch(1)
+        self.origin_x.setValue(0.0)
+        self.origin_y.setValue(0.0)
 
         self.origin_mode.currentTextChanged.connect(self._toggle_origin_inputs)
         self.size_preset.currentTextChanged.connect(self._toggle_size_inputs)
@@ -270,9 +208,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         return content
 
     def _make_frame_tab(self):
-        from vasoanalyzer.ui.dialogs.settings.frame_tab import build_frame_tab
-
-        return build_frame_tab(self)
+        return self._make_frame_tab_legacy()
 
     def _toggle_origin_inputs(self):
         manual = self.origin_mode.currentText() == "Manual"
@@ -660,10 +596,8 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return scroll
 
-    def _make_axis_tab(self, window=None):
-        from vasoanalyzer.ui.dialogs.settings.axis_tab import build_axis_tab
-
-        return build_axis_tab(self, window)
+    def _make_axis_tab(self):
+        return self._make_axis_tab_legacy()
 
     def _make_event_labels_tab_legacy(self):
         fonts = list(self._font_choices)

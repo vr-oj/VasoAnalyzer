@@ -27,7 +27,7 @@ else:  # pragma: no cover
 __all__ = ["build_axis_tab"]
 
 
-def build_axis_tab(dialog: "DialogT", window) -> QWidget:
+def build_axis_tab(dialog: "DialogT", window=None) -> QWidget:
             content = QWidget()
             grid = QGridLayout(content)
             grid.setContentsMargins(0, 0, 0, 0)
