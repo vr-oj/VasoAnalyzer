@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import List, Sequence, Tuple
 
@@ -24,15 +25,37 @@ def cluster_events(
 ) -> List[Cluster]:
     """Group events by pixel proximity along the x axis."""
 
-    if not times:
+    if not times or ax_width_px <= 1:
         return []
 
     xmin, xmax = xlim
-    span = max(xmax - xmin, 1e-12)
+    if not (xmax > xmin):
+        return []
+
+    filtered: List[float] = []
+    for value in times:
+        if value is None:
+            continue
+        try:
+            t = float(value)
+        except Exception:
+            continue
+        if not math.isfinite(t):
+            continue
+        if xmin <= t <= xmax:
+            filtered.append(t)
+
+    if not filtered:
+        return []
+
+    times = filtered
+    span = xmax - xmin
     scale = float(ax_width_px) / span
 
     xs = [(t - xmin) * scale for t in times]
     order = sorted(range(len(times)), key=lambda i: xs[i])
+
+    min_gap_px = max(int(min_gap_px), 1)
 
     groups: List[List[int]] = []
     current: List[int] = []
