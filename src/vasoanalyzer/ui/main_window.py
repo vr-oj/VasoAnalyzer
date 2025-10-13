@@ -98,6 +98,7 @@ from vasoanalyzer.core.project import (
     save_project,
     load_project,
 )
+from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.storage import sqlite_store
 from vasoanalyzer.services.project_service import (
     save_project_file,
@@ -438,6 +439,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.scope_dock = None
         self.current_experiment = None
         self.current_sample = None
+        self.project_ctx: Optional[ProjectContext] = None
+        self.project_path: Optional[str] = None
+        self.project_meta: Dict[str, Any] = {}
         self.data_cache: DataCache | None = None
         self._cache_root_hint: Optional[str] = None
         self._mirror_sources_enabled = False
