@@ -9,62 +9,9 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .audit import EditAction, deserialize_edit_log
-from .interpolation import cubic_hermite_bridge, linear_bridge
-
-
-@dataclass(frozen=True)
-class TraceWindow:
-    """Lightweight container for a window of trace data."""
-
-    time: np.ndarray
-    inner_mean: np.ndarray
-    inner_min: np.ndarray
-    inner_max: np.ndarray
-    outer_mean: Optional[np.ndarray] = None
-    outer_min: Optional[np.ndarray] = None
-    outer_max: Optional[np.ndarray] = None
-
-
-@dataclass
-class _LODLevel:
-    """Single level of the level-of-detail pyramid."""
-
-    factor: int
-    bucket_size: int
-    time_centers: np.ndarray
-    inner_mean: np.ndarray
-    inner_min: np.ndarray
-    inner_max: np.ndarray
-    outer_mean: Optional[np.ndarray]
-    outer_min: Optional[np.ndarray]
-    outer_max: Optional[np.ndarray]
-
-    def window(self, x0: float, x1: float, margin: int = 1) -> TraceWindow:
-        """Return a slice of this level covering ``[x0, x1]``."""
-
-        lo = max(np.searchsorted(self.time_centers, x0, side="left") - margin, 0)
-        hi = min(np.searchsorted(self.time_centers, x1, side="right") + margin, len(self.time_centers))
-        return TraceWindow(
-            time=self.time_centers[lo:hi],
-            inner_mean=self.inner_mean[lo:hi],
-            inner_min=self.inner_min[lo:hi],
-            inner_max=self.inner_max[lo:hi],
-            outer_mean=None if self.outer_mean is None else self.outer_mean[lo:hi],
-            outer_min=None if self.outer_min is None else self.outer_min[lo:hi],
-            outer_max=None if self.outer_max is None else self.outer_max[lo:hi],
-        )
-
-    def count_in_range(self, x0: float, x1: float) -> int:
-        lo = np.searchsorted(self.time_centers, x0, side="left")
-        hi = np.searchsorted(self.time_centers, x1, side="right")
-        return max(hi - lo, 1)
-
-
-def _ensure_float_array(data: np.ndarray) -> np.ndarray:
-    arr = np.asarray(data, dtype=float)
-    if arr.ndim != 1:
-        raise ValueError("Trace arrays must be 1-D")
-    return np.ascontiguousarray(arr)
+from .traces.actions import bridge_segment, find_neighbor
+from .traces.lod import LODLevel
+from .traces.window import TraceWindow, ensure_float_array
 
 
 def _prefer_column(frame, names: Sequence[str]) -> Optional[str]:
@@ -158,22 +105,22 @@ class TraceModel:
         order = np.argsort(time)
         self._time_full = np.ascontiguousarray(time[order])
 
-        inner_clean = _ensure_float_array(inner)[order]
+        inner_clean = ensure_float_array(inner)[order]
         raw_candidate = inner_raw if inner_raw is not None else inner
-        inner_raw_sorted = _ensure_float_array(raw_candidate)[order]
+        inner_raw_sorted = ensure_float_array(raw_candidate)[order]
 
         self._inner_raw = inner_raw_sorted
         self._inner_clean = inner_clean if inner_clean is not None else inner_raw_sorted.copy()
 
         if outer is None:
             self._outer_clean = None
-            self._outer_raw = None if outer_raw is None else _ensure_float_array(outer_raw)[order]
+            self._outer_raw = None if outer_raw is None else ensure_float_array(outer_raw)[order]
         else:
-            outer_clean_sorted = _ensure_float_array(outer)[order]
+            outer_clean_sorted = ensure_float_array(outer)[order]
             if outer_raw is None:
                 outer_raw_sorted = outer_clean_sorted.copy()
             else:
-                outer_raw_sorted = _ensure_float_array(outer_raw)[order]
+                outer_raw_sorted = ensure_float_array(outer_raw)[order]
             self._outer_clean = outer_clean_sorted
             self._outer_raw = outer_raw_sorted
 
@@ -184,7 +131,7 @@ class TraceModel:
         self._base_factor = max(int(base_factor), 2)
         self._max_points_per_level = max(int(max_points_per_level), 64)
         self._window_cache: Dict[Tuple[int, float, float], TraceWindow] = {}
-        self._levels: Tuple[_LODLevel, ...] = ()
+        self._levels: Tuple[LODLevel, ...] = ()
         self._edit_log: List[EditAction] = []
 
         if edit_actions:
@@ -194,7 +141,7 @@ class TraceModel:
 
     # ------------------------------------------------------------------ properties
     @property
-    def levels(self) -> Tuple[_LODLevel, ...]:
+    def levels(self) -> Tuple[LODLevel, ...]:
         return self._levels
 
     @property
@@ -240,8 +187,8 @@ class TraceModel:
     def clear_cache(self) -> None:
         self._window_cache.clear()
 
-    def _build_levels(self) -> Tuple[_LODLevel, ...]:
-        levels: List[_LODLevel] = []
+    def _build_levels(self) -> Tuple[LODLevel, ...]:
+        levels: List[LODLevel] = []
         bucket_size = 1
         factor = 1
         total = self._time_full.size
@@ -256,13 +203,13 @@ class TraceModel:
                 break
         return tuple(levels)
 
-    def _build_level(self, *, bucket_size: int, factor: int) -> _LODLevel:
+    def _build_level(self, *, bucket_size: int, factor: int) -> LODLevel:
         time = self._time_full
         inner = self._inner_clean
         outer = self._outer_clean
         n = time.size
         if bucket_size <= 1:
-            return _LODLevel(
+            return LODLevel(
                 factor=factor,
                 bucket_size=1,
                 time_centers=time.copy(),
@@ -292,7 +239,7 @@ class TraceModel:
         else:
             outer_mean = outer_min = outer_max = None
 
-        return _LODLevel(
+        return LODLevel(
             factor=factor,
             bucket_size=bucket_size,
             time_centers=centers,
@@ -568,7 +515,7 @@ def load_lod(
     time: np.ndarray,
     inner: np.ndarray,
     outer: Optional[np.ndarray] = None,
-) -> Optional[Tuple[_LODLevel, ...]]:
+) -> Optional[Tuple[LODLevel, ...]]:
     """Load cached LOD levels if they match the provided trace."""
 
     path = Path(path)
@@ -607,7 +554,7 @@ def load_lod(
                 if outer_mean is None:
                     return None
             levels.append(
-                _LODLevel(
+                LODLevel(
                     factor=factor,
                     bucket_size=bucket_size,
                     time_centers=time_centers,

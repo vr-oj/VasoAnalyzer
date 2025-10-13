@@ -704,7 +704,7 @@ class PlotHost:
         self._event_label_v2_artists = []
 
     def _draw_event_labels_v2(self) -> bool:
-        if not is_enabled("event_labels_v2"):
+        if not is_enabled("event_labels_v2", default=True):
             self._clear_event_label_v2()
             return False
         if self._event_label_mode == "none" or not self._event_labels_visible:
