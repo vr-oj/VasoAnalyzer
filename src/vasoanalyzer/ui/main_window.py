@@ -97,9 +97,10 @@ from vasoanalyzer.core.project import (
     export_sample,
     save_project,
     load_project,
+    open_project_ctx,
+    close_project_ctx,
 )
 from vasoanalyzer.core.project_context import ProjectContext
-from vasoanalyzer.storage import sqlite_store
 from vasoanalyzer.services.project_service import (
     save_project_file,
     autosave_project,
@@ -109,7 +110,6 @@ from vasoanalyzer.services.project_service import (
     import_project_bundle,
     export_project_single_file,
 )
-from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.services.cache_service import DataCache, cache_dir_for_project
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
@@ -203,57 +203,39 @@ class _SampleLoadJob(QRunnable):
             return
 
         repo = self._repo
-        store = None
-        store_owned = False
+        owned_ctx: Optional[ProjectContext] = None
 
         try:
             if repo is None:
                 if not self._project_path:
                     raise RuntimeError("Project path unavailable for sample load")
-                store = sqlite_store.open_project(self._project_path)
-                store_owned = True
-            else:
-                store = getattr(repo, "store", None)
-                if store is None and self._project_path:
-                    store = sqlite_store.open_project(self._project_path)
-                    store_owned = True
+                owned_ctx = open_project_ctx(self._project_path)
+                repo = owned_ctx.repo
 
-            if repo is None and store is None:
-                raise RuntimeError("Unable to obtain project store")
+            if repo is None:
+                raise RuntimeError("Unable to obtain project repository")
 
             if self._load_trace:
-                trace_raw = (
-                    repo.get_trace(self._dataset_id)  # type: ignore[call-arg]
-                    if repo is not None
-                    else sqlite_store.get_trace(store, self._dataset_id)
-                )
+                trace_raw = repo.get_trace(self._dataset_id)  # type: ignore[call-arg]
                 trace_df = project_module._format_trace_df(trace_raw)
 
             if self._load_events:
-                events_raw = (
-                    repo.get_events(self._dataset_id)  # type: ignore[call-arg]
-                    if repo is not None
-                    else sqlite_store.get_events(store, self._dataset_id)
-                )
+                events_raw = repo.get_events(self._dataset_id)  # type: ignore[call-arg]
                 events_df = project_module._format_events_df(events_raw)
 
             if self._load_results:
-                backing_store = store or getattr(repo, "store", None)
-                if backing_store is None and self._project_path:
-                    backing_store = sqlite_store.open_project(self._project_path)
-                    store_owned = True
-                    store = backing_store
-                analysis_results = (
-                    project_module._load_sample_results(backing_store, self._dataset_id)
-                    if backing_store is not None
-                    else None
+                backing_store = getattr(repo, "store", None)
+                if backing_store is None:
+                    raise RuntimeError("Repository does not expose backing store")
+                analysis_results = project_module._load_sample_results(
+                    backing_store, self._dataset_id
                 )
         except Exception as exc:  # pragma: no cover - defensive UI logging
             self.signals.error.emit(self._token, self._sample, str(exc))
             return
         finally:
-            if store_owned and store is not None:
-                store.close()
+            if owned_ctx is not None:
+                close_project_ctx(owned_ctx)
 
         self.signals.finished.emit(
             self._token, self._sample, trace_df, events_df, analysis_results
@@ -1966,38 +1948,49 @@ class VasoAnalyzerApp(QMainWindow):
         if sample.snapshot_role and sample.asset_roles:
             asset_id = sample.asset_roles.get(sample.snapshot_role)
 
-        if project_path and asset_id:
+        ctx = getattr(self, "project_ctx", None)
+        repo = ctx.repo if isinstance(ctx, ProjectContext) else None
+        owned_ctx = None
+        data = None
+
+        if repo is None and project_path:
             try:
-                store = sqlite_store.open_project(project_path)
-                try:
-                    data = sqlite_store.get_asset_bytes(store, asset_id)
-                finally:
-                    store.close()
+                owned_ctx = open_project_ctx(project_path)
+                repo = owned_ctx.repo
+            except Exception:
+                repo = None
+
+        if repo is not None and asset_id:
+            try:
+                data = repo.get_asset_bytes(asset_id)
             except Exception:
                 data = None
-            else:
-                if data:
-                    try:
-                        buffer = io.BytesIO(data)
-                        fmt = (sample.snapshot_format or "").lower()
-                        if not fmt:
-                            fmt = "npz" if data.startswith(b"PK") else "npy"
-                        if fmt == "npz":
-                            with np.load(buffer, allow_pickle=False) as npz_file:
-                                stack = npz_file["stack"]
-                        else:
-                            stack = np.load(buffer, allow_pickle=False)
-                        if isinstance(stack, np.ndarray):
-                            sample.snapshots = stack
-                        else:
-                            sample.snapshots = np.stack(stack)
-                        return sample.snapshots
-                    except Exception:
-                        log.debug(
-                            "Failed to decode snapshot stack for %s",
-                            sample.name,
-                            exc_info=True,
-                        )
+
+        if owned_ctx is not None:
+            close_project_ctx(owned_ctx)
+
+        if data:
+            try:
+                buffer = io.BytesIO(data)
+                fmt = (sample.snapshot_format or "").lower()
+                if not fmt:
+                    fmt = "npz" if data.startswith(b"PK") else "npy"
+                if fmt == "npz":
+                    with np.load(buffer, allow_pickle=False) as npz_file:
+                        stack = npz_file["stack"]
+                else:
+                    stack = np.load(buffer, allow_pickle=False)
+                if isinstance(stack, np.ndarray):
+                    sample.snapshots = stack
+                else:
+                    sample.snapshots = np.stack(stack)
+                return sample.snapshots
+            except Exception:
+                log.debug(
+                    "Failed to decode snapshot stack for %s",
+                    sample.name,
+                    exc_info=True,
+                )
 
         if sample.snapshot_path and Path(sample.snapshot_path).exists():
             try:
