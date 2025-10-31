@@ -2458,12 +2458,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         project_menu.addSeparator()
 
-        self.action_save_project = QAction("Save Project", self)
+        self.action_save_project = QAction("Save Project (.vaso)", self)
         self.action_save_project.setShortcut("Ctrl+Shift+S")
         self.action_save_project.triggered.connect(self.save_project_file)
         project_menu.addAction(self.action_save_project)
 
-        self.action_save_project_as = QAction("Save Project As…", self)
+        self.action_save_project_as = QAction("Save Project As (.vaso)…", self)
         self.action_save_project_as.triggered.connect(self.save_project_file_as)
         project_menu.addAction(self.action_save_project_as)
 
@@ -2676,6 +2676,10 @@ class VasoAnalyzerApp(QMainWindow):
         self._assign_menu_role(self.action_about, "AboutRole")
         help_menu.addAction(self.action_about)
 
+        act_about_project = QAction("About Project File…", self)
+        act_about_project.triggered.connect(self.show_project_file_info)
+        help_menu.addAction(act_about_project)
+
         self.action_user_manual = QAction("User Manual…", self)
         self.action_user_manual.triggered.connect(self.open_user_manual)
         help_menu.addAction(self.action_user_manual)
@@ -2708,6 +2712,17 @@ class VasoAnalyzerApp(QMainWindow):
         act_rel = QAction("Release Notes…", self)
         act_rel.triggered.connect(self.show_release_notes)
         help_menu.addAction(act_rel)
+
+    def show_project_file_info(self) -> None:
+        message = (
+            "<b>Single-File .vaso Projects</b><br><br>"
+            "<ul>"
+            "<li>SQLite v3 container that stores datasets, traces, UI state, and metadata together.</li>"
+            "<li>All imported assets are embedded, deduplicated by SHA-256, and compressed for portability.</li>"
+            "<li>Saves are atomic and crash-safe, with periodic autosave snapshots you can restore on reopen.</li>"
+            "</ul>"
+        )
+        QMessageBox.information(self, "About Project File", message)
 
     def build_recent_files_menu(self):
         self.recent_menu.clear()
@@ -3721,7 +3736,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
         toolbar.addAction(self.excel_action)
 
-        self.save_session_action = QAction(QIcon(self.icon_path("Save.svg")), "Save Project", self)
+        self.save_session_action = QAction(
+            QIcon(self.icon_path("Save.svg")), "Save Project (.vaso)", self
+        )
         self.save_session_action.setToolTip("Save the current project")
         self.save_session_action.setShortcut(QKeySequence.Save)
         self.save_session_action.triggered.connect(self.save_project_file)

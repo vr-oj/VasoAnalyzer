@@ -4,7 +4,14 @@ import contextlib
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from vasoanalyzer.core.project import close_project_ctx, open_project_ctx
+from PyQt5.QtWidgets import QMessageBox
+
+from vasoanalyzer.core.project import (
+    ProjectUpgradeRequired,
+    close_project_ctx,
+    convert_project,
+    open_project_ctx,
+)
 from vasoanalyzer.core.project_context import ProjectContext
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -29,7 +36,25 @@ def open_project_file(window: VasoAnalyzerApp, path: str | None = None) -> None:
 
     project_path = getattr(current_project, "path", None)
     if project_path:
-        ctx = open_project_ctx(project_path)
+        try:
+            ctx = open_project_ctx(project_path)
+        except ProjectUpgradeRequired as exc:
+            choice = QMessageBox.question(
+                window,
+                "Convert Project",
+                (
+                    "This project uses an older format.\n\n"
+                    "Convert it to the new single-file .vaso format now?\n"
+                    "A backup (.bak1) will be kept for safety."
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if choice != QMessageBox.Yes:
+                window.statusBar().showMessage("Conversion cancelled.", 5000)
+                return
+            ctx = convert_project(project_path)
+            window.statusBar().showMessage("\u2713 Project converted to single-file format.", 5000)
         window.project_ctx = ctx
         window.project_path = ctx.path
         window.project_meta = ctx.meta

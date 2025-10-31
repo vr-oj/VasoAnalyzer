@@ -20,10 +20,13 @@ __all__ = [
 class AssetRecord(TypedDict, total=False):
     id: int
     role: str
-    storage: str
-    rel_path: str | None
+    note: str | None
+    kind: str
     sha256: str
-    bytes: int | None
+    size_bytes: int
+    compressed: bool
+    chunk_size: int
+    original_name: str | None
     mime: str | None
 
 
@@ -86,7 +89,9 @@ class AssetProvider(Protocol):
         *,
         embed: bool,
         mime: str | None = None,
-        chunk_size: int = 8 * 1024 * 1024,
+        chunk_size: int = 2 * 1024 * 1024,
+        note: str | None = None,
+        original_name: str | None = None,
     ) -> int: ...
 
 
@@ -113,7 +118,7 @@ class ProjectRepository(TraceProvider, EventProvider, AssetProvider, Protocol):
         metadata: Mapping[str, Any] | None = None,
         tiff_path: str | None = None,
         embed_tiff: bool = False,
-        chunk_size: int = 8 * 1024 * 1024,
+        chunk_size: int = 2 * 1024 * 1024,
         thumbnail_png: bytes | None = None,
     ) -> int: ...
 

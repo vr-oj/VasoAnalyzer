@@ -45,6 +45,8 @@ __all__ = [
     "close_project_ctx",
     "open_project",
     "close_project",
+    "convert_project",
+    "ProjectUpgradeRequired",
     "Attachment",
     "export_sample",
     "events_dataframe_from_rows",
@@ -57,9 +59,16 @@ log = logging.getLogger(__name__)
 SCHEMA_VERSION = 2
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
-# Snapshot media policy defaults
-EMBED_SNAPSHOT_TIFFS: bool = False
-EMBED_SNAPSHOT_MAX_MB: int = 4
+
+class ProjectUpgradeRequired(RuntimeError):
+    """Raised when a legacy project must be converted to the sqlite-v3 format."""
+
+    def __init__(self, path: str, version: int):
+        self.path = path
+        self.version = version
+        super().__init__(
+            f"Project at {path} uses legacy schema version {version}; conversion to sqlite-v3 is required."
+        )
 
 
 def open_project_ctx(path: str, repo: ProjectRepository | None = None) -> ProjectContext:
@@ -70,7 +79,15 @@ def open_project_ctx(path: str, repo: ProjectRepository | None = None) -> Projec
     default repository factory is used.
     """
 
-    repository = repo or get_repo(path)
+    if repo is not None:
+        repository = repo
+    else:
+        from vasoanalyzer.storage.sqlite_store import LegacyProjectError
+
+        try:
+            repository = get_repo(path)
+        except LegacyProjectError as exc:
+            raise ProjectUpgradeRequired(exc.path.as_posix(), exc.version) from exc
     open_method = getattr(repository, "open", None)
     if repo is not None and callable(open_method):
         open_method(path)
@@ -101,6 +118,22 @@ def close_project(obj) -> None:
 
     if isinstance(obj, ProjectContext):
         close_project_ctx(obj)
+
+
+def convert_project(path: str) -> ProjectContext:
+    """Convert a legacy project to sqlite-v3 and return an open context."""
+
+    from vasoanalyzer.services.project_service import convert_project_repository
+
+    repo = convert_project_repository(path)
+    meta: dict[str, Any] = {}
+    read_meta = getattr(repo, "read_meta", None)
+    if callable(read_meta):
+        try:
+            meta = dict(read_meta())
+        except Exception:
+            meta = {}
+    return ProjectContext(path=path, repo=repo, meta=meta)
 
 
 @dataclass
@@ -1482,21 +1515,13 @@ def _persist_sample_snapshots(
         payload["snapshot_path"] = rel_path
         if abs_path and abs_path.exists():
             try:
-                embed_tiff = False
-                if EMBED_SNAPSHOT_TIFFS:
-                    try:
-                        stat_result = abs_path.stat()
-                    except OSError:
-                        pass
-                    else:
-                        size_mb = stat_result.st_size / (1024 * 1024)
-                        embed_tiff = size_mb <= EMBED_SNAPSHOT_MAX_MB
                 repo.add_or_update_asset(
                     dataset_id,
                     "snapshot_tiff",
                     abs_path,
-                    embed=embed_tiff,
+                    embed=True,
                     mime="image/tiff",
+                    note="snapshot-tiff",
                 )
                 payload["snapshot_tiff_role"] = "snapshot_tiff"
                 sample.snapshot_tiff_role = "snapshot_tiff"
@@ -1761,12 +1786,6 @@ def _dataset_to_sample(
         snapshot_path = abs_snapshot.as_posix() if abs_snapshot else raw_snapshot
     else:
         snapshot_path = None
-        snapshot_tiff_role = extra.get("snapshot_tiff_role")
-        if snapshot_tiff_role:
-            asset = assets_by_role.get(snapshot_tiff_role)
-            if asset and asset.get("storage") == "external" and asset.get("rel_path"):
-                abs_path = _absolute_path(asset["rel_path"], base_dir)
-                snapshot_path = abs_path.as_posix() if abs_path else asset["rel_path"]
     snapshot_role = extra.get("snapshot_role")
     if snapshot_role is None and "snapshot_stack" in assets_by_role:
         snapshot_role = "snapshot_stack"
@@ -1928,27 +1947,22 @@ def _load_sample_snapshots(
     tiff_role = extra.get("snapshot_tiff_role")
     if tiff_role and tiff_role in assets:
         asset = assets[tiff_role]
-        rel_path = asset.get("rel_path")
-        storage = asset.get("storage")
-        if storage == "external" and rel_path:
-            abs_path = _absolute_path(rel_path, base_dir)
-            snapshot_path = abs_path.as_posix() if abs_path else rel_path
-        else:
-            data = repo.get_asset_bytes(asset["id"])
-            if data:
-                out_dir = tmp_root / f"dataset_{dataset_id}" / "snapshots"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ext = ".tif"
-                if asset.get("mime") and not asset["mime"].endswith("tiff"):
-                    ext = ".bin"
-                sha = asset.get("sha256") or "snapshot"
-                out_path = out_dir / f"{sha[:16]}{ext}"
-                try:
-                    with open(out_path, "wb") as fh:
-                        fh.write(data)
-                    snapshot_path = out_path.as_posix()
-                except OSError:
-                    snapshot_path = None
+        data = repo.get_asset_bytes(asset["id"])
+        if data:
+            out_dir = tmp_root / f"dataset_{dataset_id}" / "snapshots"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ext = ".tif"
+            mime = asset.get("mime")
+            if mime and not mime.endswith("tiff"):
+                ext = ".bin"
+            sha = asset.get("sha256") or "snapshot"
+            out_path = out_dir / f"{sha[:16]}{ext}"
+            try:
+                with open(out_path, "wb") as fh:
+                    fh.write(data)
+                snapshot_path = out_path.as_posix()
+            except OSError:
+                snapshot_path = None
 
     if snapshot_path is None:
         raw = extra.get("snapshot_path")

@@ -2,10 +2,10 @@ from pathlib import Path
 
 from vasoanalyzer.storage.sqlite_store import (
     ProjectStore,
-    create_project,
     add_or_update_asset,
-    list_assets,
+    create_project,
     get_asset_bytes,
+    list_assets,
 )
 
 
@@ -35,14 +35,20 @@ def test_add_or_update_asset_embedded(tmp_path):
         )
         assets = list_assets(store, 1)
         assert len(assets) == 1
-        assert assets[0]["id"] == asset_id
+        asset = assets[0]
+        assert asset["id"] == asset_id
+        assert asset["role"] == "test"
+        assert asset["sha256"]
+        assert asset["size_bytes"] == len(payload)
+        assert asset["compressed"] is True
+        assert asset["chunk_size"] > 0
         data = get_asset_bytes(store, asset_id)
         assert data == payload
     finally:
         store.close()
 
 
-def test_add_or_update_asset_external(tmp_path):
+def test_add_or_update_asset_deduplicates(tmp_path):
     store = _open_temp_store(tmp_path)
     try:
         store.conn.execute(
@@ -51,17 +57,49 @@ def test_add_or_update_asset_external(tmp_path):
             VALUES (1, 'sample', '2000-01-01T00:00:00Z')
             """
         )
-        file_path = tmp_path / "asset.bin"
-        file_path.write_bytes(b"abc")
+        payload = b"abc123"
         asset_id = add_or_update_asset(
             store,
             dataset_id=1,
             role="test",
-            path_or_bytes=file_path,
-            embed=False,
+            path_or_bytes=payload,
+            embed=True,
+        )
+        second_id = add_or_update_asset(
+            store,
+            dataset_id=1,
+            role="test",
+            path_or_bytes=payload,
+            embed=True,
         )
         assets = list_assets(store, 1)
-        assert assets[0]["storage"] == "external"
-        assert get_asset_bytes(store, asset_id) == b"abc"
+        assert len(assets) == 1
+        assert assets[0]["id"] == second_id == asset_id
+        assert get_asset_bytes(store, asset_id) == payload
+    finally:
+        store.close()
+
+
+def test_add_or_update_asset_rejects_external(tmp_path):
+    store = _open_temp_store(tmp_path)
+    try:
+        store.conn.execute(
+            """
+            INSERT INTO dataset(id, name, created_utc)
+            VALUES (1, 'sample', '2000-01-01T00:00:00Z')
+            """
+        )
+        try:
+            add_or_update_asset(
+                store,
+                dataset_id=1,
+                role="test",
+                path_or_bytes=b"x",
+                embed=False,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Expected ValueError for non-embedded asset")
     finally:
         store.close()

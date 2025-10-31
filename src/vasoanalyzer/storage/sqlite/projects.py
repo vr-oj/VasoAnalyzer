@@ -24,7 +24,7 @@ def apply_default_pragmas(conn: sqlite3.Connection) -> None:
 
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA synchronous = FULL;")
     conn.execute("PRAGMA temp_store = MEMORY;")
     conn.execute("PRAGMA mmap_size = 268435456;")
     conn.execute("PRAGMA cache_size = -131072;")
@@ -90,12 +90,12 @@ def ensure_schema(
 
         CREATE TABLE IF NOT EXISTS asset (
             id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            storage TEXT NOT NULL,
-            rel_path TEXT,
-            sha256 TEXT NOT NULL,
-            bytes INTEGER,
+            kind TEXT NOT NULL,
+            sha256 TEXT NOT NULL UNIQUE,
+            size_bytes INTEGER NOT NULL,
+            compressed INTEGER NOT NULL,
+            chunk_size INTEGER NOT NULL,
+            original_name TEXT,
             mime TEXT
         );
 
@@ -105,6 +105,16 @@ def ensure_schema(
             data BLOB NOT NULL,
             PRIMARY KEY (asset_id, seq)
         ) WITHOUT ROWID;
+
+        CREATE TABLE IF NOT EXISTS ref (
+            asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
+            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+            role TEXT NOT NULL,
+            note TEXT,
+            PRIMARY KEY (asset_id, dataset_id, role)
+        ) WITHOUT ROWID;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ref_dataset_role ON ref(dataset_id, role);
 
         CREATE TABLE IF NOT EXISTS result (
             id INTEGER PRIMARY KEY,
@@ -124,6 +134,11 @@ def ensure_schema(
     set_user_version(conn, schema_version)
 
     meta_values: dict[str, str] = {
+        "format": "sqlite-v3",
+        "project_version": str(schema_version),
+        "schema_version": str(schema_version),
+        "created_at": now,
+        "modified_at": now,
         "created_utc": now,
         "modified_utc": now,
     }
@@ -159,7 +174,9 @@ def run_migrations(
             )
             version = target
         else:
-            raise RuntimeError(f"No migration path from {version} to {target}")
+            raise RuntimeError(
+                "This project uses a legacy .vaso format that requires conversion to sqlite-v3."
+            )
     set_user_version(conn, target)
     conn.commit()
 

@@ -16,6 +16,7 @@ __all__ = [
     "service_types",
     "open_project_repository",
     "create_project_repository",
+    "convert_project_repository",
     "SQLiteProjectRepository",
 ]
 
@@ -32,6 +33,10 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "create_project_repository": (
         "vasoanalyzer.services.project_service",
         "create_project_repository",
+    ),
+    "convert_project_repository": (
+        "vasoanalyzer.services.project_service",
+        "convert_project_repository",
     ),
     "SQLiteProjectRepository": ("vasoanalyzer.services.project_service", "SQLiteProjectRepository"),
     "check_for_new_version": ("vasoanalyzer.services.version", "check_for_new_version"),

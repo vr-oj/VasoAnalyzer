@@ -36,6 +36,11 @@ def test_sqlite_project_repository_roundtrip(tmp_path):
             path_or_bytes=b"data",
             embed=True,
         )
+        assets = repo.list_assets(1)
+        assert len(assets) == 1
+        assert assets[0]["id"] == asset_id
+        assert assets[0]["size_bytes"] == 4
+        assert assets[0]["compressed"] is True
         assert repo.get_asset_bytes(asset_id) == b"data"
     finally:
         repo.close()

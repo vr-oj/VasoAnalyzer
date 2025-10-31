@@ -271,7 +271,9 @@ class SQLiteProjectRepository(ProjectRepository):
         *,
         embed: bool,
         mime: str | None = None,
-        chunk_size: int = 8 * 1024 * 1024,
+        chunk_size: int = 2 * 1024 * 1024,
+        note: str | None = None,
+        original_name: str | None = None,
     ) -> int:
         return cast(
             int,
@@ -283,6 +285,8 @@ class SQLiteProjectRepository(ProjectRepository):
                 embed=embed,
                 mime=mime,
                 chunk_size=chunk_size,
+                note=note,
+                original_name=original_name,
             ),
         )
 
@@ -317,7 +321,7 @@ class SQLiteProjectRepository(ProjectRepository):
         metadata: Mapping[str, Any] | None = None,
         tiff_path: str | None = None,
         embed_tiff: bool = False,
-        chunk_size: int = 8 * 1024 * 1024,
+        chunk_size: int = 2 * 1024 * 1024,
         thumbnail_png: bytes | None = None,
     ) -> int:
         return cast(
@@ -375,6 +379,13 @@ def open_project_repository(path: str) -> SQLiteProjectRepository:
     """Open an existing SQLite project as a typed repository façade."""
 
     store = sqlite_store.open_project(path)
+    return SQLiteProjectRepository(store)
+
+
+def convert_project_repository(path: str) -> SQLiteProjectRepository:
+    """Convert a legacy project in-place and return an open repository façade."""
+
+    store = sqlite_store.convert_legacy_project(path)
     return SQLiteProjectRepository(store)
 
 

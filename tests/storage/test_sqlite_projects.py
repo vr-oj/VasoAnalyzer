@@ -16,6 +16,8 @@ def test_meta_roundtrip(tmp_path):
         initial_meta = projects.read_meta(conn)
         assert "created_utc" in initial_meta
         assert "modified_utc" in initial_meta
+        assert initial_meta["format"] == "sqlite-v3"
+        assert initial_meta["project_version"] == str(SCHEMA_VERSION)
 
         projects.write_meta(conn, {"title": "Test"})
         conn.commit()
