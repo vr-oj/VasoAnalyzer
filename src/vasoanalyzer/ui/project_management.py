@@ -3,12 +3,13 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-import os
+
 import pandas as pd
 from PyQt5.QtWidgets import (
-    QMessageBox,
     QInputDialog,
+    QMessageBox,
 )
+
 from vasoanalyzer.core.project import SampleN, save_project
 from vasoanalyzer.ui.dialogs.excel_map_wizard import ExcelMapWizard
 
@@ -75,17 +76,13 @@ def save_data_as_n(self):
         return
 
     if not self.current_project.experiments:
-        QMessageBox.warning(
-            self, "No Experiment", "Add an experiment to the project first."
-        )
+        QMessageBox.warning(self, "No Experiment", "Add an experiment to the project first.")
         return
 
     exp = self.current_experiment
     if exp is None:
         items = [e.name for e in self.current_project.experiments]
-        choice, ok = QInputDialog.getItem(
-            self, "Select Experiment", "Experiment:", items, 0, False
-        )
+        choice, ok = QInputDialog.getItem(self, "Select Experiment", "Experiment:", items, 0, False)
         if not ok:
             return
         exp = next(e for e in self.current_project.experiments if e.name == choice)

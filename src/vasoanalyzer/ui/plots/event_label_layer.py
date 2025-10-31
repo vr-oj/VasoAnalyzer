@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from collections.abc import Iterable
 
 from matplotlib.axes import Axes
 
@@ -13,10 +13,10 @@ __all__ = ["draw_event_labels"]
 def draw_event_labels(
     ax: Axes,
     clusters: Iterable[Cluster],
-    xlim: Tuple[float, float],
+    xlim: tuple[float, float],
     *,
     mode: str = "horizontal",
-) -> List:
+) -> list:
     """Draw minimal labels for clustered events on ``ax`` and return artists."""
 
     xmin, xmax = xlim
@@ -41,7 +41,7 @@ def draw_event_labels(
         valign = "top"
         clip = True
 
-    artists: List = []
+    artists: list = []
     for cluster in clusters:
         xdata = xmin + (cluster.x_px / scale)
         line = ax.axvline(xdata, linewidth=0.8, alpha=0.35)

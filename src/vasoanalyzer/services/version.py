@@ -5,13 +5,14 @@
 
 import requests
 from requests.exceptions import Timeout
+
 from utils.config import APP_VERSION
 
 
 def check_for_new_version(current_version=f"v{APP_VERSION}"):
     try:
         response = requests.get(
-            "https://api.github.com/repos/vr-oj/VasoAnalyzer/releases/latest",
+            "https://github.com/vr-oj/VasoAnalyzer/releases",
             timeout=5,
         )
         if response.status_code == 200:

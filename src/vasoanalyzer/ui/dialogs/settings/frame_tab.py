@@ -16,12 +16,16 @@ from PyQt5.QtWidgets import (
 
 if TYPE_CHECKING:  # pragma: no cover
     try:
-        from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedPlotSettingsDialog as DialogT
+        from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
+            UnifiedPlotSettingsDialog as DialogT,
+        )
     except Exception:  # pragma: no cover
         from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog as DialogT
 else:  # pragma: no cover
+
     class DialogT:  # type: ignore
         pass
+
 
 from ._shared import block_signals
 
@@ -39,7 +43,7 @@ class FrameTabRefs:
     fig_h: QDoubleSpinBox
 
 
-def create_frame_tab_widgets(dialog: "DialogT", window) -> FrameTabRefs:
+def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
     tab = QWidget(parent=dialog)
     layout = QVBoxLayout(tab)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -51,7 +55,7 @@ def create_frame_tab_widgets(dialog: "DialogT", window) -> FrameTabRefs:
     origin_layout.setSpacing(8)
 
     origin_hint = QLabel(
-        "Shift where the axes cross. Manual mode lets you anchor the axes to a specific data point.",
+        "Shift where the axes cross. Manual mode anchors them to a specific data point.",
         origin_box,
     )
     origin_hint.setWordWrap(True)
@@ -128,11 +132,18 @@ def create_frame_tab_widgets(dialog: "DialogT", window) -> FrameTabRefs:
     )
 
 
-def populate_frame_tab(dialog: "DialogT") -> None:
+def populate_frame_tab(dialog: DialogT) -> None:
     """Populate Frame tab controls with the current dialog state."""
 
     fig_w, fig_h = dialog.fig.get_size_inches()
-    widgets = [dialog.origin_mode, dialog.origin_x, dialog.origin_y, dialog.size_preset, dialog.fig_w, dialog.fig_h]
+    widgets = [
+        dialog.origin_mode,
+        dialog.origin_x,
+        dialog.origin_y,
+        dialog.size_preset,
+        dialog.fig_w,
+        dialog.fig_h,
+    ]
 
     with block_signals(widgets):
         dialog.origin_mode.setCurrentText("Automatic")
@@ -144,7 +155,7 @@ def populate_frame_tab(dialog: "DialogT") -> None:
         dialog.fig_h.setValue(round(fig_h, 1))
 
 
-def wire_frame_tab(dialog: "DialogT") -> None:
+def wire_frame_tab(dialog: DialogT) -> None:
     """Connect Frame tab signals (guarded to avoid duplicate wiring)."""
 
     if getattr(dialog, "_frame_tab_wired", False):

@@ -1,16 +1,12 @@
-import os
 from pathlib import Path
 
 from vasoanalyzer.storage.sqlite_store import (
     ProjectStore,
-    SCHEMA_VERSION,
     create_project,
     add_or_update_asset,
     list_assets,
     get_asset_bytes,
 )
-from vasoanalyzer.storage.sqlite import projects
-from vasoanalyzer.storage.sqlite.utils import open_db
 
 
 def _open_temp_store(tmp_path: Path) -> ProjectStore:
@@ -24,7 +20,10 @@ def test_add_or_update_asset_embedded(tmp_path):
     try:
         # Minimal dataset
         store.conn.execute(
-            "INSERT INTO dataset(id, name, created_utc) VALUES (1, 'sample', '2000-01-01T00:00:00Z')"
+            """
+            INSERT INTO dataset(id, name, created_utc)
+            VALUES (1, 'sample', '2000-01-01T00:00:00Z')
+            """
         )
         payload = b"hello"
         asset_id = add_or_update_asset(
@@ -47,7 +46,10 @@ def test_add_or_update_asset_external(tmp_path):
     store = _open_temp_store(tmp_path)
     try:
         store.conn.execute(
-            "INSERT INTO dataset(id, name, created_utc) VALUES (1, 'sample', '2000-01-01T00:00:00Z')"
+            """
+            INSERT INTO dataset(id, name, created_utc)
+            VALUES (1, 'sample', '2000-01-01T00:00:00Z')
+            """
         )
         file_path = tmp_path / "asset.bin"
         file_path.write_bytes(b"abc")

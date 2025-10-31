@@ -1,14 +1,14 @@
 """Centralised plot interactions for cursor-centric zooming and panning."""
 
 from __future__ import annotations
+
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
 
 from PyQt5.QtCore import Qt
 
-from vasoanalyzer.ui.plots.plot_host import PlotHost
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack
-
+from vasoanalyzer.ui.plots.plot_host import PlotHost
 
 _MODIFIER_MAP = {
     "ctrl": "control",
@@ -17,10 +17,10 @@ _MODIFIER_MAP = {
 }
 
 
-def _parse_modifiers(key: Optional[str]) -> List[str]:
+def _parse_modifiers(key: str | None) -> list[str]:
     if not key:
         return []
-    parts: List[str] = []
+    parts: list[str] = []
     for segment in key.lower().split("+"):
         parts.append(_MODIFIER_MAP.get(segment, segment))
     return parts
@@ -30,11 +30,11 @@ def _parse_modifiers(key: Optional[str]) -> List[str]:
 class _DragContext:
     mode: str
     track: ChannelTrack
-    press_xy: Tuple[float, float]
-    start_window: Optional[Tuple[float, float]]
-    start_ylim: Optional[Tuple[float, float]]
-    start_xdata: Optional[float]
-    start_ydata: Optional[float]
+    press_xy: tuple[float, float]
+    start_window: tuple[float, float] | None
+    start_ylim: tuple[float, float] | None
+    start_xdata: float | None
+    start_ydata: float | None
 
 
 class InteractionController:
@@ -47,9 +47,9 @@ class InteractionController:
         plot_host: PlotHost,
         *,
         toolbar=None,
-        on_drag_state: Optional[Callable[[bool], None]] = None,
-        set_cursor_callback: Optional[Callable[[str, Optional[float]], None]] = None,
-        clear_cursors_callback: Optional[Callable[[], None]] = None,
+        on_drag_state: Callable[[bool], None] | None = None,
+        set_cursor_callback: Callable[[str, float | None], None] | None = None,
+        clear_cursors_callback: Callable[[], None] | None = None,
     ) -> None:
         self.plot_host = plot_host
         self.canvas = plot_host.canvas
@@ -58,11 +58,11 @@ class InteractionController:
         self._set_cursor_callback = set_cursor_callback
         self._clear_cursors_callback = clear_cursors_callback or (lambda: None)
 
-        self._drag_ctx: Optional[_DragContext] = None
+        self._drag_ctx: _DragContext | None = None
         self._drag_active = False
-        self._hover_track: Optional[ChannelTrack] = None
-        self._hover_time: Optional[float] = None
-        self._connection_ids: List[int] = []
+        self._hover_track: ChannelTrack | None = None
+        self._hover_time: float | None = None
+        self._connection_ids: list[int] = []
 
         self._connect_events()
 
@@ -91,10 +91,10 @@ class InteractionController:
         mode = getattr(self.toolbar, "mode", "") if self.toolbar is not None else ""
         return bool(mode)
 
-    def _track_from_axes(self, axes) -> Optional[ChannelTrack]:
+    def _track_from_axes(self, axes) -> ChannelTrack | None:
         return self.plot_host.track_for_axes(axes)
 
-    def _track_from_event(self, event) -> Optional[ChannelTrack]:
+    def _track_from_event(self, event) -> ChannelTrack | None:
         return self._track_from_axes(getattr(event, "inaxes", None))
 
     def _set_drag_active(self, active: bool) -> None:
@@ -107,7 +107,10 @@ class InteractionController:
         if event.inaxes is None:
             return False
         bbox = track.ax.get_window_extent()
-        return (event.x < bbox.x0 + margin_px) or (event.x > bbox.x1 - margin_px)
+        x_coord = float(event.x)
+        left = float(bbox.x0)
+        right = float(bbox.x1)
+        return (x_coord < left + margin_px) or (x_coord > right - margin_px)
 
     def _scroll_factor(self, event) -> float:
         step = getattr(event, "step", None)
@@ -117,7 +120,7 @@ class InteractionController:
             direction = 1 if getattr(event, "button", "") == "up" else -1
         return 0.8 if direction > 0 else 1.25
 
-    def _active_track(self) -> Optional[ChannelTrack]:
+    def _active_track(self) -> ChannelTrack | None:
         if self._hover_track is not None:
             return self._hover_track
         tracks = self.plot_host.tracks()

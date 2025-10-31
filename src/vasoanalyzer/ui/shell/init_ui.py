@@ -10,28 +10,28 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QStackedWidget,
     QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QSizePolicy,
 )
 
 from vasoanalyzer.ui.event_table import EventTableWidget
 from vasoanalyzer.ui.event_table_controller import EventTableController
 from vasoanalyzer.ui.interactions import InteractionController
 from vasoanalyzer.ui.panels.home_page import HomePage
+from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.plot_host import PlotHost
 from vasoanalyzer.ui.theme import CURRENT_THEME
-from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 
 if TYPE_CHECKING:  # pragma: no cover
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 
 
-def init_ui(window: "VasoAnalyzerApp") -> None:
+def init_ui(window: VasoAnalyzerApp) -> None:
     """Initialise stacked layout, plot host, and ancillary widgets."""
 
     window.stack = QStackedWidget()
@@ -126,9 +126,7 @@ def init_ui(window: "VasoAnalyzerApp") -> None:
     window.snapshot_label.setMinimumHeight(220)
     window.snapshot_label.hide()
     window.snapshot_label.setContextMenuPolicy(Qt.CustomContextMenu)
-    window.snapshot_label.customContextMenuRequested.connect(
-        window.show_snapshot_context_menu
-    )
+    window.snapshot_label.customContextMenuRequested.connect(window.show_snapshot_context_menu)
 
     window.slider = QSlider(Qt.Horizontal)
     window.slider.setMinimum(0)
@@ -194,9 +192,7 @@ def init_ui(window: "VasoAnalyzerApp") -> None:
     window.snapshot_speed_combo.setEnabled(False)
     window.snapshot_speed_label.setToolTip("Adjust snapshot playback speed")
     window.snapshot_speed_combo.setToolTip("Adjust snapshot playback speed")
-    window.snapshot_speed_combo.currentIndexChanged.connect(
-        window.on_snapshot_speed_changed
-    )
+    window.snapshot_speed_combo.currentIndexChanged.connect(window.on_snapshot_speed_changed)
     controls_layout.addWidget(window.snapshot_speed_combo)
 
     controls_layout.addStretch()

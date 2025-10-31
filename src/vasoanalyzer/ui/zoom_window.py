@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -19,7 +18,7 @@ class ZoomSpan:
     start: float
     end: float
 
-    def normalized(self) -> Tuple[float, float]:
+    def normalized(self) -> tuple[float, float]:
         if self.start <= self.end:
             return self.start, self.end
         return self.end, self.start
@@ -31,8 +30,8 @@ class ZoomWindowDock(QDockWidget):
     def __init__(self, parent=None) -> None:
         super().__init__("Zoom", parent)
         self.setObjectName("ZoomWindowDock")
-        self._model: Optional[TraceModel] = None
-        self._span: Optional[ZoomSpan] = None
+        self._model: TraceModel | None = None
+        self._span: ZoomSpan | None = None
 
         self.figure = Figure(
             figsize=(4, 2.5),
@@ -56,7 +55,7 @@ class ZoomWindowDock(QDockWidget):
         self.setWidget(container)
 
     # ------------------------------------------------------------------ public API
-    def set_trace_model(self, model: Optional[TraceModel]) -> None:
+    def set_trace_model(self, model: TraceModel | None) -> None:
         self._model = model
         if model is None:
             self.clear_span()

@@ -8,27 +8,29 @@
 from importlib import import_module
 
 from vasoanalyzer.core.project import (
-    Project,
     Experiment,
+    Project,
     SampleN,
+    autosave_path_for,
     export_sample,
     load_project,
-    save_project,
-    _save_project_legacy_zip as save_project_legacy,
     pack_project_bundle,
+    restore_project_from_autosave,
+    save_project,
     unpack_project_bundle,
     write_project_autosave,
-    restore_project_from_autosave,
-    autosave_path_for,
+)
+from vasoanalyzer.core.project import (
+    _save_project_legacy_zip as save_project_legacy,
 )
 from vasoanalyzer.services.project_service import (
-    open_project_file,
-    save_project_file,
     autosave_project,
-    pending_autosave_path,
-    restore_autosave,
     export_project_bundle,
     import_project_bundle,
+    open_project_file,
+    pending_autosave_path,
+    restore_autosave,
+    save_project_file,
 )
 
 _UI_EXPORTS = {
@@ -50,6 +52,7 @@ def __getattr__(name: str):
         globals()[name] = value
         return value
     raise AttributeError(f"module 'vasoanalyzer' has no attribute {name!r}")
+
 
 open_project = load_project
 

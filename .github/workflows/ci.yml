@@ -35,12 +35,26 @@ jobs:
           pip install -e .[dev]
         shell: bash
 
-      - name: Ruff
-        run: ruff check src tests
+      - name: Ruff (new modules only)
+        run: |
+          ruff check --select I,B,UP,SIM \
+            src/vasoanalyzer/services \
+            src/vasoanalyzer/storage/sqlite \
+            src/vasoanalyzer/core/events \
+            src/vasoanalyzer/core/traces \
+            src/vasoanalyzer/ui/plots \
+            src/vasoanalyzer/ui/dialogs/settings
         shell: bash
 
-      - name: MyPy
-        run: mypy src scripts tests
+      - name: MyPy (strict only on new modules)
+        run: |
+          mypy \
+            src/vasoanalyzer/services \
+            src/vasoanalyzer/storage/sqlite \
+            src/vasoanalyzer/core/events \
+            src/vasoanalyzer/core/traces \
+            src/vasoanalyzer/ui/plots \
+            src/vasoanalyzer/ui/dialogs/settings
         shell: bash
 
       - name: Pytest

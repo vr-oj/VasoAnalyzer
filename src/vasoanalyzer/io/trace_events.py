@@ -9,6 +9,7 @@ import csv
 import logging
 import os
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -16,15 +17,15 @@ import pandas as pd
 try:
     from vasoanalyzer.services.cache_service import DataCache
 except Exception:  # pragma: no cover - optional during bootstrap
-    DataCache = None  # type: ignore
+    DataCache = None
 
+from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
 from vasoanalyzer.io.traces import load_trace
-from vasoanalyzer.io.events import find_matching_event_file, _standardize_headers
 
 
-def _read_event_dataframe(path: str, *, cache: DataCache | None = None) -> pd.DataFrame:
+def _read_event_dataframe(path: str, *, cache: Any | None = None) -> pd.DataFrame:
     """Return ``path`` loaded into a DataFrame with normalized headers."""
-    with open(path, "r", encoding="utf-8-sig") as f:
+    with open(path, encoding="utf-8-sig") as f:
         sample = f.read(1024)
         try:
             delimiter = csv.Sniffer().sniff(sample).delimiter
@@ -36,7 +37,7 @@ def _read_event_dataframe(path: str, *, cache: DataCache | None = None) -> pd.Da
             else:
                 delimiter = ";"
 
-    def _load_csv(p: Path) -> pd.DataFrame:
+    def _load_csv(p: str | Path) -> pd.DataFrame:
         return pd.read_csv(p, delimiter=delimiter)
 
     if cache is not None and DataCache is not None:
@@ -45,6 +46,7 @@ def _read_event_dataframe(path: str, *, cache: DataCache | None = None) -> pd.Da
         df = _load_csv(path)
     return _standardize_headers(df)
 
+
 log = logging.getLogger(__name__)
 
 
@@ -52,7 +54,7 @@ def load_trace_and_events(
     trace_path: str,
     events_path: str | pd.DataFrame | None = None,
     *,
-    cache: DataCache | None = None,
+    cache: Any | None = None,
 ):
     """Load a trace CSV and its matching event table.
 
@@ -116,7 +118,7 @@ def load_trace_and_events(
 
     labels: list[str] = []
     times: list[float] = []
-    frames: list[int | None] | None = None
+    raw_frames: list[int | None] | None = None
     diam: list[float] = []
     od_diam: list[float] = []
 
@@ -260,12 +262,12 @@ def load_trace_and_events(
     times = times_series.astype(float).tolist()
 
     if frame_series is not None:
-        frames = [
+        raw_frames = [
             int(val) if pd.notna(val) else None
             for val in frame_series.round().astype("Int64").tolist()
         ]
     else:
-        frames = None
+        raw_frames = None
 
     arr_id = df["Inner Diameter"].to_numpy(dtype=float)
     if "DiamBefore" in working_df.columns:
@@ -287,19 +289,17 @@ def load_trace_and_events(
                 idx = _nearest_trace_index(tv)
                 od_diam.append(float(arr_od[idx]))
 
-    if frames is None or any(f is None for f in frames):
-        resolved_frames: list[int] = []
-        for idx, tv in enumerate(times):
-            frame_idx = _nearest_trace_index(tv)
-            resolved_frames.append(frame_idx)
-            if frames and frames[idx] is None:
-                frames[idx] = frame_idx
-        frames = frames or resolved_frames
-
-    if frames is not None:
-        frames = [int(f) for f in frames]
+    resolved_frames = [_nearest_trace_index(tv) for tv in times]
+    if raw_frames is None:
+        frames = resolved_frames
+    else:
+        frames = [
+            resolved_frames[idx] if frame is None else int(frame)
+            for idx, frame in enumerate(raw_frames)
+        ]
 
     log.info("Trace and events loaded: %d events", len(labels))
     return df, labels, times, frames, diam, od_diam, extras
+
 
 __all__ = ["load_trace_and_events"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import List, Sequence, Tuple
+from typing import List, Tuple
 
 import numpy as np
 import pandas as pd

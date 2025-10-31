@@ -4,34 +4,51 @@
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
 # PlotStyleEditor - redesigned dialog with live preview
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QColor
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from __future__ import annotations
 
-from PyQt5.QtWidgets import (
-    QApplication,
-    QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QTabWidget,
-    QWidget,
-    QGroupBox,
-    QFormLayout,
-    QSpinBox,
-    QDoubleSpinBox,
-    QComboBox,
-    QCheckBox,
-    QPushButton,
-    QDialogButtonBox,
-    QListWidget,
-    QListWidgetItem,
-    QLabel,
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from typing import (
+    Any,
+    TypedDict,
 )
-from ..constants import DEFAULT_STYLE
+
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QPushButton,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
+from ..constants import DEFAULT_STYLE
 from ..event_label_editor import EventLabelEditor
+
+EventMeta = dict[str, Any]
+
+
+class EventOverride(TypedDict):
+    label: str
+    time: float
+    meta: EventMeta
+
+
+EventUpdateCallback = Callable[[list[str], list[EventMeta]], None]
 
 
 class PlotStyleEditor(QDialog):
@@ -39,20 +56,20 @@ class PlotStyleEditor(QDialog):
 
     def __init__(
         self,
-        parent=None,
+        parent: QWidget | None = None,
         *,
-        initial=None,
-        event_labels: Optional[Sequence[str]] = None,
-        event_times: Optional[Sequence[float]] = None,
-        event_meta: Optional[Sequence[Mapping[str, Any]]] = None,
-    ):
+        initial: Mapping[str, Any] | None = None,
+        event_labels: Sequence[str] | None = None,
+        event_times: Sequence[float] | None = None,
+        event_meta: Sequence[Mapping[str, Any]] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Plot Style Editor")
         self.setFont(QFont("Arial", 10))
-        self.initial = initial or {}
-        self.apply_callback = None
-        self.event_update_callback = None
-        self._event_entries: List[Dict[str, Any]] = []
+        self.initial: dict[str, Any] = dict(initial) if initial else {}
+        self.apply_callback: Callable[[dict[str, Any]], None] | None = None
+        self.event_update_callback: EventUpdateCallback | None = None
+        self._event_entries: list[EventOverride] = []
         self._suppress_event_editor = False
         self._event_updates_fired = False
         self._load_event_entries(event_labels, event_times, event_meta)
@@ -65,9 +82,9 @@ class PlotStyleEditor(QDialog):
         tabs = QTabWidget()
         main.addWidget(tabs, 1)
         self.tabs = tabs
-        self._tab_aliases = {}
+        self._tab_aliases: dict[str, int] = {}
 
-        def register_tab(widget, title, aliases):
+        def register_tab(widget: QWidget, title: str, aliases: Iterable[str]) -> None:
             widget.setObjectName(title.replace(" ", "") + "Tab")
             index = self.tabs.addTab(widget, title)
             for alias in {title.lower(), *aliases}:
@@ -105,7 +122,8 @@ class PlotStyleEditor(QDialog):
         )
 
         # Preview canvas
-        dpi = QApplication.primaryScreen().logicalDotsPerInch()
+        screen = QApplication.primaryScreen()
+        dpi = screen.logicalDotsPerInch() if screen is not None else 96
         self.canvas = FigureCanvasQTAgg(Figure(figsize=(3, 2), dpi=dpi))
         self.ax = self.canvas.figure.subplots()
         main.addWidget(self.canvas, 1)
@@ -119,11 +137,15 @@ class PlotStyleEditor(QDialog):
             | QDialogButtonBox.Ok
             | QDialogButtonBox.Cancel
         )
-        buttons.button(QDialogButtonBox.Apply).clicked.connect(self._apply)
-        buttons.button(QDialogButtonBox.Reset).clicked.connect(self._reset)
-        buttons.button(QDialogButtonBox.RestoreDefaults).clicked.connect(
-            self._defaults
-        )
+        apply_button = buttons.button(QDialogButtonBox.Apply)
+        if apply_button is not None:
+            apply_button.clicked.connect(self._apply)
+        reset_button = buttons.button(QDialogButtonBox.Reset)
+        if reset_button is not None:
+            reset_button.clicked.connect(self._reset)
+        defaults_button = buttons.button(QDialogButtonBox.RestoreDefaults)
+        if defaults_button is not None:
+            defaults_button.clicked.connect(self._defaults)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         main.addWidget(buttons)
@@ -134,22 +156,22 @@ class PlotStyleEditor(QDialog):
     # Event override helpers
     def _load_event_entries(
         self,
-        labels: Optional[Sequence[str]],
-        times: Optional[Sequence[float]],
-        meta: Optional[Sequence[Mapping[str, Any]]],
+        labels: Sequence[str] | None,
+        times: Sequence[float] | None,
+        meta: Sequence[Mapping[str, Any]] | None,
     ) -> None:
         self._event_entries.clear()
         if not labels:
             return
 
-        times_list: List[float] = []
+        times_list: list[float] = []
         if times is not None:
             for value in times:
                 try:
                     times_list.append(float(value))
                 except (TypeError, ValueError):
                     times_list.append(0.0)
-        meta_list: List[Mapping[str, Any]] = list(meta or [])
+        meta_list: list[Mapping[str, Any]] = list(meta or [])
         if len(meta_list) < len(labels):
             meta_list.extend({} for _ in range(len(labels) - len(meta_list)))
 
@@ -157,24 +179,24 @@ class PlotStyleEditor(QDialog):
             entry_meta = meta_list[idx] if idx < len(meta_list) else {}
             time_val = times_list[idx] if idx < len(times_list) else 0.0
             label_text = str(raw_label) if raw_label is not None else ""
-            self._event_entries.append(
-                {
-                    "label": label_text,
-                    "time": time_val,
-                    "meta": dict(entry_meta) if isinstance(entry_meta, Mapping) else {},
-                }
-            )
+            normalized_meta: EventMeta = dict(entry_meta) if isinstance(entry_meta, Mapping) else {}
+            entry: EventOverride = {
+                "label": label_text,
+                "time": time_val,
+                "meta": normalized_meta,
+            }
+            self._event_entries.append(entry)
 
     # ------------------------------------------------------------------
     # Tab builders
-    def _make_axis_titles_tab(self):
+    def _make_axis_titles_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
 
         grp = QGroupBox("Axis Title Font & Color")
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.axis_font_size = QSpinBox()
         self.axis_font_size.setRange(6, 48)
@@ -185,9 +207,7 @@ class PlotStyleEditor(QDialog):
         form.addRow("Font Size:", self.axis_font_size)
 
         self.axis_font_family = QComboBox()
-        self.axis_font_family.addItems(
-            ["Arial", "Helvetica", "Times New Roman", "Courier New"]
-        )
+        self.axis_font_family.addItems(["Arial", "Helvetica", "Times New Roman", "Courier New"])
         self.axis_font_family.setCurrentText(
             self.initial.get("axis_font_family", DEFAULT_STYLE["axis_font_family"])
         )
@@ -195,14 +215,10 @@ class PlotStyleEditor(QDialog):
         form.addRow("Font Family:", self.axis_font_family)
 
         self.axis_bold = QCheckBox("Bold")
-        self.axis_bold.setChecked(
-            self.initial.get("axis_bold", DEFAULT_STYLE["axis_bold"])
-        )
+        self.axis_bold.setChecked(self.initial.get("axis_bold", DEFAULT_STYLE["axis_bold"]))
         self.axis_bold.stateChanged.connect(self._on_change)
         self.axis_italic = QCheckBox("Italic")
-        self.axis_italic.setChecked(
-            self.initial.get("axis_italic", DEFAULT_STYLE["axis_italic"])
-        )
+        self.axis_italic.setChecked(self.initial.get("axis_italic", DEFAULT_STYLE["axis_italic"]))
         self.axis_italic.stateChanged.connect(self._on_change)
         form.addRow(self.axis_bold, self.axis_italic)
 
@@ -222,7 +238,7 @@ class PlotStyleEditor(QDialog):
         layout.addStretch()
         return w
 
-    def _make_tick_labels_tab(self):
+    def _make_tick_labels_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
@@ -233,13 +249,7 @@ class PlotStyleEditor(QDialog):
         self.tick_font_size = QSpinBox()
         self.tick_font_size.setRange(6, 32)
         self.tick_font_size.setValue(
-            int(
-                round(
-                    self.initial.get(
-                        "tick_font_size", DEFAULT_STYLE["tick_font_size"]
-                    )
-                )
-            )
+            int(round(self.initial.get("tick_font_size", DEFAULT_STYLE["tick_font_size"])))
         )
         self.tick_font_size.valueChanged.connect(self._on_change)
         form.addRow("Font Size:", self.tick_font_size)
@@ -260,7 +270,7 @@ class PlotStyleEditor(QDialog):
         layout.addStretch()
         return w
 
-    def _make_event_labels_tab(self):
+    def _make_event_labels_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
@@ -271,21 +281,13 @@ class PlotStyleEditor(QDialog):
         self.event_font_size = QSpinBox()
         self.event_font_size.setRange(6, 32)
         self.event_font_size.setValue(
-            int(
-                round(
-                    self.initial.get(
-                        "event_font_size", DEFAULT_STYLE["event_font_size"]
-                    )
-                )
-            )
+            int(round(self.initial.get("event_font_size", DEFAULT_STYLE["event_font_size"])))
         )
         self.event_font_size.valueChanged.connect(self._on_change)
         form.addRow("Font Size:", self.event_font_size)
 
         self.event_font_family = QComboBox()
-        self.event_font_family.addItems(
-            ["Arial", "Helvetica", "Times New Roman", "Courier New"]
-        )
+        self.event_font_family.addItems(["Arial", "Helvetica", "Times New Roman", "Courier New"])
         self.event_font_family.setCurrentText(
             self.initial.get("event_font_family", DEFAULT_STYLE["event_font_family"])
         )
@@ -293,9 +295,7 @@ class PlotStyleEditor(QDialog):
         form.addRow("Font Family:", self.event_font_family)
 
         self.event_bold = QCheckBox("Bold")
-        self.event_bold.setChecked(
-            self.initial.get("event_bold", DEFAULT_STYLE["event_bold"])
-        )
+        self.event_bold.setChecked(self.initial.get("event_bold", DEFAULT_STYLE["event_bold"]))
         self.event_bold.stateChanged.connect(self._on_change)
         self.event_italic = QCheckBox("Italic")
         self.event_italic.setChecked(
@@ -342,12 +342,12 @@ class PlotStyleEditor(QDialog):
         layout.addStretch()
         return w
 
-    def _format_event_list_item(self, entry: Dict[str, Any]) -> str:
+    def _format_event_list_item(self, entry: EventOverride) -> str:
         label = entry.get("label") or "(Untitled)"
         try:
-            time_val = float(entry.get("time", 0.0))
+            time_val = float(entry["time"])
             return f"{label} — {time_val:.2f} s"
-        except (TypeError, ValueError):
+        except (KeyError, TypeError, ValueError):
             return label
 
     def _refresh_event_list(self) -> None:
@@ -383,10 +383,11 @@ class PlotStyleEditor(QDialog):
         )
         self._suppress_event_editor = False
 
-    def _on_event_style_changed(self, index: int, meta: Dict[str, Any]) -> None:
+    def _on_event_style_changed(self, index: int, meta: Mapping[str, Any] | None) -> None:
         if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
             return
-        self._event_entries[index]["meta"] = dict(meta or {})
+        updated_meta: EventMeta = dict(meta or {})
+        self._event_entries[index]["meta"] = updated_meta
         self._event_updates_fired = False
 
     def _on_event_label_changed(self, index: int, text: str) -> None:
@@ -405,28 +406,26 @@ class PlotStyleEditor(QDialog):
             return
         item.setText(self._format_event_list_item(self._event_entries[index]))
 
-    def set_event_update_callback(self, callback) -> None:
+    def set_event_update_callback(self, callback: EventUpdateCallback | None) -> None:
         self.event_update_callback = callback
 
     def _emit_event_updates(self) -> None:
         labels, meta = self.get_event_overrides()
-        if labels is None or meta is None:
-            return
         if callable(self.event_update_callback):
             self.event_update_callback(labels, meta)
         self._event_updates_fired = True
 
-    def get_event_overrides(self) -> tuple[List[str], List[Dict[str, Any]]]:
+    def get_event_overrides(self) -> tuple[list[str], list[EventMeta]]:
         if not self._event_entries:
             return ([], [])
-        labels = [entry.get("label", "") for entry in self._event_entries]
-        meta = [dict(entry.get("meta", {})) for entry in self._event_entries]
+        labels = [entry["label"] for entry in self._event_entries]
+        meta = [dict(entry["meta"]) for entry in self._event_entries]
         return labels, meta
 
     def event_updates_emitted(self) -> bool:
         return bool(self._event_updates_fired)
 
-    def _make_pinned_labels_tab(self):
+    def _make_pinned_labels_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
@@ -437,19 +436,13 @@ class PlotStyleEditor(QDialog):
         self.pin_font_size = QSpinBox()
         self.pin_font_size.setRange(6, 32)
         self.pin_font_size.setValue(
-            int(
-                round(
-                    self.initial.get("pin_font_size", DEFAULT_STYLE["pin_font_size"])
-                )
-            )
+            int(round(self.initial.get("pin_font_size", DEFAULT_STYLE["pin_font_size"])))
         )
         self.pin_font_size.valueChanged.connect(self._on_change)
         form.addRow("Font Size:", self.pin_font_size)
 
         self.pin_font_family = QComboBox()
-        self.pin_font_family.addItems(
-            ["Arial", "Helvetica", "Times New Roman", "Courier New"]
-        )
+        self.pin_font_family.addItems(["Arial", "Helvetica", "Times New Roman", "Courier New"])
         self.pin_font_family.setCurrentText(
             self.initial.get("pin_font_family", DEFAULT_STYLE["pin_font_family"])
         )
@@ -457,14 +450,10 @@ class PlotStyleEditor(QDialog):
         form.addRow("Font Family:", self.pin_font_family)
 
         self.pin_bold = QCheckBox("Bold")
-        self.pin_bold.setChecked(
-            self.initial.get("pin_bold", DEFAULT_STYLE["pin_bold"])
-        )
+        self.pin_bold.setChecked(self.initial.get("pin_bold", DEFAULT_STYLE["pin_bold"]))
         self.pin_bold.stateChanged.connect(self._on_change)
         self.pin_italic = QCheckBox("Italic")
-        self.pin_italic.setChecked(
-            self.initial.get("pin_italic", DEFAULT_STYLE["pin_italic"])
-        )
+        self.pin_italic.setChecked(self.initial.get("pin_italic", DEFAULT_STYLE["pin_italic"]))
         self.pin_italic.stateChanged.connect(self._on_change)
         form.addRow(self.pin_bold, self.pin_italic)
 
@@ -474,20 +463,12 @@ class PlotStyleEditor(QDialog):
             self.pin_color,
             self.initial.get("pin_color", DEFAULT_STYLE["pin_color"]),
         )
-        self.pin_color.clicked.connect(
-            lambda: self._choose_color(self.pin_color, self._on_change)
-        )
+        self.pin_color.clicked.connect(lambda: self._choose_color(self.pin_color, self._on_change))
         form.addRow("Color:", self.pin_color)
 
         self.pin_size = QSpinBox()
         self.pin_size.setRange(2, 20)
-        self.pin_size.setValue(
-            int(
-                round(
-                    self.initial.get("pin_size", DEFAULT_STYLE["pin_size"])
-                )
-            )
-        )
+        self.pin_size.setValue(int(round(self.initial.get("pin_size", DEFAULT_STYLE["pin_size"]))))
         self.pin_size.valueChanged.connect(self._on_change)
         form.addRow("Marker Size:", self.pin_size)
 
@@ -496,7 +477,7 @@ class PlotStyleEditor(QDialog):
         layout.addStretch()
         return w
 
-    def _make_trace_style_tab(self):
+    def _make_trace_style_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
@@ -505,9 +486,7 @@ class PlotStyleEditor(QDialog):
         form_in = QFormLayout()
         self.line_width = QDoubleSpinBox()
         self.line_width.setRange(0.5, 10)
-        self.line_width.setValue(
-            self.initial.get("line_width", DEFAULT_STYLE["line_width"])
-        )
+        self.line_width.setValue(self.initial.get("line_width", DEFAULT_STYLE["line_width"]))
         self.line_width.valueChanged.connect(self._on_change)
         form_in.addRow("Line Width:", self.line_width)
 
@@ -570,14 +549,14 @@ class PlotStyleEditor(QDialog):
         layout.addStretch()
         return w
 
-    def _make_highlights_tab(self):
+    def _make_highlights_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(12)
 
         grp = QGroupBox("Event Highlight")
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.event_highlight_color_btn = QPushButton()
         self.event_highlight_color_btn.setFixedWidth(60)
@@ -630,11 +609,12 @@ class PlotStyleEditor(QDialog):
 
     # ------------------------------------------------------------------
     # Helpers
-    def _set_button_color(self, btn, hexcolor):
-        btn.setStyleSheet(f"background:{hexcolor};border:1px solid #888;")
-        btn.setProperty("color", hexcolor)
+    def _set_button_color(self, btn: QPushButton, hexcolor: str | None) -> None:
+        value = hexcolor or ""
+        btn.setStyleSheet(f"background:{value};border:1px solid #888;")
+        btn.setProperty("color", value)
 
-    def _choose_color(self, btn, callback):
+    def _choose_color(self, btn: QPushButton, callback: Callable[[], None]) -> None:
         from PyQt5.QtWidgets import QColorDialog
 
         col = QColorDialog.getColor(QColor(btn.property("color")), self)
@@ -642,17 +622,18 @@ class PlotStyleEditor(QDialog):
             self._set_button_color(btn, col.name())
             callback()
 
-    def _on_change(self):
+    def _on_change(self) -> None:
         if self._updating:
             return
         style = self._gather()
+        parent = self.parent()
         if callable(self.apply_callback):
             self.apply_callback(style)
-        elif self.parent() is not None and hasattr(self.parent(), "apply_plot_style"):
-            self.parent().apply_plot_style(style)
+        elif parent is not None and hasattr(parent, "apply_plot_style"):
+            parent.apply_plot_style(style)
         self._update_preview()
 
-    def _populate(self, style):
+    def _populate(self, style: Mapping[str, Any]) -> None:
         self._updating = True
         self.axis_font_size.setValue(
             int(round(style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])))
@@ -660,12 +641,8 @@ class PlotStyleEditor(QDialog):
         self.axis_font_family.setCurrentText(
             style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"])
         )
-        self.axis_bold.setChecked(
-            style.get("axis_bold", DEFAULT_STYLE["axis_bold"])
-        )
-        self.axis_italic.setChecked(
-            style.get("axis_italic", DEFAULT_STYLE["axis_italic"])
-        )
+        self.axis_bold.setChecked(style.get("axis_bold", DEFAULT_STYLE["axis_bold"]))
+        self.axis_italic.setChecked(style.get("axis_italic", DEFAULT_STYLE["axis_italic"]))
         self._set_button_color(
             self.axis_color, style.get("axis_color", DEFAULT_STYLE["axis_color"])
         )
@@ -683,12 +660,8 @@ class PlotStyleEditor(QDialog):
         self.event_font_family.setCurrentText(
             style.get("event_font_family", DEFAULT_STYLE["event_font_family"])
         )
-        self.event_bold.setChecked(
-            style.get("event_bold", DEFAULT_STYLE["event_bold"])
-        )
-        self.event_italic.setChecked(
-            style.get("event_italic", DEFAULT_STYLE["event_italic"])
-        )
+        self.event_bold.setChecked(style.get("event_bold", DEFAULT_STYLE["event_bold"]))
+        self.event_italic.setChecked(style.get("event_italic", DEFAULT_STYLE["event_italic"]))
         self._set_button_color(
             self.event_color, style.get("event_color", DEFAULT_STYLE["event_color"])
         )
@@ -699,18 +672,10 @@ class PlotStyleEditor(QDialog):
         self.pin_font_family.setCurrentText(
             style.get("pin_font_family", DEFAULT_STYLE["pin_font_family"])
         )
-        self.pin_bold.setChecked(
-            style.get("pin_bold", DEFAULT_STYLE["pin_bold"])
-        )
-        self.pin_italic.setChecked(
-            style.get("pin_italic", DEFAULT_STYLE["pin_italic"])
-        )
-        self._set_button_color(
-            self.pin_color, style.get("pin_color", DEFAULT_STYLE["pin_color"])
-        )
-        self.pin_size.setValue(
-            int(round(style.get("pin_size", DEFAULT_STYLE["pin_size"])))
-        )
+        self.pin_bold.setChecked(style.get("pin_bold", DEFAULT_STYLE["pin_bold"]))
+        self.pin_italic.setChecked(style.get("pin_italic", DEFAULT_STYLE["pin_italic"]))
+        self._set_button_color(self.pin_color, style.get("pin_color", DEFAULT_STYLE["pin_color"]))
+        self.pin_size.setValue(int(round(style.get("pin_size", DEFAULT_STYLE["pin_size"]))))
 
         self.line_width.setValue(style.get("line_width", DEFAULT_STYLE["line_width"]))
         self.line_style.setCurrentText(
@@ -758,7 +723,7 @@ class PlotStyleEditor(QDialog):
         self._updating = False
         self._update_preview()
 
-    def _gather(self):
+    def _gather(self) -> dict[str, Any]:
         return {
             "axis_font_size": self.axis_font_size.value(),
             "axis_font_family": self.axis_font_family.currentText(),
@@ -789,30 +754,31 @@ class PlotStyleEditor(QDialog):
             "event_highlight_duration_ms": self.event_highlight_duration_spin.value(),
         }
 
-    def get_style(self):
+    def get_style(self) -> dict[str, Any]:
         """Public accessor for the current style settings."""
         return self._gather()
 
-    def set_style(self, style):
+    def set_style(self, style: Mapping[str, Any]) -> None:
         """Update the dialog controls to reflect ``style``."""
         self._populate(style)
 
-    def _apply(self):
+    def _apply(self) -> None:
         params = self._gather()
+        parent = self.parent()
         if callable(self.apply_callback):
             self.apply_callback(params)
-        elif self.parent() is not None and hasattr(self.parent(), "apply_plot_style"):
-            self.parent().apply_plot_style(params)
+        elif parent is not None and hasattr(parent, "apply_plot_style"):
+            parent.apply_plot_style(params)
         self._emit_event_updates()
         self._update_preview()
 
-    def _reset(self):
+    def _reset(self) -> None:
         self._populate(self.initial)
 
-    def _defaults(self):
+    def _defaults(self) -> None:
         self._populate(DEFAULT_STYLE)
 
-    def select_tab(self, key):
+    def select_tab(self, key: Any) -> None:
         """Focus the tab matching ``key`` if available."""
 
         if not key:
@@ -827,7 +793,7 @@ class PlotStyleEditor(QDialog):
         if index is not None:
             self.tabs.setCurrentIndex(index)
 
-    def _update_preview(self):
+    def _update_preview(self) -> None:
         p = self._gather()
         self.ax.clear()
         x = [0, 1, 2, 3, 4]
@@ -856,6 +822,6 @@ class PlotStyleEditor(QDialog):
             tick.set_color(p["tick_color"])
         self.canvas.draw_idle()
 
-    def accept(self):
+    def accept(self) -> None:
         self._emit_event_updates()
         super().accept()

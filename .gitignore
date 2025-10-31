@@ -9,3 +9,5 @@
 *.pyc
 /src/vasoanalyzer/ui/dialogs/__pycache__
 *.pyc
+*.pyc
+/src/utils/__pycache__

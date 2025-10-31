@@ -1,11 +1,12 @@
-from __future__ import annotations
-
 """Asset management helpers for SQLite projects."""
 
-from typing import Iterable, Iterator, Optional
+from __future__ import annotations
+
 import hashlib
-from pathlib import Path
 import sqlite3
+from collections.abc import Iterable, Iterator
+from pathlib import Path
+from typing import cast
 
 __all__ = [
     "hash_file",
@@ -79,10 +80,10 @@ def register_asset(
     role: str,
     storage: str,
     *,
-    rel_path: Optional[str],
+    rel_path: str | None,
     sha256: str,
     size_bytes: int,
-    mime: Optional[str],
+    mime: str | None,
 ) -> int:
     """Insert a new asset metadata row and return its ID."""
 
@@ -101,7 +102,10 @@ def register_asset(
             mime,
         ),
     )
-    return int(cur.lastrowid)
+    last_rowid = cur.lastrowid
+    if last_rowid is None:
+        raise RuntimeError("Failed to insert asset metadata row")
+    return int(last_rowid)
 
 
 def list_assets(conn: sqlite3.Connection, dataset_id: int) -> list[dict]:
@@ -141,9 +145,9 @@ def fetch_asset_bytes(conn: sqlite3.Connection, project_path: Path, asset_id: in
         raise KeyError(f"Asset {asset_id} does not exist")
     storage, rel_path = row
     if storage == "embedded":
-        return reassemble_blob(conn, asset_id)
+        return cast(bytes, reassemble_blob(conn, asset_id))
     if storage == "external" and rel_path:
         asset_path = project_path.parent / rel_path
         if asset_path.exists():
-            return asset_path.read_bytes()
+            return cast(bytes, asset_path.read_bytes())
     return b""

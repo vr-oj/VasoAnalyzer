@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, cast
 
 import numpy as np
 
@@ -14,68 +14,11 @@ from .traces.lod import LODLevel
 from .traces.window import TraceWindow, ensure_float_array
 
 
-def _prefer_column(frame, names: Sequence[str]) -> Optional[str]:
+def _prefer_column(frame, names: Sequence[str]) -> str | None:
     for candidate in names:
         if candidate in frame.columns:
             return candidate
     return None
-
-
-def find_neighbor(
-    values: np.ndarray,
-    *,
-    start: int,
-    step: int,
-    forbidden: Iterable[int],
-) -> Optional[int]:
-    idx = start
-    n = len(values)
-    forbidden_set = set(int(i) for i in forbidden)
-    while 0 <= idx < n:
-        if idx not in forbidden_set and np.isfinite(values[idx]):
-            return idx
-        idx += step
-    return None
-
-
-def bridge_segment(
-    time: np.ndarray,
-    clean_series: np.ndarray,
-    raw_series: np.ndarray,
-    indices: np.ndarray,
-    *,
-    left_idx: int,
-    right_idx: int,
-    method: str,
-    forbidden: Iterable[int],
-) -> np.ndarray:
-    method = method.lower()
-    if method == "cubic":
-        bridged = cubic_hermite_bridge(
-            time,
-            clean_series,
-            raw_series,
-            indices,
-            left_idx=left_idx,
-            right_idx=right_idx,
-            forbidden=forbidden,
-        )
-        if np.any(~np.isfinite(bridged)):
-            return linear_bridge(
-                time,
-                clean_series,
-                indices,
-                left_idx=left_idx,
-                right_idx=right_idx,
-            )
-        return bridged
-    return linear_bridge(
-        time,
-        clean_series,
-        indices,
-        left_idx=left_idx,
-        right_idx=right_idx,
-    )
 
 
 class TraceModel:
@@ -87,13 +30,13 @@ class TraceModel:
         self,
         time: np.ndarray,
         inner: np.ndarray,
-        outer: Optional[np.ndarray] = None,
+        outer: np.ndarray | None = None,
         *,
-        inner_raw: Optional[np.ndarray] = None,
-        outer_raw: Optional[np.ndarray] = None,
+        inner_raw: np.ndarray | None = None,
+        outer_raw: np.ndarray | None = None,
         base_factor: int = 4,
         max_points_per_level: int = 4096,
-        edit_actions: Optional[Sequence[EditAction]] = None,
+        edit_actions: Sequence[EditAction] | None = None,
     ) -> None:
         if time.ndim != 1 or inner.ndim != 1:
             raise ValueError("time and inner arrays must be 1-D")
@@ -130,9 +73,9 @@ class TraceModel:
 
         self._base_factor = max(int(base_factor), 2)
         self._max_points_per_level = max(int(max_points_per_level), 64)
-        self._window_cache: Dict[Tuple[int, float, float], TraceWindow] = {}
-        self._levels: Tuple[LODLevel, ...] = ()
-        self._edit_log: List[EditAction] = []
+        self._window_cache: dict[tuple[int, float, float], TraceWindow] = {}
+        self._levels: tuple[LODLevel, ...] = ()
+        self._edit_log: list[EditAction] = []
 
         if edit_actions:
             self.replay_actions(edit_actions, rebuild=True)
@@ -141,7 +84,7 @@ class TraceModel:
 
     # ------------------------------------------------------------------ properties
     @property
-    def levels(self) -> Tuple[LODLevel, ...]:
+    def levels(self) -> tuple[LODLevel, ...]:
         return self._levels
 
     @property
@@ -157,19 +100,19 @@ class TraceModel:
         return self._inner_raw
 
     @property
-    def outer_full(self) -> Optional[np.ndarray]:
+    def outer_full(self) -> np.ndarray | None:
         return self._outer_clean
 
     @property
-    def outer_raw(self) -> Optional[np.ndarray]:
+    def outer_raw(self) -> np.ndarray | None:
         return self._outer_raw
 
     @property
-    def full_range(self) -> Tuple[float, float]:
+    def full_range(self) -> tuple[float, float]:
         return float(self._time_full[0]), float(self._time_full[-1])
 
     @property
-    def edit_log(self) -> Tuple[EditAction, ...]:
+    def edit_log(self) -> tuple[EditAction, ...]:
         return tuple(self._edit_log)
 
     def edited_point_count(self) -> int:
@@ -187,8 +130,8 @@ class TraceModel:
     def clear_cache(self) -> None:
         self._window_cache.clear()
 
-    def _build_levels(self) -> Tuple[LODLevel, ...]:
-        levels: List[LODLevel] = []
+    def _build_levels(self) -> tuple[LODLevel, ...]:
+        levels: list[LODLevel] = []
         bucket_size = 1
         factor = 1
         total = self._time_full.size
@@ -225,7 +168,7 @@ class TraceModel:
         ends = np.append(starts[1:], n)
         centers = (time[starts] + time[np.maximum(ends - 1, starts)]) * 0.5
 
-        def reduce_series(values: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def reduce_series(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             counts = ends - starts
             sums = np.add.reduceat(values, starts)
             means = sums / counts
@@ -234,6 +177,9 @@ class TraceModel:
             return means, mins, maxs
 
         inner_mean, inner_min, inner_max = reduce_series(inner)
+        outer_mean: np.ndarray | None
+        outer_min: np.ndarray | None
+        outer_max: np.ndarray | None
         if outer is not None:
             outer_mean, outer_min, outer_max = reduce_series(outer)
         else:
@@ -255,7 +201,6 @@ class TraceModel:
         if pixel_width <= 0:
             return 0
         desired = max(pixel_width * 2, 64)
-        span = x1 - x0 if x1 > x0 else max(self._time_full[-1] - self._time_full[0], 1e-9)
         for idx, level in enumerate(self._levels):
             buckets = level.count_in_range(x0, x1)
             if buckets <= desired:
@@ -315,7 +260,7 @@ class TraceModel:
         else:
             self.clear_cache()
 
-    def pop_actions(self, count: int = 1, *, rebuild: bool = True) -> List[EditAction]:
+    def pop_actions(self, count: int = 1, *, rebuild: bool = True) -> list[EditAction]:
         if count <= 0 or not self._edit_log:
             return []
         remove_count = min(count, len(self._edit_log))
@@ -325,7 +270,7 @@ class TraceModel:
         return list(removed)
 
     # ------------------------------------------------------------------ internal editing helpers
-    def _select_series(self, channel: str, *, raw: bool = False) -> Optional[np.ndarray]:
+    def _select_series(self, channel: str, *, raw: bool = False) -> np.ndarray | None:
         channel_key = channel.strip().lower()
         if channel_key == "inner":
             return self._inner_raw if raw else self._inner_clean
@@ -372,7 +317,7 @@ class TraceModel:
         indices: np.ndarray,
         action: EditAction,
     ) -> None:
-        forbidden = set(int(i) for i in indices.tolist())
+        forbidden = {int(i) for i in indices.tolist()}
         first = int(indices[0])
         last = int(indices[-1])
         left_idx = find_neighbor(target, start=first - 1, step=-1, forbidden=forbidden)
@@ -403,8 +348,8 @@ class TraceModel:
         *,
         base_factor: int = 4,
         max_points_per_level: int = 4096,
-        edit_actions: Optional[Sequence[EditAction]] = None,
-    ) -> "TraceModel":
+        edit_actions: Sequence[EditAction] | None = None,
+    ) -> TraceModel:
         time = df["Time (s)"].to_numpy(dtype=float)
 
         inner_col = _prefer_column(df, ("Inner Diameter (clean)", "Inner Diameter"))
@@ -495,18 +440,18 @@ def save_lod(path: Path, model: TraceModel) -> None:
     }
     for idx, level in enumerate(model.levels):
         prefix = f"l{idx}_"
-        payload[f"{prefix}meta"] = np.array(
-            [level.factor, level.bucket_size], dtype=np.int64
-        )
+        payload[f"{prefix}meta"] = np.array([level.factor, level.bucket_size], dtype=np.int64)
         payload[f"{prefix}time"] = level.time_centers
         payload[f"{prefix}inner_mean"] = level.inner_mean
         payload[f"{prefix}inner_min"] = level.inner_min
         payload[f"{prefix}inner_max"] = level.inner_max
         if level.outer_mean is not None:
             payload[f"{prefix}outer_mean"] = level.outer_mean
+        if level.outer_min is not None:
             payload[f"{prefix}outer_min"] = level.outer_min
+        if level.outer_max is not None:
             payload[f"{prefix}outer_max"] = level.outer_max
-    np.savez_compressed(path, **payload)
+    np.savez_compressed(path, **cast(dict[str, Any], payload))
 
 
 def load_lod(
@@ -514,8 +459,8 @@ def load_lod(
     *,
     time: np.ndarray,
     inner: np.ndarray,
-    outer: Optional[np.ndarray] = None,
-) -> Optional[Tuple[LODLevel, ...]]:
+    outer: np.ndarray | None = None,
+) -> tuple[LODLevel, ...] | None:
     """Load cached LOD levels if they match the provided trace."""
 
     path = Path(path)

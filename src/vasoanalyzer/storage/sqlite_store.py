@@ -9,25 +9,29 @@ external resources.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import mimetypes
 import os
 import shutil
 import sqlite3
 import tempfile
-import zipfile
 import time
+import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional
+from typing import Any, cast
 
-import mimetypes
 import pandas as pd
-from vasoanalyzer.storage.sqlite import projects as _projects
-from vasoanalyzer.storage.sqlite.utils import open_db
-from vasoanalyzer.storage.sqlite import traces as _traces
-from vasoanalyzer.storage.sqlite import events as _events
+
 from vasoanalyzer.storage.sqlite import assets as _assets
+from vasoanalyzer.storage.sqlite import events as _events
+from vasoanalyzer.storage.sqlite import projects as _projects
+from vasoanalyzer.storage.sqlite import traces as _traces
+from vasoanalyzer.storage.sqlite.utils import open_db
+
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
 
@@ -82,7 +86,7 @@ class ProjectStore:
         finally:
             self.conn.close()
 
-    def __enter__(self) -> "ProjectStore":
+    def __enter__(self) -> ProjectStore:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -93,7 +97,9 @@ class ProjectStore:
 # Project lifecycle helpers
 
 
-def create_project(path: str | os.PathLike[str], *, app_version: str, timezone: str) -> ProjectStore:
+def create_project(
+    path: str | os.PathLike[str], *, app_version: str, timezone: str
+) -> ProjectStore:
     """Create a new SQLite project file at ``path`` and return an open store."""
 
     project_path = Path(path)
@@ -160,9 +166,7 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     dest_path = Path(new_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fd, tmp_name = tempfile.mkstemp(
-        suffix=dest_path.suffix or ".vaso", dir=dest_path.parent
-    )
+    fd, tmp_name = tempfile.mkstemp(suffix=dest_path.suffix or ".vaso", dir=dest_path.parent)
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
@@ -198,13 +202,13 @@ def add_dataset(
     store: ProjectStore,
     name: str,
     trace_df: pd.DataFrame,
-    events_df: Optional[pd.DataFrame],
+    events_df: pd.DataFrame | None,
     *,
-    metadata: Optional[dict] = None,
-    tiff_path: Optional[str] = None,
+    metadata: dict | None = None,
+    tiff_path: str | None = None,
     embed_tiff: bool = False,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
-    thumbnail_png: Optional[bytes] = None,
+    thumbnail_png: bytes | None = None,
 ) -> int:
     """Insert a dataset with trace/events rows and optional TIFF asset."""
 
@@ -213,11 +217,12 @@ def add_dataset(
     extra_json = json.dumps(metadata.get("extra_json", {})) if metadata.get("extra_json") else None
 
     with store.conn:
+        dataset_sql = (
+            "INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, "
+            "t0_seconds, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
         cur = store.conn.execute(
-            """
-            INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, t0_seconds, extra_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
+            dataset_sql,
             (
                 name,
                 now,
@@ -228,7 +233,10 @@ def add_dataset(
                 extra_json,
             ),
         )
-        dataset_id = cur.lastrowid
+        dataset_rowid = cur.lastrowid
+        if dataset_rowid is None:
+            raise RuntimeError("Failed to insert dataset row")
+        dataset_id = int(dataset_rowid)
 
         trace_rows = list(_traces.prepare_trace_rows(dataset_id, trace_df))
         if trace_rows:
@@ -244,10 +252,11 @@ def add_dataset(
             event_rows = list(_events.prepare_event_rows(dataset_id, events_df))
             if event_rows:
                 store.conn.executemany(
-                    """
-                    INSERT INTO event(dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    (
+                        "INSERT INTO event("
+                        "dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
                     event_rows,
                 )
 
@@ -299,12 +308,12 @@ def add_or_update_asset(
     path_or_bytes: str | os.PathLike[str] | bytes | bytearray,
     *,
     embed: bool,
-    mime: Optional[str] = None,
+    mime: str | None = None,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> int:
     """Insert or replace an asset for ``dataset_id``."""
 
-    if isinstance(path_or_bytes, (bytes, bytearray)):
+    if isinstance(path_or_bytes, bytes | bytearray):
         data_bytes = bytes(path_or_bytes)
         sha256 = hashlib.sha256(data_bytes).hexdigest()
         size = len(data_bytes)
@@ -318,13 +327,18 @@ def add_or_update_asset(
         size = asset_path.stat().st_size
         storage = "embedded" if embed else "external"
         rel_path = (
-            asset_path
-            if storage == "embedded"
-            else os.path.relpath(asset_path, store.path.parent)
+            asset_path if storage == "embedded" else os.path.relpath(asset_path, store.path.parent)
         )
         data_bytes = None
 
-    mime = mime or _guess_mime(rel_path if isinstance(rel_path, str) else path_or_bytes)
+    if isinstance(rel_path, str | os.PathLike):
+        mime_source: str | os.PathLike[str] | None = rel_path
+    elif isinstance(path_or_bytes, str | os.PathLike):
+        mime_source = path_or_bytes
+    else:
+        mime_source = None
+
+    mime = mime or _guess_mime(mime_source)
 
     with store.conn:
         cur = store.conn.execute(
@@ -336,7 +350,10 @@ def add_or_update_asset(
         )
         row = cur.fetchone()
         if row:
-            asset_id = int(row[0])
+            asset_id_value = row[0]
+            if asset_id_value is None:
+                raise RuntimeError("Asset record missing identifier")
+            asset_id = int(asset_id_value)
             store.conn.execute(
                 """
                 UPDATE asset
@@ -369,7 +386,10 @@ def add_or_update_asset(
                     mime,
                 ),
             )
-            asset_id = cur.lastrowid
+            asset_rowid = cur.lastrowid
+            if asset_rowid is None:
+                raise RuntimeError("Failed to insert asset row")
+            asset_id = int(asset_rowid)
 
         if storage == "embedded":
             if data_bytes is not None:
@@ -379,7 +399,7 @@ def add_or_update_asset(
                     _assets.iter_chunks_from_bytes(data_bytes, chunk_size),
                 )
             else:
-                assert not isinstance(path_or_bytes, (bytes, bytearray))
+                assert not isinstance(path_or_bytes, bytes | bytearray)
                 _assets.write_blob_chunks(
                     store.conn,
                     asset_id,
@@ -393,8 +413,8 @@ def add_or_update_asset(
 def get_trace(
     store: ProjectStore,
     dataset_id: int,
-    t0: Optional[float] = None,
-    t1: Optional[float] = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> pd.DataFrame:
     """Return a trace DataFrame for ``dataset_id`` filtered to ``[t0, t1]``."""
 
@@ -404,8 +424,8 @@ def get_trace(
 def get_events(
     store: ProjectStore,
     dataset_id: int,
-    t0: Optional[float] = None,
-    t1: Optional[float] = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> pd.DataFrame:
     """Return events for ``dataset_id``."""
 
@@ -430,14 +450,17 @@ def add_result(
         (dataset_id, kind, version, now, json.dumps(payload)),
     )
     store.mark_dirty()
-    return int(cur.lastrowid)
+    result_rowid = cur.lastrowid
+    if result_rowid is None:
+        raise RuntimeError("Failed to insert result row")
+    return int(result_rowid)
 
 
 def get_results(
     store: ProjectStore,
     dataset_id: int,
-    kind: Optional[str] = None,
-) -> list[dict]:
+    kind: str | None = None,
+) -> list[dict[str, Any]]:
     """Return result payloads for ``dataset_id`` (optionally filtered by kind)."""
 
     query = "SELECT id, kind, version, created_utc, payload_json FROM result WHERE dataset_id = ?"
@@ -464,19 +487,19 @@ def get_results(
     return results
 
 
-def list_assets(store: ProjectStore, dataset_id: int) -> list[dict]:
+def list_assets(store: ProjectStore, dataset_id: int) -> list[dict[str, Any]]:
     """Return metadata for assets linked to ``dataset_id``."""
 
-    return _assets.list_assets(store.conn, dataset_id)
+    return cast(list[dict[str, Any]], _assets.list_assets(store.conn, dataset_id))
 
 
 def get_asset_bytes(store: ProjectStore, asset_id: int) -> bytes:
     """Return the binary payload for ``asset_id``."""
 
-    return _assets.fetch_asset_bytes(store.conn, store.path, asset_id)
+    return cast(bytes, _assets.fetch_asset_bytes(store.conn, store.path, asset_id))
 
 
-def iter_datasets(store: ProjectStore) -> Iterator[dict]:
+def iter_datasets(store: ProjectStore) -> Iterator[dict[str, Any]]:
     """Yield metadata dictionaries for all datasets in the project."""
 
     cursor = store.conn.execute(
@@ -560,7 +583,7 @@ def pack_bundle(
             assets_dir = tmp_root / "assets"
             assets_dir.mkdir(exist_ok=True)
 
-            for asset_id, storage, rel_path, sha256, role in asset_rows:
+            for asset_id, storage, rel_path, sha256, _role in asset_rows:
                 if storage == "embedded":
                     continue
 
@@ -639,7 +662,8 @@ def unpack_bundle(vasopack_path: str | os.PathLike[str], dest_dir: str | os.Path
         with sqlite3.connect(final_path.as_posix()) as conn:
             _projects.apply_default_pragmas(conn)
             rows = conn.execute(
-                "SELECT id, storage, rel_path, mime FROM asset WHERE storage = 'embedded' AND rel_path IS NULL"
+                "SELECT id, storage, rel_path, mime FROM asset "
+                "WHERE storage = 'embedded' AND rel_path IS NULL"
             ).fetchall()
             for asset_id, _storage, _rel_path, mime in rows:
                 blob = _assets.reassemble_blob(conn, asset_id)
@@ -673,8 +697,10 @@ def write_autosave(
     if store.path is None:
         raise ValueError("Project store has no associated path")
 
-    autosave = Path(autosave_path) if autosave_path else store.path.with_suffix(
-        store.path.suffix + ".autosave"
+    autosave = (
+        Path(autosave_path)
+        if autosave_path
+        else store.path.with_suffix(store.path.suffix + ".autosave")
     )
     autosave.parent.mkdir(parents=True, exist_ok=True)
 
@@ -687,10 +713,8 @@ def write_autosave(
         os.replace(tmp_path, autosave)
     finally:
         if tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
     return autosave
 
 
@@ -718,15 +742,15 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _guess_mime(path: str | os.PathLike[str] | None) -> Optional[str]:
+def _guess_mime(path: str | os.PathLike[str] | None) -> str | None:
     if not path:
         return None
     guess, _ = mimetypes.guess_type(str(path))
     return guess
 
 
-def _extension_for_mime(mime: Optional[str]) -> str:
+def _extension_for_mime(mime: str | None) -> str:
     if not mime:
-        return ''
+        return ""
     ext = mimetypes.guess_extension(mime)
-    return ext or ''
+    return ext or ""

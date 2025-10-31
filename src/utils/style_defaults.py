@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict
+from typing import Any
 
 STYLE_SCHEMA_VERSION = 3
 
-STYLE_DEFAULTS: Dict[str, Dict[str, Any]] = {
+STYLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "axis": {
         "plot_title": "",
         "x_title": "Time (s)",
@@ -60,17 +60,17 @@ STYLE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 
 
-def load_factory_defaults() -> Dict[str, Dict[str, Any]]:
+def load_factory_defaults() -> dict[str, dict[str, Any]]:
     """Return a deep copy of the nested factory defaults."""
 
     return deepcopy(STYLE_DEFAULTS)
 
 
-def _get(style: Dict[str, Any], key: str, fallback: Any) -> Any:
+def _get(style: dict[str, Any], key: str, fallback: Any) -> Any:
     return style.get(key, fallback)
 
 
-def flatten_style_defaults(style: Dict[str, Dict[str, Any]] | None = None) -> Dict[str, Any]:
+def flatten_style_defaults(style: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     """Flatten the nested defaults for legacy consumers in the UI layer."""
 
     source = style or STYLE_DEFAULTS
@@ -123,7 +123,9 @@ def flatten_style_defaults(style: Dict[str, Dict[str, Any]] | None = None) -> Di
         "line_width": float(_get(lines, "inner_width", STYLE_DEFAULTS["lines"]["inner_width"])),
         "line_style": _get(lines, "inner_style", STYLE_DEFAULTS["lines"]["inner_style"]),
         "line_color": _get(lines, "inner_color", STYLE_DEFAULTS["lines"]["inner_color"]),
-        "outer_line_width": float(_get(lines, "outer_width", STYLE_DEFAULTS["lines"]["outer_width"])),
+        "outer_line_width": float(
+            _get(lines, "outer_width", STYLE_DEFAULTS["lines"]["outer_width"])
+        ),
         "outer_line_style": _get(lines, "outer_style", STYLE_DEFAULTS["lines"]["outer_style"]),
         "outer_line_color": _get(lines, "outer_color", STYLE_DEFAULTS["lines"]["outer_color"]),
         # Event highlight styling
@@ -151,7 +153,7 @@ def flatten_style_defaults(style: Dict[str, Dict[str, Any]] | None = None) -> Di
     return defaults
 
 
-def load_flat_factory_defaults() -> Dict[str, Any]:
+def load_flat_factory_defaults() -> dict[str, Any]:
     """Return a flattened, deep-copied defaults dictionary."""
 
     return deepcopy(flatten_style_defaults())

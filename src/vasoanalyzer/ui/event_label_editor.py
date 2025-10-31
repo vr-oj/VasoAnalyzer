@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from collections.abc import Mapping
+from typing import Any, TypedDict, cast
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
@@ -36,15 +37,26 @@ def _hex_to_color(value: str) -> QColor:
     return QColor()
 
 
+class EventLabelOverrides(TypedDict, total=False):
+    visible: bool
+    font: str
+    fontfamily: str
+    fontsize: float
+    x_offset_px: float
+    y_offset_axes: float
+    lane: int
+    color: str
+
+
 class EventLabelEditor(QWidget):
     """Compact editor for per-event label typography and placement."""
 
     styleChanged = pyqtSignal(int, dict)
     labelTextChanged = pyqtSignal(int, str)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._current_index: Optional[int] = None
+        self._current_index: int | None = None
         self._updating = False
         self._max_lanes = 3
 
@@ -60,7 +72,8 @@ class EventLabelEditor(QWidget):
 
         self.summary_label = QLabel("Select an event to edit its label.")
         self.summary_label.setWordWrap(True)
-        self.summary_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        self.summary_label.setAlignment(cast(Qt.AlignmentFlag, alignment))
         root_layout.addWidget(self.summary_label)
 
         self.label_edit = QLineEdit()
@@ -155,29 +168,29 @@ class EventLabelEditor(QWidget):
         index: int,
         label: str,
         time_seconds: float,
-        meta: Optional[Dict[str, Any]],
+        meta: Mapping[str, Any] | None,
         *,
-        max_lanes: Optional[int] = None,
+        max_lanes: int | None = None,
     ) -> None:
         self._current_index = index
         self._set_controls_enabled(True)
         if max_lanes is not None and max_lanes != self._max_lanes:
             self._populate_lane_combo(max(1, max_lanes))
 
-        meta = meta or {}
+        meta_mapping = dict(meta or {})
         self._updating = True
 
         self.summary_label.setText(f"{label} — {time_seconds:.2f} s")
         self.label_edit.setText(label)
-        self.visible_check.setChecked(bool(meta.get("visible", True)))
+        self.visible_check.setChecked(bool(meta_mapping.get("visible", True)))
 
-        font_override = meta.get("font") or meta.get("fontfamily")
+        font_override = meta_mapping.get("font") or meta_mapping.get("fontfamily")
         if isinstance(font_override, str) and font_override.strip():
             self.font_combo.setCurrentFont(QFont(font_override))
         else:
             self.font_combo.setCurrentFont(self._default_font)
 
-        fontsize = meta.get("fontsize")
+        fontsize = meta_mapping.get("fontsize")
         if fontsize is None:
             self.font_size_spin.setValue(0.0)
         else:
@@ -187,18 +200,18 @@ class EventLabelEditor(QWidget):
                 self.font_size_spin.setValue(0.0)
 
         try:
-            self.x_offset_spin.setValue(float(meta.get("x_offset_px", 0.0) or 0.0))
+            self.x_offset_spin.setValue(float(meta_mapping.get("x_offset_px", 0.0) or 0.0))
         except (TypeError, ValueError):
             self.x_offset_spin.setValue(0.0)
         try:
-            self.y_offset_spin.setValue(float(meta.get("y_offset_axes", 0.0) or 0.0))
+            self.y_offset_spin.setValue(float(meta_mapping.get("y_offset_axes", 0.0) or 0.0))
         except (TypeError, ValueError):
             self.y_offset_spin.setValue(0.0)
 
-        lane_value = meta.get("lane")
+        lane_value = meta_mapping.get("lane")
         self._select_lane(lane_value)
 
-        color_value = meta.get("color") or ""
+        color_value = meta_mapping.get("color") or ""
         self._default_color = color_value if isinstance(color_value, str) else ""
         self._render_color_button(self._default_color)
 
@@ -241,8 +254,8 @@ class EventLabelEditor(QWidget):
             self.lane_combo.setCurrentIndex(max(data_index, 0))
         self.lane_combo.blockSignals(False)
 
-    def _gather_meta(self) -> Dict[str, Any]:
-        meta: Dict[str, Any] = {}
+    def _gather_meta(self) -> EventLabelOverrides:
+        meta: EventLabelOverrides = {}
         if not self.visible_check.isChecked():
             meta["visible"] = False
 
@@ -252,15 +265,15 @@ class EventLabelEditor(QWidget):
 
         size_value = self.font_size_spin.value()
         if size_value > 0:
-            meta["fontsize"] = size_value
+            meta["fontsize"] = float(size_value)
 
         x_offset = self.x_offset_spin.value()
         if abs(x_offset) > 1e-6:
-            meta["x_offset_px"] = x_offset
+            meta["x_offset_px"] = float(x_offset)
 
         y_offset = self.y_offset_spin.value()
         if abs(y_offset) > 1e-6:
-            meta["y_offset_axes"] = y_offset
+            meta["y_offset_axes"] = float(y_offset)
 
         lane_data = self.lane_combo.currentData()
         if lane_data is not None:

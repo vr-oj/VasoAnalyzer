@@ -24,7 +24,10 @@ def _golden_path() -> Path:
     return path
 
 
-@pytest.mark.skipif(not is_enabled("event_labels_v2", default=True), reason="event_labels_v2 disabled")
+@pytest.mark.skipif(
+    not is_enabled("event_labels_v2", default=True),
+    reason="event_labels_v2 disabled",
+)
 def test_event_labels_v2_golden(monkeypatch):
     reload_flags()
     if not is_enabled("event_labels_v2", default=True):

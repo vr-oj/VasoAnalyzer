@@ -1,12 +1,12 @@
-from __future__ import annotations
-
 """
 Event table persistence helpers for SQLite projects.
 """
 
-from typing import Iterable, Mapping, Optional, Sequence
+from __future__ import annotations
+
 import json
 import sqlite3
+from collections.abc import Iterable, Sequence
 
 import pandas as pd
 
@@ -26,7 +26,10 @@ def match_event_columns(columns: Sequence[str]) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for col in columns:
         norm = _traces.normalize_label(col)
-        if norm in {"times", "time", "tseconds", "timestamp"} and "t_seconds" not in mapping.values():
+        if (
+            norm in {"times", "time", "tseconds", "timestamp"}
+            and "t_seconds" not in mapping.values()
+        ):
             mapping[col] = "t_seconds"
         elif norm in {"event", "label"} and "label" not in mapping.values():
             mapping[col] = "label"
@@ -43,7 +46,7 @@ def match_event_columns(columns: Sequence[str]) -> dict[str, str]:
     return mapping
 
 
-def nullable_int(value) -> Optional[int]:
+def nullable_int(value) -> int | None:
     """Return an int or ``None`` while tolerating NaN-like values."""
 
     if value is None:
@@ -59,7 +62,7 @@ def nullable_int(value) -> Optional[int]:
         return None
 
 
-def prepare_event_rows(dataset_id: int, df: Optional[pd.DataFrame]) -> Iterable[tuple]:
+def prepare_event_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tuple]:
     """Normalize events DataFrame into rows suitable for insertion."""
 
     if df is None or df.empty:
@@ -112,8 +115,8 @@ def prepare_event_rows(dataset_id: int, df: Optional[pd.DataFrame]) -> Iterable[
 def fetch_events_dataframe(
     conn: sqlite3.Connection,
     dataset_id: int,
-    t0: Optional[float] = None,
-    t1: Optional[float] = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> pd.DataFrame:
     """Return events for ``dataset_id`` optionally filtered to ``[t0, t1]``."""
 

@@ -38,9 +38,15 @@ def test_fetch_trace_dataframe_filters(tmp_path):
             "INSERT INTO dataset(id, name, created_utc) VALUES (?, ?, ?)",
             (1, "sample", "2000-01-01T00:00:00Z"),
         )
-        rows = [(1, 0.0, 10.0, 12.0, 1.0, None, None), (1, 1.0, 11.0, 13.0, 2.0, None, None)]
+        rows = [
+            (1, 0.0, 10.0, 12.0, 1.0, None, None),
+            (1, 1.0, 11.0, 13.0, 2.0, None, None),
+        ]
         conn.executemany(
-            "INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)"
+            ),
             rows,
         )
         df = traces.fetch_trace_dataframe(conn, 1, t0=0.5, t1=1.5)

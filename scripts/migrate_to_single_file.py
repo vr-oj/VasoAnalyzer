@@ -10,7 +10,9 @@ from vasoanalyzer.tools.portable_export import export_single_file
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bulk convert .vaso files to single-file DELETE mode")
+    parser = argparse.ArgumentParser(
+        description="Bulk convert .vaso files to single-file DELETE mode"
+    )
     parser.add_argument("root", help="Directory to scan for .vaso files")
     parser.add_argument(
         "--in-place",
@@ -26,7 +28,9 @@ def main() -> None:
 
     root = Path(args.root).expanduser().resolve(strict=False)
     for path in root.rglob("*.vaso"):
-        destination = path if args.in_place else path.with_name(path.stem + ".shareable" + path.suffix)
+        destination = (
+            path if args.in_place else path.with_name(f"{path.stem}.shareable{path.suffix}")
+        )
         export_single_file(
             str(path),
             out_path=str(destination),

@@ -47,14 +47,22 @@ def test_tiff_externalization(tmp_path):
         )
         blob = b"TIFF89" + b"0" * 20
         conn.execute(
-            "INSERT INTO assets(media_type, is_embedded, blob, sha256, path_hint) VALUES (?, ?, ?, ?, ?)",
+            (
+                "INSERT INTO assets(media_type, is_embedded, blob, sha256, path_hint) "
+                "VALUES (?, ?, ?, ?, ?)"
+            ),
             ("image/tiff", 1, blob, None, None),
         )
         conn.commit()
 
     assets_dir = tmp_path / "assets_out"
     out = tmp_path / "shareable.vaso"
-    export_single_file(str(src), str(out), link_snapshot_tiffs=True, extract_tiffs_dir=str(assets_dir))
+    export_single_file(
+        str(src),
+        str(out),
+        link_snapshot_tiffs=True,
+        extract_tiffs_dir=str(assets_dir),
+    )
 
     with sqlite3.connect(out) as conn:
         row = conn.execute("SELECT is_embedded, blob, sha256, path_hint FROM assets").fetchone()

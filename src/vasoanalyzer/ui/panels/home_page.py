@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtSvg import QSvgWidget
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -11,7 +13,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt5.QtSvg import QSvgWidget
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover
 class HomePage(QWidget):
     """Standalone widget for the launcher/home experience."""
 
-    def __init__(self, window: "VasoAnalyzerApp") -> None:
+    def __init__(self, window: VasoAnalyzerApp) -> None:
         super().__init__(parent=window)
         self._window = window
         self.setObjectName("HomePage")
@@ -68,7 +69,10 @@ class HomePage(QWidget):
         title.setObjectName("HeroTitle")
 
         subtitle = QLabel(
-            "Follow the buttons below to import traces, continue a project, or review the welcome guide.",
+            (
+                "Follow the buttons below to import traces, continue a project, "
+                "or review the welcome guide."
+            ),
             hero,
         )
         subtitle.setWordWrap(True)
@@ -204,12 +208,12 @@ class HomePage(QWidget):
 
     def _apply_stylesheet(self) -> None:
         window = self._window
-        border_color = CURRENT_THEME["grid_color"]
-        text_color = CURRENT_THEME["text"]
-        window_bg = CURRENT_THEME["window_bg"]
-        hero_bg = CURRENT_THEME.get("button_bg", window_bg)
-        card_bg = CURRENT_THEME.get("table_bg", window_bg)
-        hover_bg = CURRENT_THEME.get("button_hover_bg", border_color)
+        border_color: str = CURRENT_THEME["grid_color"]
+        text_color: str = CURRENT_THEME["text"]
+        window_bg: str = CURRENT_THEME["window_bg"]
+        hero_bg: str = CURRENT_THEME.get("button_bg", window_bg)
+        card_bg: str = CURRENT_THEME.get("table_bg", window_bg)
+        hover_bg: str = CURRENT_THEME.get("button_hover_bg", border_color)
 
         def rgba_from_hex(color: str, alpha: float) -> str:
             color = color.strip()
@@ -219,7 +223,7 @@ class HomePage(QWidget):
             if len(color) == 3:
                 color = "".join(ch * 2 for ch in color)
             try:
-                r, g, b = (int(color[i : i + 2], 16) for i in (0, 2, 4))
+                r, g, b = tuple(int(color[i : i + 2], 16) for i in (0, 2, 4))
             except ValueError:
                 return text_color
             alpha = max(0.0, min(1.0, alpha))
@@ -277,4 +281,3 @@ QToolButton#HomeRemoveButton:hover {{
 }}
 """
         )
-

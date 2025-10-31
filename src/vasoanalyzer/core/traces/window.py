@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -16,9 +15,9 @@ class TraceWindow:
     inner_mean: np.ndarray
     inner_min: np.ndarray
     inner_max: np.ndarray
-    outer_mean: Optional[np.ndarray] = None
-    outer_min: Optional[np.ndarray] = None
-    outer_max: Optional[np.ndarray] = None
+    outer_mean: np.ndarray | None = None
+    outer_min: np.ndarray | None = None
+    outer_max: np.ndarray | None = None
 
 
 def ensure_float_array(data: np.ndarray) -> np.ndarray:

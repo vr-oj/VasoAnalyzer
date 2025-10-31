@@ -1,18 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import contextmanager
-from typing import Iterable
 
-from PyQt5.QtCore import QSignalBlocker
+from PyQt5.QtCore import QObject, QSignalBlocker
 
 
 @contextmanager
 def block_signals(widgets: Iterable[object]):
     """Temporarily block signals for an iterable of Qt widgets."""
 
-    blockers = [QSignalBlocker(getattr(widget, "widget", widget)) for widget in widgets if widget is not None]
+    blockers = []
+    for widget in widgets:
+        if widget is None:
+            continue
+        candidate = getattr(widget, "widget", widget)
+        if isinstance(candidate, QObject):
+            blockers.append(QSignalBlocker(candidate))
     try:
         yield
     finally:
         del blockers
-

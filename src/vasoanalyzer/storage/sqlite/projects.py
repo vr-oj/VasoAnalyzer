@@ -1,11 +1,12 @@
-from __future__ import annotations
-
 """
 Project-level SQLite helpers migrated from the legacy sqlite_store module.
 """
 
-from typing import Any, Mapping, Optional
+from __future__ import annotations
+
 import sqlite3
+from collections.abc import Mapping
+from typing import Any
 
 __all__ = [
     "apply_default_pragmas",
@@ -34,8 +35,8 @@ def ensure_schema(
     *,
     schema_version: int,
     now: str,
-    app_version: Optional[str] = None,
-    timezone: Optional[str] = None,
+    app_version: str | None = None,
+    timezone: str | None = None,
 ) -> None:
     """
     Ensure that all schema objects exist and seed project metadata defaults.
@@ -141,8 +142,8 @@ def run_migrations(
     target: int,
     *,
     now: str,
-    app_version: Optional[str] = None,
-    timezone: Optional[str] = None,
+    app_version: str | None = None,
+    timezone: str | None = None,
 ) -> None:
     """Execute schema migrations between ``start`` and ``target`` versions."""
 

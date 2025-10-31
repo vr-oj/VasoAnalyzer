@@ -6,17 +6,14 @@ from __future__ import annotations
 import pathlib
 import sys
 
-import numpy as np
 import matplotlib.pyplot as plt
+import numpy as np
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
 for entry in (SRC, ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
-
-from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
-
 
 def _make_events():
     return [
@@ -46,11 +43,15 @@ def _make_events():
 def _make_signal():
     rng = np.random.default_rng(42)
     times = np.linspace(0, 60, 600)
-    signal = 0.8 * np.sin(times / 3.0) + 0.2 * np.cos(times / 5.0) + 0.15 * rng.normal(size=times.size)
+    signal = (
+        0.8 * np.sin(times / 3.0)
+        + 0.2 * np.cos(times / 5.0)
+        + 0.15 * rng.normal(size=times.size)
+    )
     return times, signal
 
 
-def plot_vertical(events, times, signal):
+def plot_vertical(events, times, signal, event_labeler_cls, layout_options_cls):
     fig, (ax_top, ax_bottom) = plt.subplots(
         2,
         1,
@@ -67,15 +68,15 @@ def plot_vertical(events, times, signal):
     ax_bottom.set_xlabel("Time [s]")
     ax_top.set_title("Vertical (inside) event labels on shared X")
 
-    options = LayoutOptions(min_px=22, max_labels_per_cluster=1, top_pad_axes=0.04)
-    EventLabeler(ax_bottom, events, mode="vertical", options=options).draw()
+    options = layout_options_cls(min_px=22, max_labels_per_cluster=1, top_pad_axes=0.04)
+    event_labeler_cls(ax_bottom, events, mode="vertical", options=options).draw()
 
     fig.align_ylabels((ax_top, ax_bottom))
     fig.savefig("vertical_inside.png", dpi=200)
     plt.close(fig)
 
 
-def plot_horizontal(events, times, signal):
+def plot_horizontal(events, times, signal, event_labeler_cls, layout_options_cls):
     fig, (ax_top, ax_bottom) = plt.subplots(
         2,
         1,
@@ -92,7 +93,7 @@ def plot_horizontal(events, times, signal):
     ax_bottom.set_xlabel("Time [s]")
     ax_top.set_title("Horizontal outside belt anchored to top axes")
 
-    options = LayoutOptions(
+    options = layout_options_cls(
         min_px=22,
         max_labels_per_cluster=1,
         max_lanes=3,
@@ -101,7 +102,7 @@ def plot_horizontal(events, times, signal):
         outside_show_baseline=True,
         top_pad_axes=0.04,
     )
-    EventLabeler(ax_bottom, events, mode="horizontal_outside", options=options).draw()
+    event_labeler_cls(ax_bottom, events, mode="horizontal_outside", options=options).draw()
 
     fig.align_ylabels((ax_top, ax_bottom))
     fig.savefig("horizontal_outside.png", dpi=200)
@@ -109,10 +110,12 @@ def plot_horizontal(events, times, signal):
 
 
 def main():
+    from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
+
     events = _make_events()
     times, signal = _make_signal()
-    plot_vertical(events, times, signal)
-    plot_horizontal(events, times, signal)
+    plot_vertical(events, times, signal, EventLabeler, LayoutOptions)
+    plot_horizontal(events, times, signal, EventLabeler, LayoutOptions)
 
 
 if __name__ == "__main__":

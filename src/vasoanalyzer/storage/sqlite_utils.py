@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 __all__ = [
     "connect_rw",
@@ -28,37 +28,29 @@ def connect_rw(path: str | os.PathLike[str], *, timeout: float = 30.0) -> sqlite
 def checkpoint_full(conn: sqlite3.Connection) -> None:
     """Request a FULL WAL checkpoint, ignoring unsupported configurations."""
 
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("PRAGMA wal_checkpoint(FULL)")
-    except Exception:
-        pass
 
 
 def set_delete_mode(conn: sqlite3.Connection) -> None:
     """Configure ``conn`` to use DELETE journal mode when possible."""
 
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("PRAGMA journal_mode=DELETE")
-    except Exception:
-        pass
 
 
 def optimize(conn: sqlite3.Connection) -> None:
     """Run ``PRAGMA optimize`` when available."""
 
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("PRAGMA optimize")
-    except Exception:
-        pass
 
 
 def vacuum_optimize(conn: sqlite3.Connection) -> None:
     """VACUUM and optimize the database for maximum portability."""
 
-    try:
+    with contextlib.suppress(Exception):
         conn.execute("VACUUM")
-    except Exception:
-        pass
     optimize(conn)
 
 
@@ -73,7 +65,9 @@ def delete_sidecars(path: str | os.PathLike[str]) -> None:
             continue
 
 
-def backup_to_delete_mode(src_path: str | os.PathLike[str], dst_path: str | os.PathLike[str]) -> None:
+def backup_to_delete_mode(
+    src_path: str | os.PathLike[str], dst_path: str | os.PathLike[str]
+) -> None:
     """Copy ``src_path`` into ``dst_path`` ensuring DELETE journal mode."""
 
     src_path = str(Path(src_path))
@@ -83,11 +77,10 @@ def backup_to_delete_mode(src_path: str | os.PathLike[str], dst_path: str | os.P
         checkpoint_full(src)
         dst_dir = os.path.dirname(os.path.abspath(dst_path)) or "."
         os.makedirs(dst_dir, exist_ok=True)
-        tmp = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             prefix=Path(dst_path).name + ".", suffix=".tmp", dir=dst_dir, delete=False
-        )
-        tmp_path = tmp.name
-        tmp.close()
+        ) as tmp:
+            tmp_path = tmp.name
         try:
             with connect_rw(tmp_path) as dst:
                 src.backup(dst)
@@ -98,8 +91,6 @@ def backup_to_delete_mode(src_path: str | os.PathLike[str], dst_path: str | os.P
             os.replace(tmp_path, dst_path)
         finally:
             if os.path.exists(tmp_path):
-                try:
+                with contextlib.suppress(Exception):
                     os.remove(tmp_path)
-                except Exception:
-                    pass
     delete_sidecars(dst_path)

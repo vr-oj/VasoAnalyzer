@@ -1,14 +1,15 @@
-from __future__ import annotations
-
 """
 Utility helpers for SQLite-backed project storage.
 
 Initial slice: connection helpers, pragmas, cursor/transaction context managers.
 """
 
-from contextlib import contextmanager
-from typing import Iterator, Mapping, Optional
+from __future__ import annotations
+
 import sqlite3
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from typing import Any, cast
 
 __all__ = ["open_db", "set_pragmas", "db_cursor", "transaction"]
 
@@ -21,7 +22,7 @@ def open_db(
     *,
     mode: str = "rwc",
     apply_pragmas: bool = False,
-    pragmas: Optional[Mapping[str, object]] = None,
+    pragmas: Mapping[str, object] | None = None,
 ) -> sqlite3.Connection:
     """
     Open a SQLite database with predictable defaults.
@@ -40,10 +41,18 @@ def open_db(
     return conn
 
 
+def _to_int(value: object) -> int:
+    """Best-effort conversion to ``int`` for pragmatic pragmas."""
+
+    return int(cast(Any, value))
+
+
 def set_pragmas(conn: sqlite3.Connection, opts: Mapping[str, object]) -> None:
-    """
-    Apply a limited set of pragmas. Only keys present in ``opts`` are applied.
-    Supported keys: foreign_keys, journal_mode, synchronous, temp_store, cache_size, busy_timeout_ms.
+    """Apply selected pragmas.
+
+    Only keys present in ``opts`` are applied. Supported keys include
+    ``foreign_keys``, ``journal_mode``, ``synchronous``, ``temp_store``,
+    ``cache_size``, and ``busy_timeout_ms``.
     """
 
     norm = {str(key).lower(): value for key, value in opts.items()}
@@ -57,9 +66,9 @@ def set_pragmas(conn: sqlite3.Connection, opts: Mapping[str, object]) -> None:
         elif key == "temp_store":
             conn.execute(f"PRAGMA temp_store={value}")
         elif key == "cache_size":
-            conn.execute(f"PRAGMA cache_size={int(value)}")
+            conn.execute(f"PRAGMA cache_size={_to_int(value)}")
         elif key == "busy_timeout_ms":
-            conn.execute(f"PRAGMA busy_timeout={int(value)}")
+            conn.execute(f"PRAGMA busy_timeout={_to_int(value)}")
 
 
 # ---- Cursors / Transactions -------------------------------------------------

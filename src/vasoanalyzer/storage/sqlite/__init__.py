@@ -7,4 +7,4 @@ This module intentionally exposes no public API yet; upcoming slices will
 populate the concrete helpers.
 """
 
-__all__ = []
+__all__: list[str] = []

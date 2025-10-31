@@ -1,28 +1,29 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Sequence, Tuple
 
 __all__ = ["Cluster", "cluster_events"]
+
 
 @dataclass(frozen=True)
 class Cluster:
     """One visual cluster of events occupying roughly the same x pixels."""
 
     x_px: float
-    times: Tuple[float, ...]
+    times: tuple[float, ...]
     hidden: int
 
 
 def cluster_events(
     times: Sequence[float],
-    xlim: Tuple[float, float],
+    xlim: tuple[float, float],
     ax_width_px: int,
     *,
     min_gap_px: int = 12,
     max_visible_per_cluster: int = 3,
-) -> List[Cluster]:
+) -> list[Cluster]:
     """Group events by pixel proximity along the x axis."""
 
     if not times or ax_width_px <= 1:
@@ -32,7 +33,7 @@ def cluster_events(
     if not (xmax > xmin):
         return []
 
-    filtered: List[float] = []
+    filtered: list[float] = []
     for value in times:
         if value is None:
             continue
@@ -57,8 +58,8 @@ def cluster_events(
 
     min_gap_px = max(int(min_gap_px), 1)
 
-    groups: List[List[int]] = []
-    current: List[int] = []
+    groups: list[list[int]] = []
+    current: list[int] = []
     for idx in order:
         if current and xs[idx] - xs[current[-1]] > min_gap_px:
             groups.append(current)
@@ -68,7 +69,7 @@ def cluster_events(
     if current:
         groups.append(current)
 
-    clusters: List[Cluster] = []
+    clusters: list[Cluster] = []
     for group in groups:
         visible_idx = group[:max_visible_per_cluster]
         hidden = max(0, len(group) - len(visible_idx))

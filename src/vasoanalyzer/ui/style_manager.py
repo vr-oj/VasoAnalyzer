@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Literal, cast
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -10,14 +11,15 @@ from matplotlib.text import Text
 
 from .constants import DEFAULT_STYLE
 
-EventText = Sequence[Tuple[Text, float, object]]
-PinnedPoint = Sequence[Tuple[Line2D, Text]]
+EventText = Sequence[tuple[Text, float, object]]
+PinnedPoint = Sequence[tuple[Line2D, Text]]
+FontStyle = Literal["normal", "italic", "oblique"]
 
 
 class PlotStyleManager:
     """Maintain and apply a normalized plot style dictionary."""
 
-    def __init__(self, style: Optional[dict] = None) -> None:
+    def __init__(self, style: dict | None = None) -> None:
         self._style: dict = {}
         self.replace(style)
 
@@ -27,7 +29,7 @@ class PlotStyleManager:
 
         return self._style.copy()
 
-    def replace(self, style: Optional[dict]) -> None:
+    def replace(self, style: dict | None) -> None:
         """Replace the managed style with a fresh merge against defaults."""
 
         merged = DEFAULT_STYLE.copy()
@@ -35,7 +37,7 @@ class PlotStyleManager:
             merged.update(style)
         self._style = merged
 
-    def update(self, overrides: Optional[dict]) -> dict:
+    def update(self, overrides: dict | None) -> dict:
         """Update the current style with overrides and return the result."""
 
         if overrides:
@@ -48,13 +50,13 @@ class PlotStyleManager:
     def apply(
         self,
         *,
-        ax: Optional[Axes],
-        ax_secondary: Optional[Axes] = None,
-        x_axis: Optional[Axes] = None,
-        event_text_objects: Optional[Iterable[Tuple[Text, float, object]]] = None,
-        pinned_points: Optional[Iterable[Tuple[Line2D, Text]]] = None,
-        main_line: Optional[Line2D] = None,
-        od_line: Optional[Line2D] = None,
+        ax: Axes | None,
+        ax_secondary: Axes | None = None,
+        x_axis: Axes | None = None,
+        event_text_objects: Iterable[tuple[Text, float, object]] | None = None,
+        pinned_points: Iterable[tuple[Line2D, Text]] | None = None,
+        main_line: Line2D | None = None,
+        od_line: Line2D | None = None,
     ) -> None:
         """Apply the managed style to the provided matplotlib artists."""
 
@@ -67,7 +69,9 @@ class PlotStyleManager:
         axis_font_size = style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])
         axis_font_family = style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"])
         axis_weight = "bold" if style.get("axis_bold", DEFAULT_STYLE["axis_bold"]) else "normal"
-        axis_style = "italic" if style.get("axis_italic", DEFAULT_STYLE["axis_italic"]) else "normal"
+        axis_style: FontStyle = (
+            "italic" if style.get("axis_italic", DEFAULT_STYLE["axis_italic"]) else "normal"
+        )
 
         x_axis_color = style.get(
             "x_axis_color", style.get("axis_color", DEFAULT_STYLE["axis_color"])
@@ -155,12 +159,11 @@ class PlotStyleManager:
         event_style = {
             "size": style.get("event_font_size", DEFAULT_STYLE["event_font_size"]),
             "family": style.get("event_font_family", DEFAULT_STYLE["event_font_family"]),
-            "weight": "bold"
-            if style.get("event_bold", DEFAULT_STYLE["event_bold"])
-            else "normal",
-            "style": "italic"
-            if style.get("event_italic", DEFAULT_STYLE["event_italic"])
-            else "normal",
+            "weight": "bold" if style.get("event_bold", DEFAULT_STYLE["event_bold"]) else "normal",
+            "style": cast(
+                FontStyle,
+                "italic" if style.get("event_italic", DEFAULT_STYLE["event_italic"]) else "normal",
+            ),
             "color": style.get("event_color", DEFAULT_STYLE["event_color"]),
         }
 
@@ -175,12 +178,11 @@ class PlotStyleManager:
         pin_font = {
             "size": style.get("pin_font_size", DEFAULT_STYLE["pin_font_size"]),
             "family": style.get("pin_font_family", DEFAULT_STYLE["pin_font_family"]),
-            "weight": "bold"
-            if style.get("pin_bold", DEFAULT_STYLE["pin_bold"])
-            else "normal",
-            "style": "italic"
-            if style.get("pin_italic", DEFAULT_STYLE["pin_italic"])
-            else "normal",
+            "weight": "bold" if style.get("pin_bold", DEFAULT_STYLE["pin_bold"]) else "normal",
+            "style": cast(
+                FontStyle,
+                "italic" if style.get("pin_italic", DEFAULT_STYLE["pin_italic"]) else "normal",
+            ),
             "color": style.get("pin_color", DEFAULT_STYLE["pin_color"]),
         }
         pin_marker_size = style.get("pin_size", DEFAULT_STYLE["pin_size"])
@@ -209,9 +211,7 @@ class PlotStyleManager:
             od_target.set_linewidth(
                 style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"])
             )
-            od_target.set_color(
-                style.get("outer_line_color", DEFAULT_STYLE["outer_line_color"])
-            )
+            od_target.set_color(style.get("outer_line_color", DEFAULT_STYLE["outer_line_color"]))
             od_target.set_linestyle(
                 style.get("outer_line_style", DEFAULT_STYLE.get("outer_line_style", "solid"))
             )

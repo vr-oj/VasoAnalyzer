@@ -4,18 +4,17 @@
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
 import json
+import logging
 import os
 import pickle
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from matplotlib import rcParams
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from vasoanalyzer.ui.dialogs.figure_export_dialog import FigureExportDialog
 from vasoanalyzer.ui.theme import CURRENT_THEME
-
-import logging
 
 log = logging.getLogger(__name__)
 
@@ -169,7 +168,7 @@ def _safe_getattr(obj, name, default=None):
 
 def _serialize_pins(pins):
     serial = []
-    for marker, label in pins or []:
+    for marker, _label in pins or []:
         try:
             serial.append(
                 {
@@ -191,11 +190,11 @@ def _serialize_events(event_table):
 
 
 def _ensure_json_safe(value):
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    if isinstance(value, str | int | float | bool) or value is None:
         return value
     if isinstance(value, dict):
         return {str(k): _ensure_json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_ensure_json_safe(v) for v in value]
     return str(value)
 

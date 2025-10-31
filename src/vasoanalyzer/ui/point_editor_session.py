@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import cast
 
 import numpy as np
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -31,7 +32,7 @@ class SessionSummary:
     point_count: int
     percent_of_trace: float
     action_count: int
-    time_bounds: Tuple[float, float]
+    time_bounds: tuple[float, float]
 
 
 class PointEditorSession(QObject):
@@ -46,20 +47,22 @@ class PointEditorSession(QObject):
         self,
         model: TraceModel,
         channel: str,
-        time_window: Tuple[float, float],
+        time_window: tuple[float, float],
     ) -> None:
         super().__init__()
         self._model = model
         self._channel = _normalize_channel(channel)
-        self._time = model.time_full
-        self._raw_full = (
-            model.inner_raw if self._channel == "inner" else model.outer_raw
+        self._time: np.ndarray = model.time_full
+        raw_full = model.inner_raw if self._channel == "inner" else model.outer_raw
+        clean_base = (
+            model.inner_full.copy()
+            if self._channel == "inner"
+            else (model.outer_full.copy() if model.outer_full is not None else None)
         )
-        self._clean_base = (
-            model.inner_full.copy() if self._channel == "inner" else (model.outer_full.copy() if model.outer_full is not None else None)
-        )
-        if self._raw_full is None or self._clean_base is None:
+        if raw_full is None or clean_base is None:
             raise ValueError(f"Channel {channel} not available for editing")
+        self._raw_full: np.ndarray = raw_full
+        self._clean_base: np.ndarray = clean_base
 
         self._connect_method = "linear"
         self._time_window = (
@@ -68,13 +71,15 @@ class PointEditorSession(QObject):
         )
         mask = (self._time >= self._time_window[0]) & (self._time <= self._time_window[1])
         indices = np.nonzero(mask)[0]
-        self._visible_indices = indices if indices.size else np.arange(self._time.size, dtype=int)
-        self._selection: Set[int] = set()
+        self._visible_indices: np.ndarray = (
+            indices if indices.size else np.arange(self._time.size, dtype=int)
+        )
+        self._selection: set[int] = set()
 
-        self._base_clean = self._clean_base.copy()
-        self._working_clean = self._clean_base.copy()
-        self._pending_actions: List[EditAction] = []
-        self._redo_stack: List[EditAction] = []
+        self._base_clean: np.ndarray = self._clean_base.copy()
+        self._working_clean: np.ndarray = self._clean_base.copy()
+        self._pending_actions: list[EditAction] = []
+        self._redo_stack: list[EditAction] = []
 
     # ------------------------------------------------------------------ properties
     @property
@@ -97,16 +102,16 @@ class PointEditorSession(QObject):
         self._connect_method = method
 
     @property
-    def time_window(self) -> Tuple[float, float]:
+    def time_window(self) -> tuple[float, float]:
         return self._time_window
 
-    def selection(self) -> Tuple[int, ...]:
+    def selection(self) -> tuple[int, ...]:
         return tuple(sorted(self._selection))
 
     def has_selection(self) -> bool:
         return bool(self._selection)
 
-    def selection_bounds(self) -> Optional[Tuple[float, float]]:
+    def selection_bounds(self) -> tuple[float, float] | None:
         if not self._selection:
             return None
         indices = self.selection()
@@ -125,13 +130,13 @@ class PointEditorSession(QObject):
         return self._visible_indices.copy()
 
     def visible_times(self) -> np.ndarray:
-        return self._time[self._visible_indices]
+        return cast(np.ndarray, self._time[self._visible_indices])
 
     def visible_raw(self) -> np.ndarray:
-        return self._raw_full[self._visible_indices]
+        return cast(np.ndarray, self._raw_full[self._visible_indices])
 
     def visible_clean(self) -> np.ndarray:
-        return self._working_clean[self._visible_indices]
+        return cast(np.ndarray, self._working_clean[self._visible_indices])
 
     def working_clean(self) -> np.ndarray:
         return self._working_clean
@@ -143,7 +148,9 @@ class PointEditorSession(QObject):
         self._selection.clear()
         self.selection_changed.emit()
 
-    def set_selection(self, indices: Iterable[int], *, additive: bool = False, toggle: bool = False) -> None:
+    def set_selection(
+        self, indices: Iterable[int], *, additive: bool = False, toggle: bool = False
+    ) -> None:
         normalized = {int(idx) for idx in indices}
         if not normalized:
             return
@@ -160,17 +167,17 @@ class PointEditorSession(QObject):
         self.selection_changed.emit()
 
     # ------------------------------------------------------------------ operations
-    def delete_selection(self) -> Optional[EditAction]:
+    def delete_selection(self) -> EditAction | None:
         if not self._selection:
             return None
         return self._apply_operation("delete_points", self.selection())
 
-    def restore_selection(self) -> Optional[EditAction]:
+    def restore_selection(self) -> EditAction | None:
         if not self._selection:
             return None
         return self._apply_operation("restore_points", self.selection())
 
-    def connect_selection(self, *, method: Optional[str] = None) -> Optional[EditAction]:
+    def connect_selection(self, *, method: str | None = None) -> EditAction | None:
         if not self._selection:
             return None
         chosen = (method or self._connect_method or "linear").lower()
@@ -183,15 +190,15 @@ class PointEditorSession(QObject):
         op: str,
         indices: Sequence[int],
         *,
-        method: Optional[str] = None,
-    ) -> Optional[EditAction]:
+        method: str | None = None,
+    ) -> EditAction | None:
         unique_indices = sorted(dict.fromkeys(int(i) for i in indices))
         if not unique_indices:
             return None
 
         first = unique_indices[0]
         last = unique_indices[-1]
-        params: Dict[str, str] = {}
+        params: dict[str, str] = {}
 
         span_seconds = float(self._time[last] - self._time[first])
         total_samples = max(len(self._time), 1)
@@ -202,15 +209,17 @@ class PointEditorSession(QObject):
                 "You are editing a segment longer than 5 s. Consider leaving a gap."
             )
         if op == "delete_points" and selection_fraction > 0.01:
-            self.warning_emitted.emit(
-                "Large deletion: more than 1% of the trace is selected."
-            )
+            self.warning_emitted.emit("Large deletion: more than 1% of the trace is selected.")
 
         if op == "connect_across":
             params["method"] = method or self._connect_method
             forbidden = set(unique_indices)
-            left_idx = find_neighbor(self._working_clean, start=first - 1, step=-1, forbidden=forbidden)
-            right_idx = find_neighbor(self._working_clean, start=last + 1, step=+1, forbidden=forbidden)
+            left_idx = find_neighbor(
+                self._working_clean, start=first - 1, step=-1, forbidden=forbidden
+            )
+            right_idx = find_neighbor(
+                self._working_clean, start=last + 1, step=+1, forbidden=forbidden
+            )
             if left_idx is None or right_idx is None:
                 params["fallback"] = "nan"
         action = EditAction(
@@ -243,9 +252,13 @@ class PointEditorSession(QObject):
             self._working_clean[indices] = np.nan
             return
 
-        forbidden = set(int(i) for i in indices.tolist())
-        left_idx = find_neighbor(self._working_clean, start=int(indices[0]) - 1, step=-1, forbidden=forbidden)
-        right_idx = find_neighbor(self._working_clean, start=int(indices[-1]) + 1, step=+1, forbidden=forbidden)
+        forbidden = {int(i) for i in indices.tolist()}
+        left_idx = find_neighbor(
+            self._working_clean, start=int(indices[0]) - 1, step=-1, forbidden=forbidden
+        )
+        right_idx = find_neighbor(
+            self._working_clean, start=int(indices[-1]) + 1, step=+1, forbidden=forbidden
+        )
         if left_idx is None or right_idx is None:
             self._working_clean[indices] = np.nan
             self.warning_emitted.emit("Connect fallback: segment touches trace edge.")
@@ -264,7 +277,7 @@ class PointEditorSession(QObject):
         self._working_clean[indices] = bridged
 
     # ------------------------------------------------------------------ undo/redo
-    def undo(self) -> Optional[EditAction]:
+    def undo(self) -> EditAction | None:
         if not self._pending_actions:
             return None
         action = self._pending_actions.pop()
@@ -274,7 +287,7 @@ class PointEditorSession(QObject):
         self.undo_redo_changed.emit(self.can_undo(), self.can_redo())
         return action
 
-    def redo(self) -> Optional[EditAction]:
+    def redo(self) -> EditAction | None:
         if not self._redo_stack:
             return None
         action = self._redo_stack.pop()
@@ -297,7 +310,7 @@ class PointEditorSession(QObject):
         self.data_changed.emit()
         self.undo_redo_changed.emit(False, False)
 
-    def commit(self) -> Tuple[EditAction, ...]:
+    def commit(self) -> tuple[EditAction, ...]:
         actions = tuple(self._pending_actions)
         if actions:
             self._base_clean = self._working_clean.copy()

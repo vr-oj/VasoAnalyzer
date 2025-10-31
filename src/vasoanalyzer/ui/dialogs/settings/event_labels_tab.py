@@ -1,21 +1,38 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING
-from dataclasses import dataclass
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QGroupBox, QFormLayout, QHBoxLayout, QComboBox, QSpinBox, QCheckBox, QListWidget
-from PyQt5.QtCore import Qt
 
-from vasoanalyzer.ui.event_label_editor import EventLabelEditor
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
 from vasoanalyzer.ui.constants import DEFAULT_STYLE
 from vasoanalyzer.ui.dialogs.settings._shared import block_signals
+from vasoanalyzer.ui.event_label_editor import EventLabelEditor
 
 if TYPE_CHECKING:  # pragma: no cover
     try:
-        from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedPlotSettingsDialog as DialogT
+        from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
+            UnifiedPlotSettingsDialog as DialogT,
+        )
     except Exception:
         from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog as DialogT
 else:
+
     class DialogT:  # type: ignore
         pass
+
 
 __all__ = [
     "EventLabelsTabRefs",
@@ -23,6 +40,7 @@ __all__ = [
     "populate_event_labels_tab",
     "wire_event_labels_tab",
 ]
+
 
 @dataclass
 class EventLabelsTabRefs:
@@ -32,13 +50,14 @@ class EventLabelsTabRefs:
     event_font_size: QSpinBox
     event_bold: QCheckBox
     event_italic: QCheckBox
-    event_color_btn: QWidget     # created by dialog._make_color_button(...)
+    event_color_btn: QWidget  # created by dialog._make_color_button(...)
     event_list: QListWidget
-    event_editor: QWidget        # EventLabelEditor
+    event_editor: QWidget  # EventLabelEditor
     event_overrides_box: QGroupBox
     event_empty_label: QLabel
 
-def create_event_labels_tab_widgets(dialog: "DialogT", window) -> EventLabelsTabRefs:
+
+def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRefs:
     """
     BUILD UI ONLY (no value-setting other than construction defaults, and only
     the connects that are strictly part of construction if any—signal wiring
@@ -92,7 +111,8 @@ def create_event_labels_tab_widgets(dialog: "DialogT", window) -> EventLabelsTab
     # dialog.style.get("event_color", DEFAULT_STYLE["event_color"])
     event_color_btn = dialog._make_color_button(
         dialog.style.get("event_color", dialog.DEFAULT_STYLE["event_color"])
-        if hasattr(dialog, "DEFAULT_STYLE") else dialog.style.get("event_color", "#000000")
+        if hasattr(dialog, "DEFAULT_STYLE")
+        else dialog.style.get("event_color", "#000000")
     )
     defaults_form.addRow("Event Color:", event_color_btn)
 
@@ -139,7 +159,8 @@ def create_event_labels_tab_widgets(dialog: "DialogT", window) -> EventLabelsTab
         event_empty_label=event_empty_label,
     )
 
-def populate_event_labels_tab(dialog: "DialogT") -> None:
+
+def populate_event_labels_tab(dialog: DialogT) -> None:
     """
     Move ONLY the value-setting lines from legacy:
       - setCurrentText / setValue / setChecked that read from dialog.style or DEFAULT_STYLE
@@ -148,10 +169,12 @@ def populate_event_labels_tab(dialog: "DialogT") -> None:
     default_style = getattr(dialog, "DEFAULT_STYLE", DEFAULT_STYLE)
     style = getattr(dialog, "style", {})
 
-    with block_signals([
-        getattr(dialog, "event_font_family", None),
-        getattr(dialog, "event_font_size", None),
-    ]):
+    with block_signals(
+        [
+            getattr(dialog, "event_font_family", None),
+            getattr(dialog, "event_font_size", None),
+        ]
+    ):
         dialog.event_font_family.setCurrentText(
             style.get("event_font_family", default_style.get("event_font_family", "Arial"))
         )
@@ -161,7 +184,8 @@ def populate_event_labels_tab(dialog: "DialogT") -> None:
 
     return
 
-def wire_event_labels_tab(dialog: "DialogT") -> None:
+
+def wire_event_labels_tab(dialog: DialogT) -> None:
     """
     Move ONLY the connect(...) lines from legacy.
     Lines mapped from legacy: 715, 719–720 (+ any other .connect calls for this tab).

@@ -1,36 +1,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
-    QWidget,
-    QHBoxLayout,
-    QVBoxLayout,
-    QGroupBox,
-    QFormLayout,
-    QLabel,
-    QScrollArea,
-    QSlider,
-    QDoubleSpinBox,
-    QSizePolicy,
-)
-from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
 
-from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.dialogs.settings._shared import block_signals
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:  # pragma: no cover
     try:
-        from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedPlotSettingsDialog as DialogT
+        from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
+            UnifiedPlotSettingsDialog as DialogT,
+        )
     except Exception:
         from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedSettingsDialog as DialogT
 else:
+
     class DialogT:  # type: ignore
         pass
+
 
 __all__ = [
     "LayoutTabRefs",
@@ -43,8 +47,8 @@ __all__ = [
 @dataclass
 class LayoutTabRefs:
     tab: QWidget
-    layout_controls: Dict[str, QDoubleSpinBox]
-    layout_sliders: Dict[str, QSlider]
+    layout_controls: dict[str, QDoubleSpinBox]
+    layout_sliders: dict[str, QSlider]
     preview_fig: Figure
     preview_canvas: FigureCanvas
     preview_ax: Axes
@@ -72,7 +76,7 @@ def _make_slider_row() -> tuple[QWidget, QSlider, QDoubleSpinBox]:
     return container, slider, spin
 
 
-def create_layout_tab_widgets(dialog: "DialogT", window) -> LayoutTabRefs:
+def create_layout_tab_widgets(dialog: DialogT, window) -> LayoutTabRefs:
     """
     Move ONLY widget creation and layout from _make_layout_tab legacy.
     Return the tab + the controls you need to reattach on dialog.
@@ -87,9 +91,7 @@ def create_layout_tab_widgets(dialog: "DialogT", window) -> LayoutTabRefs:
     controls_layout.setContentsMargins(12, 12, 12, 12)
     controls_layout.setSpacing(10)
 
-    help_lbl = QLabel(
-        "Adjust how the subplot fills the canvas. Values are in figure fraction (0 → edge, 1 → outside)."
-    )
+    help_lbl = QLabel("Adjust subplot margins in figure fraction (0 → edge, 1 → outside).")
     help_lbl.setWordWrap(True)
     help_lbl.setObjectName("PlotSettingsHint")
     controls_layout.addWidget(help_lbl)
@@ -108,8 +110,8 @@ def create_layout_tab_widgets(dialog: "DialogT", window) -> LayoutTabRefs:
         ("hspace", "Height gap"),
     ]
 
-    sliders: Dict[str, QSlider] = {}
-    controls: Dict[str, QDoubleSpinBox] = {}
+    sliders: dict[str, QSlider] = {}
+    controls: dict[str, QDoubleSpinBox] = {}
 
     for name, label_text in labels:
         row_widget, slider, spin = _make_slider_row()
@@ -154,7 +156,7 @@ def create_layout_tab_widgets(dialog: "DialogT", window) -> LayoutTabRefs:
     )
 
 
-def populate_layout_tab(dialog: "DialogT") -> None:
+def populate_layout_tab(dialog: DialogT) -> None:
     """Filled in slice B (set values using block_signals)."""
     layout_controls = getattr(dialog, "layout_controls", None)
     if not layout_controls:
@@ -177,7 +179,7 @@ def populate_layout_tab(dialog: "DialogT") -> None:
     return
 
 
-def wire_layout_tab(dialog: "DialogT") -> None:
+def wire_layout_tab(dialog: DialogT) -> None:
     """Filled in slice C (connect signals; guard duplicate wiring)."""
     controls = getattr(dialog, "layout_controls", None)
     if not controls:

@@ -6,15 +6,15 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QVBoxLayout,
-    QScrollArea,
-    QWidget,
-    QLabel,
     QFrame,
     QHBoxLayout,
-    QCheckBox,
+    QLabel,
     QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
 
 
@@ -50,7 +50,7 @@ class TutorialDialog(QDialog):
             (
                 "2. Name Your First Experiment",
                 [
-                    'In the same dialog, enter an experiment name (e.g., "Concentration Response Curve").',
+                    'Enter an experiment name, such as "Concentration Response".',
                     "Click <b>Finish</b> to open the main window.",
                 ],
             ),

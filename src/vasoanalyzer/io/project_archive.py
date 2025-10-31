@@ -12,7 +12,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from typing import Any, Dict, Tuple
+from typing import Any
 
 import pandas as pd
 from tifffile import imread, imwrite
@@ -22,10 +22,12 @@ from vasoanalyzer.core.project import _safe_extractall
 __all__ = ["embed_tiff", "save_project", "open_project"]
 
 
-THRESHOLD_BYTES = 1 * 1024 ** 3  # 1 GiB
+THRESHOLD_BYTES = 1 * 1024**3  # 1 GiB
 
 
-def embed_tiff(src_path: str, dest_dir: str, threshold_bytes: int = THRESHOLD_BYTES) -> Tuple[str, bool]:
+def embed_tiff(
+    src_path: str, dest_dir: str, threshold_bytes: int = THRESHOLD_BYTES
+) -> tuple[str, bool]:
     """Copy or compress ``src_path`` into ``dest_dir``.
 
     Parameters
@@ -60,16 +62,16 @@ def embed_tiff(src_path: str, dest_dir: str, threshold_bytes: int = THRESHOLD_BY
     return fname, compressed
 
 
-def _write_json(path: str, data: Dict[str, Any]) -> None:
+def _write_json(path: str, data: dict[str, Any]) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2)
 
 
 def save_project(
     path: str,
-    experiments: Dict[str, Dict[str, Any]],
-    state: Dict[str, Any],
-    exports: Dict[str, str] | None = None,
+    experiments: dict[str, dict[str, Any]],
+    state: dict[str, Any],
+    exports: dict[str, str] | None = None,
 ) -> None:
     """Save a project to ``path`` using the .vaso format.
 
@@ -90,7 +92,7 @@ def save_project(
     """
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        manifest: Dict[str, Any] = {"schema_version": "1.1", "experiments": {}}
+        manifest: dict[str, Any] = {"schema_version": "1.1", "experiments": {}}
         state = {"schema_version": "1.1", **state}
 
         exp_root = os.path.join(tmpdir, "experiments")
@@ -115,7 +117,7 @@ def save_project(
             if events_user_df is not None:
                 events_user_df.to_csv(events_user_file, index=False)
 
-            manifest_entry = {
+            manifest_entry: dict[str, Any] = {
                 "trace_file": f"experiments/{exp_id}/trace.csv",
                 "events_file": f"experiments/{exp_id}/events.csv",
             }
@@ -147,7 +149,7 @@ def save_project(
         os.replace(tmp_zip, path)
 
 
-def open_project(path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def open_project(path: str) -> tuple[dict[str, Any], dict[str, Any]]:
     """Load ``path`` and return ``(manifest, state)``.
 
     Parameters
@@ -168,12 +170,12 @@ def open_project(path: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     with zipfile.ZipFile(path, "r") as zf:
         _safe_extractall(zf, tmpdir)
 
-        with open(os.path.join(tmpdir, "manifest.json"), "r", encoding="utf-8") as fh:
+        with open(os.path.join(tmpdir, "manifest.json"), encoding="utf-8") as fh:
             manifest = json.load(fh)
-        with open(os.path.join(tmpdir, "state.json"), "r", encoding="utf-8") as fh:
+        with open(os.path.join(tmpdir, "state.json"), encoding="utf-8") as fh:
             state = json.load(fh)
 
-        for exp_id, meta in manifest.get("experiments", {}).items():
+        for _exp_id, meta in manifest.get("experiments", {}).items():
             for key in ("trace_file", "events_file", "events_user_file", "tiff_file"):
                 if key in meta:
                     meta[key] = os.path.join(tmpdir, meta[key])

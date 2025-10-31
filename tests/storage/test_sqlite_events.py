@@ -44,7 +44,10 @@ def test_fetch_events_dataframe_roundtrip(tmp_path):
             (1, 2.0, "b", 2, 2.0, None, None, None, None),
         ]
         conn.executemany(
-            "INSERT INTO event(dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "INSERT INTO event(dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, "
+                "extra_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            ),
             rows,
         )
         df = events.fetch_events_dataframe(conn, 1, t0=1.0, t1=3.0)

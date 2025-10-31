@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """
 Trace persistence utilities for SQLite projects.
 """
 
-from typing import Iterable, Optional, Sequence
+from __future__ import annotations
+
 import sqlite3
+from collections.abc import Iterable, Sequence
 
 import pandas as pd
 
@@ -32,7 +32,10 @@ def match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for col in columns:
         norm = normalize_label(col)
-        if norm in {"times", "tseconds", "t", "time", "timestamp"} and "t_seconds" not in mapping.values():
+        if (
+            norm in {"times", "tseconds", "t", "time", "timestamp"}
+            and "t_seconds" not in mapping.values()
+        ):
             mapping[col] = "t_seconds"
         elif norm in {"innerdiameter", "innerdiam"} and "inner_diam" not in mapping.values():
             mapping[col] = "inner_diam"
@@ -59,7 +62,7 @@ def match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
     return defaults
 
 
-def nullable_float(value) -> Optional[float]:
+def nullable_float(value) -> float | None:
     """Return a float or ``None`` while tolerating NaN-like values."""
 
     if value is None:
@@ -76,7 +79,7 @@ def nullable_float(value) -> Optional[float]:
         return None
 
 
-def prepare_trace_rows(dataset_id: int, df: Optional[pd.DataFrame]) -> Iterable[tuple]:
+def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tuple]:
     """Normalize ``df`` into rows suitable for the trace table."""
 
     if df is None or df.empty:
@@ -118,8 +121,8 @@ def prepare_trace_rows(dataset_id: int, df: Optional[pd.DataFrame]) -> Iterable[
 def fetch_trace_dataframe(
     conn: sqlite3.Connection,
     dataset_id: int,
-    t0: Optional[float] = None,
-    t1: Optional[float] = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> pd.DataFrame:
     """
     Load trace samples for ``dataset_id`` optionally filtered to ``[t0, t1]``.

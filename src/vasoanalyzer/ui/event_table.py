@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 import pandas as pd
 from PyQt5.QtCore import (
@@ -11,16 +11,18 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
+from PyQt5.QtGui import QResizeEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHeaderView,
     QTableView,
-    QFrame,
 )
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
-EventRow = Tuple[str, float, float, Optional[float], Optional[int]]
+EventRow = tuple[str, float, float, float | None, int | None]
+DEFAULT_QMODEL_INDEX = QModelIndex()
 
 
 class EventTableModel(QAbstractTableModel):
@@ -31,27 +33,25 @@ class EventTableModel(QAbstractTableModel):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._rows: List[Tuple] = []
+        self._rows: list[tuple] = []
         self._has_outer = False
-        self._headers: List[str] = []
+        self._headers: list[str] = []
 
     # Qt model API -----------------------------------------------------
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+    def rowCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+    def columnCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return 0 if parent.isValid() else len(self._headers)
 
-    def headerData(
-        self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole
-    ):  # type: ignore[override]
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Horizontal and 0 <= section < len(self._headers):
             return self._headers[section]
         return super().headerData(section, orientation, role)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):  # type: ignore[override]
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
         if not index.isValid():
             return None
         row_idx = index.row()
@@ -67,7 +67,7 @@ class EventTableModel(QAbstractTableModel):
             return "" if raw_value is None else str(raw_value)
         return None
 
-    def flags(self, index: QModelIndex):  # type: ignore[override]
+    def flags(self, index: QModelIndex):
         if not index.isValid():
             return Qt.ItemIsEnabled
         base = Qt.ItemIsSelectable | Qt.ItemIsEnabled
@@ -75,9 +75,7 @@ class EventTableModel(QAbstractTableModel):
             base |= Qt.ItemIsEditable
         return base
 
-    def setData(
-        self, index: QModelIndex, value, role: int = Qt.EditRole
-    ) -> bool:  # type: ignore[override]
+    def setData(self, index: QModelIndex, value: object, role: int = Qt.EditRole) -> bool:
         if role not in (Qt.EditRole, Qt.DisplayRole) or not index.isValid():
             return False
         if index.column() != 2:
@@ -88,7 +86,7 @@ class EventTableModel(QAbstractTableModel):
             return False
 
         try:
-            new_val = round(float(value), 2)
+            new_val = round(float(str(value)), 2)
         except (TypeError, ValueError):
             return False
 
@@ -101,9 +99,7 @@ class EventTableModel(QAbstractTableModel):
         return True
 
     # Public helpers ---------------------------------------------------
-    def set_events(
-        self, rows: Sequence[Tuple], *, has_outer_diameter: bool
-    ) -> None:
+    def set_events(self, rows: Sequence[tuple], *, has_outer_diameter: bool) -> None:
         self.beginResetModel()
         self._rows = [tuple(row) for row in rows]
         self._has_outer = has_outer_diameter
@@ -118,7 +114,7 @@ class EventTableModel(QAbstractTableModel):
     def clear(self) -> None:
         self.set_events([], has_outer_diameter=False)
 
-    def rows(self) -> List[Tuple]:
+    def rows(self) -> list[tuple]:
         return list(self._rows)
 
     def has_outer(self) -> bool:
@@ -127,21 +123,21 @@ class EventTableModel(QAbstractTableModel):
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self._rows, columns=self._headers)
 
-    def insert_row(self, index: int, row: Tuple) -> None:
+    def insert_row(self, index: int, row: tuple) -> None:
         self.beginInsertRows(QModelIndex(), index, index)
         self._rows.insert(index, tuple(row))
         self.endInsertRows()
 
-    def append_row(self, row: Tuple) -> None:
+    def append_row(self, row: tuple) -> None:
         self.insert_row(len(self._rows), row)
 
-    def remove_row(self, index: int) -> Tuple:
+    def remove_row(self, index: int) -> tuple:
         self.beginRemoveRows(QModelIndex(), index, index)
         removed = self._rows.pop(index)
         self.endRemoveRows()
         return removed
 
-    def update_row(self, index: int, row: Tuple) -> None:
+    def update_row(self, index: int, row: tuple) -> None:
         if not 0 <= index < len(self._rows):
             return
         self._rows[index] = tuple(row)
@@ -164,9 +160,7 @@ class EventTableModel(QAbstractTableModel):
             return value
         if value is None:
             return "—"
-        is_frame_column = (
-            column == 4 and self._has_outer
-        ) or (column == 3 and not self._has_outer)
+        is_frame_column = (column == 4 and self._has_outer) or (column == 3 and not self._has_outer)
         if is_frame_column:
             try:
                 return f"{int(round(float(value))):,}"
@@ -250,7 +244,7 @@ class EventTableWidget(QTableView):
         if index.isValid():
             self.cellClicked.emit(index.row(), index.column())
 
-    def resizeEvent(self, event):  # type: ignore[override]
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         self._fit_columns_to_viewport()
 

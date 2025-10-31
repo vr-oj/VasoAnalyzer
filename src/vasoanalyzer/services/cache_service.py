@@ -8,9 +8,9 @@ import os
 import platform
 import shutil
 import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional
 
 import pandas as pd
 
@@ -19,7 +19,7 @@ __all__ = ["DataCache", "cache_dir_for_project", "DEFAULT_CACHE_LIMIT_GB", "get_
 DEFAULT_CACHE_LIMIT_GB = 25
 
 
-def get_cache_root(app_name: str = "VasoAnalyzer") -> Optional[Path]:
+def get_cache_root(app_name: str = "VasoAnalyzer") -> Path | None:
     """Return the system cache root when ``VASO_CACHE_MODE=system`` is set."""
 
     mode = os.environ.get("VASO_CACHE_MODE", "").lower()
@@ -32,7 +32,11 @@ def get_cache_root(app_name: str = "VasoAnalyzer") -> Optional[Path]:
     if system == "darwin":
         base = home / "Library" / "Caches" / app_name
     elif system == "windows":
-        base = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))) / app_name / "Cache"
+        base = (
+            Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
+            / app_name
+            / "Cache"
+        )
     else:
         base = Path(os.environ.get("XDG_CACHE_HOME", str(home / ".cache"))) / app_name
 
@@ -40,7 +44,7 @@ def get_cache_root(app_name: str = "VasoAnalyzer") -> Optional[Path]:
     return base
 
 
-def cache_dir_for_project(project_path: Optional[str | os.PathLike[str]]) -> Path:
+def cache_dir_for_project(project_path: str | os.PathLike[str] | None) -> Path:
     """Return the cache directory associated with ``project_path``.
 
     When ``project_path`` points to a ``.vaso`` file the cache lives in a sibling
@@ -91,9 +95,10 @@ def _safe_read_json(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _safe_write_json(path: Path, payload: dict) -> None:
@@ -170,7 +175,7 @@ class DataCache:
         src_path: str | os.PathLike[str],
         loader: Callable[[Path], pd.DataFrame],
         *,
-        preserve_columns: Optional[Iterable[str]] = None,
+        preserve_columns: Iterable[str] | None = None,
         allow_parquet: bool = True,
         category_threshold: float = 0.2,
     ) -> pd.DataFrame:
@@ -201,7 +206,7 @@ class DataCache:
 
         if allow_parquet:
             try:
-                import pyarrow  # type: ignore  # noqa: F401
+                import pyarrow  # noqa: F401
 
                 cache_path = self._cache_path_for(src, ".parquet")
                 df.to_parquet(cache_path)
@@ -227,7 +232,7 @@ class DataCache:
         self,
         df: pd.DataFrame,
         *,
-        preserve_columns: Optional[Iterable[str]] = None,
+        preserve_columns: Iterable[str] | None = None,
         threshold: float,
     ) -> pd.DataFrame:
         if df.empty:
@@ -277,7 +282,7 @@ class DataCache:
         entries.sort(key=lambda item: item[0].stat().st_mtime if item[0].exists() else 0)
 
         current = total
-        for path, entry, size in entries:
+        for path, _entry, size in entries:
             if current <= limit_bytes:
                 break
             try:

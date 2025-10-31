@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
+from typing import cast
 
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
@@ -21,7 +22,7 @@ class ChannelTrackSpec:
 
     track_id: str
     component: str  # "inner", "outer", or "dual"
-    label: Optional[str] = None
+    label: str | None = None
     height_ratio: float = 1.0
 
 
@@ -39,16 +40,16 @@ class ChannelTrack:
         self.canvas = canvas
         mode = spec.component if spec.component in {"inner", "outer", "dual"} else "inner"
         self.view = TraceView(ax, canvas, mode=mode, y_label=spec.label)
-        self._model: Optional[TraceModel] = None
+        self._model: TraceModel | None = None
         self._height_ratio = max(spec.height_ratio, 0.05)
         self._visible = True
-        self._events: Optional[Sequence[float]] = None
-        self._event_colors: Optional[Sequence[str]] = None
-        self._event_labels: Optional[Sequence[str]] = None
+        self._events: Sequence[float] | None = None
+        self._event_colors: Sequence[str] | None = None
+        self._event_labels: Sequence[str] | None = None
         self.ax.set_autoscaley_on(True)
         self._auto_margin: float = 0.05
-        self._sticky_ylim: Optional[Tuple[float, float]] = None
-        self._last_time_span: Optional[float] = None
+        self._sticky_ylim: tuple[float, float] | None = None
+        self._last_time_span: float | None = None
 
     @property
     def id(self) -> str:
@@ -94,9 +95,8 @@ class ChannelTrack:
         bbox = self.ax.get_window_extent(renderer=self.canvas.renderer)
         pixel_width = max(int(bbox.width), 1)
         span = float(x1 - x0)
-        span_changed = (
-            self._last_time_span is None
-            or not math.isclose(span, self._last_time_span, rel_tol=1e-9, abs_tol=1e-9)
+        span_changed = self._last_time_span is None or not math.isclose(
+            span, self._last_time_span, rel_tol=1e-9, abs_tol=1e-9
         )
         self._last_time_span = span
         self.view.update_window(x0, x1, pixel_width=pixel_width)
@@ -105,8 +105,8 @@ class ChannelTrack:
     def set_events(
         self,
         times: Sequence[float],
-        colors: Optional[Sequence[str]] = None,
-        labels: Optional[Sequence[str]] = None,
+        colors: Sequence[str] | None = None,
+        labels: Sequence[str] | None = None,
     ) -> None:
         self._events = list(times)
         self._event_colors = None if colors is None else list(colors)
@@ -123,16 +123,17 @@ class ChannelTrack:
     def refresh_background(self) -> None:
         self.view.refresh_background()
 
-    def axes(self) -> Tuple[Axes, ...]:
+    def axes(self) -> tuple[Axes, ...]:
         candidates = [self.ax]
         if getattr(self.view, "ax2", None) is not None:
             candidates.append(self.view.ax2)
         return tuple(candidate for candidate in candidates if candidate is not None)
 
-    def data_limits(self) -> Optional[Tuple[float, float]]:
-        return self.view.data_limits()
+    def data_limits(self) -> tuple[float, float] | None:
+        limits = self.view.data_limits()
+        return cast(tuple[float, float] | None, limits)
 
-    def autoscale(self, margin: float = 0.05) -> Optional[Tuple[float, float]]:
+    def autoscale(self, margin: float = 0.05) -> tuple[float, float] | None:
         """Autoscale the Y axis using the current data window."""
 
         padded = self._compute_padded_limits(margin=margin)
@@ -198,7 +199,7 @@ class ChannelTrack:
             ax2.set_ylim(new_min, new_max)
 
     # ------------------------------------------------------------------ helpers
-    def _compute_padded_limits(self, *, margin: Optional[float] = None) -> Optional[Tuple[float, float]]:
+    def _compute_padded_limits(self, *, margin: float | None = None) -> tuple[float, float] | None:
         limits = self.data_limits()
         if limits is None:
             return None

@@ -42,7 +42,9 @@ def _load_golden(name: str) -> np.ndarray:
     return golden
 
 
-def _assert_images_close(actual: np.ndarray, expected: np.ndarray, tolerance: int = 4) -> Tuple[int, float]:
+def _assert_images_close(
+    actual: np.ndarray, expected: np.ndarray, tolerance: int = 4
+) -> Tuple[int, float]:
     if actual.shape != expected.shape:
         raise AssertionError(f"Image shapes differ: {actual.shape} vs {expected.shape}")
     diff = np.abs(actual.astype(np.int16) - expected.astype(np.int16))

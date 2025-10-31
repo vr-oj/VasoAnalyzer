@@ -3,7 +3,7 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtWidgets import QDockWidget, QTreeWidget, QAbstractItemView
+from PyQt5.QtWidgets import QAbstractItemView, QDockWidget, QTreeWidget
 
 
 class ProjectExplorerWidget(QDockWidget):

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -20,15 +19,18 @@ class LODLevel:
     inner_mean: np.ndarray
     inner_min: np.ndarray
     inner_max: np.ndarray
-    outer_mean: Optional[np.ndarray]
-    outer_min: Optional[np.ndarray]
-    outer_max: Optional[np.ndarray]
+    outer_mean: np.ndarray | None
+    outer_min: np.ndarray | None
+    outer_max: np.ndarray | None
 
     def window(self, x0: float, x1: float, margin: int = 1) -> TraceWindow:
         """Return a slice of this level covering ``[x0, x1]``."""
 
-        lo = max(np.searchsorted(self.time_centers, x0, side="left") - margin, 0)
-        hi = min(np.searchsorted(self.time_centers, x1, side="right") + margin, len(self.time_centers))
+        lo = max(int(np.searchsorted(self.time_centers, x0, side="left")) - margin, 0)
+        hi = min(
+            int(np.searchsorted(self.time_centers, x1, side="right")) + margin,
+            len(self.time_centers),
+        )
         return TraceWindow(
             time=self.time_centers[lo:hi],
             inner_mean=self.inner_mean[lo:hi],
@@ -40,6 +42,6 @@ class LODLevel:
         )
 
     def count_in_range(self, x0: float, x1: float) -> int:
-        lo = np.searchsorted(self.time_centers, x0, side="left")
-        hi = np.searchsorted(self.time_centers, x1, side="right")
+        lo = int(np.searchsorted(self.time_centers, x0, side="left"))
+        hi = int(np.searchsorted(self.time_centers, x1, side="right"))
         return max(hi - lo, 1)

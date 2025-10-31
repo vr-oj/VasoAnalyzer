@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor
+from PyQt5.QtGui import QBrush, QColor, QShowEvent
 from PyQt5.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -30,11 +30,11 @@ class MissingAsset:
     sample: SampleN
     kind: str  # "trace", "events", or "attachment"
     label: str
-    current_path: Optional[str]
-    relative: Optional[str] = None
-    hint: Optional[str] = None
-    signature: Optional[str] = None
-    new_path: Optional[str] = None
+    current_path: str | None
+    relative: str | None = None
+    hint: str | None = None
+    signature: str | None = None
+    new_path: str | None = None
 
     def status(self) -> str:
         candidate = self.new_path or self.current_path
@@ -54,7 +54,7 @@ class RelinkDialog(QDialog):
         self.setWindowModality(Qt.NonModal)
         self.resize(720, 360)
 
-        self._assets: List[MissingAsset] = []
+        self._assets: list[MissingAsset] = []
 
         self._build_ui()
 
@@ -154,7 +154,7 @@ class RelinkDialog(QDialog):
         self._refresh_tree()
 
     # ------------------------------------------------------------------
-    def _candidate_from_root(self, root: Path, asset: MissingAsset) -> Optional[Path]:
+    def _candidate_from_root(self, root: Path, asset: MissingAsset) -> Path | None:
         if asset.relative:
             candidate = (root / asset.relative).resolve(strict=False)
             return candidate
@@ -193,6 +193,6 @@ class RelinkDialog(QDialog):
         self.close()
 
     # ------------------------------------------------------------------
-    def showEvent(self, event) -> None:  # type: ignore[override]
+    def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
         self._refresh_tree()

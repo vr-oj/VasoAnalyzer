@@ -9,7 +9,8 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import QApplication
 
-from vasoanalyzer.app import is_enabled, reload as reload_flags
+from vasoanalyzer.app import is_enabled
+from vasoanalyzer.app import reload as reload_flags
 from vasoanalyzer.app.flags import all_enabled
 from vasoanalyzer.services.project_service import open_project_file
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp

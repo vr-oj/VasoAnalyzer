@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 import os
-from typing import Dict, Iterable
+from collections.abc import Iterable
+from functools import lru_cache
 
 _FALSE_VALUES = {"0", "false", "off", "no", "disable", "disabled"}
 _TRUE_VALUES = {"1", "true", "on", "yes", "enable", "enabled"}
@@ -30,8 +30,8 @@ def _parse_bool(value: str) -> bool | None:
     return None
 
 
-def _parse_tokens(raw: str) -> Dict[str, bool]:
-    features: Dict[str, bool] = {}
+def _parse_tokens(raw: str) -> dict[str, bool]:
+    features: dict[str, bool] = {}
     for token in _tokenise(raw):
         if token.startswith(("!", "-")):
             features[_normalise(token[1:])] = False
@@ -48,7 +48,7 @@ def _parse_tokens(raw: str) -> Dict[str, bool]:
 
 
 @lru_cache(maxsize=1)
-def _cached_flags(env_value: str | None = None) -> Dict[str, bool]:
+def _cached_flags(env_value: str | None = None) -> dict[str, bool]:
     raw = env_value if env_value is not None else os.environ.get("VA_FEATURES", "")
     return _parse_tokens(raw)
 
@@ -59,7 +59,7 @@ def reload() -> None:
     _cached_flags.cache_clear()
 
 
-def all_enabled(env_value: str | None = None) -> Dict[str, bool]:
+def all_enabled(env_value: str | None = None) -> dict[str, bool]:
     """Return a copy of the parsed feature map."""
 
     return dict(_cached_flags(env_value))
@@ -75,4 +75,3 @@ def is_enabled(flag: str, *, default: bool = False) -> bool:
     if key not in features:
         return default
     return features[key]
-

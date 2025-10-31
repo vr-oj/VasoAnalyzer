@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 from vasoanalyzer.storage.sqlite_utils import (
     backup_to_delete_mode,
@@ -31,23 +31,25 @@ def _guess_asset_tables(conn: sqlite3.Connection) -> list[tuple[str, set[str]]]:
     out = []
     for (tname,) in rows:
         cols = _table_cols(conn, tname)
-        if ("media_type" in cols) and any(c in cols for c in ("blob", "data", "bytes", "content")):
-            if any(c in cols for c in ("is_embedded", "embedded")):
-                if any(c in cols for c in ("sha256", "hash")) and any(
-                    c in cols for c in ("path_hint", "relative_path", "path")
-                ):
-                    out.append((tname, cols))
+        if (
+            "media_type" in cols
+            and any(c in cols for c in ("blob", "data", "bytes", "content"))
+            and any(c in cols for c in ("is_embedded", "embedded"))
+            and any(c in cols for c in ("sha256", "hash"))
+            and any(c in cols for c in ("path_hint", "relative_path", "path"))
+        ):
+            out.append((tname, cols))
     return out
 
 
-def _first_in(options: list[str], cols: set[str]) -> Optional[str]:
+def _first_in(options: list[str], cols: set[str]) -> str | None:
     for name in options:
         if name in cols:
             return name
     return None
 
 
-def externalize_snapshot_tiffs(conn: sqlite3.Connection, extract_dir: Optional[str]) -> int:
+def externalize_snapshot_tiffs(conn: sqlite3.Connection, extract_dir: str | None) -> int:
     """Convert embedded TIFF assets to linked records, optionally extracting them."""
 
     total = 0
@@ -77,7 +79,8 @@ def externalize_snapshot_tiffs(conn: sqlite3.Connection, extract_dir: Optional[s
                 with open(dest, "wb") as fh:
                     fh.write(blob)
 
-            fields, params = [], []
+            fields: list[str] = []
+            params: list[object] = []
             fields.append(f"{emb_col}=?")
             params.append(0)
             fields.append(f"{blob_col}=?")
@@ -96,10 +99,10 @@ def externalize_snapshot_tiffs(conn: sqlite3.Connection, extract_dir: Optional[s
 
 def export_single_file(
     db_path: str,
-    out_path: Optional[str] = None,
+    out_path: str | None = None,
     *,
     link_snapshot_tiffs: bool = True,
-    extract_tiffs_dir: Optional[str] = None,
+    extract_tiffs_dir: str | None = None,
 ) -> str:
     """Create a shareable `.vaso` copy with DELETE journal mode."""
 
@@ -114,10 +117,8 @@ def export_single_file(
         with connect_rw(out_path) as conn:
             changed = externalize_snapshot_tiffs(conn, extract_tiffs_dir)
             if changed:
-                try:
+                with contextlib.suppress(Exception):
                     conn.commit()
-                except Exception:
-                    pass
             vacuum_optimize(conn)
 
     delete_sidecars(out_path)

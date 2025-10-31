@@ -14,16 +14,19 @@ can override typography, offsets, visibility, and box styling through metadata p
 
 from __future__ import annotations
 
-import copy
+from collections.abc import Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, cast
 
+from matplotlib.artist import Artist
 from matplotlib.axes import Axes
+from matplotlib.backend_bases import RendererBase
 from matplotlib.font_manager import FontProperties
 from matplotlib.transforms import ScaledTranslation, blended_transform_factory
 
 try:  # axes_grid1 is optional; fall back gracefully if absent
-    from mpl_toolkits.axes_grid1 import make_axes_locatable  # type: ignore
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
 except Exception:  # pragma: no cover - optional dependency
     make_axes_locatable = None
 
@@ -70,7 +73,7 @@ class EventEntry:
 
     time: float
     label: str
-    meta: Dict[str, Any] = field(default_factory=dict)
+    meta: dict[str, Any] = field(default_factory=dict)
 
     @property
     def display_label(self) -> str:
@@ -93,8 +96,8 @@ class ClusteredLabel:
 
     x: float
     text: str
-    meta: Dict[str, Any]
-    entries: List[EventEntry]
+    meta: dict[str, Any]
+    entries: list[EventEntry]
 
 
 def _truncate(text: str, limit: int) -> str:
@@ -105,7 +108,7 @@ def _truncate(text: str, limit: int) -> str:
     return f"{text[: limit - 1]}…"
 
 
-def _measure_text(renderer, text: str, fontsize: float) -> Tuple[float, float]:
+def _measure_text(renderer: RendererBase | None, text: str, fontsize: float) -> tuple[float, float]:
     if renderer is None:
         return 0.0, 0.0
     props = FontProperties(size=fontsize)
@@ -113,7 +116,7 @@ def _measure_text(renderer, text: str, fontsize: float) -> Tuple[float, float]:
     return float(width), float(height)
 
 
-def _shared_x_axes(ax: Axes) -> List[Axes]:
+def _shared_x_axes(ax: Axes) -> list[Axes]:
     try:
         siblings = list(ax.get_shared_x_axes().get_siblings(ax))
     except Exception:
@@ -131,13 +134,13 @@ def _select_host(ax: Axes, policy: str) -> Axes:
     return siblings[-1]
 
 
-def _cluster_by_pixels(ax: Axes, xs_data: Sequence[float], min_px: int) -> List[List[int]]:
+def _cluster_by_pixels(ax: Axes, xs_data: Sequence[float], min_px: int) -> list[list[int]]:
     transform = ax.transData
-    xs_px = [transform.transform((x, 0))[0] for x in xs_data]
+    xs_px = [float(transform.transform((x, 0))[0]) for x in xs_data]
     order = sorted(range(len(xs_px)), key=xs_px.__getitem__)
-    clusters: List[List[int]] = []
-    current: List[int] = []
-    last_px: Optional[float] = None
+    clusters: list[list[int]] = []
+    current: list[int] = []
+    last_px: float | None = None
     for idx in order:
         px = xs_px[idx]
         if last_px is None or abs(px - last_px) >= min_px:
@@ -172,28 +175,29 @@ class EventLabeler:
         ax: Axes,
         events: Iterable[Any],
         mode: str = "vertical",
-        options: Optional[LayoutOptions] = None,
+        options: LayoutOptions | None = None,
     ) -> None:
         self.ax = ax
         self.options = options or LayoutOptions()
 
         self.mode = mode.lower()
         if self.mode not in self._VALID_MODES:
-            raise ValueError(f"Unsupported mode '{mode}'. Expected one of {sorted(self._VALID_MODES)}.")
+            expected = ", ".join(sorted(self._VALID_MODES))
+            raise ValueError(f"Unsupported mode '{mode}'. Expected one of {expected}.")
 
-        self.events: List[EventEntry] = self._normalise_events(events)
+        self.events: list[EventEntry] = self._normalise_events(events)
         host_policy = (self.options.label_host or "auto_top").lower()
         if host_policy not in {"self", "auto_top", "auto_bottom"}:
             host_policy = "auto_top"
         self._host_ax: Axes = _select_host(ax, host_policy)
 
-        self._artists: List = []
-        self._belt_artists: List = []
-        self._belt_ax: Optional[Axes] = None
-        self._cid: Optional[int] = None
+        self._artists: list[Artist] = []
+        self._belt_artists: list[Artist] = []
+        self._belt_ax: Axes | None = None
+        self._cid: int | None = None
 
     # ------------------------------------------------------------------ lifecycle
-    def draw(self) -> "EventLabeler":
+    def draw(self) -> EventLabeler:
         self.clear()
         if not self.events:
             return self
@@ -206,26 +210,20 @@ class EventLabeler:
 
     def clear(self) -> None:
         for artist in self._artists:
-            try:
+            with suppress(Exception):
                 artist.remove()
-            except Exception:
-                pass
         self._artists.clear()
 
         for artist in self._belt_artists:
-            try:
+            with suppress(Exception):
                 artist.remove()
-            except Exception:
-                pass
         self._belt_artists.clear()
 
     def disconnect(self) -> None:
         if self._cid is None:
             return
-        try:
+        with suppress(Exception):
             self.ax.figure.canvas.mpl_disconnect(self._cid)
-        except Exception:
-            pass
         self._cid = None
 
     def destroy(self, *, remove_belt: bool = False) -> None:
@@ -235,13 +233,12 @@ class EventLabeler:
         if remove_belt and self._belt_ax is not None:
             belt = self._belt_ax
             self._belt_ax = None
-            try:
-                belt.remove()
-            except Exception:
-                try:
+            if belt is not None:
+                with suppress(Exception):
+                    belt.remove()
+                    return
+                with suppress(Exception):
                     belt.figure.delaxes(belt)
-                except Exception:
-                    pass
         else:
             self._belt_ax = None
 
@@ -252,12 +249,18 @@ class EventLabeler:
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
-    def _normalise_events(events: Iterable[Any]) -> List[EventEntry]:
-        entries: List[EventEntry] = []
+    def _normalise_events(events: Iterable[Any]) -> list[EventEntry]:
+        entries: list[EventEntry] = []
         for item in events:
-            meta: Dict[str, Any] = {}
+            meta: dict[str, Any] = {}
             if isinstance(item, EventEntry):
-                entries.append(EventEntry(time=float(item.time), label=str(item.label), meta=dict(item.meta or {})))
+                entries.append(
+                    EventEntry(
+                        time=float(item.time),
+                        label=str(item.label),
+                        meta=dict(item.meta or {}),
+                    )
+                )
                 continue
 
             if isinstance(item, Mapping):
@@ -271,9 +274,11 @@ class EventLabeler:
                     meta.setdefault("text", text_override)
             else:
                 try:
-                    raw_time, raw_label = item  # type: ignore[misc]
+                    raw_time, raw_label = item
                 except Exception as exc:  # pragma: no cover - defensive
-                    raise TypeError("Events must be (time, label) tuples, mappings, or EventEntry instances.") from exc
+                    raise TypeError(
+                        "Events must be (time, label) tuples, mappings, or EventEntry instances."
+                    ) from exc
 
             try:
                 time_value = float(raw_time)
@@ -287,7 +292,11 @@ class EventLabeler:
         return entries
 
     @staticmethod
-    def _meta_float(meta: Mapping[str, Any], key: str, default: Optional[float] = None) -> Optional[float]:
+    def _meta_float(
+        meta: Mapping[str, Any],
+        key: str,
+        default: float | None = None,
+    ) -> float | None:
         value = meta.get(key)
         if value is None:
             return default
@@ -297,7 +306,11 @@ class EventLabeler:
             return default
 
     @staticmethod
-    def _meta_int(meta: Mapping[str, Any], key: str, default: Optional[int] = None) -> Optional[int]:
+    def _meta_int(
+        meta: Mapping[str, Any],
+        key: str,
+        default: int | None = None,
+    ) -> int | None:
         value = meta.get(key)
         if value is None:
             return default
@@ -314,18 +327,22 @@ class EventLabeler:
         else:
             self._draw_horizontal_outside()
 
-    def _visible_indices(self, ax: Axes) -> List[int]:
+    def _visible_indices(self, ax: Axes) -> list[int]:
         xmin, xmax = ax.get_xlim()
         pad = 0.02 * (xmax - xmin)
-        return [idx for idx, entry in enumerate(self.events) if (xmin - pad) <= entry.time <= (xmax + pad)]
+        return [
+            idx
+            for idx, entry in enumerate(self.events)
+            if (xmin - pad) <= entry.time <= (xmax + pad)
+        ]
 
-    def _cluster(self, ax: Axes, indices: List[int]) -> List[ClusteredLabel]:
+    def _cluster(self, ax: Axes, indices: list[int]) -> list[ClusteredLabel]:
         if not indices:
             return []
 
         xs_data = [self.events[i].time for i in indices]
         clusters = _cluster_by_pixels(ax, xs_data, max(1, int(self.options.min_px)))
-        results: List[ClusteredLabel] = []
+        results: list[ClusteredLabel] = []
 
         for cluster in clusters:
             actual_indices = [indices[j] for j in cluster]
@@ -336,7 +353,7 @@ class EventLabeler:
             x_vals = [entry.time for entry in entries]
             centre = sum(x_vals) / len(x_vals) if x_vals else entries[0].time
 
-            texts: List[str] = []
+            texts: list[str] = []
             seen = set()
             for entry in entries:
                 text_piece = _truncate(entry.display_label, self.options.truncate)
@@ -357,7 +374,14 @@ class EventLabeler:
                 label_text = f"{label_text} (+{remaining} more)"
 
             primary_meta = dict(entries[0].meta or {})
-            results.append(ClusteredLabel(x=centre, text=label_text, meta=primary_meta, entries=entries))
+            results.append(
+                ClusteredLabel(
+                    x=centre,
+                    text=label_text,
+                    meta=primary_meta,
+                    entries=entries,
+                )
+            )
 
         results.sort(key=lambda cluster: cluster.x)
         return results
@@ -427,7 +451,7 @@ class EventLabeler:
             ha = self._resolve_halign("right" if side == "right" else "left", meta)
             va = self._resolve_valign("top", meta)
 
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             font_family = meta.get("font") or meta.get("fontfamily")
             if isinstance(font_family, str) and font_family.strip():
                 kwargs["fontfamily"] = font_family
@@ -447,10 +471,7 @@ class EventLabeler:
             rotation = meta.get("rotation", 90)
 
             text_value = meta.get("text_override", cluster.text)
-            if isinstance(text_value, str):
-                label_text = text_value
-            else:
-                label_text = cluster.text
+            label_text = text_value if isinstance(text_value, str) else cluster.text
 
             txt = host.text(
                 cluster.x,
@@ -485,31 +506,29 @@ class EventLabeler:
         lane_right_px = [-float("inf")] * lanes
         buffer_px = 6.0
         lane_ys = [
-            max(0.0, (1.0 - float(self.options.top_pad_axes)) - lane * float(self.options.lane_gap_axes))
+            max(
+                0.0,
+                (1.0 - float(self.options.top_pad_axes)) - lane * float(self.options.lane_gap_axes),
+            )
             for lane in range(lanes)
         ]
 
+        # Force a renderer so pixel measurements are accurate before layout.
         canvas = getattr(host.figure, "canvas", None)
         renderer = None
         if canvas is not None:
-            try:
+            with suppress(Exception):
                 canvas.draw()
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 renderer = canvas.get_renderer()
-            except Exception:
-                renderer = None
 
         base_transform = blended_transform_factory(host.transData, host.transAxes)
         dpi = host.figure.dpi
         default_pad = abs(float(self.options.horizontal_x_pad_px))
         axes_bbox = None
         if renderer is not None:
-            try:
+            with suppress(Exception):
                 axes_bbox = host.get_window_extent(renderer)
-            except Exception:
-                axes_bbox = None
 
         for cluster in clusters:
             meta = cluster.meta or {}
@@ -548,7 +567,7 @@ class EventLabeler:
                     text_right = text_left + width_px
 
             preferred_lane = self._meta_int(meta, "lane", None)
-            lane_idx: Optional[int] = None
+            lane_idx: int | None = None
             if preferred_lane is not None and preferred_lane >= 0:
                 lane_idx = min(preferred_lane, lanes - 1)
             else:
@@ -563,12 +582,16 @@ class EventLabeler:
             offset = total_pad if not align_right else -total_pad
             if align_pref == "center":
                 offset = self._meta_float(meta, "x_offset_px", 0.0) or 0.0
-            transform = base_transform + ScaledTranslation(offset / dpi, 0.0, host.figure.dpi_scale_trans)
+            transform = base_transform + ScaledTranslation(
+                offset / dpi,
+                0.0,
+                host.figure.dpi_scale_trans,
+            )
             ha = "right" if align_right else ("center" if align_pref == "center" else "left")
             va = self._resolve_valign("top", meta)
             y_axes = lane_ys[lane_idx] + (self._meta_float(meta, "y_offset_axes", 0.0) or 0.0)
 
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             font_family = meta.get("font") or meta.get("fontfamily")
             if isinstance(font_family, str) and font_family.strip():
                 kwargs["fontfamily"] = font_family
@@ -603,7 +626,7 @@ class EventLabeler:
             )
             self._artists.append(txt)
 
-    def _ensure_belt(self, host: Axes) -> Optional[Axes]:
+    def _ensure_belt(self, host: Axes) -> Axes | None:
         if make_axes_locatable is None:
             return None
         belt = self._belt_ax
@@ -611,11 +634,14 @@ class EventLabeler:
             return belt
 
         divider = make_axes_locatable(host)
-        belt = divider.append_axes(
-            "top",
-            size=f"{float(self.options.outside_height_pct):.1f}%",
-            pad=float(self.options.outside_pad_in),
-            sharex=host,
+        belt = cast(
+            Axes,
+            divider.append_axes(
+                "top",
+                size=f"{float(self.options.outside_height_pct):.1f}%",
+                pad=float(self.options.outside_pad_in),
+                sharex=host,
+            ),
         )
         self._belt_ax = belt
 
@@ -649,14 +675,10 @@ class EventLabeler:
         canvas = getattr(belt.figure, "canvas", None)
         renderer = None
         if canvas is not None:
-            try:
+            with suppress(Exception):
                 canvas.draw()
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 renderer = canvas.get_renderer()
-            except Exception:
-                renderer = None
 
         lanes = max(1, int(self.options.max_lanes))
         lane_right_px = [-float("inf")] * lanes
@@ -677,10 +699,8 @@ class EventLabeler:
         default_pad = abs(float(self.options.horizontal_x_pad_px))
         axes_bbox = None
         if renderer is not None:
-            try:
+            with suppress(Exception):
                 axes_bbox = belt.get_window_extent(renderer)
-            except Exception:
-                axes_bbox = None
 
         for cluster in clusters:
             meta = cluster.meta or {}
@@ -719,7 +739,7 @@ class EventLabeler:
                     text_right = text_left + width_px
 
             preferred_lane = self._meta_int(meta, "lane", None)
-            lane_idx: Optional[int] = None
+            lane_idx: int | None = None
             if preferred_lane is not None and preferred_lane >= 0:
                 lane_idx = min(preferred_lane, lanes - 1)
             else:
@@ -734,12 +754,16 @@ class EventLabeler:
             offset = total_pad if not align_right else -total_pad
             if align_pref == "center":
                 offset = self._meta_float(meta, "x_offset_px", 0.0) or 0.0
-            transform = base_transform + ScaledTranslation(offset / dpi, 0.0, belt.figure.dpi_scale_trans)
+            transform = base_transform + ScaledTranslation(
+                offset / dpi,
+                0.0,
+                belt.figure.dpi_scale_trans,
+            )
             ha = "right" if align_right else ("center" if align_pref == "center" else "left")
             va = self._resolve_valign("top", meta)
             y_axes = lane_ys[lane_idx] + (self._meta_float(meta, "y_offset_axes", 0.0) or 0.0)
 
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             font_family = meta.get("font") or meta.get("fontfamily")
             if isinstance(font_family, str) and font_family.strip():
                 kwargs["fontfamily"] = font_family
@@ -801,24 +825,18 @@ class EventLabeler:
         canvas = getattr(host.figure, "canvas", None)
         renderer = None
         if canvas is not None:
-            try:
+            with suppress(Exception):
                 canvas.draw()
-            except Exception:
-                pass
-            try:
+            with suppress(Exception):
                 renderer = canvas.get_renderer()
-            except Exception:
-                renderer = None
 
         base_transform = blended_transform_factory(host.transData, host.transAxes)
         dpi = host.figure.dpi
         default_pad = abs(float(self.options.horizontal_x_pad_px))
         axes_bbox = None
         if renderer is not None:
-            try:
+            with suppress(Exception):
                 axes_bbox = host.get_window_extent(renderer)
-            except Exception:
-                axes_bbox = None
 
         for cluster in clusters:
             meta = cluster.meta or {}
@@ -857,7 +875,7 @@ class EventLabeler:
                     text_right = text_left + width_px
 
             preferred_lane = self._meta_int(meta, "lane", None)
-            lane_idx: Optional[int] = None
+            lane_idx: int | None = None
             if preferred_lane is not None and preferred_lane >= 0:
                 lane_idx = min(preferred_lane, lanes - 1)
             else:
@@ -872,12 +890,16 @@ class EventLabeler:
             offset = total_pad if not align_right else -total_pad
             if align_pref == "center":
                 offset = self._meta_float(meta, "x_offset_px", 0.0) or 0.0
-            transform = base_transform + ScaledTranslation(offset / dpi, 0.0, host.figure.dpi_scale_trans)
+            transform = base_transform + ScaledTranslation(
+                offset / dpi,
+                0.0,
+                host.figure.dpi_scale_trans,
+            )
             ha = "right" if align_right else ("center" if align_pref == "center" else "left")
             va = self._resolve_valign("bottom", meta)
             y_axes = lane_ys[lane_idx] + (self._meta_float(meta, "y_offset_axes", 0.0) or 0.0)
 
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             font_family = meta.get("font") or meta.get("fontfamily")
             if isinstance(font_family, str) and font_family.strip():
                 kwargs["fontfamily"] = font_family

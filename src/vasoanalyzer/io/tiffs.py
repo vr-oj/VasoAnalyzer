@@ -5,8 +5,8 @@
 
 """Loading routines for TIFF stacks used for trace snapshots."""
 
-import logging
 import json
+import logging
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -15,14 +15,15 @@ import tifffile
 log = logging.getLogger(__name__)
 
 
-def parse_description(desc: str) -> dict:
+def parse_description(desc: str) -> dict[str, object]:
     """Parse TIFF page descriptions which may contain JSON or OME-XML."""
 
     if not desc:
         return {}
 
     try:
-        return json.loads(desc)
+        parsed = json.loads(desc)
+        return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         pass
 

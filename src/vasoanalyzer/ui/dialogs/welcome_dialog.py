@@ -7,25 +7,25 @@ from __future__ import annotations
 
 import os
 
-from PyQt5.QtCore import Qt, QSettings, pyqtSignal
+from PyQt5.QtCore import QSettings, Qt, pyqtSignal
+from PyQt5.QtSvg import QSvgWidget
 from PyQt5.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QFrame,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
-    QSizePolicy,
 )
-from PyQt5.QtSvg import QSvgWidget
 
 from utils import resource_path
-
 from utils.config import APP_VERSION
+
 from .. import resources_rc  # noqa: F401 - ensure Qt resources loaded
 
 
@@ -159,7 +159,7 @@ class WelcomeGuideDialog(QDialog):
         title_row.addWidget(version_chip, 0, Qt.AlignRight)
 
         subtitle = QLabel(
-            "Take a quick tour so you can load traces, explore events, and share results with confidence."
+            "Take a quick tour to load traces, explore events, and share results confidently."
         )
         subtitle.setWordWrap(True)
         subtitle.setProperty("va-body", True)
@@ -300,7 +300,7 @@ class WelcomeGuideDialog(QDialog):
 
         normalized = []
         for token in tokens:
-            if isinstance(token, (tuple, list)):
+            if isinstance(token, tuple | list):
                 options = [str(opt).strip() for opt in token if str(opt).strip()]
                 if options:
                     normalized.append(" / ".join(options))
@@ -342,7 +342,7 @@ class WelcomeGuideDialog(QDialog):
         title = QLabel("Quick tour")
         title.setProperty("va-h1", True)
         blurb = QLabel(
-            "See how VasoAnalyzer moves from raw traces to polished figures without losing project context."
+            "See VasoAnalyzer turn raw traces into polished figures while keeping context intact."
         )
         blurb.setWordWrap(True)
         blurb.setProperty("va-body", True)
@@ -393,7 +393,7 @@ class WelcomeGuideDialog(QDialog):
         title.setProperty("va-h1", True)
 
         intro = QLabel(
-            "Each panel is purpose-built for vascular analysis, balancing quick toggles and deeper dives."
+            "Each panel suits vascular analysis, balancing quick toggles with deeper dives."
         )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
@@ -439,7 +439,7 @@ class WelcomeGuideDialog(QDialog):
         title.setProperty("va-h1", True)
 
         intro = QLabel(
-            "Follow this path from acquisition to communication while keeping collaborators aligned."
+            "Follow this path from acquisition to communication and keep collaborators aligned."
         )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)

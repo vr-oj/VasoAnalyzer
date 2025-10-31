@@ -5,7 +5,6 @@
 
 import re
 from pathlib import Path
-from typing import Optional
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -40,7 +39,11 @@ class NewProjectDialog(QDialog):
         self._settings = settings
         self._path_edited_manually = False
 
-        self._default_dir = self._settings.value("paths/last_project_directory", "", type=str) if self._settings else ""
+        self._default_dir = (
+            self._settings.value("paths/last_project_directory", "", type=str)
+            if self._settings
+            else ""
+        )
         if not self._default_dir:
             self._default_dir = str(Path.home())
 
@@ -93,13 +96,15 @@ class NewProjectDialog(QDialog):
         form.addRow("Experiment:", experiment_container)
 
         guidance = QLabel(
-            "After creating the project you can start loading traces, events, and images from the toolbar."
+            "After creating the project, use the toolbar to load traces, events, and images."
         )
         guidance.setWordWrap(True)
         guidance.setStyleSheet("color: palette(mid);")
         main_layout.addWidget(guidance)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self)
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
+        )
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         main_layout.addWidget(button_box)
@@ -151,7 +156,7 @@ class NewProjectDialog(QDialog):
         self._path_edited_manually = True
 
     # ------------------------------------------------------------------#
-    def accept(self) -> None:  # type: ignore[override]
+    def accept(self) -> None:
         name = _sanitize_project_name(self.project_name_edit.text())
         if not name:
             QMessageBox.warning(self, "Missing Information", "Please enter a project name.")
@@ -160,7 +165,9 @@ class NewProjectDialog(QDialog):
 
         path_text = self.project_path_edit.text().strip()
         if not path_text:
-            QMessageBox.warning(self, "Missing Information", "Select where the project should be saved.")
+            QMessageBox.warning(
+                self, "Missing Information", "Select where the project should be saved."
+            )
             self.project_path_edit.setFocus(Qt.OtherFocusReason)
             return
 
@@ -182,7 +189,9 @@ class NewProjectDialog(QDialog):
         try:
             project_path.parent.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            QMessageBox.critical(self, "Create Project", f"Unable to prepare the target folder:\n{exc}")
+            QMessageBox.critical(
+                self, "Create Project", f"Unable to prepare the target folder:\n{exc}"
+            )
             return
 
         if self._settings:
@@ -202,7 +211,7 @@ class NewProjectDialog(QDialog):
         return self.project_path_edit.text().strip()
 
     # ------------------------------------------------------------------#
-    def experiment_name(self) -> Optional[str]:
+    def experiment_name(self) -> str | None:
         if not self.create_experiment_checkbox.isChecked():
             return None
         exp_name = self.experiment_name_edit.text().strip()

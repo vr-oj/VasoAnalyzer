@@ -5,43 +5,41 @@
 
 """Combined dialog for subplot layout, axis settings and style."""
 
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+import contextlib
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon, QColor
-from PyQt5.QtWidgets import (
-    QDialog,
-    QTabWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGridLayout,
-    QGroupBox,
-    QFormLayout,
-    QLabel,
-    QWidget,
-    QComboBox,
-    QDoubleSpinBox,
-    QSpinBox,
-    QCheckBox,
-    QPushButton,
-    QSlider,
-    QLineEdit,
-    QColorDialog,
-    QDialogButtonBox,
-    QStyle,
-    QScrollArea,
-    QListWidget,
-    QListWidgetItem,
-)
+from matplotlib.colors import to_hex
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator
-from matplotlib.lines import Line2D
-from matplotlib.colors import to_hex
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QFont, QIcon
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QStyle,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
-from vasoanalyzer.ui.theme import CURRENT_THEME
-from vasoanalyzer.ui.constants import DEFAULT_STYLE
-from vasoanalyzer.ui.event_label_editor import EventLabelEditor
 from utils import resource_path
+from vasoanalyzer.ui.constants import DEFAULT_STYLE
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 
 class UnifiedPlotSettingsDialog(QDialog):
@@ -58,8 +56,8 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.pinned_points = pinned_points or []
 
         self._font_choices: Sequence[str] = ("Arial", "Helvetica", "Times New Roman", "Courier New")
-        self._event_entries: List[Dict[str, Any]] = []
-        self._event_times: List[float] = []
+        self._event_entries: list[dict[str, Any]] = []
+        self._event_times: list[float] = []
         self._suppress_event_editor = False
         self._event_updates_fired = False
         self._event_update_callback = None
@@ -67,9 +65,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.parent_window = parent
         self.style = DEFAULT_STYLE.copy()
         try:
-            if hasattr(parent, '_snapshot_style'):
+            if hasattr(parent, "_snapshot_style"):
                 self.style.update(parent._snapshot_style())
-            elif hasattr(parent, 'get_current_plot_style'):
+            elif hasattr(parent, "get_current_plot_style"):
                 current = parent.get_current_plot_style() or {}
                 if isinstance(current, dict):
                     self.style.update(current)
@@ -495,7 +493,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         tick_grp = QGroupBox("Grid && Ticks")
         tick_form = QFormLayout(tick_grp)
         self.show_grid = QCheckBox("Show grid")
-        grid_state = getattr(self.parent_window, 'grid_visible', None)
+        grid_state = getattr(self.parent_window, "grid_visible", None)
         if grid_state is None:
             grid_state = any(line.get_visible() for line in self.ax.get_xgridlines())
         self.show_grid.setChecked(bool(grid_state))
@@ -557,7 +555,7 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Event override helpers -------------------------------------------
-    def _initialize_event_sources(self, parent: Optional[object]) -> None:
+    def _initialize_event_sources(self, parent: object | None) -> None:
         if parent is not None:
             callback = getattr(parent, "apply_event_label_overrides", None)
             if callable(callback):
@@ -571,23 +569,23 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     def _load_event_entries(
         self,
-        labels: Optional[Sequence[str]],
-        times: Optional[Sequence[float]],
-        meta: Optional[Sequence[Mapping[str, Any]]],
+        labels: Sequence[str] | None,
+        times: Sequence[float] | None,
+        meta: Sequence[Mapping[str, Any]] | None,
     ) -> None:
         self._event_entries.clear()
         self._event_times = []
         if not labels:
             return
 
-        times_list: List[float] = []
+        times_list: list[float] = []
         if times is not None:
             for value in times:
                 try:
                     times_list.append(float(value))
                 except (TypeError, ValueError):
                     times_list.append(0.0)
-        meta_list: List[Mapping[str, Any]] = list(meta or [])
+        meta_list: list[Mapping[str, Any]] = list(meta or [])
         if len(meta_list) < len(labels):
             meta_list.extend({} for _ in range(len(labels) - len(meta_list)))
 
@@ -596,9 +594,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         for idx, raw_label in enumerate(labels):
             entry_meta = meta_list[idx] if idx < len(meta_list) else {}
             label_text = str(raw_label) if raw_label is not None else ""
-            time_val = (
-                times_list[idx] if idx < len(times_list) else 0.0
-            )
+            time_val = times_list[idx] if idx < len(times_list) else 0.0
             self._event_entries.append(
                 {
                     "label": label_text,
@@ -614,7 +610,7 @@ class UnifiedPlotSettingsDialog(QDialog):
     def event_updates_emitted(self) -> bool:
         return bool(self._event_updates_fired)
 
-    def get_event_overrides(self) -> tuple[List[str], List[Dict[str, Any]]]:
+    def get_event_overrides(self) -> tuple[list[str], list[dict[str, Any]]]:
         if not self._event_entries:
             return ([], [])
         labels = [entry.get("label", "") for entry in self._event_entries]
@@ -629,7 +625,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             self._event_update_callback(labels, meta)
         self._event_updates_fired = True
 
-    def _format_event_list_item(self, entry: Dict[str, Any]) -> str:
+    def _format_event_list_item(self, entry: dict[str, Any]) -> str:
         label = entry.get("label") or "(Untitled)"
         try:
             time_val = float(entry.get("time", 0.0))
@@ -683,7 +679,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             )
         self._suppress_event_editor = False
 
-    def _on_event_style_changed(self, index: int, meta: Dict[str, Any]) -> None:
+    def _on_event_style_changed(self, index: int, meta: dict[str, Any]) -> None:
         if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
             return
         self._event_entries[index]["meta"] = dict(meta or {})
@@ -720,24 +716,26 @@ class UnifiedPlotSettingsDialog(QDialog):
     # Style tab --------------------------------------------------------
     def _make_style_tab_legacy(self):
         from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
+
         return build_style_tab(self)
 
     def _make_style_tab(self):
         from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
+
         return build_style_tab(self)
 
     # ------------------------------------------------------------------
     def update_preview(self, *_):
         params = {name: ctrl.value() for name, ctrl in self.layout_controls.items()}
         self.preview_ax.clear()
-        self.preview_ax.axis('off')
+        self.preview_ax.axis("off")
         self.preview_ax.add_patch(
             Rectangle(
-                (params['left'], params['bottom']),
-                params['right'] - params['left'],
-                params['top'] - params['bottom'],
+                (params["left"], params["bottom"]),
+                params["right"] - params["left"],
+                params["top"] - params["bottom"],
                 fill=False,
-                edgecolor='#4a90e2',
+                edgecolor="#4a90e2",
                 lw=2,
             )
         )
@@ -745,7 +743,6 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.preview_ax.set_ylim(0, 1)
         self.preview_ax.invert_yaxis()
         self.preview_canvas.draw_idle()
-
 
     def _populate_layout_controls(self, params):
         if not hasattr(self, "layout_controls"):
@@ -811,7 +808,9 @@ class UnifiedPlotSettingsDialog(QDialog):
             self._toggle_range_inputs([self.yo_min, self.yo_max], not self.yo_auto.isChecked())
             y2_scale = state.get("bottom_scale", state.get("right_scale", self.ax2.get_yscale()))
             self.yo_scale.setCurrentText("Log" if y2_scale == "log" else "Linear")
-            bottom_ticks = state.get("bottom_ticks", state.get("right_ticks", self.yo_ticks.value()))
+            bottom_ticks = state.get(
+                "bottom_ticks", state.get("right_ticks", self.yo_ticks.value())
+            )
             self.yo_ticks.setValue(int(max(2, min(20, bottom_ticks))))
 
         grid_on = state.get("grid_on")
@@ -864,17 +863,25 @@ class UnifiedPlotSettingsDialog(QDialog):
             style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"]),
         )
         self.axis_font_size.blockSignals(True)
-        self.axis_font_size.setValue(int(style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])))
+        self.axis_font_size.setValue(
+            int(style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"]))
+        )
         self.axis_font_size.blockSignals(False)
         self.axis_bold.blockSignals(True)
-        self.axis_bold.setChecked(bool(style.get("axis_bold", DEFAULT_STYLE.get("axis_bold", True))))
+        self.axis_bold.setChecked(
+            bool(style.get("axis_bold", DEFAULT_STYLE.get("axis_bold", True)))
+        )
         self.axis_bold.blockSignals(False)
         self.axis_italic.blockSignals(True)
-        self.axis_italic.setChecked(bool(style.get("axis_italic", DEFAULT_STYLE.get("axis_italic", False))))
+        self.axis_italic.setChecked(
+            bool(style.get("axis_italic", DEFAULT_STYLE.get("axis_italic", False)))
+        )
         self.axis_italic.blockSignals(False)
 
         self.tick_font_size.blockSignals(True)
-        self.tick_font_size.setValue(int(style.get("tick_font_size", DEFAULT_STYLE["tick_font_size"])))
+        self.tick_font_size.setValue(
+            int(style.get("tick_font_size", DEFAULT_STYLE["tick_font_size"]))
+        )
         self.tick_font_size.blockSignals(False)
 
         x_color_source = self._x_axis_target or self.ax
@@ -925,13 +932,19 @@ class UnifiedPlotSettingsDialog(QDialog):
             style.get("event_font_family", DEFAULT_STYLE["event_font_family"]),
         )
         self.event_font_size.blockSignals(True)
-        self.event_font_size.setValue(int(style.get("event_font_size", DEFAULT_STYLE["event_font_size"])))
+        self.event_font_size.setValue(
+            int(style.get("event_font_size", DEFAULT_STYLE["event_font_size"]))
+        )
         self.event_font_size.blockSignals(False)
         self.event_bold.blockSignals(True)
-        self.event_bold.setChecked(bool(style.get("event_bold", DEFAULT_STYLE.get("event_bold", False))))
+        self.event_bold.setChecked(
+            bool(style.get("event_bold", DEFAULT_STYLE.get("event_bold", False)))
+        )
         self.event_bold.blockSignals(False)
         self.event_italic.blockSignals(True)
-        self.event_italic.setChecked(bool(style.get("event_italic", DEFAULT_STYLE.get("event_italic", False))))
+        self.event_italic.setChecked(
+            bool(style.get("event_italic", DEFAULT_STYLE.get("event_italic", False)))
+        )
         self.event_italic.blockSignals(False)
         self._set_button_color(
             self.event_color_btn,
@@ -949,7 +962,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.pin_bold.setChecked(bool(style.get("pin_bold", DEFAULT_STYLE.get("pin_bold", False))))
         self.pin_bold.blockSignals(False)
         self.pin_italic.blockSignals(True)
-        self.pin_italic.setChecked(bool(style.get("pin_italic", DEFAULT_STYLE.get("pin_italic", False))))
+        self.pin_italic.setChecked(
+            bool(style.get("pin_italic", DEFAULT_STYLE.get("pin_italic", False)))
+        )
         self.pin_italic.blockSignals(False)
         self._set_button_color(
             self.pin_color_btn,
@@ -962,7 +977,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.line_width.blockSignals(True)
         self.line_width.setValue(float(style.get("line_width", DEFAULT_STYLE["line_width"])))
         self.line_width.blockSignals(False)
-        idx = self.line_style_combo.findData(style.get("line_style", DEFAULT_STYLE["line_style"]).lower())
+        idx = self.line_style_combo.findData(
+            style.get("line_style", DEFAULT_STYLE["line_style"]).lower()
+        )
         if idx != -1:
             self.line_style_combo.blockSignals(True)
             self.line_style_combo.setCurrentIndex(idx)
@@ -980,10 +997,14 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         if hasattr(self, "od_line_width"):
             self.od_line_width.blockSignals(True)
-            self.od_line_width.setValue(float(style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"])))
+            self.od_line_width.setValue(
+                float(style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"]))
+            )
             self.od_line_width.blockSignals(False)
         if hasattr(self, "od_line_style_combo"):
-            o_idx = self.od_line_style_combo.findData(style.get("outer_line_style", DEFAULT_STYLE["outer_line_style"]).lower())
+            o_idx = self.od_line_style_combo.findData(
+                style.get("outer_line_style", DEFAULT_STYLE["outer_line_style"]).lower()
+            )
             if o_idx != -1:
                 self.od_line_style_combo.blockSignals(True)
                 self.od_line_style_combo.setCurrentIndex(o_idx)
@@ -1052,14 +1073,14 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     def apply_changes(self):
-        parent = getattr(self, 'parent_window', None) or self.parent()
+        parent = getattr(self, "parent_window", None) or self.parent()
 
         if self.origin_mode.currentText() == "Manual":
-            self.ax.spines['left'].set_position(('data', self.origin_x.value()))
-            self.ax.spines['bottom'].set_position(('data', self.origin_y.value()))
+            self.ax.spines["left"].set_position(("data", self.origin_x.value()))
+            self.ax.spines["bottom"].set_position(("data", self.origin_y.value()))
         else:
-            self.ax.spines['left'].set_position(('outward', 0))
-            self.ax.spines['bottom'].set_position(('outward', 0))
+            self.ax.spines["left"].set_position(("outward", 0))
+            self.ax.spines["bottom"].set_position(("outward", 0))
 
         preset = self.size_preset.currentText()
         if preset == "Custom":
@@ -1069,33 +1090,29 @@ class UnifiedPlotSettingsDialog(QDialog):
             self.fig.set_size_inches(side, side)
 
         layout_values = {n: c.value() for n, c in self.layout_controls.items()}
-        layout_values['left'] = max(0.0, min(layout_values['left'], 1.0))
-        layout_values['right'] = max(layout_values['left'] + 0.05, min(layout_values['right'], 1.0))
-        layout_values['bottom'] = max(0.0, min(layout_values['bottom'], 1.0))
-        layout_values['top'] = max(layout_values['bottom'] + 0.05, min(layout_values['top'], 1.0))
-        layout_values['wspace'] = max(0.0, layout_values['wspace'])
-        layout_values['hspace'] = max(0.0, layout_values['hspace'])
+        layout_values["left"] = max(0.0, min(layout_values["left"], 1.0))
+        layout_values["right"] = max(layout_values["left"] + 0.05, min(layout_values["right"], 1.0))
+        layout_values["bottom"] = max(0.0, min(layout_values["bottom"], 1.0))
+        layout_values["top"] = max(layout_values["bottom"] + 0.05, min(layout_values["top"], 1.0))
+        layout_values["wspace"] = max(0.0, layout_values["wspace"])
+        layout_values["hspace"] = max(0.0, layout_values["hspace"])
         self.fig.subplots_adjust(**layout_values)
 
         x_auto = self.x_auto.isChecked()
         self.ax.set_autoscalex_on(x_auto)
         if x_auto:
-            self.ax.autoscale(enable=True, axis='x')
+            self.ax.autoscale(enable=True, axis="x")
         else:
-            try:
+            with contextlib.suppress(Exception):
                 self.ax.set_xlim(self.x_min.value(), self.x_max.value())
-            except Exception:
-                pass
 
         y_auto = self.y_auto.isChecked()
         self.ax.set_autoscaley_on(y_auto)
         if y_auto:
-            self.ax.autoscale(enable=True, axis='y')
+            self.ax.autoscale(enable=True, axis="y")
         else:
-            try:
+            with contextlib.suppress(Exception):
                 self.ax.set_ylim(self.yi_min.value(), self.yi_max.value())
-            except Exception:
-                pass
 
         self.ax.set_xscale(self.x_scale.currentText().lower())
         self.ax.set_yscale(self.y_scale.currentText().lower())
@@ -1106,21 +1123,19 @@ class UnifiedPlotSettingsDialog(QDialog):
             y2_auto = self.yo_auto.isChecked()
             self.ax2.set_autoscaley_on(y2_auto)
             if y2_auto:
-                self.ax2.autoscale(enable=True, axis='y')
+                self.ax2.autoscale(enable=True, axis="y")
             else:
-                try:
+                with contextlib.suppress(Exception):
                     self.ax2.set_ylim(self.yo_min.value(), self.yo_max.value())
-                except Exception:
-                    pass
             self.ax2.set_yscale(self.yo_scale.currentText().lower())
             self.ax2.yaxis.set_major_locator(MaxNLocator(self.yo_ticks.value()))
 
         grid_on = self.show_grid.isChecked()
         if grid_on:
-            self.ax.grid(True, color=CURRENT_THEME.get('grid_color', '#e0e0e0'))
+            self.ax.grid(True, color=CURRENT_THEME.get("grid_color", "#e0e0e0"))
         else:
             self.ax.grid(False)
-        if parent is not None and hasattr(parent, 'grid_visible'):
+        if parent is not None and hasattr(parent, "grid_visible"):
             parent.grid_visible = bool(grid_on)
 
         self.ax.set_title(self.title_edit.text())
@@ -1134,53 +1149,56 @@ class UnifiedPlotSettingsDialog(QDialog):
         if self.ax2 is not None:
             self.ax2.set_ylabel(self.yo_label_edit.text())
 
-        self.style['axis_font_family'] = self.axis_font_family.currentText()
-        self.style['axis_font_size'] = int(self.axis_font_size.value())
-        self.style['axis_bold'] = self.axis_bold.isChecked()
-        self.style['axis_italic'] = self.axis_italic.isChecked()
-        self.style['tick_font_size'] = int(self.tick_font_size.value())
-        self.style['axis_color'] = self.x_axis_color_btn.color
-        self.style['x_axis_color'] = self.x_axis_color_btn.color
-        self.style['y_axis_color'] = self.yi_axis_color_btn.color
-        self.style['x_tick_color'] = self.x_tick_color_btn.color
-        self.style['y_tick_color'] = self.yi_tick_color_btn.color
-        self.style['tick_color'] = self.x_tick_color_btn.color
-        self.style['tick_length'] = float(self.tick_length.value())
-        self.style['tick_width'] = float(self.tick_width.value())
-        self.style['line_width'] = float(self.line_width.value())
-        self.style['line_style'] = (self.line_style_combo.currentData() or DEFAULT_STYLE['line_style']).lower()
-        self.style['line_color'] = self.line_color_btn.color
-        self.style['event_font_family'] = self.event_font_family.currentText()
-        self.style['event_font_size'] = int(self.event_font_size.value())
-        self.style['event_bold'] = self.event_bold.isChecked()
-        self.style['event_italic'] = self.event_italic.isChecked()
-        self.style['event_color'] = self.event_color_btn.color
-        self.style['pin_font_family'] = self.pin_font_family.currentText()
-        self.style['pin_font_size'] = int(self.pin_font_size.value())
-        self.style['pin_bold'] = self.pin_bold.isChecked()
-        self.style['pin_italic'] = self.pin_italic.isChecked()
-        self.style['pin_color'] = self.pin_color_btn.color
-        self.style['pin_size'] = int(self.pin_marker_size.value())
+        self.style["axis_font_family"] = self.axis_font_family.currentText()
+        self.style["axis_font_size"] = int(self.axis_font_size.value())
+        self.style["axis_bold"] = self.axis_bold.isChecked()
+        self.style["axis_italic"] = self.axis_italic.isChecked()
+        self.style["tick_font_size"] = int(self.tick_font_size.value())
+        self.style["axis_color"] = self.x_axis_color_btn.color
+        self.style["x_axis_color"] = self.x_axis_color_btn.color
+        self.style["y_axis_color"] = self.yi_axis_color_btn.color
+        self.style["x_tick_color"] = self.x_tick_color_btn.color
+        self.style["y_tick_color"] = self.yi_tick_color_btn.color
+        self.style["tick_color"] = self.x_tick_color_btn.color
+        self.style["tick_length"] = float(self.tick_length.value())
+        self.style["tick_width"] = float(self.tick_width.value())
+        self.style["line_width"] = float(self.line_width.value())
+        self.style["line_style"] = (
+            self.line_style_combo.currentData() or DEFAULT_STYLE["line_style"]
+        ).lower()
+        self.style["line_color"] = self.line_color_btn.color
+        self.style["event_font_family"] = self.event_font_family.currentText()
+        self.style["event_font_size"] = int(self.event_font_size.value())
+        self.style["event_bold"] = self.event_bold.isChecked()
+        self.style["event_italic"] = self.event_italic.isChecked()
+        self.style["event_color"] = self.event_color_btn.color
+        self.style["pin_font_family"] = self.pin_font_family.currentText()
+        self.style["pin_font_size"] = int(self.pin_font_size.value())
+        self.style["pin_bold"] = self.pin_bold.isChecked()
+        self.style["pin_italic"] = self.pin_italic.isChecked()
+        self.style["pin_color"] = self.pin_color_btn.color
+        self.style["pin_size"] = int(self.pin_marker_size.value())
 
         if self.ax2 is not None:
-            if hasattr(self, 'yo_axis_color_btn'):
-                self.style['right_axis_color'] = self.yo_axis_color_btn.color
-            if hasattr(self, 'yo_tick_color_btn'):
-                self.style['right_tick_color'] = self.yo_tick_color_btn.color
-            if hasattr(self, 'od_line_width'):
-                self.style['outer_line_width'] = float(self.od_line_width.value())
-            if hasattr(self, 'od_line_style_combo'):
-                self.style['outer_line_style'] = (self.od_line_style_combo.currentData() or DEFAULT_STYLE['outer_line_style']).lower()
-            if hasattr(self, 'od_line_color_btn'):
-                self.style['outer_line_color'] = self.od_line_color_btn.color
+            if hasattr(self, "yo_axis_color_btn"):
+                self.style["right_axis_color"] = self.yo_axis_color_btn.color
+            if hasattr(self, "yo_tick_color_btn"):
+                self.style["right_tick_color"] = self.yo_tick_color_btn.color
+            if hasattr(self, "od_line_width"):
+                self.style["outer_line_width"] = float(self.od_line_width.value())
+            if hasattr(self, "od_line_style_combo"):
+                self.style["outer_line_style"] = (
+                    self.od_line_style_combo.currentData() or DEFAULT_STYLE["outer_line_style"]
+                ).lower()
+            if hasattr(self, "od_line_color_btn"):
+                self.style["outer_line_color"] = self.od_line_color_btn.color
 
         self._emit_event_updates()
 
-        if parent is not None and hasattr(parent, 'apply_plot_style'):
+        if parent is not None and hasattr(parent, "apply_plot_style"):
             parent.apply_plot_style(self.style, persist=True)
         else:
             self.canvas.draw_idle()
-
 
     # ------------------------------------------------------------------
     def get_style(self):

@@ -1,16 +1,19 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.1
+    rev: v0.6.8
     hooks:
       - id: ruff
-        args: ["--fix"]
+        args: [--select, "I,B,UP,SIM", --fix]
+        files: ^src/vasoanalyzer/
       - id: ruff-format
+        files: ^src/vasoanalyzer/
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
     hooks:
       - id: mypy
         additional_dependencies:
-          - pytest>=7.4
-          - PyQt5>=5.15
-          - types-requests
-        files: "^(src|scripts|tests)/"
+          - PyQt5-stubs==5.15.6.0
+          - types-requests==2.32.0.20240712
+        files: ^src/vasoanalyzer/
+        args:
+          - --config-file=pyproject.toml

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from PyQt5.QtCore import QObject, QRunnable, QThreadPool, pyqtSignal
 
 from vasoanalyzer.services.version import check_for_new_version
@@ -25,8 +23,8 @@ class _UpdateCheckJob(QRunnable):
         self.signals = _UpdateCheckSignals()
 
     def run(self) -> None:  # pragma: no cover - Qt runs this on a worker thread
-        latest: Optional[str] = None
-        error: Optional[BaseException] = None
+        latest: str | None = None
+        error: BaseException | None = None
         try:
             latest = check_for_new_version(self._current_version)
         except BaseException as exc:  # broad on purpose to avoid killing the thread
@@ -39,7 +37,7 @@ class UpdateChecker(QObject):
 
     completed = pyqtSignal(bool, object, object)
 
-    def __init__(self, parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._pool = QThreadPool.globalInstance()
         self._in_progress = False
@@ -58,6 +56,8 @@ class UpdateChecker(QObject):
         self._in_progress = True
         return True
 
-    def _handle_finished(self, silent: bool, latest: Optional[str], error: Optional[BaseException]) -> None:
+    def _handle_finished(
+        self, silent: bool, latest: str | None, error: BaseException | None
+    ) -> None:
         self._in_progress = False
         self.completed.emit(silent, latest, error)

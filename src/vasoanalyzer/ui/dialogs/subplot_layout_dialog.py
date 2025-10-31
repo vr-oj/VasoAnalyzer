@@ -5,27 +5,27 @@
 
 """Custom dialog for adjusting subplot spacing and margins."""
 
+from matplotlib import rcParams
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGroupBox,
-    QLabel,
-    QSlider,
-    QDoubleSpinBox,
     QDialogButtonBox,
+    QDoubleSpinBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
     QSizePolicy,
+    QSlider,
+    QVBoxLayout,
 )
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
-from matplotlib.patches import Rectangle
-from matplotlib import rcParams
 
-from vasoanalyzer.ui.theme import CURRENT_THEME
 from utils import resource_path
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 
 class SubplotLayoutDialog(QDialog):
@@ -62,13 +62,9 @@ class SubplotLayoutDialog(QDialog):
 
         # --- Live preview --------------------------------------------------
         dpi = QApplication.primaryScreen().logicalDotsPerInch()
-        self.preview_fig = Figure(
-            figsize=(2, 2), facecolor=CURRENT_THEME["window_bg"], dpi=dpi
-        )
+        self.preview_fig = Figure(figsize=(2, 2), facecolor=CURRENT_THEME["window_bg"], dpi=dpi)
         self.preview_canvas = FigureCanvas(self.preview_fig)
-        self.preview_canvas.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Expanding
-        )
+        self.preview_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.preview_ax = self.preview_fig.add_subplot(111)
         self.preview_ax.axis("off")
         main.addWidget(self.preview_canvas, 1)
@@ -97,7 +93,8 @@ class SubplotLayoutDialog(QDialog):
         slider = QSlider(Qt.Horizontal)
         slider.setRange(0, 100)
 
-        spin = QDoubleSpinBox(objectName=name)
+        spin = QDoubleSpinBox()
+        spin.setObjectName(name)
         spin.setRange(0.0, 1.0)
         spin.setSingleStep(0.01)
         spin.setDecimals(2)
@@ -209,4 +206,3 @@ class SubplotLayoutDialog(QDialog):
     def _on_ok(self):
         self.apply_to_fig()
         self.accept()
-

@@ -20,7 +20,11 @@ def test_smoke_launch_and_export(qapp, tmp_path):
     events_df = events_dataframe()
     sample = SampleN(name="Synthetic Sample", trace_data=trace_df, events_data=events_df)
     experiment = Experiment(name="Synthetic Experiment", samples=[sample])
-    project = Project(name="Smoke Project", experiments=[experiment], path=str(tmp_path / "smoke.vaso"))
+    project = Project(
+        name="Smoke Project",
+        experiments=[experiment],
+        path=str(tmp_path / "smoke.vaso"),
+    )
 
     try:
         window._replace_current_project(project)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -29,9 +28,9 @@ class SweepResult:
     relative_time: np.ndarray
     triggers: np.ndarray
     inner_sweeps: np.ndarray
-    outer_sweeps: Optional[np.ndarray]
-    average_inner: Optional[np.ndarray]
-    average_outer: Optional[np.ndarray]
+    outer_sweeps: np.ndarray | None
+    average_inner: np.ndarray | None
+    average_outer: np.ndarray | None
 
     @property
     def count(self) -> int:
@@ -74,10 +73,7 @@ def compute_sweeps(model: TraceModel, config: TriggerConfig) -> SweepResult:
 
     dt = float(np.nanmedian(np.diff(time)))
     total_window = float(config.pre_window + config.post_window)
-    if total_window <= 0:
-        samples = 1
-    else:
-        samples = int(max(round(total_window / dt), 1)) + 1
+    samples = 1 if total_window <= 0 else int(max(round(total_window / dt), 1)) + 1
     relative = np.linspace(-config.pre_window, config.post_window, samples)
 
     kept_triggers = []
@@ -131,7 +127,9 @@ def compute_sweeps(model: TraceModel, config: TriggerConfig) -> SweepResult:
     )
 
 
-def _detect_triggers(time: np.ndarray, signal: np.ndarray, threshold: float, direction: str) -> np.ndarray:
+def _detect_triggers(
+    time: np.ndarray, signal: np.ndarray, threshold: float, direction: str
+) -> np.ndarray:
     if signal.size != time.size:
         raise ValueError("signal and time arrays must be the same length")
 

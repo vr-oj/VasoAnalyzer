@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import csv
-from typing import Optional
 
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
@@ -13,8 +12,8 @@ from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDockWidget,
-    QFileDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -36,13 +35,13 @@ class ScopeDock(QDockWidget):
     def __init__(self, parent=None) -> None:
         super().__init__("Scope", parent)
         self.setObjectName("ScopeDock")
-        self._model: Optional[TraceModel] = None
-        self._last_result: Optional[SweepResult] = None
+        self._model: TraceModel | None = None
+        self._last_result: SweepResult | None = None
 
         self._build_ui()
 
     # ------------------------------------------------------------------ public API
-    def set_trace_model(self, model: Optional[TraceModel]) -> None:
+    def set_trace_model(self, model: TraceModel | None) -> None:
         self._model = model
         has_data = model is not None and model.time_full.size > 0
         self.capture_btn.setEnabled(has_data)

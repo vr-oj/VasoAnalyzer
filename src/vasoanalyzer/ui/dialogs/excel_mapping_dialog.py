@@ -3,14 +3,28 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QPushButton, QFileDialog, QComboBox,
-    QTableWidget, QTableWidgetItem, QHBoxLayout, QMessageBox, QFrame,
-    QHeaderView
-)
+import os
+import subprocess
+import sys
+import time
+
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
-import os, sys, subprocess, time
+from PyQt5.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+)
+
 
 class ExcelMappingDialog(QDialog):
     def __init__(self, parent, event_data):
@@ -60,7 +74,7 @@ class ExcelMappingDialog(QDialog):
         self.load_button = QPushButton("Load Excel Template")
         self.load_button.clicked.connect(self.load_excel)
         self.layout.addWidget(self.load_button)
-        
+
         self.excel_filename_label = QLabel("")
         self.layout.addWidget(self.excel_filename_label)
 
@@ -82,7 +96,9 @@ class ExcelMappingDialog(QDialog):
 
         self.event_table = QTableWidget()
         self.event_table.setColumnCount(4)
-        self.event_table.setHorizontalHeaderLabels(["EventLabel", "Time (s)", "ID (\u00b5m)", "Frame"])
+        self.event_table.setHorizontalHeaderLabels(
+            ["EventLabel", "Time (s)", "ID (\u00b5m)", "Frame"]
+        )
         self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.event_table.cellClicked.connect(self.map_event_to_excel)
         self.event_table.setMinimumWidth(420)
@@ -141,7 +157,7 @@ class ExcelMappingDialog(QDialog):
             self.event_table.setItem(i, 2, QTableWidgetItem(str(id_val)))
             self.event_table.setItem(i, 3, QTableWidgetItem(str(frame)))
         self.event_table.resizeColumnsToContents()
-        
+
         self.event_table.setAlternatingRowColors(True)
         self.event_table.setStyleSheet("""
             QTableWidget {
@@ -172,7 +188,6 @@ class ExcelMappingDialog(QDialog):
                 QMessageBox.critical(self, "Error", f"Failed to load Excel file:\n{e}")
         self.excel_filename_label.setText(f"<i>Loaded:</i> {os.path.basename(path)}")
 
-
     def get_current_cell(self):
         col_letter = self.column_selector.currentText()
         return f"{col_letter}{self.current_row}" if col_letter else None
@@ -186,7 +201,7 @@ class ExcelMappingDialog(QDialog):
                 desc_value = str(self.ws[f"A{self.current_row}"].value)
                 if desc_value:
                     description = f" \u2192 <i>{desc_value}</i>"
-            except:
+            except Exception:
                 pass
         self.cell_label.setText(f"<b>Editing Cell:</b> {cell}{description}")
         self.update_preview_table()
@@ -223,7 +238,9 @@ class ExcelMappingDialog(QDialog):
         for r, sheet_row in enumerate(range(start_row, end_row + 1)):
             for c, col in enumerate(column_indices):
                 value = self.ws.cell(row=sheet_row, column=col).value
-                self.preview_table.setItem(r, c, QTableWidgetItem("" if value is None else str(value)))
+                self.preview_table.setItem(
+                    r, c, QTableWidgetItem("" if value is None else str(value))
+                )
 
         self.preview_table.resizeColumnsToContents()
 
@@ -260,7 +277,7 @@ class ExcelMappingDialog(QDialog):
         cell, old_value = self.history.pop()
         self.ws[cell] = old_value
         self.wb.save(self.excel_path)
-        self.current_row = int(''.join(filter(str.isdigit, cell)))
+        self.current_row = int("".join(filter(str.isdigit, cell)))
         self.update_cell_label()
         self.update_preview_table()
 
@@ -273,7 +290,9 @@ class ExcelMappingDialog(QDialog):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save Excel file:\n{e}")
 
+
 # Auto-update utility
+
 
 def update_excel_file(excel_path, event_table_data, start_row=3, column_letter="B"):
     try:
@@ -290,14 +309,16 @@ def update_excel_file(excel_path, event_table_data, start_row=3, column_letter="
     except Exception as e:
         print(f"❌ Failed to update Excel file:\n{e}")
 
+
 # Cross-platform file reopening logic
+
 
 def reopen_excel_file_crossplatform(path):
     try:
         time.sleep(1)
         if sys.platform == "darwin":
             safe_path = path.replace("\\", "\\\\").replace('"', '\\"')
-            applescript = f'''
+            applescript = f"""
             tell application "Microsoft Excel"
                 try
                     close (documents whose name is "{os.path.basename(path)}") saving yes
@@ -305,7 +326,7 @@ def reopen_excel_file_crossplatform(path):
                 open POSIX file "{safe_path}"
                 activate
             end tell
-            '''
+            """
 
             subprocess.call(["osascript", "-e", applescript])
         elif sys.platform == "win32":

@@ -4,6 +4,7 @@ from vasoanalyzer.services.types import ProjectRepository
 
 __all__ = ["get_repo"]
 
+
 def get_repo(path: str) -> ProjectRepository:
     """Return a ProjectRepository for ``path``. Currently uses SQLite."""
 

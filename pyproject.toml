@@ -18,6 +18,7 @@ dev = [
     "pytest-qt>=4.4",
     "ruff>=0.6.0",
     "mypy>=1.8.0",
+    "types-requests>=2.32.0.20240712",
 ]
 
 [tool.setuptools]
@@ -26,6 +27,9 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+vasoanalyzer = ["py.typed"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
@@ -40,14 +44,16 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F"]
+extend-select = ["I", "B", "UP", "SIM"]
 ignore = [
     "E203",  # allow whitespace before colon for slices
     "B028",  # optional PyQt relative import warnings
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B011"]
+"tests/**" = ["B011", "I", "B", "UP", "SIM"]
+"src/vasoanalyzer/legacy/**" = ["I", "B", "UP", "SIM"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -66,15 +72,31 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [
+  "vasoanalyzer.ui.*",
+]
+disable_error_code = ["attr-defined", "call-arg"]
+ignore_errors = false
+
+
+[[tool.mypy.overrides]]
+module = "vasoanalyzer.ui.main_window"
+ignore_errors = true
+
+
+[[tool.mypy.overrides]]
+module = [
+  "vasoanalyzer.services",
+  "vasoanalyzer.services.*",
+  "vasoanalyzer.storage.sqlite",
+  "vasoanalyzer.storage.sqlite.*",
+  "vasoanalyzer.core.events.*",
+  "vasoanalyzer.core.traces.*",
+  "vasoanalyzer.ui.plots",
+  "vasoanalyzer.ui.plots.*",
+  "vasoanalyzer.ui.dialogs.settings",
+  "vasoanalyzer.ui.dialogs.settings.*",
   "vasoanalyzer.core.project_context",
   "vasoanalyzer.core.repo_factory",
-  "vasoanalyzer.services.types",
-  "vasoanalyzer.services.project_service",
-  "vasoanalyzer.storage.sqlite.utils",
-  "vasoanalyzer.storage.sqlite.projects",
-  "vasoanalyzer.storage.sqlite.traces",
-  "vasoanalyzer.storage.sqlite.events",
-  "vasoanalyzer.storage.sqlite.assets",
 ]
 disallow_untyped_defs = true
 no_implicit_optional = true

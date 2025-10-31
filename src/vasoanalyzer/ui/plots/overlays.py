@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import cast
 
 from matplotlib.axes import Axes
 from matplotlib.lines import Line2D
@@ -25,21 +27,21 @@ class AnnotationSpec:
 
     time_s: float
     label: str
-    color: Optional[str] = None
-    category: Optional[str] = None
+    color: str | None = None
+    category: str | None = None
 
 
 class AnnotationLane:
     """Top-of-plot annotation renderer fed by event metadata."""
 
     def __init__(self) -> None:
-        self._axes: Optional[Axes] = None
-        self._entries: List[AnnotationSpec] = []
-        self._artists: List = []
+        self._axes: Axes | None = None
+        self._entries: list[AnnotationSpec] = []
+        self._artists: list = []
         self._y_offset = 1.02  # axis-relative offset above the top spine
 
     # ------------------------------------------------------------------ lifecycle
-    def attach(self, axes: Optional[Axes]) -> None:
+    def attach(self, axes: Axes | None) -> None:
         """Attach to the primary axes (or detach when None)."""
 
         if self._axes is axes:
@@ -57,7 +59,7 @@ class AnnotationLane:
     def set_entries(self, entries: Sequence[AnnotationSpec]) -> None:
         """Replace the displayed annotations."""
 
-        normalized: List[AnnotationSpec] = []
+        normalized: list[AnnotationSpec] = []
         for entry in entries:
             if isinstance(entry, AnnotationSpec):
                 normalized.append(entry)
@@ -71,10 +73,8 @@ class AnnotationLane:
     # ------------------------------------------------------------------ internals
     def _clear_artists(self) -> None:
         for artist in self._artists:
-            try:
+            with contextlib.suppress(Exception):
                 artist.remove()
-            except Exception:
-                pass
         self._artists.clear()
 
     def _redraw(self) -> None:
@@ -88,7 +88,7 @@ class AnnotationLane:
         transform = axes.get_xaxis_transform()
         default_color = CURRENT_THEME.get("text", "#000000")
         fontsize = FONTS.get("event_size", 10)
-        placements: List[Tuple[AnnotationSpec, Text]] = []
+        placements: list[tuple[AnnotationSpec, Text]] = []
         for entry in sorted(self._entries, key=lambda item: item.time_s):
             text = axes.text(
                 entry.time_s,
@@ -129,11 +129,11 @@ class AnnotationLane:
                 text.set_visible(True)
                 last_center = center_x
 
-    def entries_with_artists(self) -> List[Tuple[AnnotationSpec, Text]]:
+    def entries_with_artists(self) -> list[tuple[AnnotationSpec, Text]]:
         """Return paired (entry, artist) tuples for downstream styling."""
 
-        pairs: List[Tuple[AnnotationSpec, Text]] = []
-        for entry, artist in zip(self._entries, self._artists):
+        pairs: list[tuple[AnnotationSpec, Text]] = []
+        for entry, artist in zip(self._entries, self._artists, strict=False):
             if isinstance(artist, Text):
                 pairs.append((entry, artist))
         return pairs
@@ -144,7 +144,7 @@ class TimeCursorOverlay:
 
     def __init__(self) -> None:
         self._lines: dict[str, Line2D] = {}
-        self._time: Optional[float] = None
+        self._time: float | None = None
         self._visible = True
         self._line_kwargs = dict(
             color=CURRENT_THEME.get("time_cursor", "#C62828"),
@@ -161,7 +161,7 @@ class TimeCursorOverlay:
         seen: set[str] = set()
         for track in tracks:
             track_id = getattr(track, "id", None)
-            axes: Optional[Axes] = getattr(track, "ax", None)
+            axes: Axes | None = getattr(track, "ax", None)
             if track_id is None or axes is None:
                 continue
             seen.add(track_id)
@@ -169,26 +169,22 @@ class TimeCursorOverlay:
             if line is not None:
                 if line.axes is axes:
                     continue
-                try:
+                with contextlib.suppress(Exception):
                     line.remove()
-                except Exception:
-                    pass
             self._lines[track_id] = axes.axvline(0.0, visible=False, **self._line_kwargs)
 
         for track_id in list(self._lines.keys()):
             if track_id in seen:
                 continue
             line = self._lines.pop(track_id)
-            try:
+            with contextlib.suppress(Exception):
                 line.remove()
-            except Exception:
-                pass
 
         self._apply_time()
         self._apply_visibility()
 
     # ------------------------------------------------------------------ public API
-    def set_time(self, time_s: Optional[float]) -> None:
+    def set_time(self, time_s: float | None) -> None:
         self._time = None if time_s is None else float(time_s)
         self._apply_time()
 
@@ -211,7 +207,8 @@ class TimeCursorOverlay:
         has_time = self._time is not None
         for line in self._lines.values():
             if has_time:
-                line.set_xdata([self._time, self._time])
+                time_value = cast(float, self._time)
+                line.set_xdata([time_value, time_value])
             line.set_visible(has_time and self._visible)
 
     def _apply_visibility(self) -> None:
@@ -225,7 +222,7 @@ class EventHighlightOverlay:
 
     def __init__(self) -> None:
         self._lines: dict[str, Line2D] = {}
-        self._time: Optional[float] = None
+        self._time: float | None = None
         self._visible: bool = False
         self._color = CURRENT_THEME.get("event_highlight", CURRENT_THEME.get("accent", "#1D5CFF"))
         self._alpha: float = 0.95
@@ -246,7 +243,7 @@ class EventHighlightOverlay:
         seen: set[str] = set()
         for track in tracks:
             track_id = getattr(track, "id", None)
-            axes: Optional[Axes] = getattr(track, "ax", None)
+            axes: Axes | None = getattr(track, "ax", None)
             if track_id is None or axes is None:
                 continue
             seen.add(track_id)
@@ -254,10 +251,8 @@ class EventHighlightOverlay:
             if line is not None:
                 if line.axes is axes:
                     continue
-                try:
+                with contextlib.suppress(Exception):
                     line.remove()
-                except Exception:
-                    pass
             line = axes.axvline(0.0, visible=False, **self._line_kwargs)
             self._lines[track_id] = line
             self._apply_style(line)
@@ -266,16 +261,14 @@ class EventHighlightOverlay:
             if track_id in seen:
                 continue
             line = self._lines.pop(track_id)
-            try:
+            with contextlib.suppress(Exception):
                 line.remove()
-            except Exception:
-                pass
 
         self._apply_time()
         self._apply_visibility()
 
     # ------------------------------------------------------------------ public API
-    def set_time(self, time_s: Optional[float]) -> None:
+    def set_time(self, time_s: float | None) -> None:
         self._time = None if time_s is None else float(time_s)
         self._apply_time()
 
@@ -299,7 +292,8 @@ class EventHighlightOverlay:
         has_time = self._time is not None
         for line in self._lines.values():
             if has_time:
-                line.set_xdata([self._time, self._time])
+                time_value = cast(float, self._time)
+                line.set_xdata([time_value, time_value])
             line.set_visible(has_time and self._visible)
 
     def _apply_visibility(self) -> None:
@@ -307,7 +301,7 @@ class EventHighlightOverlay:
         for line in self._lines.values():
             line.set_visible(has_time and self._visible)
 
-    def _apply_style(self, target: Optional[Line2D] = None) -> None:
+    def _apply_style(self, target: Line2D | None = None) -> None:
         lines = [target] if target is not None else list(self._lines.values())
         for line in lines:
             if line is None:
@@ -321,10 +315,10 @@ class EventHighlightOverlay:
     def set_style(
         self,
         *,
-        color: Optional[str] = None,
-        alpha: Optional[float] = None,
-        linewidth: Optional[float] = None,
-        linestyle: Optional[str] = None,
+        color: str | None = None,
+        alpha: float | None = None,
+        linewidth: float | None = None,
+        linestyle: str | None = None,
     ) -> None:
         if color is not None:
             self._color = str(color)

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
-
+import contextlib
 import time
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
+from typing import Any, cast
 
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
@@ -16,7 +17,6 @@ from PyQt5.QtCore import QTimer
 from vasoanalyzer.app.flags import is_enabled
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
-from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack, ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import (
     AnnotationLane,
@@ -24,6 +24,7 @@ from vasoanalyzer.ui.plots.overlays import (
     EventHighlightOverlay,
     TimeCursorOverlay,
 )
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["LayoutState", "PlotHost"]
 
@@ -32,9 +33,9 @@ __all__ = ["LayoutState", "PlotHost"]
 class LayoutState:
     """Serializable layout snapshot."""
 
-    order: List[str]
-    height_ratios: Dict[str, float]
-    visibility: Dict[str, bool]
+    order: list[str]
+    height_ratios: dict[str, float]
+    visibility: dict[str, bool]
 
 
 class PlotHost:
@@ -49,40 +50,40 @@ class PlotHost:
         )
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.figure.subplots_adjust(left=0.095, right=0.985, top=0.985, bottom=0.115)
-        self._channel_specs: List[ChannelTrackSpec] = []
-        self._tracks: Dict[str, ChannelTrack] = {}
-        self._axes_map: Dict[Axes, ChannelTrack] = {}
-        self._model: Optional[TraceModel] = None
-        self._current_window: Optional[Tuple[float, float]] = None
-        self._event_times: List[float] = []
-        self._event_colors: Optional[List[str]] = None
-        self._event_labels: List[str] = []
-        self._event_label_meta: List[Dict[str, Any]] = []
-        self._event_labeler: Optional[EventLabeler] = None
-        self._event_label_v2_artists: List[Any] = []
+        self._channel_specs: list[ChannelTrackSpec] = []
+        self._tracks: dict[str, ChannelTrack] = {}
+        self._axes_map: dict[Axes, ChannelTrack] = {}
+        self._model: TraceModel | None = None
+        self._current_window: tuple[float, float] | None = None
+        self._event_times: list[float] = []
+        self._event_colors: list[str] | None = None
+        self._event_labels: list[str] = []
+        self._event_label_meta: list[dict[str, Any]] = []
+        self._event_labeler: EventLabeler | None = None
+        self._event_label_v2_artists: list[Any] = []
         self._use_track_event_lines: bool = True
-        self._xlim_cid: Optional[int] = None
-        self._ylim_cid: Optional[int] = None
-        self._last_xlim: Optional[Tuple[float, float]] = None
-        self._last_ylim: Optional[Tuple[float, float]] = None
-        self._event_label_mode: str = "none"
+        self._xlim_cid: int | None = None
+        self._ylim_cid: int | None = None
+        self._last_xlim: tuple[float, float] | None = None
+        self._last_ylim: tuple[float, float] | None = None
+        self._event_label_mode: str = "vertical"
         self._event_lines_visible: bool = True
         self._event_labels_visible: bool = False
         self._event_label_gap_px: int = 22
         self._annotation_lane = AnnotationLane()
         self._time_cursor_overlay = TimeCursorOverlay()
         self._event_highlight_overlay = EventHighlightOverlay()
-        self._annotation_entries: List[AnnotationSpec] = []
+        self._annotation_entries: list[AnnotationSpec] = []
         self._event_highlight_alpha: float = self._event_highlight_overlay.alpha()
         self._event_highlight_color: str = CURRENT_THEME.get(
             "event_highlight",
             CURRENT_THEME.get("accent", "#1D5CFF"),
         )
-        self._event_highlight_time: Optional[float] = None
+        self._event_highlight_time: float | None = None
         self._event_highlight_visible: bool = False
         self._last_draw_ts: float = 0.0
         self._min_draw_interval: float = 1.0 / 60.0
-        self._pending_draw_timer: Optional[QTimer] = None
+        self._pending_draw_timer: QTimer | None = None
 
     def add_channel(self, spec: ChannelTrackSpec) -> ChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -125,7 +126,7 @@ class PlotHost:
             return
 
         specs = self._channel_specs
-        height_ratios: List[float] = [max(spec.height_ratio, 0.05) for spec in specs]
+        height_ratios: list[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
         gs = self.figure.add_gridspec(
             nrows=row_count,
@@ -135,7 +136,7 @@ class PlotHost:
         )
 
         shared_ax = None
-        track_axes: List[Tuple[Axes, str]] = []
+        track_axes: list[tuple[Axes, str]] = []
         for index, spec in enumerate(specs):
             ax = self.figure.add_subplot(gs[index, 0], sharex=shared_ax)
             if shared_ax is None:
@@ -147,7 +148,9 @@ class PlotHost:
             ax.xaxis.label.set_color(CURRENT_THEME["text"])
             ax.title.set_color(CURRENT_THEME["text"])
             ax.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
-            spine_color = CURRENT_THEME.get("border_soft", CURRENT_THEME.get("grid_color", "#CCCCCC"))
+            spine_color = CURRENT_THEME.get(
+                "border_soft", CURRENT_THEME.get("grid_color", "#CCCCCC")
+            )
             for spine in ax.spines.values():
                 spine.set_color(spine_color)
             track = ChannelTrack(spec, ax, self.canvas)
@@ -156,7 +159,7 @@ class PlotHost:
             track_axes.append((ax, spec.track_id))
 
         divider_color = CURRENT_THEME.get("text", "#000000")
-        for (upper_ax, _), (lower_ax, _) in zip(track_axes, track_axes[1:]):
+        for (upper_ax, _), (lower_ax, _) in zip(track_axes, track_axes[1:], strict=False):
             upper_spine = upper_ax.spines["bottom"]
             upper_spine.set_visible(True)
             upper_spine.set_color(divider_color)
@@ -226,15 +229,15 @@ class PlotHost:
     def set_events(
         self,
         times: Sequence[float],
-        colors: Optional[Sequence[str]] = None,
-        labels: Optional[Sequence[str]] = None,
-        label_meta: Optional[Sequence[Mapping[str, Any]]] = None,
+        colors: Sequence[str] | None = None,
+        labels: Sequence[str] | None = None,
+        label_meta: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         """Propagate event markers (and labels) to all tracks and the gutter."""
 
-        normalized_times: List[float] = []
-        normalized_colors: List[str] = []
-        normalized_labels: List[str] = []
+        normalized_times: list[float] = []
+        normalized_colors: list[str] = []
+        normalized_labels: list[str] = []
 
         color_list = list(colors) if colors is not None else None
         label_list = list(labels) if labels is not None else None
@@ -268,7 +271,7 @@ class PlotHost:
 
     def _assign_event_label_meta(
         self,
-        meta: Optional[Sequence[Mapping[str, Any]]],
+        meta: Sequence[Mapping[str, Any]] | None,
         count: int,
     ) -> None:
         if count <= 0:
@@ -277,7 +280,7 @@ class PlotHost:
         if not meta:
             self._event_label_meta = [dict() for _ in range(count)]
             return
-        normalised: List[Dict[str, Any]] = []
+        normalised: list[dict[str, Any]] = []
         for idx in range(count):
             payload: Any = {}
             try:
@@ -292,7 +295,7 @@ class PlotHost:
 
     def set_event_label_meta(self, meta: Sequence[Mapping[str, Any]]) -> None:
         self._assign_event_label_meta(meta, len(self._event_times))
-        if self._event_labels_visible and self._event_label_mode != "none":
+        if self._event_labels_visible:
             self._rebuild_event_labeler()
             self._schedule_draw()
 
@@ -306,15 +309,15 @@ class PlotHost:
             self._annotation_lane.clear()
         self._schedule_draw()
 
-    def annotation_text_objects(self) -> List[Tuple[Text, float, str]]:
+    def annotation_text_objects(self) -> list[tuple[Text, float, str]]:
         """Expose active annotation artists for downstream styling helpers."""
 
-        text_objects: List[Tuple[Text, float, str]] = []
+        text_objects: list[tuple[Text, float, str]] = []
         for entry, artist in self._annotation_lane.entries_with_artists():
             text_objects.append((artist, entry.time_s, entry.label))
         return text_objects
 
-    def set_time_cursor(self, time_s: Optional[float], *, visible: Optional[bool] = None) -> None:
+    def set_time_cursor(self, time_s: float | None, *, visible: bool | None = None) -> None:
         """Update the global 'now' cursor position (unused when None)."""
 
         self._time_cursor_overlay.set_time(time_s)
@@ -322,7 +325,7 @@ class PlotHost:
             self._time_cursor_overlay.set_visible(visible)
         self._schedule_draw()
 
-    def highlight_event(self, time_s: Optional[float], *, visible: bool = True) -> None:
+    def highlight_event(self, time_s: float | None, *, visible: bool = True) -> None:
         """Highlight a selected event across all tracks."""
 
         if time_s is None:
@@ -349,10 +352,10 @@ class PlotHost:
     def set_event_highlight_style(
         self,
         *,
-        color: Optional[str] = None,
-        alpha: Optional[float] = None,
-        linewidth: Optional[float] = None,
-        linestyle: Optional[str] = None,
+        color: str | None = None,
+        alpha: float | None = None,
+        linewidth: float | None = None,
+        linestyle: str | None = None,
     ) -> None:
         if color is not None:
             self._event_highlight_color = str(color)
@@ -384,18 +387,18 @@ class PlotHost:
         track.set_visible(visible)
         self._schedule_draw()
 
-    def track(self, track_id: str) -> Optional[ChannelTrack]:
+    def track(self, track_id: str) -> ChannelTrack | None:
         return self._tracks.get(track_id)
 
-    def current_window(self) -> Optional[Tuple[float, float]]:
+    def current_window(self) -> tuple[float, float] | None:
         return self._current_window
 
-    def full_range(self) -> Optional[Tuple[float, float]]:
+    def full_range(self) -> tuple[float, float] | None:
         if self._model is None:
             return None
-        return self._model.full_range
+        return cast(tuple[float, float], self._model.full_range)
 
-    def axes(self) -> List:
+    def axes(self) -> list[Axes]:
         return [track.ax for track in self._tracks.values()]
 
     def primary_axis(self):
@@ -441,7 +444,7 @@ class PlotHost:
         self._event_lines_visible = True
         self._event_labels_visible = False
         self._event_label_gap_px = 22
-        self._event_label_mode = "none"
+        self._event_label_mode = "vertical"
         self._annotation_lane.attach(None)
         self._annotation_entries.clear()
         self._time_cursor_overlay.clear()
@@ -496,20 +499,20 @@ class PlotHost:
         if changed:
             self._schedule_draw()
 
-    def tracks(self) -> List[ChannelTrack]:
+    def tracks(self) -> list[ChannelTrack]:
         return list(self._tracks.values())
 
-    def channel_specs(self) -> List[ChannelTrackSpec]:
+    def channel_specs(self) -> list[ChannelTrackSpec]:
         return [replace(spec) for spec in self._channel_specs]
 
-    def track_for_axes(self, axes: Axes) -> Optional[ChannelTrack]:
+    def track_for_axes(self, axes: Axes) -> ChannelTrack | None:
         return self._axes_map.get(axes)
 
     def _register_track_axes(self, track: ChannelTrack) -> None:
         for axes in track.axes():
             self._axes_map[axes] = track
 
-    def _clamp_window(self, x0: float, x1: float) -> Tuple[float, float]:
+    def _clamp_window(self, x0: float, x1: float) -> tuple[float, float]:
         if self._model is None:
             return float(x0), float(x1)
         lo_full, hi_full = self._model.full_range
@@ -530,10 +533,11 @@ class PlotHost:
         tracks = [track for track in tracks if track is not None]
         if not tracks:
             return
-        visible_tracks = [track for track in tracks if track.is_visible()]
-        layout_tracks = visible_tracks if visible_tracks else tracks
+        channel_tracks = cast(list[ChannelTrack], tracks)
+        visible_tracks = [track for track in channel_tracks if track.is_visible()]
+        layout_tracks = visible_tracks if visible_tracks else channel_tracks
         bottom_track = layout_tracks[-1]
-        for track in tracks:
+        for track in channel_tracks:
             ax = track.ax
             if track is bottom_track:
                 ax.tick_params(bottom=True, labelbottom=True)
@@ -589,17 +593,15 @@ class PlotHost:
         self._push_events_to_tracks()
         self._schedule_draw()
 
-    def set_event_labeler(self, helper: Optional[EventLabeler]) -> None:
+    def set_event_labeler(self, helper: EventLabeler | None) -> None:
         # Clean teardown of existing helper
         current = self._event_labeler
         if helper is current:
             return
         if current is not None:
             self._detach_view_callbacks()
-            try:
+            with contextlib.suppress(Exception):
                 current.destroy(remove_belt=True)
-            except Exception:
-                pass
         else:
             self._detach_view_callbacks()
         self._event_labeler = helper
@@ -612,10 +614,8 @@ class PlotHost:
             return
         if not self._event_lines_visible or not self._use_track_event_lines:
             for track in self._tracks.values():
-                try:
+                with contextlib.suppress(Exception):
                     track.set_events([], None, None)
-                except Exception:
-                    pass
             return
         colors = self._event_colors
         labels_payload = self._event_labels if self._event_labels else None
@@ -634,20 +634,16 @@ class PlotHost:
             if new_state:
                 self._rebuild_event_labeler()
             else:
-                self.set_event_labeler(None)
+                self._destroy_event_labeler()
                 self.use_track_event_lines(True)
             self._schedule_draw()
             return
         self._event_labels_visible = new_state
         if new_state:
-            if self._event_label_mode != "none":
-                self.use_track_event_lines(False)
-                self._rebuild_event_labeler()
-            else:
-                self.use_track_event_lines(True)
-                self._destroy_event_labeler()
+            self.use_track_event_lines(False)
+            self._rebuild_event_labeler()
         else:
-            self.set_event_labeler(None)
+            self._destroy_event_labeler()
             self.use_track_event_lines(True)
         self._schedule_draw()
 
@@ -661,29 +657,25 @@ class PlotHost:
         normalized = str(mode).lower()
         alias = {"auto": "vertical", "all": "horizontal_outside"}
         normalized = alias.get(normalized, normalized)
-        if normalized not in {"vertical", "horizontal", "horizontal_outside", "none"}:
+        if normalized not in {"vertical", "horizontal", "horizontal_outside"}:
             normalized = "vertical"
 
         previous_mode = self._event_label_mode
-        if normalized == previous_mode and (
-            (normalized == "none" and self._event_labeler is None)
-            or (normalized != "none" and self._event_labeler is not None)
-        ):
-            self._event_labels_visible = normalized != "none"
-            return
-
+        already_active = normalized == previous_mode and self._event_labeler is not None
         self._event_label_mode = normalized
-        self._event_labels_visible = normalized != "none"
+        self._event_labels_visible = True
 
-        if normalized == "none":
-            self.use_track_event_lines(True)
-        else:
-            self.use_track_event_lines(False)
+        self.use_track_event_lines(False)
+
+        if already_active:
+            self._rebuild_event_labeler()
+            self._schedule_draw()
+            return
 
         self._rebuild_event_labeler()
         self._schedule_draw()
 
-    def _normalized_event_labels(self) -> List[str]:
+    def _normalized_event_labels(self) -> list[str]:
         if not self._event_times:
             return []
         if not self._event_labels:
@@ -697,24 +689,24 @@ class PlotHost:
         if not self._event_label_v2_artists:
             return
         for artist in self._event_label_v2_artists:
-            try:
+            with contextlib.suppress(Exception):
                 artist.remove()
-            except Exception:
-                pass
         self._event_label_v2_artists = []
 
     def _draw_event_labels_v2(self) -> bool:
-        if not is_enabled("event_labels_v2", default=True):
+        # Compact numeric counters are experimental; keep them opt-in.
+        if not is_enabled("event_labels_v2", default=False):
             self._clear_event_label_v2()
             return False
-        if self._event_label_mode == "none" or not self._event_labels_visible:
+        # Only delegate to V2 for the vertical label presentation.
+        if self._event_label_mode != "vertical" or not self._event_labels_visible:
             self._clear_event_label_v2()
             return True
         if not self._event_times:
             self._clear_event_label_v2()
             return True
 
-        anchor_ax: Optional[Axes] = self.primary_axis() or self.bottom_axis()
+        anchor_ax: Axes | None = self.primary_axis() or self.bottom_axis()
         if anchor_ax is None:
             self._clear_event_label_v2()
             return True
@@ -757,7 +749,7 @@ class PlotHost:
         self.set_event_labeler(None)
 
     def _rebuild_event_labeler(self) -> None:
-        if not self._event_labels_visible or self._event_label_mode == "none":
+        if not self._event_labels_visible:
             self.set_event_labeler(None)
             return
         if not getattr(self, "_event_times", None):
@@ -782,7 +774,7 @@ class PlotHost:
             live=False,
         )
 
-        anchor_ax: Optional[Axes] = self.primary_axis() or self.bottom_axis()
+        anchor_ax: Axes | None = self.primary_axis() or self.bottom_axis()
         if anchor_ax is None:
             tracks = list(self._tracks.values())
             anchor_ax = tracks[0].ax if tracks else None
@@ -790,10 +782,10 @@ class PlotHost:
             self.set_event_labeler(None)
             return
 
-        events_payload: List[Dict[str, Any]] = []
+        events_payload: list[dict[str, Any]] = []
         for idx, time_value in enumerate(self._event_times):
             label_value = labels[idx] if idx < len(labels) else ""
-            meta_payload: Dict[str, Any] = {}
+            meta_payload: dict[str, Any] = {}
             if idx < len(self._event_label_meta):
                 candidate = self._event_label_meta[idx] or {}
                 if isinstance(candidate, Mapping):
@@ -804,7 +796,9 @@ class PlotHost:
             self.set_event_labeler(None)
             return
 
-        helper = EventLabeler(anchor_ax, events_payload, mode=self._event_label_mode, options=options)
+        helper = EventLabeler(
+            anchor_ax, events_payload, mode=self._event_label_mode, options=options
+        )
         helper.draw()
 
         self.set_event_labeler(helper)
@@ -815,8 +809,8 @@ class PlotHost:
         if host_ax is None:
             return
         try:
-            self._last_xlim = tuple(host_ax.get_xlim())
-            self._last_ylim = tuple(host_ax.get_ylim())
+            self._last_xlim = cast(tuple[float, float], host_ax.get_xlim())
+            self._last_ylim = cast(tuple[float, float], host_ax.get_ylim())
         except Exception:
             self._last_xlim = None
             self._last_ylim = None
@@ -827,15 +821,11 @@ class PlotHost:
         host_ax = self._event_labeler.host_axes if self._event_labeler else None
         if host_ax is not None:
             if self._xlim_cid is not None:
-                try:
+                with contextlib.suppress(Exception):
                     host_ax.callbacks.disconnect(self._xlim_cid)
-                except Exception:
-                    pass
             if self._ylim_cid is not None:
-                try:
+                with contextlib.suppress(Exception):
                     host_ax.callbacks.disconnect(self._ylim_cid)
-                except Exception:
-                    pass
         self._xlim_cid = None
         self._ylim_cid = None
         self._last_xlim = None
@@ -845,8 +835,8 @@ class PlotHost:
         if not self._event_labeler or ax is None:
             return
         try:
-            xlim = tuple(ax.get_xlim())
-            ylim = tuple(ax.get_ylim())
+            xlim = cast(tuple[float, float], ax.get_xlim())
+            ylim = cast(tuple[float, float], ax.get_ylim())
         except Exception:
             return
         if xlim == self._last_xlim and ylim == self._last_ylim:

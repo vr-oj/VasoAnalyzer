@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
+from typing import cast
 
 import numpy as np
 
@@ -15,10 +16,10 @@ def find_neighbor(
     start: int,
     step: int,
     forbidden: Iterable[int],
-) -> Optional[int]:
+) -> int | None:
     idx = start
     n = len(values)
-    forbidden_set = set(int(i) for i in forbidden)
+    forbidden_set = {int(i) for i in forbidden}
     while 0 <= idx < n:
         if idx not in forbidden_set and np.isfinite(values[idx]):
             return idx
@@ -49,18 +50,24 @@ def bridge_segment(
             forbidden=forbidden,
         )
         if np.any(~np.isfinite(bridged)):
-            return linear_bridge(
-                time,
-                clean_series,
-                indices,
-                left_idx=left_idx,
-                right_idx=right_idx,
+            return cast(
+                np.ndarray,
+                linear_bridge(
+                    time,
+                    clean_series,
+                    indices,
+                    left_idx=left_idx,
+                    right_idx=right_idx,
+                ),
             )
-        return bridged
-    return linear_bridge(
-        time,
-        clean_series,
-        indices,
-        left_idx=left_idx,
-        right_idx=right_idx,
+        return cast(np.ndarray, bridged)
+    return cast(
+        np.ndarray,
+        linear_bridge(
+            time,
+            clean_series,
+            indices,
+            left_idx=left_idx,
+            right_idx=right_idx,
+        ),
     )

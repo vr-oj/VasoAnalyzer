@@ -6,15 +6,14 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 from PyQt5.QtCore import QCoreApplication, Qt, QTimer
-from PyQt5.QtGui import QFont, QIcon, QPalette, QColor, QPainter, QPainterPath, QPixmap
+from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, QPixmap
 from PyQt5.QtWidgets import QApplication, QSplashScreen
 
+from utils.config import APP_VERSION
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 from vasoanalyzer.ui.theme import apply_light_theme
-from utils.config import APP_VERSION
 
 try:  # Optional helper used for locating packaged resources
     from utils import resource_path
@@ -32,7 +31,7 @@ os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 class VasoAnalyzerLauncher:
     """Create the Qt application, theme it, and show the main window."""
 
-    def __init__(self, project_path: Optional[str] = None) -> None:
+    def __init__(self, project_path: str | None = None) -> None:
         self.project_path = project_path
 
         QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -156,7 +155,7 @@ class VasoAnalyzerLauncher:
                 QTimer.singleShot(100, window.show_welcome_dialog)
             self.window = window
             log.info("Main window started successfully")
-        except Exception as exc:  # pragma: no cover - defensive logging for GUI
+        except Exception:  # pragma: no cover - defensive logging for GUI
             log.exception("Error launching main window")
 
     # ------------------------------------------------------------------

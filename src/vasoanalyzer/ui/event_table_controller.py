@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Tuple
+from collections.abc import Iterable
 
 import pandas as pd
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -16,7 +16,7 @@ class EventTableController(QObject):
     rows_changed = pyqtSignal()
     cell_edited = pyqtSignal(int, float, float)
 
-    def __init__(self, table: EventTableWidget, parent: Optional[QObject] = None) -> None:
+    def __init__(self, table: EventTableWidget, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._table = table
         self._model = EventTableModel(table)
@@ -35,7 +35,7 @@ class EventTableController(QObject):
         return self._model
 
     @property
-    def rows(self) -> List[Tuple]:
+    def rows(self) -> list[tuple]:
         return self._model.rows()
 
     @property
@@ -45,7 +45,7 @@ class EventTableController(QObject):
     # ------------------------------------------------------------------
     def set_events(
         self,
-        data: Iterable[Tuple[str, float, float, Optional[float], Optional[int]]],
+        data: Iterable[tuple[str, float, float, float | None, int | None]],
         *,
         has_outer_diameter: bool,
     ) -> None:
