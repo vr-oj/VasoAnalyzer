@@ -14,7 +14,7 @@ can override typography, offsets, visibility, and box styling through metadata p
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence, Sized
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -23,6 +23,7 @@ from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
 from matplotlib.font_manager import FontProperties
+from matplotlib.ticker import AutoLocator, AutoMinorLocator, NullFormatter, NullLocator
 from matplotlib.transforms import ScaledTranslation, blended_transform_factory
 
 try:  # axes_grid1 is optional; fall back gracefully if absent
@@ -203,7 +204,8 @@ class EventLabeler:
             return self
         self._render()
         if self.options.live and self._cid is None:
-            canvas = getattr(self.ax.figure, "canvas", None)
+            figure = getattr(self.ax, "figure", None)
+            canvas = getattr(figure, "canvas", None)
             if canvas is not None:
                 self._cid = canvas.mpl_connect("draw_event", self._on_draw)
         return self
@@ -222,30 +224,79 @@ class EventLabeler:
     def disconnect(self) -> None:
         if self._cid is None:
             return
-        with suppress(Exception):
-            self.ax.figure.canvas.mpl_disconnect(self._cid)
+        figure = getattr(self.ax, "figure", None)
+        canvas = getattr(figure, "canvas", None)
+        if canvas is not None:
+            with suppress(Exception):
+                canvas.mpl_disconnect(self._cid)
         self._cid = None
 
     def destroy(self, *, remove_belt: bool = False) -> None:
         """Disconnect callbacks, clear artists, and optionally remove the belt axes."""
         self.disconnect()
         self.clear()
+        belt_removed = False
         if remove_belt and self._belt_ax is not None:
             belt = self._belt_ax
             self._belt_ax = None
             if belt is not None:
-                with suppress(Exception):
-                    belt.remove()
-                    return
-                with suppress(Exception):
-                    belt.figure.delaxes(belt)
+                removal_failed = True
+                remover = getattr(belt, "remove", None)
+                if callable(remover):
+                    try:
+                        remover()
+                    except Exception:
+                        removal_failed = True
+                    else:
+                        removal_failed = False
+                if removal_failed:
+                    belt_figure = getattr(belt, "figure", None)
+                    if belt_figure is not None:
+                        with suppress(Exception):
+                            belt_figure.delaxes(belt)
+                belt_removed = True
         else:
             self._belt_ax = None
+        host = self._resolve_host_axes()
+        if host is not None:
+            locator = host.xaxis.get_major_locator()
+            locs = getattr(locator, "locs", None)
+            if belt_removed and (
+                isinstance(locator, NullLocator) or (isinstance(locs, Sized) and len(locs) == 0)
+            ):
+                host.xaxis.set_major_locator(AutoLocator())
+                host.xaxis.set_minor_locator(AutoMinorLocator())
+            host.tick_params(axis="x", which="both", labelbottom=True, bottom=True, top=False)
+
+    def _resolve_host_axes(self) -> Axes | None:
+        """Return a live host axes or attempt to re-select one when stale."""
+        host = self._host_ax
+        if host is not None and getattr(host, "figure", None) is not None:
+            return host
+
+        anchor = self.ax
+        if anchor is None or getattr(anchor, "figure", None) is None:
+            return None
+
+        policy = (self.options.label_host or "auto_top").lower()
+        if policy not in {"self", "auto_top", "auto_bottom"}:
+            policy = "auto_top"
+
+        try:
+            host = _select_host(anchor, policy)
+        except Exception:
+            host = anchor
+
+        if getattr(host, "figure", None) is None:
+            return None
+
+        self._host_ax = host
+        return host
 
     @property
-    def host_axes(self) -> Axes:
+    def host_axes(self) -> Axes | None:
         """Expose the host axes for external coordination."""
-        return self._host_ax
+        return self._resolve_host_axes()
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
@@ -418,7 +469,12 @@ class EventLabeler:
 
     # ------------------------------------------------------------------ modes
     def _draw_vertical_inside(self) -> None:
-        host = self._host_ax
+        host = self._resolve_host_axes()
+        if host is None:
+            return
+        figure = getattr(host, "figure", None)
+        if figure is None:
+            return
         indices = self._visible_indices(host)
         if not indices:
             return
@@ -436,7 +492,7 @@ class EventLabeler:
         direction = -1.0 if side == "right" else 1.0
         base_y = 1.0 - float(self.options.top_pad_axes)
 
-        dpi = host.figure.dpi
+        dpi = float(figure.dpi)
         for cluster in clusters:
             meta = cluster.meta or {}
             if not bool(meta.get("visible", True)):
@@ -445,7 +501,7 @@ class EventLabeler:
             fontsize = self._meta_float(meta, "fontsize", base_fontsize) or base_fontsize
             pad_px = self._meta_float(meta, "x_offset_px", 0.0) or 0.0
             total_pad = (direction * default_pad) + pad_px
-            offset = ScaledTranslation(total_pad / dpi, 0.0, host.figure.dpi_scale_trans)
+            offset = ScaledTranslation(total_pad / dpi, 0.0, figure.dpi_scale_trans)
             transform = base_transform + offset
             y_axes = base_y + (self._meta_float(meta, "y_offset_axes", 0.0) or 0.0)
             ha = self._resolve_halign("right" if side == "right" else "left", meta)
@@ -490,7 +546,12 @@ class EventLabeler:
             self._artists.append(txt)
 
     def _draw_horizontal_inside(self) -> None:
-        host = self._host_ax
+        host = self._resolve_host_axes()
+        if host is None:
+            return
+        figure = getattr(host, "figure", None)
+        if figure is None:
+            return
         indices = self._visible_indices(host)
         if not indices:
             return
@@ -514,7 +575,7 @@ class EventLabeler:
         ]
 
         # Force a renderer so pixel measurements are accurate before layout.
-        canvas = getattr(host.figure, "canvas", None)
+        canvas = getattr(figure, "canvas", None)
         renderer = None
         if canvas is not None:
             with suppress(Exception):
@@ -523,7 +584,7 @@ class EventLabeler:
                 renderer = canvas.get_renderer()
 
         base_transform = blended_transform_factory(host.transData, host.transAxes)
-        dpi = host.figure.dpi
+        dpi = float(figure.dpi)
         default_pad = abs(float(self.options.horizontal_x_pad_px))
         axes_bbox = None
         if renderer is not None:
@@ -585,7 +646,7 @@ class EventLabeler:
             transform = base_transform + ScaledTranslation(
                 offset / dpi,
                 0.0,
-                host.figure.dpi_scale_trans,
+                figure.dpi_scale_trans,
             )
             ha = "right" if align_right else ("center" if align_pref == "center" else "left")
             va = self._resolve_valign("top", meta)
@@ -629,9 +690,16 @@ class EventLabeler:
     def _ensure_belt(self, host: Axes) -> Axes | None:
         if make_axes_locatable is None:
             return None
+        figure = getattr(host, "figure", None)
+        if figure is None:
+            return None
         belt = self._belt_ax
-        if belt is not None and belt in host.figure.axes:
-            return belt
+        if belt is not None:
+            belt_figure = getattr(belt, "figure", None)
+            if belt_figure is figure and belt in figure.axes:
+                return belt
+            if belt_figure is None or belt_figure is not figure:
+                self._belt_ax = None
 
         divider = make_axes_locatable(host)
         belt = cast(
@@ -640,22 +708,31 @@ class EventLabeler:
                 "top",
                 size=f"{float(self.options.outside_height_pct):.1f}%",
                 pad=float(self.options.outside_pad_in),
-                sharex=host,
             ),
         )
         self._belt_ax = belt
 
         belt.set_ylim(0.0, 1.0)
-        belt.set_yticks([])
-        belt.set_xticks([])
+        belt.yaxis.set_major_locator(NullLocator())
+        belt.yaxis.set_major_formatter(NullFormatter())
+        belt.xaxis.set_major_locator(NullLocator())
+        belt.xaxis.set_minor_locator(NullLocator())
+        belt.xaxis.set_major_formatter(NullFormatter())
         belt.tick_params(axis="x", which="both", length=0, labelbottom=False, labeltop=False)
         belt.set_facecolor("none")
         for spine in belt.spines.values():
             spine.set_visible(False)
+        with suppress(Exception):
+            belt.set_xlim(host.get_xlim())
         return belt
 
     def _draw_horizontal_outside(self) -> None:
-        host = self._host_ax
+        host = self._resolve_host_axes()
+        if host is None:
+            return
+        figure = getattr(host, "figure", None)
+        if figure is None:
+            return
         indices = self._visible_indices(host)
         if not indices:
             return
@@ -671,8 +748,15 @@ class EventLabeler:
         if belt is None:
             self._draw_horizontal_outside_fallback(host, clusters, fontsize_base)
             return
+        with suppress(Exception):
+            belt.set_xlim(host.get_xlim())
 
-        canvas = getattr(belt.figure, "canvas", None)
+        belt_figure = getattr(belt, "figure", None)
+        if belt_figure is None:
+            self._draw_horizontal_outside_fallback(host, clusters, fontsize_base)
+            return
+
+        canvas = getattr(belt_figure, "canvas", None)
         renderer = None
         if canvas is not None:
             with suppress(Exception):
@@ -695,7 +779,7 @@ class EventLabeler:
             self._belt_artists.append(baseline)
 
         base_transform = blended_transform_factory(belt.transData, belt.transAxes)
-        dpi = belt.figure.dpi
+        dpi = float(belt_figure.dpi)
         default_pad = abs(float(self.options.horizontal_x_pad_px))
         axes_bbox = None
         if renderer is not None:
@@ -757,7 +841,7 @@ class EventLabeler:
             transform = base_transform + ScaledTranslation(
                 offset / dpi,
                 0.0,
-                belt.figure.dpi_scale_trans,
+                belt_figure.dpi_scale_trans,
             )
             ha = "right" if align_right else ("center" if align_pref == "center" else "left")
             va = self._resolve_valign("top", meta)
@@ -817,12 +901,15 @@ class EventLabeler:
         clusters: Sequence[ClusteredLabel],
         fontsize_base: float,
     ) -> None:
+        figure = getattr(host, "figure", None)
+        if figure is None:
+            return
         lanes = max(1, int(self.options.max_lanes))
         lane_right_px = [-float("inf")] * lanes
         buffer_px = 6.0
         lane_ys = [1.02 + lane * 0.08 for lane in range(lanes)]
 
-        canvas = getattr(host.figure, "canvas", None)
+        canvas = getattr(figure, "canvas", None)
         renderer = None
         if canvas is not None:
             with suppress(Exception):
@@ -831,7 +918,7 @@ class EventLabeler:
                 renderer = canvas.get_renderer()
 
         base_transform = blended_transform_factory(host.transData, host.transAxes)
-        dpi = host.figure.dpi
+        dpi = float(figure.dpi)
         default_pad = abs(float(self.options.horizontal_x_pad_px))
         axes_bbox = None
         if renderer is not None:
@@ -893,7 +980,7 @@ class EventLabeler:
             transform = base_transform + ScaledTranslation(
                 offset / dpi,
                 0.0,
-                host.figure.dpi_scale_trans,
+                figure.dpi_scale_trans,
             )
             ha = "right" if align_right else ("center" if align_pref == "center" else "left")
             va = self._resolve_valign("bottom", meta)
@@ -949,7 +1036,13 @@ class EventLabeler:
 
     # ------------------------------------------------------------------ callbacks
     def _on_draw(self, event) -> None:
-        if event is None or event.canvas is None or event.canvas.figure is not self.ax.figure:
+        ax_figure = getattr(self.ax, "figure", None)
+        if (
+            event is None
+            or event.canvas is None
+            or ax_figure is None
+            or event.canvas.figure is not ax_figure
+        ):
             return
         self.clear()
         self._render()

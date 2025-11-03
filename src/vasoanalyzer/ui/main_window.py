@@ -4836,15 +4836,43 @@ QPushButton[isGhost="true"]:hover {{
                 QMessageBox.warning(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
 
         # 6) If a project and experiment are active, auto-add this dataset
-        if self.current_project and self.current_experiment:
+        target_experiment: Experiment | None = None
+        if self.current_project:
+            if (
+                self.current_experiment
+                and self.current_experiment in self.current_project.experiments
+            ):
+                target_experiment = self.current_experiment
+            elif self.current_project.experiments:
+                target_experiment = self.current_project.experiments[0]
+            else:
+                target_experiment = Experiment(name="Experiment 1")
+                self.current_project.experiments.append(target_experiment)
+
+        if self.current_project and target_experiment:
+            trace_obj = Path(file_path).expanduser().resolve(strict=False)
             sample_name = os.path.splitext(os.path.basename(file_path))[0]
-            sample = SampleN(name=sample_name, trace_path=file_path)
+            sample = SampleN(name=sample_name)
+            self._update_sample_link_metadata(sample, "trace", trace_obj)
+            if isinstance(self.trace_data, pd.DataFrame) and not self.trace_data.empty:
+                with contextlib.suppress(Exception):
+                    sample.trace_data = self.trace_data.copy(deep=True)
+
             event_path = find_matching_event_file(file_path)
             if event_path and os.path.exists(event_path):
-                sample.events_path = event_path
+                event_obj = Path(event_path).expanduser().resolve(strict=False)
+                self._update_sample_link_metadata(sample, "events", event_obj)
+
             if snapshots is not None:
-                sample.snapshots = np.stack(snapshots)
-            self.current_experiment.samples.append(sample)
+                try:
+                    sample.snapshots = np.stack(snapshots)
+                except Exception:
+                    log.debug(
+                        "Failed to materialise snapshot stack for %s", sample_name, exc_info=True
+                    )
+
+            target_experiment.samples.append(sample)
+            self.current_experiment = target_experiment
             self.current_sample = sample
             self.refresh_project_tree()
             if self.current_project.path:
