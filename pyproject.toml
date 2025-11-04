@@ -10,7 +10,10 @@ requires-python = ">=3.10"
 authors = [{ name = "Osvaldo J. Vega Rodríguez" }]
 license = { text = "CC BY-NC-SA 4.0" }
 readme = "README.md"
-dependencies = []
+dependencies = ["pydantic>=1.10"]
+
+[project.scripts]
+vaso = "vasoanalyzer.cli:main"
 
 [project.optional-dependencies]
 dev = [

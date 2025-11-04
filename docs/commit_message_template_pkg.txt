@@ -1,0 +1,8 @@
+feat(pkg): introduce .vaso Package v1 architecture
+
+- added src/vasoanalyzer/pkg/ with VasoPackage core
+- implemented unified project save/load with pack & relink support
+- defined JSON schemas and Pydantic models for manifest, datasets, and events
+- added CLI commands: vaso pack, unpack, verify, relink
+- updated README and dev.md with new project file system overview
+

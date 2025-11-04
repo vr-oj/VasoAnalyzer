@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from utils.config import APP_VERSION
+from vasoanalyzer.app.flags import is_enabled
 from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.core.repo_factory import get_repo
 from vasoanalyzer.services.types import ProjectRepository
@@ -1201,6 +1202,20 @@ def _write_sqlite_project(
             repo.close()
 
         os.replace(tmp_path, dest)
+
+    if is_enabled("pkg_save", default=False):
+        try:
+            from vasoanalyzer.pkg.exporter import export_project_to_package
+
+            package_path = dest.parent / f"{dest.stem}.pkg.vaso"
+            export_project_to_package(
+                project,
+                package_path,
+                base_dir=base_dir,
+                timezone=timezone_name,
+            )
+        except Exception:  # pragma: no cover - best effort sidecar export
+            log.debug("Failed to export pkg.vaso sidecar", exc_info=True)
 
 
 def _populate_store_from_project(project: Project, repo: ProjectRepository, base_dir: Path) -> None:
