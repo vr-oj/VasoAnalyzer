@@ -1,17 +1,23 @@
 /.venv
+
+# Bytecode artifacts
+__pycache__/
 *.pyc
+
+# OS cruft
+.DS_Store
+
+# Generated bundles and caches
+*.vaso
+*.vaso.bak
+*.vaso.cache/
+*.vaso.cache
+
+# Local tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Build outputs
 /build
 /dist
-*.pyc
-*.pyc
-*.pyc
-.DS_Store
-*.pyc
-/src/vasoanalyzer/ui/dialogs/__pycache__
-*.pyc
-*.pyc
-/src/utils/__pycache__
-/src/utils/__pycache__
-/src/vasoanalyzer/__pycache__
-*.pyc
-*.pyc
