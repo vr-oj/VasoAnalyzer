@@ -574,14 +574,16 @@ class EventLabeler:
             for lane in range(lanes)
         ]
 
-        # Force a renderer so pixel measurements are accurate before layout.
+        # Try to get renderer for pixel measurements without forcing a synchronous draw.
         canvas = getattr(figure, "canvas", None)
         renderer = None
         if canvas is not None:
             with suppress(Exception):
-                canvas.draw()
-            with suppress(Exception):
                 renderer = canvas.get_renderer()
+            # If no renderer available, schedule async draw but proceed without measurements
+            if renderer is None:
+                with suppress(Exception):
+                    canvas.draw_idle()
 
         base_transform = blended_transform_factory(host.transData, host.transAxes)
         dpi = float(figure.dpi)
@@ -760,9 +762,10 @@ class EventLabeler:
         renderer = None
         if canvas is not None:
             with suppress(Exception):
-                canvas.draw()
-            with suppress(Exception):
                 renderer = canvas.get_renderer()
+            if renderer is None:
+                with suppress(Exception):
+                    canvas.draw_idle()
 
         lanes = max(1, int(self.options.max_lanes))
         lane_right_px = [-float("inf")] * lanes
@@ -913,9 +916,10 @@ class EventLabeler:
         renderer = None
         if canvas is not None:
             with suppress(Exception):
-                canvas.draw()
-            with suppress(Exception):
                 renderer = canvas.get_renderer()
+            if renderer is None:
+                with suppress(Exception):
+                    canvas.draw_idle()
 
         base_transform = blended_transform_factory(host.transData, host.transAxes)
         dpi = float(figure.dpi)
