@@ -95,6 +95,12 @@ class PlotHost:
         self._tooltip_proximity_px: int = 10
         self._compact_legend_enabled: bool = True
         self._compact_legend_location: str = "upper right"
+        # Base event label style (applied to all labels before priority/category enhancements)
+        self._event_font_family: str = "Arial"
+        self._event_font_size: float = 15.0
+        self._event_font_bold: bool = False
+        self._event_font_italic: bool = False
+        self._event_color: str = "#000000"
         self._cid_motion: int | None = None
         self._hover_annot: Annotation | None = None
         self._last_hover_text: Text | None = None
@@ -340,6 +346,18 @@ class PlotHost:
     def annotation_text_objects(self) -> list[tuple[Text, float, str]]:
         """Expose active annotation artists for downstream styling helpers."""
 
+        # Return v3 text objects if v3 is enabled
+        if self._feature_flags.get("event_labels_v3", False) and self._event_helper_v3 is not None:
+            text_objects: list[tuple[Text, float, str]] = []
+            texts, cluster_map = self._event_helper_v3.annotation_text_objects()
+            for text_artist in texts:
+                cluster = cluster_map.get(text_artist)
+                if cluster is not None:
+                    # Return (Text, time, label) tuple
+                    text_objects.append((text_artist, cluster.x, cluster.text))
+            return text_objects
+
+        # Fall back to v2 annotation lane
         text_objects: list[tuple[Text, float, str]] = []
         for entry, artist in self._annotation_lane.entries_with_artists():
             text_objects.append((artist, entry.time_s, entry.label))
@@ -473,7 +491,7 @@ class PlotHost:
         self._event_labels_visible = False
         self._event_label_gap_px = 22
         self._event_label_mode = "vertical"
-        self._feature_flags["event_labels_v3"] = is_enabled("event_labels_v3", default=False)
+        self._feature_flags["event_labels_v3"] = is_enabled("event_labels_v3", default=True)
         self._event_helper_v3 = None
         self._event_entries_v3 = []
         self._event_label_host_ax = None
@@ -492,6 +510,11 @@ class PlotHost:
         self._tooltip_proximity_px = 10
         self._compact_legend_enabled = True
         self._compact_legend_location = "upper right"
+        self._event_font_family = "Arial"
+        self._event_font_size = 15.0
+        self._event_font_bold = False
+        self._event_font_italic = False
+        self._event_color = "#000000"
         self._disconnect_event_label_tooltips()
         self._annotation_lane.attach(None)
         self._annotation_entries.clear()
@@ -944,6 +967,35 @@ class PlotHost:
         if self._compact_legend_enabled and self._event_labels_visible:
             self._update_compact_legend()
 
+    def set_event_base_style(
+        self,
+        *,
+        font_family: str | None = None,
+        font_size: float | None = None,
+        bold: bool | None = None,
+        italic: bool | None = None,
+        color: str | None = None,
+    ) -> None:
+        """Set the base event label style (applied before priority/category enhancements)."""
+        changed = False
+        if font_family is not None and font_family != self._event_font_family:
+            self._event_font_family = str(font_family)
+            changed = True
+        if font_size is not None and font_size != self._event_font_size:
+            self._event_font_size = float(font_size)
+            changed = True
+        if bold is not None and bold != self._event_font_bold:
+            self._event_font_bold = bool(bold)
+            changed = True
+        if italic is not None and italic != self._event_font_italic:
+            self._event_font_italic = bool(italic)
+            changed = True
+        if color is not None and color != self._event_color:
+            self._event_color = str(color)
+            changed = True
+        if changed and self._event_labels_visible:
+            self._rebuild_label_helper()
+
     def _connect_event_label_tooltips(self) -> None:
         if not self._label_tooltips_enabled or self._event_helper_v3 is None:
             return
@@ -1288,11 +1340,19 @@ class PlotHost:
         entries: list[EventEntryV3] = []
         for idx, time_value in enumerate(self._event_times):
             label_value = labels[idx] if idx < len(labels) else ""
-            meta_payload: dict[str, Any] = {}
+            # Start with base event style
+            meta_payload: dict[str, Any] = {
+                "fontfamily": self._event_font_family,
+                "fontsize": self._event_font_size,
+                "fontweight": "bold" if self._event_font_bold else "normal",
+                "fontstyle": "italic" if self._event_font_italic else "normal",
+                "color": self._event_color,
+            }
+            # Overlay user-specified metadata (can override base style)
             if idx < len(self._event_label_meta):
                 candidate = self._event_label_meta[idx] or {}
                 if isinstance(candidate, Mapping):
-                    meta_payload = dict(candidate)
+                    meta_payload.update(dict(candidate))
             priority = meta_payload.get("priority", meta_payload.get("rank", 0))
             try:
                 priority_value = int(priority)

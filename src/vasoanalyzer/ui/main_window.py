@@ -7021,11 +7021,22 @@ QPushButton[isGhost="true"]:hover {{
         manager = self._ensure_style_manager()
         effective_style = manager.update(style or {})
         x_axis = self._x_axis_for_style()
+
+        # Don't pass v3 event text objects to StyleManager - v3 handles its own styling
+        plot_host = getattr(self, "plot_host", None)
+        v3_enabled = False
+        if plot_host is not None:
+            try:
+                v3_enabled = effective_style.get("event_labels_v3_enabled", False)
+            except Exception:
+                pass
+        event_texts = [] if v3_enabled else self.event_text_objects
+
         manager.apply(
             ax=self.ax,
             ax_secondary=self.ax2,
             x_axis=x_axis,
-            event_text_objects=self.event_text_objects,
+            event_text_objects=event_texts,
             pinned_points=self.pinned_points,
             main_line=self.ax.lines[0] if self.ax.lines else None,
             od_line=self.od_line,
@@ -7038,7 +7049,7 @@ QPushButton[isGhost="true"]:hover {{
                 plot_host.set_event_labels_v3_enabled(
                     effective_style.get(
                         "event_labels_v3_enabled",
-                        defaults.get("event_labels_v3_enabled", False),
+                        defaults.get("event_labels_v3_enabled", True),
                     )
                 )
                 plot_host.set_max_labels_per_cluster(
@@ -7074,7 +7085,7 @@ QPushButton[isGhost="true"]:hover {{
                 plot_host.set_auto_event_label_mode(
                     effective_style.get(
                         "event_label_auto_mode",
-                        defaults.get("event_label_auto_mode", False),
+                        defaults.get("event_label_auto_mode", True),
                     )
                 )
                 plot_host.set_label_density_thresholds(
@@ -7090,17 +7101,17 @@ QPushButton[isGhost="true"]:hover {{
                 plot_host.set_label_outline_enabled(
                     effective_style.get(
                         "event_label_outline_enabled",
-                        defaults.get("event_label_outline_enabled", False),
+                        defaults.get("event_label_outline_enabled", True),
                     )
                 )
                 plot_host.set_label_outline(
                     effective_style.get(
                         "event_label_outline_width",
-                        defaults.get("event_label_outline_width", 0.0),
+                        defaults.get("event_label_outline_width", 2.0),
                     ),
                     effective_style.get(
                         "event_label_outline_color",
-                        defaults.get("event_label_outline_color", "#FFFFFFFF"),
+                        defaults.get("event_label_outline_color", (1.0, 1.0, 1.0, 0.9)),
                     ),
                 )
                 plot_host.set_label_tooltips_enabled(
@@ -7126,6 +7137,28 @@ QPushButton[isGhost="true"]:hover {{
                         "event_label_legend_loc",
                         defaults.get("event_label_legend_loc", "upper right"),
                     )
+                )
+                plot_host.set_event_base_style(
+                    font_family=effective_style.get(
+                        "event_font_family",
+                        defaults.get("event_font_family", "Arial"),
+                    ),
+                    font_size=effective_style.get(
+                        "event_font_size",
+                        defaults.get("event_font_size", 15),
+                    ),
+                    bold=effective_style.get(
+                        "event_bold",
+                        defaults.get("event_bold", False),
+                    ),
+                    italic=effective_style.get(
+                        "event_italic",
+                        defaults.get("event_italic", False),
+                    ),
+                    color=effective_style.get(
+                        "event_color",
+                        defaults.get("event_color", "#000000"),
+                    ),
                 )
             except Exception:
                 log.exception("Failed to apply event label style to PlotHost")
