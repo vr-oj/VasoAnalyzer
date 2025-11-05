@@ -6982,6 +6982,7 @@ QPushButton[isGhost="true"]:hover {{
                 "layout": 1,
                 "axis": 2,
                 "style": 3,
+                "event_labels": 4,
             }
             idx = mapping.get(str(tab_name).lower(), 0)
             with contextlib.suppress(Exception):

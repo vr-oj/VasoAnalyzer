@@ -146,8 +146,8 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
     window.actStyle.setToolTip("Open plot style settings")
     with contextlib.suppress(Exception):
-        window.actStyle.triggered.disconnect(window.open_unified_plot_settings_dialog)
-    window.actStyle.triggered.connect(window.open_unified_plot_settings_dialog)
+        window.actStyle.triggered.disconnect()
+    window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
     toolbar.addAction(window.actStyle)
 
     window.actEditPoints = QAction(
