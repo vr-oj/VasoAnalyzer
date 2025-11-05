@@ -177,7 +177,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._set_button_color(btn, color)
 
         def choose():
-            qcol = QColorDialog.getColor(QColor(btn.color), self)
+            # Ensure btn.color is a valid color string
+            current_color = btn.color if isinstance(btn.color, str) else to_hex(btn.color)
+            qcol = QColorDialog.getColor(QColor(current_color), self)
             if qcol.isValid():
                 self._set_button_color(btn, qcol.name())
 
