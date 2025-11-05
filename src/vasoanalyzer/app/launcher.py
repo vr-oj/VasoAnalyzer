@@ -150,8 +150,9 @@ class VasoAnalyzerLauncher:
             window = VasoAnalyzerApp()
             window.show()
 
-            # Check for crash recovery autosaves
-            QTimer.singleShot(200, lambda: self._check_crash_recovery(window))
+            # Note: Crash recovery is handled inline when opening projects
+            # (see main_window.py lines ~945 and project_mixin.py lines ~192)
+            # No need for global scan of autosave files
 
             if self.project_path:
                 QTimer.singleShot(100, lambda: window.open_recent_project(self.project_path))
@@ -161,44 +162,6 @@ class VasoAnalyzerLauncher:
             log.info("Main window started successfully")
         except Exception:  # pragma: no cover - defensive logging for GUI
             log.exception("Error launching main window")
-
-    def _check_crash_recovery(self, window) -> None:
-        """Check for autosave files and offer recovery."""
-        import glob
-        from vasoanalyzer.ui.dialogs.crash_recovery_dialog import CrashRecoveryDialog
-
-        # Look for autosave files in user's project directory
-        # Autosave files have .vaso.autosave extension
-        home_dir = Path.home()
-        autosave_pattern = str(home_dir / "**" / "*.vaso.autosave")
-
-        try:
-            autosave_files = glob.glob(autosave_pattern, recursive=True)
-
-            if autosave_files:
-                dialog = CrashRecoveryDialog(autosave_files, window)
-                if dialog.exec_():
-                    # User chose to recover
-                    selected = dialog.selected_file
-                    if selected:
-                        log.info(f"Recovering autosave: {selected}")
-                        # Extract project path (remove .autosave extension)
-                        project_path = str(Path(selected).with_suffix(""))
-                        try:
-                            from vasoanalyzer.services.project_service import restore_autosave
-                            project = restore_autosave(project_path)
-                            window.load_project(project)
-                            window.statusBar().showMessage("✓ Project recovered from autosave", 5000)
-                        except Exception as e:
-                            log.exception("Failed to restore autosave")
-                            from PyQt5.QtWidgets import QMessageBox
-                            QMessageBox.warning(
-                                window,
-                                "Recovery Failed",
-                                f"Could not recover project:\n{e}"
-                            )
-        except Exception:  # pragma: no cover - defensive logging
-            log.exception("Error checking for crash recovery")
 
     # ------------------------------------------------------------------
     def run(self) -> None:
