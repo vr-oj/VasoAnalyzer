@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -85,9 +86,15 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     """
     fonts = list(dialog._font_choices)
 
-    container = QWidget()
-    main_layout = QVBoxLayout(container)
-    main_layout.setContentsMargins(0, 0, 0, 0)
+    # Create scroll area to prevent widget collapse
+    scroll_area = QScrollArea()
+    scroll_area.setWidgetResizable(True)
+    scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+    # Create content widget that will be scrolled
+    content_widget = QWidget()
+    main_layout = QVBoxLayout(content_widget)
+    main_layout.setContentsMargins(12, 12, 12, 12)
     main_layout.setSpacing(12)
 
     intro = QLabel(
@@ -101,8 +108,8 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # Two-column grid layout for group boxes
     grid = QGridLayout()
     grid.setSpacing(12)
-    grid.setColumnStretch(0, 1)
-    grid.setColumnStretch(1, 1)
+    grid.setColumnStretch(0, 2)
+    grid.setColumnStretch(1, 3)
 
     # Global Label Style
     defaults_box = QGroupBox("Global Label Style")
@@ -271,10 +278,12 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     event_list.setAlternatingRowColors(True)
     event_list.setSelectionMode(QListWidget.SingleSelection)
     event_list.setMinimumWidth(220)
+    event_list.setMaximumWidth(300)
     # NOTE: signal connects move to wire_event_labels_tab
     overrides_layout.addWidget(event_list, 1)
 
     event_editor = EventLabelEditor(dialog)
+    event_editor.setMinimumWidth(350)
     # NOTE: connects move to wire_event_labels_tab
     overrides_layout.addWidget(event_editor, 2)
 
@@ -287,6 +296,15 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     main_layout.addWidget(event_empty_label)
 
     main_layout.addStretch(1)
+
+    # Set content widget in scroll area
+    scroll_area.setWidget(content_widget)
+
+    # Create container widget with scroll area
+    container = QWidget()
+    container_layout = QVBoxLayout(container)
+    container_layout.setContentsMargins(0, 0, 0, 0)
+    container_layout.addWidget(scroll_area)
 
     # Return refs so the dialog can reattach attributes it expects
     return EventLabelsTabRefs(

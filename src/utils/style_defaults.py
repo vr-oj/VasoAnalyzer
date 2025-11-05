@@ -41,7 +41,7 @@ STYLE_DEFAULTS: dict[str, dict[str, Any]] = {
         "belt_baseline": True,
         "span_siblings": True,
         "use_v3": True,
-        "auto_mode": True,
+        "auto_mode": False,
         "density_compact": 0.8,
         "density_belt": 0.25,
         "outline_enabled": True,
