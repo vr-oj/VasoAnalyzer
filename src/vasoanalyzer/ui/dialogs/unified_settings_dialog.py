@@ -550,6 +550,10 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.event_outline_enabled = refs.event_outline_enabled
         self.event_outline_width = refs.event_outline_width
         self.event_outline_color_btn = refs.event_outline_color_btn
+        self.event_tooltips_enabled = refs.event_tooltips_enabled
+        self.event_tooltip_proximity = refs.event_tooltip_proximity
+        self.event_legend_enabled = refs.event_legend_enabled
+        self.event_legend_location = refs.event_legend_location
         self.event_list = refs.event_list
         self.event_editor = refs.event_editor
         self.event_overrides_box = refs.event_overrides_box
@@ -1213,6 +1217,10 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.style["event_label_outline_enabled"] = self.event_outline_enabled.isChecked()
         self.style["event_label_outline_width"] = float(self.event_outline_width.value())
         self.style["event_label_outline_color"] = self.event_outline_color_btn.color
+        self.style["event_label_tooltips_enabled"] = self.event_tooltips_enabled.isChecked()
+        self.style["event_label_tooltip_proximity"] = int(self.event_tooltip_proximity.value())
+        self.style["event_label_legend_enabled"] = self.event_legend_enabled.isChecked()
+        self.style["event_label_legend_location"] = self.event_legend_location.currentText()
 
         # Event highlights
         if hasattr(self, "event_highlight_color_btn"):
