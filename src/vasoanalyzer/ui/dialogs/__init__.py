@@ -5,7 +5,6 @@
 
 from .axis_settings_dialog import AxisSettingsDialog as AxisSettingsDialog
 from .legend_settings_dialog import LegendSettingsDialog as LegendSettingsDialog
-from .plot_style_editor import PlotStyleEditor as PlotStyleEditor
 from .subplot_layout_dialog import SubplotLayoutDialog as SubplotLayoutDialog
 from .tutorial_dialog import TutorialDialog as TutorialDialog
 from .unified_settings_dialog import UnifiedPlotSettingsDialog as UnifiedPlotSettingsDialog

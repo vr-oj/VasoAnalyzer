@@ -107,7 +107,6 @@ from vasoanalyzer.ui.commands import PointEditCommand, ReplaceEventCommand
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.excel_mapping_dialog import update_excel_file
 from vasoanalyzer.ui.dialogs.legend_settings_dialog import LegendSettingsDialog
-from vasoanalyzer.ui.dialogs.plot_style_editor import PlotStyleEditor
 from vasoanalyzer.ui.dialogs.relink_dialog import MissingAsset, RelinkDialog
 from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
 from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
@@ -6990,11 +6989,6 @@ QPushButton[isGhost="true"]:hover {{
         dialog.exec_()
 
     # [J] ========================= PLOT STYLE EDITOR ================================
-    def open_plot_style_editor(self, tab_name=None):
-        """Open plot style editor - redirects to unified dialog."""
-        # Redirect to unified dialog, open Style tab
-        self.open_unified_plot_settings_dialog(tab_name=tab_name or "style")
-
     def apply_plot_style(self, style, persist: bool = False):
         manager = self._ensure_style_manager()
         effective_style = manager.update(style or {})
@@ -7335,120 +7329,6 @@ QPushButton[isGhost="true"]:hover {{
 
         return style
 
-    def open_plot_style_editor_for(self, ax, canvas, event_text_objects=None, pinned_points=None):
-        """Open plot style editor - redirects to unified dialog."""
-        # Redirect to unified dialog, open Style tab
-        self.open_unified_plot_settings_dialog(tab_name="style")
-
-        def apply_local_style(style=None):
-            style = style or dialog.get_style()
-            merged = {**DEFAULT_STYLE, **style}
-
-            axis_font_size = merged["axis_font_size"]
-            axis_font_family = merged["axis_font_family"]
-            axis_weight = "bold" if merged["axis_bold"] else "normal"
-            axis_style = "italic" if merged["axis_italic"] else "normal"
-
-            x_axis_color = merged.get("x_axis_color", merged.get("axis_color", "black"))
-            y_axis_color = merged.get("y_axis_color", merged.get("axis_color", "black"))
-            x_tick_color = merged.get("x_tick_color", merged.get("tick_color", "black"))
-            y_tick_color = merged.get("y_tick_color", merged.get("tick_color", "black"))
-            tick_length = merged.get("tick_length", DEFAULT_STYLE["tick_length"])
-            tick_width = merged.get("tick_width", DEFAULT_STYLE["tick_width"])
-
-            for label, color in (
-                (ax.xaxis.label, x_axis_color),
-                (ax.yaxis.label, y_axis_color),
-            ):
-                label.set_fontsize(axis_font_size)
-                label.set_fontname(axis_font_family)
-                label.set_fontstyle(axis_style)
-                label.set_fontweight(axis_weight)
-                label.set_color(color)
-
-            for spine_name, color in (
-                ("bottom", x_axis_color),
-                ("top", x_axis_color),
-                ("left", y_axis_color),
-                ("right", y_axis_color),
-            ):
-                if spine_name in ax.spines:
-                    ax.spines[spine_name].set_color(color)
-
-            ax.tick_params(
-                axis="x",
-                labelsize=merged["tick_font_size"],
-                colors=x_tick_color,
-                length=tick_length,
-                width=tick_width,
-            )
-            ax.tick_params(
-                axis="y",
-                labelsize=merged["tick_font_size"],
-                colors=y_tick_color,
-                length=tick_length,
-                width=tick_width,
-            )
-
-            if event_text_objects:
-                for txt, _, _ in event_text_objects:
-                    txt.set_fontsize(merged["event_font_size"])
-                    txt.set_fontname(merged["event_font_family"])
-                    txt.set_fontstyle("italic" if merged["event_italic"] else "normal")
-                    txt.set_fontweight("bold" if merged["event_bold"] else "normal")
-                    txt.set_color(merged.get("event_color", "black"))
-
-            if pinned_points:
-                for marker, label in pinned_points:
-                    marker.set_markersize(merged["pin_size"])
-                    label.set_fontsize(merged["pin_font_size"])
-                    label.set_fontname(merged["pin_font_family"])
-                    label.set_fontstyle("italic" if merged["pin_italic"] else "normal")
-                    label.set_fontweight("bold" if merged["pin_bold"] else "normal")
-                    label.set_color(merged.get("pin_color", "black"))
-                    marker.set_color(merged.get("pin_color", "red"))
-
-            if ax.lines:
-                ax.lines[0].set_linewidth(merged["line_width"])
-                ax.lines[0].set_color(merged.get("line_color", "black"))
-                ax.lines[0].set_linestyle(merged.get("line_style", "solid"))
-
-            if self.od_line and ax is self.ax:
-                self.od_line.set_linewidth(merged.get("outer_line_width", 2))
-                self.od_line.set_color(merged.get("outer_line_color", "tab:orange"))
-                self.od_line.set_linestyle(merged.get("outer_line_style", "solid"))
-
-            self._event_highlight_color = merged.get(
-                "event_highlight_color",
-                self._event_highlight_color,
-            )
-            self._event_highlight_base_alpha = max(
-                0.0,
-                min(
-                    float(merged.get("event_highlight_alpha", self._event_highlight_base_alpha)),
-                    1.0,
-                ),
-            )
-            self._event_highlight_duration_ms = max(
-                0,
-                int(merged.get("event_highlight_duration_ms", self._event_highlight_duration_ms)),
-            )
-            self._event_highlight_elapsed_ms = 0
-            if hasattr(self, "plot_host") and self.plot_host is not None:
-                self.plot_host.set_event_highlight_style(
-                    color=self._event_highlight_color,
-                    alpha=self._event_highlight_base_alpha,
-                )
-
-            canvas.draw_idle()
-
-        # Inject the apply method into the dialog
-        dialog.apply_callback = apply_local_style
-
-        if dialog.exec_():
-            dialog.apply_callback()
-        else:
-            apply_local_style(prev_style)
 
     def open_customize_dialog(self):
         # Check visibility of any existing grid line

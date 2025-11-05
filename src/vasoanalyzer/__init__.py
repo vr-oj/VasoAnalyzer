@@ -36,7 +36,6 @@ from vasoanalyzer.services.project_service import (
 _UI_EXPORTS = {
     "ReplaceEventCommand": ("vasoanalyzer.ui.commands", "ReplaceEventCommand"),
     "AxisSettingsDialog": ("vasoanalyzer.ui.dialogs.axis_settings_dialog", "AxisSettingsDialog"),
-    "PlotStyleEditor": ("vasoanalyzer.ui.dialogs.plot_style_editor", "PlotStyleEditor"),
     "SubplotLayoutDialog": ("vasoanalyzer.ui.dialogs.subplot_layout_dialog", "SubplotLayoutDialog"),
     "ExcelMapWizard": ("vasoanalyzer.ui.dialogs.excel_map_wizard", "ExcelMapWizard"),
     "VasoAnalyzerApp": ("vasoanalyzer.ui.main_window", "VasoAnalyzerApp"),
@@ -59,7 +58,6 @@ open_project = load_project
 __all__ = [
     "VasoAnalyzerApp",
     "AxisSettingsDialog",
-    "PlotStyleEditor",
     "SubplotLayoutDialog",
     "ReplaceEventCommand",
     "Project",
