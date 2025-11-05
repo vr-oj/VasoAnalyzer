@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -85,9 +86,9 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     fonts = list(dialog._font_choices)
 
     container = QWidget()
-    layout = QVBoxLayout(container)
-    layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(12)
+    main_layout = QVBoxLayout(container)
+    main_layout.setContentsMargins(0, 0, 0, 0)
+    main_layout.setSpacing(12)
 
     intro = QLabel(
         "Tune the default typography for all event markers or override specific labels "
@@ -95,7 +96,13 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     )
     intro.setWordWrap(True)
     intro.setObjectName("EventLabelsIntro")
-    layout.addWidget(intro)
+    main_layout.addWidget(intro)
+
+    # Two-column grid layout for group boxes
+    grid = QGridLayout()
+    grid.setSpacing(12)
+    grid.setColumnStretch(0, 1)
+    grid.setColumnStretch(1, 1)
 
     # Global Label Style
     defaults_box = QGroupBox("Global Label Style")
@@ -134,7 +141,8 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     )
     defaults_form.addRow("Event Color:", event_color_btn)
 
-    layout.addWidget(defaults_box)
+    # Add to grid: left column, row 0
+    grid.addWidget(defaults_box, 0, 0)
 
     # Behaviour controls
     behaviour_box = QGroupBox("Label Layout & Behaviour")
@@ -188,7 +196,30 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     event_span_siblings.setChecked(True)
     behaviour_form.addRow("Span Axes:", event_span_siblings)
 
-    layout.addWidget(behaviour_box)
+    # Add to grid: right column, row 0
+    grid.addWidget(behaviour_box, 0, 1)
+
+    # Text Outline (left column, row 1)
+    outline_box = QGroupBox("Text Outline")
+    outline_form = QFormLayout(outline_box)
+    outline_form.setLabelAlignment(Qt.AlignRight)
+
+    event_outline_enabled = QCheckBox("Enable outline")
+    event_outline_enabled.setChecked(False)
+    outline_form.addRow("Enabled:", event_outline_enabled)
+
+    event_outline_width = QDoubleSpinBox()
+    event_outline_width.setRange(0.0, 10.0)
+    event_outline_width.setDecimals(2)
+    event_outline_width.setSingleStep(0.1)
+    outline_form.addRow("Width (px):", event_outline_width)
+
+    outline_default = DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF")
+    event_outline_color_btn = dialog._make_color_button(outline_default)
+    outline_form.addRow("Outline Color:", event_outline_color_btn)
+
+    # Add to grid: left column, row 1
+    grid.addWidget(outline_box, 1, 0)
 
     interaction_box = QGroupBox("Interaction & Legend")
     interaction_form = QFormLayout(interaction_box)
@@ -223,27 +254,11 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     )
     interaction_form.addRow("Legend Position:", event_legend_location)
 
-    layout.addWidget(interaction_box)
+    # Add to grid: right column, row 1
+    grid.addWidget(interaction_box, 1, 1)
 
-    outline_box = QGroupBox("Text Outline")
-    outline_form = QFormLayout(outline_box)
-    outline_form.setLabelAlignment(Qt.AlignRight)
-
-    event_outline_enabled = QCheckBox("Enable outline")
-    event_outline_enabled.setChecked(False)
-    outline_form.addRow("Enabled:", event_outline_enabled)
-
-    event_outline_width = QDoubleSpinBox()
-    event_outline_width.setRange(0.0, 10.0)
-    event_outline_width.setDecimals(2)
-    event_outline_width.setSingleStep(0.1)
-    outline_form.addRow("Width (px):", event_outline_width)
-
-    outline_default = DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF")
-    event_outline_color_btn = dialog._make_color_button(outline_default)
-    outline_form.addRow("Outline Color:", event_outline_color_btn)
-
-    layout.addWidget(outline_box)
+    # Add the grid to the main layout
+    main_layout.addLayout(grid)
 
     # Overrides group: list + editor
     overrides_box = QGroupBox("Per-Event Overrides")
@@ -263,14 +278,15 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # NOTE: connects move to wire_event_labels_tab
     overrides_layout.addWidget(event_editor, 2)
 
-    layout.addWidget(overrides_box, 1)
+    # Add overrides box below the grid, spanning full width
+    main_layout.addWidget(overrides_box, 1)
 
     event_empty_label = QLabel("No events found for this sample.")
     event_empty_label.setAlignment(Qt.AlignCenter)
     event_empty_label.setStyleSheet("color: #666666;")
-    layout.addWidget(event_empty_label)
+    main_layout.addWidget(event_empty_label)
 
-    layout.addStretch(1)
+    main_layout.addStretch(1)
 
     # Return refs so the dialog can reattach attributes it expects
     return EventLabelsTabRefs(
