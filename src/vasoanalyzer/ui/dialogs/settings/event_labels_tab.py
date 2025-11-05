@@ -56,6 +56,7 @@ class EventLabelsTabRefs:
     event_italic: QCheckBox
     event_color_btn: QWidget  # created by dialog._make_color_button(...)
     event_labels_v3_toggle: QCheckBox
+    event_label_mode: QComboBox  # Mode selector: vertical/horizontal/belt
     event_cluster_style: QComboBox
     event_max_per_cluster: QSpinBox
     event_label_lanes: QSpinBox
@@ -98,8 +99,8 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     main_layout.setSpacing(12)
 
     intro = QLabel(
-        "Tune the default typography for all event markers or override specific labels "
-        "to adjust their wording, visibility, or placement."
+        "Configure vertical event labels with dashed line markers. "
+        "Adjust typography for all labels or customize individual events below."
     )
     intro.setWordWrap(True)
     intro.setObjectName("EventLabelsIntro")
@@ -152,31 +153,41 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     grid.addWidget(defaults_box, 0, 0)
 
     # Behaviour controls
-    behaviour_box = QGroupBox("Label Layout & Behaviour")
+    behaviour_box = QGroupBox("Label Clustering & Behaviour")
     behaviour_form = QFormLayout(behaviour_box)
     behaviour_form.setLabelAlignment(Qt.AlignRight)
 
+    # Hidden: Auto mode and density controls (not needed for vertical labels)
     event_auto_mode = QCheckBox("Automatic density switching")
     event_auto_mode.setChecked(False)
-    behaviour_form.addRow("Auto Mode:", event_auto_mode)
+    event_auto_mode.setVisible(False)
 
     event_density_compact = QDoubleSpinBox()
     event_density_compact.setRange(0.0, 10.0)
     event_density_compact.setDecimals(3)
     event_density_compact.setSingleStep(0.05)
     event_density_compact.setValue(0.8)
-    behaviour_form.addRow("Compact Threshold:", event_density_compact)
+    event_density_compact.setVisible(False)
 
     event_density_belt = QDoubleSpinBox()
     event_density_belt.setRange(0.0, 10.0)
     event_density_belt.setDecimals(3)
     event_density_belt.setSingleStep(0.05)
     event_density_belt.setValue(0.25)
-    behaviour_form.addRow("Belt Threshold:", event_density_belt)
+    event_density_belt.setVisible(False)
 
+    # Event Labels v3 always enabled (hidden, no need for toggle)
     event_labels_v3_toggle = QCheckBox("Enable Event Labels v3")
-    event_labels_v3_toggle.setChecked(False)
-    behaviour_form.addRow("Event Labels v3:", event_labels_v3_toggle)
+    event_labels_v3_toggle.setChecked(True)  # Always on
+    event_labels_v3_toggle.setVisible(False)  # Hide - no need to toggle
+
+    # Hidden: Mode selector (locked to vertical)
+    event_label_mode = QComboBox()
+    event_label_mode.addItem("Vertical (Above Plot)", "vertical")
+    event_label_mode.addItem("Horizontal (Inside Plot)", "horizontal")
+    event_label_mode.addItem("Horizontal Belt (Outside Plot)", "horizontal_outside")
+    event_label_mode.setCurrentIndex(0)  # Always vertical
+    event_label_mode.setVisible(False)
 
     event_cluster_style = QComboBox()
     event_cluster_style.addItem("First label", "first")
@@ -190,14 +201,16 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     event_max_per_cluster.setValue(1)
     behaviour_form.addRow("Max per Cluster:", event_max_per_cluster)
 
+    # Hidden: Horizontal lanes (not used in vertical mode)
     event_label_lanes = QSpinBox()
     event_label_lanes.setRange(1, 12)
     event_label_lanes.setValue(3)
-    behaviour_form.addRow("Horizontal Lanes:", event_label_lanes)
+    event_label_lanes.setVisible(False)
 
+    # Hidden: Belt baseline (not used in vertical mode)
     event_belt_baseline = QCheckBox("Show belt baseline")
     event_belt_baseline.setChecked(True)
-    behaviour_form.addRow("Belt Baseline:", event_belt_baseline)
+    event_belt_baseline.setVisible(False)
 
     event_span_siblings = QCheckBox("Span shared axes")
     event_span_siblings.setChecked(True)
@@ -315,6 +328,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
         event_italic=event_italic,
         event_color_btn=event_color_btn,
         event_labels_v3_toggle=event_labels_v3_toggle,
+        event_label_mode=event_label_mode,
         event_cluster_style=event_cluster_style,
         event_max_per_cluster=event_max_per_cluster,
         event_label_lanes=event_label_lanes,
@@ -351,6 +365,7 @@ def populate_event_labels_tab(dialog: DialogT) -> None:
             getattr(dialog, "event_font_family", None),
             getattr(dialog, "event_font_size", None),
             getattr(dialog, "event_labels_v3_toggle", None),
+            getattr(dialog, "event_label_mode", None),
             getattr(dialog, "event_cluster_style", None),
             getattr(dialog, "event_max_per_cluster", None),
             getattr(dialog, "event_label_lanes", None),
@@ -378,6 +393,16 @@ def populate_event_labels_tab(dialog: DialogT) -> None:
                 )
             )
         )
+        mode_value = str(
+            style.get(
+                "event_label_mode",
+                default_style.get("event_label_mode", "vertical"),
+            )
+        ).lower()
+        mode_idx = dialog.event_label_mode.findData(mode_value)
+        if mode_idx < 0:
+            mode_idx = 0
+        dialog.event_label_mode.setCurrentIndex(mode_idx)
         policy_value = str(
             style.get(
                 "event_label_style_policy",

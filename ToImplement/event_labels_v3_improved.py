@@ -408,16 +408,12 @@ class EventLabelerV3:
                 peer.add_line(guide)
                 self._artists.append(guide)
 
-        # Position labels INSIDE plot area, offset from dashed line
-        y_axes = 0.98  # Inside plot, near top (was 1.0 = at top edge)
+        y_axes = 1.0
         for cluster in clusters:
             enhanced_style = self._enhance_style_by_priority(
                 cluster.style, cluster.max_priority, cluster.category
             )
             text_kwargs = self._text_kwargs(enhanced_style)
-            # Remove ha/va from kwargs since we're setting them explicitly
-            text_kwargs.pop("ha", None)
-            text_kwargs.pop("va", None)
             text = ax.text(
                 cluster.x,
                 y_axes,
@@ -425,10 +421,10 @@ class EventLabelerV3:
                 rotation=self.options.rotation_deg,
                 rotation_mode="anchor",
                 transform=ax.get_xaxis_transform(),
-                ha="right",  # Right-align: label ENDS at this position, extends left
-                va="bottom",  # Bottom-align at y position
+                ha=text_kwargs.pop("ha", "center"),
+                va=text_kwargs.pop("va", "bottom"),
                 zorder=self.options.z_label,
-                clip_on=True,  # Enable clipping to keep labels inside plot
+                clip_on=False,
                 **text_kwargs,
             )
             self._apply_outline(text)
@@ -672,9 +668,7 @@ class EventLabelerV3:
         self._belt_ax = belt_ax
         return belt_ax
 
-    def annotation_text_objects(
-        self,
-    ) -> tuple[list[Text], dict[Text, ClusteredLabelV3]]:
+    def annotation_text_objects(self) -> tuple[list[Text], dict[Text, ClusteredLabelV3]]:
         texts = [artist for artist in self._artists if isinstance(artist, Text)]
         return texts, dict(self._artist_to_cluster)
 
@@ -818,19 +812,19 @@ class EventLabelerV3:
         Returns the best lane index.
         """
         width = max(width, 0.0)
-
+        
         # Find all lanes where this label can fit without overlap
         candidates = []
         for lane_index, lane_tail in enumerate(lane_end_px):
             if px >= lane_tail:  # Label fits without overlap
                 candidates.append((lane_index, lane_tail))
-
+        
         if candidates:
             # Choose the lane with the earliest end position (most room remaining)
             # This keeps labels as low as possible and spreads them across lanes
             best_lane = min(candidates, key=lambda x: x[1])[0]
             return best_lane
-
+        
         # If no lane fits perfectly, use the one that ends earliest
         # This minimizes overlap
         return min(range(len(lane_end_px)), key=lambda i: lane_end_px[i])

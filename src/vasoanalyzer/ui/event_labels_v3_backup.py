@@ -7,11 +7,6 @@ The v3 helper is designed to render dense event timelines without layout jank by
 - supporting multiple layout modes (vertical, horizontal inside, horizontal belt),
 - exposing cluster style policies and per-cluster summarisation controls, and
 - keeping label guides above dashed event lines via explicit z-ordering.
-
-IMPROVEMENTS IN THIS VERSION:
-- Enhanced lane selection using best-fit algorithm for better label distribution
-- Increased horizontal spacing (12px vs 6px) for clearer separation from dashed lines
-- Labels now spread more evenly across lanes instead of clustering in the first available lane
 """
 
 from __future__ import annotations
@@ -408,16 +403,12 @@ class EventLabelerV3:
                 peer.add_line(guide)
                 self._artists.append(guide)
 
-        # Position labels INSIDE plot area, offset from dashed line
-        y_axes = 0.98  # Inside plot, near top (was 1.0 = at top edge)
+        y_axes = 1.0
         for cluster in clusters:
             enhanced_style = self._enhance_style_by_priority(
                 cluster.style, cluster.max_priority, cluster.category
             )
             text_kwargs = self._text_kwargs(enhanced_style)
-            # Remove ha/va from kwargs since we're setting them explicitly
-            text_kwargs.pop("ha", None)
-            text_kwargs.pop("va", None)
             text = ax.text(
                 cluster.x,
                 y_axes,
@@ -425,10 +416,10 @@ class EventLabelerV3:
                 rotation=self.options.rotation_deg,
                 rotation_mode="anchor",
                 transform=ax.get_xaxis_transform(),
-                ha="right",  # Right-align: label ENDS at this position, extends left
-                va="bottom",  # Bottom-align at y position
+                ha=text_kwargs.pop("ha", "center"),
+                va=text_kwargs.pop("va", "bottom"),
                 zorder=self.options.z_label,
-                clip_on=True,  # Enable clipping to keep labels inside plot
+                clip_on=False,
                 **text_kwargs,
             )
             self._apply_outline(text)
@@ -457,7 +448,7 @@ class EventLabelerV3:
         x_min_px = float(bbox.x0)
         x_max_px = float(bbox.x1)
         margin_px = 4.0
-        preferred_gap_px = 12.0  # Increased from 6.0 for better separation from dashed line
+        preferred_gap_px = 6.0
         min_gap_px = 2.0
         buffer_px = 12.0
 
@@ -549,7 +540,7 @@ class EventLabelerV3:
         x_min_px = float(bbox.x0)
         x_max_px = float(bbox.x1)
         margin_px = 4.0
-        preferred_gap_px = 12.0  # Increased from 6.0 for better separation from dashed line
+        preferred_gap_px = 6.0
         min_gap_px = 2.0
         buffer_px = 12.0
 
@@ -672,9 +663,7 @@ class EventLabelerV3:
         self._belt_ax = belt_ax
         return belt_ax
 
-    def annotation_text_objects(
-        self,
-    ) -> tuple[list[Text], dict[Text, ClusteredLabelV3]]:
+    def annotation_text_objects(self) -> tuple[list[Text], dict[Text, ClusteredLabelV3]]:
         texts = [artist for artist in self._artists if isinstance(artist, Text)]
         return texts, dict(self._artist_to_cluster)
 
@@ -811,28 +800,15 @@ class EventLabelerV3:
     ) -> int:
         """Select the best lane for a label given its leftmost pixel coordinate.
 
-        Uses a best-fit algorithm that prefers lanes with the earliest end position
-        among those that can fit the label. This spreads labels more evenly across
-        lanes rather than clustering in the first available lane.
-
-        Returns the best lane index.
+        Returns the first lane where the label fits without overlap, or the
+        lane with the smallest tail position if none fit perfectly.
         """
         width = max(width, 0.0)
-
-        # Find all lanes where this label can fit without overlap
-        candidates = []
+        # Try to find a lane where this label fits without overlap
         for lane_index, lane_tail in enumerate(lane_end_px):
-            if px >= lane_tail:  # Label fits without overlap
-                candidates.append((lane_index, lane_tail))
-
-        if candidates:
-            # Choose the lane with the earliest end position (most room remaining)
-            # This keeps labels as low as possible and spreads them across lanes
-            best_lane = min(candidates, key=lambda x: x[1])[0]
-            return best_lane
-
-        # If no lane fits perfectly, use the one that ends earliest
-        # This minimizes overlap
+            if px >= lane_tail:
+                return lane_index
+        # If no lane fits perfectly, use the one that's least occupied
         return min(range(len(lane_end_px)), key=lambda i: lane_end_px[i])
 
     def _get_category_color(self, category: str | None) -> tuple[float, float, float, float] | None:

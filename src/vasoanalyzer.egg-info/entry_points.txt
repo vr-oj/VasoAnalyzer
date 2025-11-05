@@ -1,0 +1,2 @@
+[console_scripts]
+vaso = vasoanalyzer.cli:main

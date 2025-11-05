@@ -93,6 +93,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             screen = parent.screen()
         else:
             from PyQt5.QtWidgets import QApplication
+
             screen = QApplication.primaryScreen()
 
         if screen:
@@ -562,6 +563,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.event_italic = refs.event_italic
         self.event_color_btn = refs.event_color_btn
         self.event_labels_v3_toggle = refs.event_labels_v3_toggle
+        self.event_label_mode = refs.event_label_mode
         self.event_cluster_style = refs.event_cluster_style
         self.event_max_per_cluster = refs.event_max_per_cluster
         self.event_label_lanes = refs.event_label_lanes
@@ -1223,6 +1225,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.style["event_italic"] = self.event_italic.isChecked()
         self.style["event_color"] = self.event_color_btn.color
         self.style["event_labels_v3_enabled"] = self.event_labels_v3_toggle.isChecked()
+        self.style["event_label_mode"] = self.event_label_mode.currentData() or "vertical"
         self.style["event_label_style_policy"] = self.event_cluster_style.currentData() or "first"
         self.style["event_label_max_per_cluster"] = int(self.event_max_per_cluster.value())
         self.style["event_label_lanes"] = int(self.event_label_lanes.value())

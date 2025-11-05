@@ -198,6 +198,63 @@ def test_event_labels_v3_compact_counts_text():
     plt.close(fig)
 
 
+def test_event_labels_v3_horizontal_inside_stays_within_axes():
+    fig, ax = plt.subplots(figsize=(4, 2), dpi=100)
+    ax.set_xlim(0, 10)
+    entries = _make_entries(
+        [2.0, 5.0],
+        ["Stimulus", "Washout"],
+    )
+    opts = LayoutOptionsV3(mode="h_inside", lanes=2)
+    helper = EventLabelerV3(ax, [ax], opts)
+    fig.canvas.draw()
+    helper.draw(entries)
+    renderer = fig.canvas.get_renderer()
+    axis_bbox = ax.get_window_extent(renderer=renderer)
+
+    texts, mapping = helper.annotation_text_objects()
+    assert texts, "Expected horizontal labels to be drawn"
+    for text in texts:
+        cluster = mapping[text]
+        x_anchor, _ = text.get_position()
+        # Allow small tolerance for floating conversion.
+        assert x_anchor >= cluster.x - 1e-6
+        bbox = text.get_window_extent(renderer=renderer)
+        assert bbox.x0 >= axis_bbox.x0 - 0.5
+        assert bbox.x1 <= axis_bbox.x1 + 0.5
+        assert text.get_ha() == "left"
+    helper.clear()
+    plt.close(fig)
+
+
+def test_event_labels_v3_horizontal_belt_respects_bounds():
+    fig, ax = plt.subplots(figsize=(4, 2), dpi=100)
+    ax.set_xlim(0, 10)
+    entries = _make_entries(
+        [1.5, 7.5],
+        ["Dose", "Recovery"],
+    )
+    opts = LayoutOptionsV3(mode="h_belt", lanes=2)
+    helper = EventLabelerV3(ax, [ax], opts)
+    fig.canvas.draw()
+    helper.draw(entries)
+    renderer = fig.canvas.get_renderer()
+
+    texts, mapping = helper.annotation_text_objects()
+    assert texts, "Expected belt labels to be drawn"
+    for text in texts:
+        cluster = mapping[text]
+        x_anchor, _ = text.get_position()
+        assert x_anchor >= cluster.x - 1e-6
+        axis_bbox = text.axes.get_window_extent(renderer=renderer)
+        bbox = text.get_window_extent(renderer=renderer)
+        assert bbox.x0 >= axis_bbox.x0 - 0.5
+        assert bbox.x1 <= axis_bbox.x1 + 0.5
+        assert text.get_ha() == "left"
+    helper.clear()
+    plt.close(fig)
+
+
 def test_annotation_text_objects_mapping_contains_clusters():
     fig, ax = plt.subplots(figsize=(2, 2), dpi=100)
     entries = _make_entries([0.5], ["Single"])

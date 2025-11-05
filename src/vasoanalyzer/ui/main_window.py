@@ -3574,6 +3574,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def show_shortcuts(self):
         from vasoanalyzer.ui.dialogs.keyboard_shortcuts_dialog import KeyboardShortcutsDialog
+
         dialog = KeyboardShortcutsDialog(self)
         dialog.exec_()
 
@@ -4148,7 +4149,9 @@ QPushButton[isGhost="true"]:hover {{
         """Show progress bar in status bar with optional message."""
         self._progress_bar.setMaximum(maximum)
         self._progress_bar.setValue(0)
-        self._progress_bar.setFormat(f"{message} %p%") if message else self._progress_bar.setFormat("%p%")
+        self._progress_bar.setFormat(f"{message} %p%") if message else self._progress_bar.setFormat(
+            "%p%"
+        )
         self._progress_bar.show()
         if message:
             self.statusBar().showMessage(message)
@@ -7030,10 +7033,8 @@ QPushButton[isGhost="true"]:hover {{
         plot_host = getattr(self, "plot_host", None)
         v3_enabled = False
         if plot_host is not None:
-            try:
+            with contextlib.suppress(Exception):
                 v3_enabled = effective_style.get("event_labels_v3_enabled", False)
-            except Exception:
-                pass
         event_texts = [] if v3_enabled else self.event_text_objects
 
         manager.apply(
@@ -7052,6 +7053,12 @@ QPushButton[isGhost="true"]:hover {{
             try:
                 # Always use v3 - force upgrade from old saved settings
                 plot_host.set_event_labels_v3_enabled(True)
+                plot_host.set_event_label_mode(
+                    effective_style.get(
+                        "event_label_mode",
+                        defaults.get("event_label_mode", "vertical"),
+                    )
+                )
                 plot_host.set_max_labels_per_cluster(
                     effective_style.get(
                         "event_label_max_per_cluster",
@@ -7389,7 +7396,6 @@ QPushButton[isGhost="true"]:hover {{
             )
 
         return style
-
 
     def open_customize_dialog(self):
         # Check visibility of any existing grid line

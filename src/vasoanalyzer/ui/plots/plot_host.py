@@ -358,7 +358,7 @@ class PlotHost:
             return text_objects
 
         # Fall back to v2 annotation lane
-        text_objects: list[tuple[Text, float, str]] = []
+        text_objects = []
         for entry, artist in self._annotation_lane.entries_with_artists():
             text_objects.append((artist, entry.time_s, entry.label))
         return text_objects
@@ -490,7 +490,7 @@ class PlotHost:
         self._event_lines_visible = True
         self._event_labels_visible = False
         self._event_label_gap_px = 22
-        self._event_label_mode = "vertical"
+        self._event_label_mode = "vertical"  # LOCKED TO VERTICAL ONLY
         self._feature_flags["event_labels_v3"] = is_enabled("event_labels_v3", default=True)
         self._event_helper_v3 = None
         self._event_entries_v3 = []
@@ -500,7 +500,7 @@ class PlotHost:
         self._event_label_lanes = 3
         self._belt_baseline_enabled = True
         self._span_event_lines_across_siblings = True
-        self._auto_event_label_mode = True
+        self._auto_event_label_mode = False  # Auto mode disabled - always vertical
         self._density_threshold_compact = 0.8
         self._density_threshold_belt = 0.25
         self._label_outline_enabled = True
@@ -827,7 +827,8 @@ class PlotHost:
         self._schedule_draw()
 
     def set_auto_event_label_mode(self, enabled: bool) -> None:
-        flag = bool(enabled)
+        # LOCKED: Auto mode permanently disabled - always use vertical
+        flag = False  # Ignore enabled parameter, always False
         if flag == self._auto_event_label_mode:
             return
         self._auto_event_label_mode = flag
@@ -1217,11 +1218,8 @@ class PlotHost:
             return None
 
     def set_event_label_mode(self, mode: str) -> None:
-        normalized = str(mode).lower()
-        alias = {"auto": "vertical", "all": "horizontal_outside"}
-        normalized = alias.get(normalized, normalized)
-        if normalized not in {"vertical", "horizontal", "horizontal_outside"}:
-            normalized = "vertical"
+        # LOCKED TO VERTICAL MODE ONLY - ignore any other mode setting
+        normalized = "vertical"  # Force vertical mode always
 
         previous_mode = self._event_label_mode
         already_active = normalized == previous_mode and self._event_labeler is not None
@@ -1291,36 +1289,14 @@ class PlotHost:
         if anchor_ax not in siblings:
             siblings.append(anchor_ax)
 
-        mapping = {
-            "vertical": "vertical",
-            "horizontal": "h_inside",
-            "horizontal_outside": "h_belt",
-        }
-        base_layout_mode = mapping.get(self._event_label_mode, "vertical")
-        layout_mode = base_layout_mode
+        # LOCKED TO VERTICAL MODE ONLY - ignore all mode logic
+        layout_mode = "vertical"
         compact_counts = False
         rotation_deg = 90.0
         max_labels = max(1, int(self._max_labels_per_cluster))
         lanes = max(1, int(self._event_label_lanes))
 
-        if self._auto_event_label_mode:
-            density_mode = self._resolve_density_mode(anchor_ax)
-            if density_mode == "compact":
-                layout_mode = "vertical"
-                compact_counts = True
-                max_labels = 0
-                rotation_deg = 90.0
-            elif density_mode == "belt":
-                layout_mode = "h_belt"
-                rotation_deg = 0.0
-                max_labels = max(1, int(self._max_labels_per_cluster))
-                lanes = max(lanes, 4)
-            else:
-                layout_mode = "h_inside"
-                rotation_deg = 0.0
-                max_labels = max(1, int(self._max_labels_per_cluster))
-        else:
-            rotation_deg = 90.0 if layout_mode == "vertical" else 0.0
+        # Auto mode and all other modes disabled - always vertical
 
         options = LayoutOptionsV3(
             mode=layout_mode,

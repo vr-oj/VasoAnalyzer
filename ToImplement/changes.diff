@@ -1,0 +1,67 @@
+--- /mnt/user-data/uploads/event_labels_v3.py	2025-11-05 16:04:58.944000000 +0000
++++ /home/claude/event_labels_v3_improved.py	2025-11-05 16:08:35.195631482 +0000
+@@ -7,6 +7,11 @@
+ - supporting multiple layout modes (vertical, horizontal inside, horizontal belt),
+ - exposing cluster style policies and per-cluster summarisation controls, and
+ - keeping label guides above dashed event lines via explicit z-ordering.
++
++IMPROVEMENTS IN THIS VERSION:
++- Enhanced lane selection using best-fit algorithm for better label distribution
++- Increased horizontal spacing (12px vs 6px) for clearer separation from dashed lines
++- Labels now spread more evenly across lanes instead of clustering in the first available lane
+ """
+ 
+ from __future__ import annotations
+@@ -448,7 +453,7 @@
+         x_min_px = float(bbox.x0)
+         x_max_px = float(bbox.x1)
+         margin_px = 4.0
+-        preferred_gap_px = 6.0
++        preferred_gap_px = 12.0  # Increased from 6.0 for better separation from dashed line
+         min_gap_px = 2.0
+         buffer_px = 12.0
+ 
+@@ -540,7 +545,7 @@
+         x_min_px = float(bbox.x0)
+         x_max_px = float(bbox.x1)
+         margin_px = 4.0
+-        preferred_gap_px = 6.0
++        preferred_gap_px = 12.0  # Increased from 6.0 for better separation from dashed line
+         min_gap_px = 2.0
+         buffer_px = 12.0
+ 
+@@ -800,15 +805,28 @@
+     ) -> int:
+         """Select the best lane for a label given its leftmost pixel coordinate.
+ 
+-        Returns the first lane where the label fits without overlap, or the
+-        lane with the smallest tail position if none fit perfectly.
++        Uses a best-fit algorithm that prefers lanes with the earliest end position
++        among those that can fit the label. This spreads labels more evenly across
++        lanes rather than clustering in the first available lane.
++
++        Returns the best lane index.
+         """
+         width = max(width, 0.0)
+-        # Try to find a lane where this label fits without overlap
++        
++        # Find all lanes where this label can fit without overlap
++        candidates = []
+         for lane_index, lane_tail in enumerate(lane_end_px):
+-            if px >= lane_tail:
+-                return lane_index
+-        # If no lane fits perfectly, use the one that's least occupied
++            if px >= lane_tail:  # Label fits without overlap
++                candidates.append((lane_index, lane_tail))
++        
++        if candidates:
++            # Choose the lane with the earliest end position (most room remaining)
++            # This keeps labels as low as possible and spreads them across lanes
++            best_lane = min(candidates, key=lambda x: x[1])[0]
++            return best_lane
++        
++        # If no lane fits perfectly, use the one that ends earliest
++        # This minimizes overlap
+         return min(range(len(lane_end_px)), key=lambda i: lane_end_px[i])
+ 
+     def _get_category_color(self, category: str | None) -> tuple[float, float, float, float] | None:
