@@ -118,6 +118,11 @@ class PlotHost:
         self._last_draw_ts: float = 0.0
         self._min_draw_interval: float = 1.0 / 60.0
         self._pending_draw_timer: QTimer | None = None
+        self._batch_mode: bool = False
+        self._batch_needs_draw: bool = False
+        # Tooltip hover debouncing
+        self._hover_debounce_timer: QTimer | None = None
+        self._pending_hover_event = None
 
     def add_channel(self, spec: ChannelTrackSpec) -> ChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -630,6 +635,11 @@ class PlotHost:
                 axis.set_xlabel("")
 
     def _schedule_draw(self) -> None:
+        # If in batch mode, defer the draw until resume is called
+        if self._batch_mode:
+            self._batch_needs_draw = True
+            return
+
         now = time.perf_counter()
         if now - self._last_draw_ts >= self._min_draw_interval:
             self.canvas.draw_idle()
@@ -654,6 +664,18 @@ class PlotHost:
             self._pending_draw_timer = None
         self.canvas.draw_idle()
         self._last_draw_ts = time.perf_counter()
+
+    def suspend_updates(self) -> None:
+        """Suspend draw calls to batch multiple setter operations."""
+        self._batch_mode = True
+        self._batch_needs_draw = False
+
+    def resume_updates(self) -> None:
+        """Resume draw calls and trigger a draw if any setters were called during batch mode."""
+        self._batch_mode = False
+        if self._batch_needs_draw:
+            self._batch_needs_draw = False
+            self._schedule_draw()
 
     def use_track_event_lines(self, flag: bool) -> None:
         """When False, clear per-track LineCollections; the helper will draw shared lines."""
@@ -1007,8 +1029,8 @@ class PlotHost:
             try:
                 renderer = canvas.get_renderer()
             except Exception:
-                canvas.draw()
-                renderer = canvas.get_renderer()
+                # Don't force a synchronous draw - tooltips can wait
+                renderer = None
         else:
             renderer = None
         texts, mapping = self._event_helper_v3.annotation_text_objects()
@@ -1023,11 +1045,16 @@ class PlotHost:
         proximity = max(1, int(self._tooltip_proximity_px))
         self._last_hover_text = None
 
-        def on_motion(evt):
+        def process_hover_event(evt):
+            """Process hover event (called after debounce delay)."""
             if evt.inaxes is None or not texts:
                 self._hide_tooltip()
                 return
-            current_renderer = renderer or canvas.get_renderer()
+            # Try to get renderer, but don't block if unavailable
+            try:
+                current_renderer = renderer or canvas.get_renderer()
+            except Exception:
+                return  # Defer tooltip until renderer is available
             nearest: Text | None = None
             best_dist = float("inf")
             for text_artist in texts:
@@ -1070,6 +1097,19 @@ class PlotHost:
                 lines.append(f"<div>{badge}{label}</div>")
             html = "".join(lines)
             self._show_qt_tooltip(evt, html)
+
+        def on_motion(evt):
+            """Debounced motion handler - schedules hover processing."""
+            self._pending_hover_event = evt
+            if self._hover_debounce_timer is None:
+                self._hover_debounce_timer = QTimer(canvas)
+                self._hover_debounce_timer.setSingleShot(True)
+                self._hover_debounce_timer.timeout.connect(
+                    lambda: process_hover_event(self._pending_hover_event)
+                    if self._pending_hover_event
+                    else None
+                )
+            self._hover_debounce_timer.start(16)  # 16ms = ~60fps, smooth but responsive
 
         self._cid_motion = canvas.mpl_connect("motion_notify_event", on_motion)
 
@@ -1419,12 +1459,16 @@ class PlotHost:
         try:
             renderer = self.canvas.get_renderer()
         except Exception:
-            self.canvas.draw()
-            renderer = self.canvas.get_renderer()
+            # Don't force a synchronous draw - use fallback dimensions
+            renderer = None
 
         try:
-            bbox = anchor_ax.get_window_extent(renderer)
-            ax_width_px = max(int(bbox.width), 1)
+            if renderer is not None:
+                bbox = anchor_ax.get_window_extent(renderer)
+                ax_width_px = max(int(bbox.width), 1)
+            else:
+                # Fallback to canvas dimensions if renderer unavailable
+                ax_width_px = max(int(self.canvas.width()), 1)
         except Exception:
             ax_width_px = max(int(self.canvas.width()), 1)
 

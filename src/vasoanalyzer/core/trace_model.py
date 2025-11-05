@@ -198,14 +198,9 @@ class TraceModel:
         )
 
     def best_level_for_window(self, x0: float, x1: float, pixel_width: int) -> int:
-        if pixel_width <= 0:
-            return 0
-        desired = max(pixel_width * 2, 64)
-        for idx, level in enumerate(self._levels):
-            buckets = level.count_in_range(x0, x1)
-            if buckets <= desired:
-                return idx
-        return len(self._levels) - 1
+        # Always return Level 0 (raw data, no aggregation)
+        # Users should see their data exactly as loaded
+        return 0
 
     def window(self, level_index: int, x0: float, x1: float) -> TraceWindow:
         key = (level_index, float(x0), float(x1))

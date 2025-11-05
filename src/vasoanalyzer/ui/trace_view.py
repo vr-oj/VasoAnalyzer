@@ -208,8 +208,8 @@ class TraceView:
             return
         mean, ymin, ymax = primary
         self.inner_line.set_data(time, mean)
-        verts = _band_vertices(time, ymin, ymax)
-        self.inner_band.set_verts([verts])
+        # Disable uncertainty bands - show raw data only (no shadow effect)
+        self.inner_band.set_verts([])
 
         y_min = np.nanmin(ymin)
         y_max = np.nanmax(ymax)
@@ -218,8 +218,8 @@ class TraceView:
         if secondary and self.outer_line and self.outer_band:
             mean2, ymin2, ymax2 = secondary
             self.outer_line.set_data(time, mean2)
-            outer_verts = _band_vertices(time, ymin2, ymax2)
-            self.outer_band.set_verts([outer_verts])
+            # Disable outer uncertainty bands too
+            self.outer_band.set_verts([])
             y_min = min(y_min, np.nanmin(ymin2))
             y_max = max(y_max, np.nanmax(ymax2))
         elif self.outer_line:

@@ -13,7 +13,7 @@ from matplotlib.colors import to_hex
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor, QFont, QIcon
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -61,6 +61,19 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._suppress_event_editor = False
         self._event_updates_fired = False
         self._event_update_callback = None
+
+        # Debounce timer for layout preview updates
+        self._preview_update_timer = QTimer()
+        self._preview_update_timer.setSingleShot(True)
+        self._preview_update_timer.setInterval(100)  # 100ms debounce
+        self._preview_update_timer.timeout.connect(self._do_update_preview)
+
+        # Debounce timer for event lane count changes
+        self._event_lane_timer = QTimer()
+        self._event_lane_timer.setSingleShot(True)
+        self._event_lane_timer.setInterval(300)  # 300ms debounce for heavier operation
+        self._event_lane_timer.timeout.connect(self._do_event_lane_update)
+        self._pending_event_row = -1
 
         self.parent_window = parent
         self.style = DEFAULT_STYLE.copy()
@@ -737,13 +750,19 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._event_updates_fired = False
 
     def _on_event_lane_count_changed(self, value: int) -> None:
+        """Debounced event lane count change - stores row and restarts timer."""
         if self._suppress_event_editor:
             return
         if not hasattr(self, "event_list"):
             return
         current_row = self.event_list.currentRow()
-        if current_row >= 0:
-            self._on_event_row_changed(current_row)
+        self._pending_event_row = current_row
+        self._event_lane_timer.start()
+
+    def _do_event_lane_update(self) -> None:
+        """Actual event lane update implementation after debounce."""
+        if self._pending_event_row >= 0:
+            self._on_event_row_changed(self._pending_event_row)
 
     def _update_event_list_item(self, index: int) -> None:
         if not hasattr(self, "event_list"):
@@ -778,6 +797,13 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     def update_preview(self, *_):
+        """Debounced preview update - restarts timer on each call."""
+        self._preview_update_timer.start()
+
+    def _do_update_preview(self):
+        """Actual preview update implementation."""
+        if not hasattr(self, "layout_controls"):
+            return
         params = {name: ctrl.value() for name, ctrl in self.layout_controls.items()}
         self.preview_ax.clear()
         self.preview_ax.axis("off")

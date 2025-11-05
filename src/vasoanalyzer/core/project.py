@@ -1134,10 +1134,16 @@ def _load_project_legacy_zip(path: str) -> Project:
 # SQLite-backed persistence -------------------------------------------------
 
 
-def save_project(project: Project, path: str) -> None:
-    """Persist ``project`` to ``path`` using the SQLite .vaso format."""
+def save_project(project: Project, path: str, *, skip_optimize: bool = False) -> None:
+    """Persist ``project`` to ``path`` using the SQLite .vaso format.
 
-    _save_project_sqlite(project, path)
+    Args:
+        project: The project to save
+        path: Path to save to
+        skip_optimize: If True, skip expensive OPTIMIZE operation (useful during app close)
+    """
+
+    _save_project_sqlite(project, path, skip_optimize=skip_optimize)
 
 
 def load_project(path: str) -> Project:
@@ -1148,7 +1154,7 @@ def load_project(path: str) -> Project:
     return _load_project_legacy_zip(path)
 
 
-def _save_project_sqlite(project: Project, path: str) -> None:
+def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = False) -> None:
     """Serialize ``project`` into a fresh SQLite database."""
 
     dest = Path(path)
@@ -1170,7 +1176,9 @@ def _save_project_sqlite(project: Project, path: str) -> None:
 
     tz_name = _project_timezone()
     base_dir = Path(project.path).resolve().parent if project.path else dest.parent
-    _write_sqlite_project(project, dest, timezone_name=tz_name, base_dir=base_dir)
+    _write_sqlite_project(
+        project, dest, timezone_name=tz_name, base_dir=base_dir, skip_optimize=skip_optimize
+    )
 
     project.path = dest.as_posix()
 
@@ -1181,6 +1189,7 @@ def _write_sqlite_project(
     *,
     timezone_name: str,
     base_dir: Path,
+    skip_optimize: bool = False,
 ) -> None:
     """Serialise ``project`` into ``dest`` without mutating the caller."""
 
@@ -1197,7 +1206,7 @@ def _write_sqlite_project(
         )
         try:
             _populate_store_from_project(project, repo, base_dir)
-            repo.save()
+            repo.save(skip_optimize=skip_optimize)
         finally:
             repo.close()
 

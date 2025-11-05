@@ -90,10 +90,16 @@ class ChannelTrack:
     def update_window(self, x0: float, x1: float) -> None:
         if self._model is None:
             return
-        if getattr(self.canvas, "renderer", None) is None:
-            self.canvas.draw()
-        bbox = self.ax.get_window_extent(renderer=self.canvas.renderer)
-        pixel_width = max(int(bbox.width), 1)
+        # Try to get bounding box, fall back to canvas width if renderer unavailable
+        try:
+            renderer = getattr(self.canvas, "renderer", None)
+            if renderer is None:
+                renderer = self.canvas.get_renderer()
+            bbox = self.ax.get_window_extent(renderer=renderer)
+            pixel_width = max(int(bbox.width), 1)
+        except Exception:
+            # Fallback if renderer not available - don't force synchronous draw
+            pixel_width = max(int(self.canvas.width()), 400)  # 400px reasonable default
         span = float(x1 - x0)
         span_changed = self._last_time_span is None or not math.isclose(
             span, self._last_time_span, rel_tol=1e-9, abs_tol=1e-9

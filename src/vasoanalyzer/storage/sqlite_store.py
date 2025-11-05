@@ -159,8 +159,13 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
     return ProjectStore(path=project_path, conn=conn, dirty=False)
 
 
-def save_project(store: ProjectStore) -> None:
-    """Flush pending changes and update ``modified_utc`` metadata."""
+def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
+    """Flush pending changes and update ``modified_utc`` metadata.
+
+    Args:
+        store: The ProjectStore to save
+        skip_optimize: If True, skip the expensive OPTIMIZE operation (useful during app close)
+    """
 
     now = _utc_now()
     _projects.write_meta(store.conn, {"modified_utc": now, "modified_at": now})
@@ -183,7 +188,8 @@ def save_project(store: ProjectStore) -> None:
         _projects.apply_default_pragmas(conn)
         store.conn = conn
         store.dirty = False
-        _sqlite_optimize(store.conn)
+        if not skip_optimize:
+            _sqlite_optimize(store.conn)
     finally:
         if tmp_path.exists():
             with contextlib.suppress(OSError):

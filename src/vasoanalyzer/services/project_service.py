@@ -169,15 +169,23 @@ def open_project_file(path: str) -> Project:
     return load_project(path)
 
 
-def save_project_file(project: Project, path: str | None = None) -> None:
-    """Save ``project`` to ``path``."""
+def save_project_file(
+    project: Project, path: str | None = None, *, skip_optimize: bool = False
+) -> None:
+    """Save ``project`` to ``path``.
+
+    Args:
+        project: The project to save
+        path: Optional path to save to (updates project.path if provided)
+        skip_optimize: If True, skip expensive OPTIMIZE operation (useful during app close)
+    """
 
     if path is not None:
         project.path = path
     if not project.path:
         raise ValueError("Project path is not set")
 
-    save_project(project, project.path)
+    save_project(project, project.path, skip_optimize=skip_optimize)
 
 
 def autosave_project(project: Project, autosave_path: str | None = None) -> str | None:
@@ -365,8 +373,8 @@ class SQLiteProjectRepository(ProjectRepository):
     def iter_datasets(self) -> Sequence[Mapping[str, Any]]:
         return list(sqlite_store.iter_datasets(self._store))
 
-    def save(self) -> None:
-        sqlite_store.save_project(self._store)
+    def save(self, *, skip_optimize: bool = False) -> None:
+        sqlite_store.save_project(self._store, skip_optimize=skip_optimize)
 
     @property
     def store(self) -> sqlite_store.ProjectStore:

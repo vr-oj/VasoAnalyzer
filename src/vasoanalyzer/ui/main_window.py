@@ -311,6 +311,15 @@ DEFAULT_LEGEND_SETTINGS = {
 }
 
 
+def _copy_legend_settings(settings: dict) -> dict:
+    """Fast copy of legend settings (avoids expensive deepcopy)."""
+    result = dict(settings)
+    # Only deep copy the labels dict if it exists and isn't empty
+    if "labels" in result and result["labels"]:
+        result["labels"] = dict(result["labels"])
+    return result
+
+
 def onboarding_needed(settings: QSettings) -> bool:
     """Return True when the onboarding guide should be displayed."""
 
@@ -379,7 +388,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.inner_line = None
         self.outer_line = None
         self.plot_legend = None
-        self.legend_settings = copy.deepcopy(DEFAULT_LEGEND_SETTINGS)
+        self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
         self.event_metadata = []
         self._last_event_import = {}
         self.sampling_rate_hz: float | None = None
@@ -401,6 +410,11 @@ class VasoAnalyzerApp(QMainWindow):
         self._event_highlight_timer.setSingleShot(False)
         self._event_highlight_timer.setInterval(40)
         self._event_highlight_timer.timeout.connect(self._on_event_highlight_tick)
+        # Performance: Cache expensive state gathering operations
+        self._cached_sample_state: dict | None = None
+        self._sample_state_dirty = True
+        self._cached_snapshot_style: dict | None = None
+        self._snapshot_style_dirty = True
         self.ax2 = None
         self.xlim_full = None
         self.ylim_full = None
@@ -1819,7 +1833,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._reset_channel_view_defaults()
         self.xlim_full = None
         self.ylim_full = None
-        self.legend_settings = copy.deepcopy(DEFAULT_LEGEND_SETTINGS)
+        self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
         self.update_plot()
         self.compute_frame_trace_indices()
         self.load_project_events(labels, times, frames, diam, od)
@@ -2964,7 +2978,7 @@ class VasoAnalyzerApp(QMainWindow):
         if self.xlim_full is not None:
             self._apply_time_window(self.xlim_full)
         self.ax.set_ylim(self.ylim_full)
-        self.canvas.draw()
+        self.canvas.draw_idle()
 
     def reset_view(self):
         self.reset_to_full_view()
@@ -4143,6 +4157,8 @@ QPushButton[isGhost="true"]:hover {{
         if not self.session_dirty:
             self.session_dirty = True
             self._update_status_chip()
+        # Invalidate cached state since something changed
+        self._invalidate_sample_state_cache()
 
     # ------------------------------------------------------------------ progress bar helpers
     def show_progress(self, message: str = "", maximum: int = 100) -> None:
@@ -4160,7 +4176,7 @@ QPushButton[isGhost="true"]:hover {{
         """Update progress bar value."""
         if self._progress_bar.isVisible():
             self._progress_bar.setValue(value)
-            QApplication.processEvents()  # Force UI update
+            # Progress bar updates automatically - no need to force event processing
 
     def hide_progress(self) -> None:
         """Hide progress bar."""
@@ -6138,10 +6154,10 @@ QPushButton[isGhost="true"]:hover {{
     def apply_legend_settings(self, settings=None, *, mark_dirty: bool = False) -> None:
         """Merge ``settings`` into the current legend options and refresh."""
 
-        merged = copy.deepcopy(DEFAULT_LEGEND_SETTINGS)
+        merged = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
 
         if isinstance(self.legend_settings, dict):
-            existing = copy.deepcopy(self.legend_settings)
+            existing = _copy_legend_settings(self.legend_settings)
             labels = existing.pop("labels", {}) or {}
             merged.update(existing)
             merged["labels"] = labels
@@ -6523,7 +6539,7 @@ QPushButton[isGhost="true"]:hover {{
             try:
                 renderer = getattr(self.canvas, "renderer", None)
                 if renderer is None:
-                    self.canvas.draw()
+                    self.canvas.draw_idle()
                     renderer = getattr(self.canvas, "renderer", None)
                 bbox = legend.get_window_extent(renderer)
                 if bbox.contains(event.x, event.y):
@@ -7051,6 +7067,8 @@ QPushButton[isGhost="true"]:hover {{
         if plot_host is not None:
             defaults = DEFAULT_STYLE
             try:
+                # Batch all setter calls to avoid cascading redraws
+                plot_host.suspend_updates()
                 # Always use v3 - force upgrade from old saved settings
                 plot_host.set_event_labels_v3_enabled(True)
                 plot_host.set_event_label_mode(
@@ -7169,6 +7187,9 @@ QPushButton[isGhost="true"]:hover {{
                 )
             except Exception:
                 log.exception("Failed to apply event label style to PlotHost")
+            finally:
+                # Always resume updates, even if there was an error
+                plot_host.resume_updates()
 
         self.canvas.draw_idle()
         if hasattr(self, "plot_style_dialog") and self.plot_style_dialog:
@@ -7222,6 +7243,11 @@ QPushButton[isGhost="true"]:hover {{
         pinned_points=None,
         od_line=None,
     ):
+        # Use cache only when called with default parameters (most common case)
+        use_cache = all(p is None for p in [ax, ax2, event_text_objects, pinned_points, od_line])
+        if use_cache and not self._snapshot_style_dirty and self._cached_snapshot_style is not None:
+            return self._cached_snapshot_style.copy()
+
         ax = ax or self.ax
         ax2 = self.ax2 if ax2 is None else ax2
         event_text_objects = (
@@ -7395,6 +7421,11 @@ QPushButton[isGhost="true"]:hover {{
                 DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF"),
             )
 
+        # Cache the result if using default parameters
+        if use_cache:
+            self._cached_snapshot_style = style.copy()
+            self._snapshot_style_dirty = False
+
         return style
 
     def open_customize_dialog(self):
@@ -7451,7 +7482,7 @@ QPushButton[isGhost="true"]:hover {{
         self.ax2 = None
         self.hover_annotation_id = None
         self.hover_annotation_od = None
-        self.canvas.draw()
+        self.canvas.draw_idle()
         self.event_table_controller.clear()
         self.snapshot_label.clear()
         self.sampling_rate_hz = None
@@ -7477,7 +7508,7 @@ QPushButton[isGhost="true"]:hover {{
         self.scroll_slider.setValue(0)
         self.scroll_slider.hide()
         self.show_home_screen()
-        self.legend_settings = copy.deepcopy(DEFAULT_LEGEND_SETTINGS)
+        self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
         if getattr(self, "plot_legend", None):
             with contextlib.suppress(Exception):
                 self.plot_legend.remove()
@@ -7515,7 +7546,7 @@ QPushButton[isGhost="true"]:hover {{
             self.zoom_dock.set_trace_model(None)
         if self.scope_dock:
             self.scope_dock.set_trace_model(None)
-        self.canvas.draw()
+        self.canvas.draw_idle()
         if hasattr(self, "event_table_controller"):
             self.event_table_controller.clear()
         if hasattr(self, "load_events_action") and self.load_events_action is not None:
@@ -7885,7 +7916,20 @@ QPushButton[isGhost="true"]:hover {{
                 state["splitter_state"] = bytes(self.data_splitter.saveState()).hex()
         return state
 
+    def _invalidate_sample_state_cache(self):
+        """Invalidate the cached sample state to force recomputation on next gather."""
+        self._sample_state_dirty = True
+        self._cached_sample_state = None
+        # Also invalidate snapshot style since it's part of the state
+        self._snapshot_style_dirty = True
+        self._cached_snapshot_style = None
+
     def gather_sample_state(self):
+        """Gather current sample state (cached for performance)."""
+        # Return cached version if still valid
+        if not self._sample_state_dirty and self._cached_sample_state is not None:
+            return self._cached_sample_state
+
         # preserve any previously saved style_settings
         prev = {}
         if self.current_sample and isinstance(self.current_sample.ui_state, dict):
@@ -7915,6 +7959,10 @@ QPushButton[isGhost="true"]:hover {{
         layout_state = self._serialize_plot_layout()
         if layout_state:
             state["plot_layout"] = layout_state
+
+        # Cache the result
+        self._cached_sample_state = state
+        self._sample_state_dirty = False
         return state
 
     def apply_ui_state(self, state):
@@ -8066,7 +8114,8 @@ QPushButton[isGhost="true"]:hover {{
                     state = self.gather_sample_state()
                     self.current_sample.ui_state = state
                     self.project_state[id(self.current_sample)] = state
-                save_project_file(self.current_project)
+                # Skip expensive OPTIMIZE operation on close for faster exit
+                save_project_file(self.current_project, skip_optimize=True)
             except Exception as e:
                 log.error("Failed to auto-save project:\n%s", e)
         self._replace_current_project(None)
