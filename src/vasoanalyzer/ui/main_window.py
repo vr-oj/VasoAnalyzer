@@ -6024,6 +6024,8 @@ QPushButton[isGhost="true"]:hover {{
                 labels=self.event_labels,
                 label_meta=self.event_label_meta,
             )
+            # Enable event label rendering (critical - without this labels stay hidden!)
+            self.plot_host.set_event_labels_visible(True)
             self.event_table_data = []
             offset_sec = 2
             nEv = len(self.event_times)
@@ -6100,6 +6102,8 @@ QPushButton[isGhost="true"]:hover {{
             self._refresh_event_annotation_artists()
         else:
             self.plot_host.set_events([], labels=[], label_meta=[])
+            # Disable event label rendering when no events
+            self.plot_host.set_event_labels_visible(False)
             self.event_table_data = []
             self.event_metadata = []
             self.event_text_objects = []
