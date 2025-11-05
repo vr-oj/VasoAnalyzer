@@ -504,7 +504,7 @@ class EventLabeler:
             offset = ScaledTranslation(total_pad / dpi, 0.0, figure.dpi_scale_trans)
             transform = base_transform + offset
             y_axes = base_y + (self._meta_float(meta, "y_offset_axes", 0.0) or 0.0)
-            ha = self._resolve_halign("right" if side == "right" else "left", meta)
+            ha = self._resolve_halign("left" if side == "right" else "right", meta)
             va = self._resolve_valign("top", meta)
 
             kwargs: dict[str, Any] = {}
