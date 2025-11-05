@@ -994,7 +994,7 @@ class PlotHost:
             self._event_color = str(color)
             changed = True
         if changed and self._event_labels_visible:
-            self._rebuild_label_helper()
+            self._rebuild_event_labeler()
 
     def _connect_event_label_tooltips(self) -> None:
         if not self._label_tooltips_enabled or self._event_helper_v3 is None:

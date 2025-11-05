@@ -782,10 +782,17 @@ class EventLabelerV3:
         }
 
     def _text_kwargs(self, style: dict[str, Any]) -> dict[str, Any]:
+        """Extract only matplotlib-compatible text properties from style dict."""
+        # Only include matplotlib text properties, exclude layout/positioning metadata
+        valid_keys = {
+            "fontfamily", "fontstyle", "fontweight", "fontsize",
+            "color", "alpha", "rotation", "align", "valign",
+            "clip_on", "bbox"
+        }
         kwargs = {
             key: value
             for key, value in style.items()
-            if key not in {"pinned", "priority", "visible"}
+            if key in valid_keys
         }
         kwargs.setdefault("ha", kwargs.pop("align", "center"))
         kwargs.setdefault("va", kwargs.pop("valign", "center"))
