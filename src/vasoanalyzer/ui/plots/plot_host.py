@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import contextlib
+import math
+import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -10,13 +12,15 @@ from typing import Any, cast
 
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
-from matplotlib.text import Text
+from matplotlib.text import Annotation, Text
 from PyQt5.QtCore import QTimer
 
 from vasoanalyzer.app.flags import is_enabled
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
+from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, EventLabelerV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack, ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import (
     AnnotationLane,
@@ -70,6 +74,30 @@ class PlotHost:
         self._event_lines_visible: bool = True
         self._event_labels_visible: bool = False
         self._event_label_gap_px: int = 22
+        self._feature_flags: dict[str, bool] = {
+            "event_labels_v3": is_enabled("event_labels_v3", default=False)
+        }
+        self._event_helper_v3: EventLabelerV3 | None = None
+        self._event_entries_v3: list[EventEntryV3] = []
+        self._event_label_host_ax: Axes | None = None
+        self._max_labels_per_cluster: int = 1
+        self._cluster_style_policy: str = "first"
+        self._event_label_lanes: int = 3
+        self._belt_baseline_enabled: bool = True
+        self._span_event_lines_across_siblings: bool = True
+        self._auto_event_label_mode: bool = False
+        self._density_threshold_compact: float = 0.8
+        self._density_threshold_belt: float = 0.25
+        self._label_outline_enabled: bool = False
+        self._label_outline_width: float = 0.0
+        self._label_outline_color: tuple[float, float, float, float] | None = None
+        self._label_tooltips_enabled: bool = True
+        self._tooltip_proximity_px: int = 10
+        self._compact_legend_enabled: bool = True
+        self._compact_legend_location: str = "upper right"
+        self._cid_motion: int | None = None
+        self._hover_annot: Annotation | None = None
+        self._last_hover_text: Text | None = None
         self._annotation_lane = AnnotationLane()
         self._time_cursor_overlay = TimeCursorOverlay()
         self._event_highlight_overlay = EventHighlightOverlay()
@@ -445,6 +473,26 @@ class PlotHost:
         self._event_labels_visible = False
         self._event_label_gap_px = 22
         self._event_label_mode = "vertical"
+        self._feature_flags["event_labels_v3"] = is_enabled("event_labels_v3", default=False)
+        self._event_helper_v3 = None
+        self._event_entries_v3 = []
+        self._event_label_host_ax = None
+        self._max_labels_per_cluster = 1
+        self._cluster_style_policy = "first"
+        self._event_label_lanes = 3
+        self._belt_baseline_enabled = True
+        self._span_event_lines_across_siblings = True
+        self._auto_event_label_mode = False
+        self._density_threshold_compact = 0.8
+        self._density_threshold_belt = 0.25
+        self._label_outline_enabled = False
+        self._label_outline_width = 0.0
+        self._label_outline_color = None
+        self._label_tooltips_enabled = True
+        self._tooltip_proximity_px = 10
+        self._compact_legend_enabled = True
+        self._compact_legend_location = "upper right"
+        self._disconnect_event_label_tooltips()
         self._annotation_lane.attach(None)
         self._annotation_entries.clear()
         self._time_cursor_overlay.clear()
@@ -653,6 +701,469 @@ class PlotHost:
             self._rebuild_event_labeler()
         self._schedule_draw()
 
+    def event_labels_v3_enabled(self) -> bool:
+        return bool(self._feature_flags.get("event_labels_v3", False))
+
+    def max_labels_per_cluster(self) -> int:
+        return int(self._max_labels_per_cluster)
+
+    def cluster_style_policy(self) -> str:
+        return self._cluster_style_policy
+
+    def event_label_lanes(self) -> int:
+        return int(self._event_label_lanes)
+
+    def belt_baseline_enabled(self) -> bool:
+        return bool(self._belt_baseline_enabled)
+
+    def span_event_lines_across_siblings(self) -> bool:
+        return bool(self._span_event_lines_across_siblings)
+
+    def auto_event_label_mode(self) -> bool:
+        return bool(self._auto_event_label_mode)
+
+    def label_density_thresholds(self) -> tuple[float, float]:
+        return (float(self._density_threshold_compact), float(self._density_threshold_belt))
+
+    def label_outline_settings(
+        self,
+    ) -> tuple[bool, float, tuple[float, float, float, float] | None]:
+        return (
+            bool(self._label_outline_enabled),
+            float(self._label_outline_width),
+            self._label_outline_color,
+        )
+
+    def label_tooltips_enabled(self) -> bool:
+        return bool(self._label_tooltips_enabled)
+
+    def tooltip_proximity(self) -> int:
+        return int(self._tooltip_proximity_px)
+
+    def compact_legend_enabled(self) -> bool:
+        return bool(self._compact_legend_enabled)
+
+    def compact_legend_location(self) -> str:
+        return self._compact_legend_location
+
+    def set_max_labels_per_cluster(self, count: int) -> None:
+        value = max(1, int(count))
+        if value == self._max_labels_per_cluster:
+            return
+        self._max_labels_per_cluster = value
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_cluster_style_policy(self, policy: str) -> None:
+        allowed = {"first", "most_common", "priority", "blend_color"}
+        normalized = str(policy).lower()
+        if normalized not in allowed:
+            normalized = "first"
+        if normalized == self._cluster_style_policy:
+            return
+        self._cluster_style_policy = normalized
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_label_lanes(self, lanes: int) -> None:
+        value = max(1, min(int(lanes), 12))
+        if value == self._event_label_lanes:
+            return
+        self._event_label_lanes = value
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_belt_baseline(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if flag == self._belt_baseline_enabled:
+            return
+        self._belt_baseline_enabled = flag
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_event_label_span_siblings(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if flag == self._span_event_lines_across_siblings:
+            return
+        self._span_event_lines_across_siblings = flag
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_event_labels_v3_enabled(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if self._feature_flags.get("event_labels_v3", False) == flag:
+            return
+        self._feature_flags["event_labels_v3"] = flag
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_auto_event_label_mode(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if flag == self._auto_event_label_mode:
+            return
+        self._auto_event_label_mode = flag
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_label_density_thresholds(
+        self, *, compact: float | None = None, belt: float | None = None
+    ) -> None:
+        new_compact = float(compact) if compact is not None else self._density_threshold_compact
+        new_belt = float(belt) if belt is not None else self._density_threshold_belt
+        new_compact = max(0.0, new_compact)
+        new_belt = max(0.0, min(new_belt, new_compact))
+        if math.isclose(
+            new_compact, self._density_threshold_compact, rel_tol=1e-6
+        ) and math.isclose(new_belt, self._density_threshold_belt, rel_tol=1e-6):
+            return
+        self._density_threshold_compact = new_compact
+        self._density_threshold_belt = new_belt
+        if self._event_labels_visible and self._auto_event_label_mode:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_label_outline_enabled(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if flag == self._label_outline_enabled:
+            return
+        self._label_outline_enabled = flag
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_label_outline(
+        self, width: float, color: Sequence[float] | tuple[float, ...] | str
+    ) -> None:
+        if isinstance(color, str):
+            rgba_tuple = self._parse_hex_rgba(color)
+            if rgba_tuple is None:
+                raise ValueError("Invalid outline color format")
+        else:
+            rgba_values = tuple(float(component) for component in color)
+            if len(rgba_values) == 3:
+                rgba_tuple = (*rgba_values, 1.0)
+            elif len(rgba_values) == 4:
+                rgba_tuple = rgba_values
+            else:
+                raise ValueError("Outline color must have 3 or 4 components")
+        rgba = tuple(max(0.0, min(1.0, component)) for component in rgba_tuple)
+        width_value = max(float(width), 0.0)
+        changed = (
+            not math.isclose(width_value, self._label_outline_width, rel_tol=1e-6)
+            or self._label_outline_color != rgba
+        )
+        if not changed:
+            return
+        self._label_outline_width = width_value
+        self._label_outline_color = rgba  # type: ignore[assignment]
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def pin_event(self, index: int, pinned: bool = True) -> None:
+        if not (0 <= index < len(self._event_times)):
+            return
+        while len(self._event_label_meta) < len(self._event_times):
+            self._event_label_meta.append({})
+        current = dict(self._event_label_meta[index] or {})
+        if current.get("pinned") == bool(pinned):
+            return
+        current["pinned"] = bool(pinned)
+        self._event_label_meta[index] = current
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_event_priority(self, index: int, priority: int) -> None:
+        if not (0 <= index < len(self._event_times)):
+            return
+        while len(self._event_label_meta) < len(self._event_times):
+            self._event_label_meta.append({})
+        current = dict(self._event_label_meta[index] or {})
+        priority_value = int(priority)
+        if current.get("priority") == priority_value:
+            return
+        current["priority"] = priority_value
+        self._event_label_meta[index] = current
+        if self._event_labels_visible:
+            self._rebuild_event_labeler()
+        self._schedule_draw()
+
+    def set_label_tooltips_enabled(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if flag == self._label_tooltips_enabled:
+            return
+        self._label_tooltips_enabled = flag
+        if not flag:
+            self._disconnect_event_label_tooltips()
+        elif self._event_labels_visible:
+            self._connect_event_label_tooltips()
+
+    def set_tooltip_proximity(self, pixels: int) -> None:
+        value = max(1, int(pixels))
+        if value == self._tooltip_proximity_px:
+            return
+        self._tooltip_proximity_px = value
+
+    def set_compact_legend_enabled(self, enabled: bool) -> None:
+        flag = bool(enabled)
+        if flag == self._compact_legend_enabled:
+            return
+        self._compact_legend_enabled = flag
+        if not flag and self._event_helper_v3 is not None:
+            anchor_ax = self._event_helper_v3.ax_host
+            self._event_helper_v3.draw_compact_legend(anchor_ax, {})
+        elif flag and self._event_labels_visible:
+            self._update_compact_legend()
+
+    def set_compact_legend_location(self, location: str) -> None:
+        normalized = str(location).lower().strip() or "upper right"
+        valid = {
+            "upper right",
+            "upper left",
+            "lower left",
+            "lower right",
+            "center right",
+            "center left",
+            "center",
+            "upper center",
+            "lower center",
+        }
+        if normalized not in valid:
+            normalized = "upper right"
+        if normalized == self._compact_legend_location:
+            return
+        self._compact_legend_location = normalized
+        if self._compact_legend_enabled and self._event_labels_visible:
+            self._update_compact_legend()
+
+    def _connect_event_label_tooltips(self) -> None:
+        if not self._label_tooltips_enabled or self._event_helper_v3 is None:
+            return
+        canvas = self.canvas
+        if canvas is None:
+            return
+        if hasattr(canvas, "get_renderer"):
+            try:
+                renderer = canvas.get_renderer()
+            except Exception:
+                canvas.draw()
+                renderer = canvas.get_renderer()
+        else:
+            renderer = None
+        texts, mapping = self._event_helper_v3.annotation_text_objects()
+        if not texts:
+            self._disconnect_event_label_tooltips()
+            return
+
+        if self._cid_motion is not None:
+            canvas.mpl_disconnect(self._cid_motion)
+            self._cid_motion = None
+
+        proximity = max(1, int(self._tooltip_proximity_px))
+        self._last_hover_text = None
+
+        def on_motion(evt):
+            if evt.inaxes is None or not texts:
+                self._hide_tooltip()
+                return
+            current_renderer = renderer or canvas.get_renderer()
+            nearest: Text | None = None
+            best_dist = float("inf")
+            for text_artist in texts:
+                try:
+                    bbox = text_artist.get_window_extent(renderer=current_renderer)
+                except Exception:
+                    continue
+                cx = bbox.x0 + bbox.width / 2.0
+                cy = bbox.y0 + bbox.height / 2.0
+                dx = evt.x - cx
+                dy = evt.y - cy
+                dist2 = (dx * dx) + (dy * dy)
+                if dist2 < best_dist:
+                    best_dist = dist2
+                    nearest = text_artist
+            if nearest is None or best_dist > (proximity * proximity):
+                self._hide_tooltip()
+                return
+
+            if self._last_hover_text is nearest:
+                return
+
+            cluster = mapping.get(nearest)
+            if cluster is None or not cluster.items:
+                self._hide_tooltip()
+                return
+
+            self._last_hover_text = nearest
+            lines = ["<b>Events in cluster</b>"]
+            for entry in cluster.items:
+                label = entry.meta.get("text_override") or entry.text
+                color = entry.meta.get("color")
+                rgba = self._normalize_color(color)
+                css = self._color_to_css(rgba)
+                badge = (
+                    '<span style="display:inline-block;width:10px;height:10px;'
+                    "border-radius:2px;"
+                    f'background:{css};margin-right:6px;"></span>'
+                )
+                lines.append(f"<div>{badge}{label}</div>")
+            html = "".join(lines)
+            self._show_qt_tooltip(evt, html)
+
+        self._cid_motion = canvas.mpl_connect("motion_notify_event", on_motion)
+
+    def _disconnect_event_label_tooltips(self) -> None:
+        canvas = self.canvas
+        if self._cid_motion is not None and canvas is not None:
+            with contextlib.suppress(Exception):
+                canvas.mpl_disconnect(self._cid_motion)
+        self._cid_motion = None
+        self._hide_tooltip()
+
+    def _show_qt_tooltip(self, evt, html: str) -> None:
+        try:
+            from PyQt5.QtGui import QCursor
+            from PyQt5.QtWidgets import QToolTip
+
+            QToolTip.showText(QCursor.pos(), html)
+        except Exception:
+            ax = evt.inaxes
+            if ax is None:
+                return
+            if self._hover_annot is None:
+                self._hover_annot = ax.annotate(
+                    "",
+                    xy=(0, 0),
+                    xytext=(10, 10),
+                    textcoords="offset points",
+                    bbox=dict(boxstyle="round", fc="w", alpha=0.9),
+                    zorder=100,
+                )
+            hover = self._hover_annot
+            hover.set_visible(True)
+            hover.xy = (evt.xdata, evt.ydata)
+            hover.set_text(self._strip_html(html))
+            ax.figure.canvas.draw_idle()
+
+    def _hide_tooltip(self) -> None:
+        self._last_hover_text = None
+        try:
+            from PyQt5.QtWidgets import QToolTip
+
+            QToolTip.hideText()
+        except Exception:
+            pass
+        if self._hover_annot is not None:
+            hover = self._hover_annot
+            hover.set_visible(False)
+            axes = getattr(hover, "axes", None)
+            if axes is not None and getattr(axes, "figure", None) is not None:
+                axes.figure.canvas.draw_idle()
+
+    @staticmethod
+    def _strip_html(value: str) -> str:
+        return re.sub("<[^<]+?>", "", value)
+
+    def _update_compact_legend(self) -> None:
+        helper = self._event_helper_v3
+        if helper is None:
+            return
+        ax = helper.ax_host
+        if ax is None:
+            return
+        if not self._compact_legend_enabled:
+            helper.draw_compact_legend(ax, {})
+            return
+        try:
+            x0, x1 = ax.get_xlim()
+        except Exception:
+            return
+
+        categories: dict[str, tuple[int, tuple[float, float, float, float]]] = {}
+        for idx, time_value in enumerate(self._event_times):
+            if time_value < x0 or time_value > x1:
+                continue
+            meta: dict[str, Any] = {}
+            if idx < len(self._event_label_meta):
+                candidate = self._event_label_meta[idx] or {}
+                if isinstance(candidate, Mapping):
+                    meta = dict(candidate)
+            if not bool(meta.get("visible", True)):
+                continue
+            cat = (
+                meta.get("category")
+                or meta.get("group")
+                or (self._event_labels[idx] if idx < len(self._event_labels) else "Event")
+            )
+            color = self._normalize_color(meta.get("color"))
+            if cat in categories:
+                count, existing_color = categories[cat]
+                categories[cat] = (count + 1, existing_color)
+            else:
+                categories[cat] = (1, color)
+
+        helper.draw_compact_legend(
+            ax, categories, title="Events", loc=self._compact_legend_location
+        )
+
+    def _normalize_color(self, color: Any) -> tuple[float, float, float, float]:
+        parsed = self._parse_hex_rgba(color) if isinstance(color, str) else None
+        if parsed is not None:
+            return parsed
+        try:
+            rgba = to_rgba(color)
+            return (float(rgba[0]), float(rgba[1]), float(rgba[2]), float(rgba[3]))
+        except Exception:
+            pass
+        if isinstance(color, Sequence):
+            try:
+                values = [float(component) for component in color]
+            except (TypeError, ValueError):
+                values = []
+            while len(values) < 4:
+                values.append(1.0 if len(values) == 3 else 1.0)
+            return (
+                max(0.0, min(1.0, values[0])),
+                max(0.0, min(1.0, values[1])),
+                max(0.0, min(1.0, values[2])),
+                max(0.0, min(1.0, values[3] if len(values) > 3 else 1.0)),
+            )
+        return (0.0, 0.0, 0.0, 1.0)
+
+    @staticmethod
+    def _color_to_css(color: tuple[float, float, float, float]) -> str:
+        r = int(round(color[0] * 255))
+        g = int(round(color[1] * 255))
+        b = int(round(color[2] * 255))
+        a = max(0.0, min(1.0, color[3]))
+        return f"rgba({r},{g},{b},{a:.2f})"
+
+    @staticmethod
+    def _parse_hex_rgba(value: str | None) -> tuple[float, float, float, float] | None:
+        if not value:
+            return None
+        hex_value = value.strip().lstrip("#")
+        if len(hex_value) == 6:
+            hex_value = "FF" + hex_value
+        if len(hex_value) != 8:
+            return None
+        try:
+            a = int(hex_value[0:2], 16) / 255.0
+            r = int(hex_value[2:4], 16) / 255.0
+            g = int(hex_value[4:6], 16) / 255.0
+            b = int(hex_value[6:8], 16) / 255.0
+            return (r, g, b, a)
+        except ValueError:
+            return None
+
     def set_event_label_mode(self, mode: str) -> None:
         normalized = str(mode).lower()
         alias = {"auto": "vertical", "all": "horizontal_outside"}
@@ -692,6 +1203,164 @@ class PlotHost:
             with contextlib.suppress(Exception):
                 artist.remove()
         self._event_label_v2_artists = []
+
+    def _clear_event_helper_v3(self) -> None:
+        helper = self._event_helper_v3
+        if helper is not None:
+            with contextlib.suppress(Exception):
+                helper.clear()
+            if self._event_labeler is None:
+                self._detach_view_callbacks()
+        self._event_helper_v3 = None
+        self._event_entries_v3 = []
+        self._disconnect_event_label_tooltips()
+
+    def _draw_event_labels_v3(self, labels: list[str]) -> bool:
+        if not self._feature_flags.get("event_labels_v3", False):
+            return False
+        if not self._event_times:
+            return False
+        self._clear_event_label_v2()
+
+        anchor_ax: Axes | None = self.primary_axis() or self.bottom_axis()
+        if anchor_ax is None:
+            tracks = list(self._tracks.values())
+            anchor_ax = tracks[0].ax if tracks else None
+        if anchor_ax is None:
+            return False
+
+        siblings: list[Axes] = []
+        if self._span_event_lines_across_siblings:
+            for track in self._tracks.values():
+                if track.ax not in siblings:
+                    siblings.append(track.ax)
+        else:
+            siblings.append(anchor_ax)
+        if anchor_ax not in siblings:
+            siblings.append(anchor_ax)
+
+        mapping = {
+            "vertical": "vertical",
+            "horizontal": "h_inside",
+            "horizontal_outside": "h_belt",
+        }
+        base_layout_mode = mapping.get(self._event_label_mode, "vertical")
+        layout_mode = base_layout_mode
+        compact_counts = False
+        rotation_deg = 90.0
+        max_labels = max(1, int(self._max_labels_per_cluster))
+        lanes = max(1, int(self._event_label_lanes))
+
+        if self._auto_event_label_mode:
+            density_mode = self._resolve_density_mode(anchor_ax)
+            if density_mode == "compact":
+                layout_mode = "vertical"
+                compact_counts = True
+                max_labels = 0
+                rotation_deg = 90.0
+            elif density_mode == "belt":
+                layout_mode = "h_belt"
+                rotation_deg = 0.0
+                max_labels = max(1, int(self._max_labels_per_cluster))
+                lanes = max(lanes, 4)
+            else:
+                layout_mode = "h_inside"
+                rotation_deg = 0.0
+                max_labels = max(1, int(self._max_labels_per_cluster))
+        else:
+            rotation_deg = 90.0 if layout_mode == "vertical" else 0.0
+
+        options = LayoutOptionsV3(
+            mode=layout_mode,
+            min_px=max(1, int(self._event_label_gap_px)),
+            max_labels_per_cluster=max_labels,
+            style_policy=self._cluster_style_policy,
+            span_siblings=self._span_event_lines_across_siblings,
+            lanes=lanes,
+            belt_baseline=bool(self._belt_baseline_enabled),
+            rotation_deg=rotation_deg,
+            outline_enabled=self._label_outline_enabled,
+            outline_width=self._label_outline_width,
+            outline_color=self._label_outline_color,
+            compact_counts=compact_counts,
+        )
+
+        entries: list[EventEntryV3] = []
+        for idx, time_value in enumerate(self._event_times):
+            label_value = labels[idx] if idx < len(labels) else ""
+            meta_payload: dict[str, Any] = {}
+            if idx < len(self._event_label_meta):
+                candidate = self._event_label_meta[idx] or {}
+                if isinstance(candidate, Mapping):
+                    meta_payload = dict(candidate)
+            priority = meta_payload.get("priority", meta_payload.get("rank", 0))
+            try:
+                priority_value = int(priority)
+            except (TypeError, ValueError):
+                priority_value = 0
+            category = meta_payload.get("category")
+            pinned = bool(meta_payload.get("pinned", False))
+            entries.append(
+                EventEntryV3(
+                    t=float(time_value),
+                    text=str(label_value),
+                    meta=meta_payload,
+                    priority=priority_value,
+                    category=str(category) if isinstance(category, str) else None,
+                    pinned=pinned,
+                )
+            )
+
+        if not entries:
+            return False
+
+        self._clear_event_helper_v3()
+        helper = EventLabelerV3(anchor_ax, siblings, options)
+        helper.draw(entries)
+        self._event_helper_v3 = helper
+        self._event_entries_v3 = entries
+        self.set_event_labeler(None)
+        self._attach_view_callbacks(anchor_ax)
+        if self._label_tooltips_enabled:
+            self._connect_event_label_tooltips()
+        else:
+            self._disconnect_event_label_tooltips()
+        if self._compact_legend_enabled:
+            self._update_compact_legend()
+        else:
+            helper.draw_compact_legend(anchor_ax, {})
+        return True
+
+    def _resolve_density_mode(self, ax: Axes) -> str:
+        try:
+            x0, x1 = ax.get_xlim()
+        except Exception:
+            if not self._event_times:
+                return "full"
+            x0 = min(self._event_times)
+            x1 = max(self._event_times)
+        if x0 > x1:
+            x0, x1 = x1, x0
+        try:
+            width_px = float(ax.bbox.width)
+        except Exception:
+            width_px = float(ax.figure.bbox.width if getattr(ax, "figure", None) else 0.0)
+        dpi = float(getattr(ax.figure, "dpi", 96.0))
+        width_in = width_px / dpi if dpi > 0 else 0.0
+        visible_count = 0
+        if x1 > x0:
+            span = x1 - x0
+            pad = 0.02 * span
+            lo = x0 - pad
+            hi = x1 + pad
+            visible_count = sum(1 for value in self._event_times if lo <= value <= hi)
+        effective_width = max(width_in, 1e-3)
+        density = visible_count / (effective_width * 100.0)
+        if density >= self._density_threshold_compact:
+            return "compact"
+        if density >= self._density_threshold_belt:
+            return "belt"
+        return "full"
 
     def _draw_event_labels_v2(self) -> bool:
         # Compact numeric counters are experimental; keep them opt-in.
@@ -742,23 +1411,30 @@ class PlotHost:
             anchor_ax.get_xlim(),
             mode=self._event_label_mode,
         )
+        self._disconnect_event_label_tooltips()
         return True
 
     def _destroy_event_labeler(self) -> None:
         self._clear_event_label_v2()
+        self._clear_event_helper_v3()
         self.set_event_labeler(None)
 
     def _rebuild_event_labeler(self) -> None:
         if not self._event_labels_visible:
-            self.set_event_labeler(None)
+            self._destroy_event_labeler()
             return
         if not getattr(self, "_event_times", None):
-            self.set_event_labeler(None)
+            self._destroy_event_labeler()
             return
         labels = self._normalized_event_labels()
         if not labels:
-            self.set_event_labeler(None)
+            self._destroy_event_labeler()
             return
+
+        if self._draw_event_labels_v3(labels):
+            return
+
+        self._clear_event_helper_v3()
         if self._draw_event_labels_v2():
             return
         options = LayoutOptions(
@@ -808,6 +1484,7 @@ class PlotHost:
         self._detach_view_callbacks()
         if host_ax is None:
             return
+        self._event_label_host_ax = host_ax
         try:
             self._last_xlim = cast(tuple[float, float], host_ax.get_xlim())
             self._last_ylim = cast(tuple[float, float], host_ax.get_ylim())
@@ -818,7 +1495,7 @@ class PlotHost:
         self._ylim_cid = host_ax.callbacks.connect("ylim_changed", self._on_view_changed)
 
     def _detach_view_callbacks(self) -> None:
-        host_ax = self._event_labeler.host_axes if self._event_labeler else None
+        host_ax = self._event_label_host_ax
         if host_ax is not None:
             if self._xlim_cid is not None:
                 with contextlib.suppress(Exception):
@@ -826,13 +1503,14 @@ class PlotHost:
             if self._ylim_cid is not None:
                 with contextlib.suppress(Exception):
                     host_ax.callbacks.disconnect(self._ylim_cid)
+        self._event_label_host_ax = None
         self._xlim_cid = None
         self._ylim_cid = None
         self._last_xlim = None
         self._last_ylim = None
 
     def _on_view_changed(self, ax: Axes) -> None:
-        if not self._event_labeler or ax is None:
+        if ax is None:
             return
         try:
             xlim = cast(tuple[float, float], ax.get_xlim())
@@ -843,14 +1521,38 @@ class PlotHost:
             return
         self._last_xlim = xlim
         self._last_ylim = ylim
-        try:
-            self._event_labeler.draw()
-        except Exception:
+        handled = False
+        if self._feature_flags.get("event_labels_v3", False):
+            if self._auto_event_label_mode:
+                labels = self._normalized_event_labels()
+                handled = self._draw_event_labels_v3(labels)
+            elif self._event_helper_v3 is not None:
+                try:
+                    self._event_helper_v3.draw(self._event_entries_v3)
+                    handled = True
+                except Exception:
+                    handled = False
+        if not handled and self._event_labeler is not None:
+            try:
+                self._event_labeler.draw()
+                handled = True
+            except Exception:
+                handled = False
+        if handled:
+            if self._label_tooltips_enabled and self._event_helper_v3 is not None:
+                self._connect_event_label_tooltips()
+            else:
+                self._disconnect_event_label_tooltips()
+            if self._compact_legend_enabled:
+                self._update_compact_legend()
+        if not handled:
             return
         fig = ax.figure
         if fig is not None and getattr(fig, "canvas", None) is not None:
             fig.canvas.draw_idle()
 
     def _redraw_event_labels(self) -> None:
-        if self._event_labeler is not None:
+        if self._event_helper_v3 is not None and self._feature_flags.get("event_labels_v3", False):
+            self._event_helper_v3.draw(self._event_entries_v3)
+        elif self._event_labeler is not None:
             self._event_labeler.draw()

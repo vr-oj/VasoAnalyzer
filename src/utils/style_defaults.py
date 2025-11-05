@@ -5,7 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-STYLE_SCHEMA_VERSION = 3
+STYLE_SCHEMA_VERSION = 4
 
 STYLE_DEFAULTS: dict[str, dict[str, Any]] = {
     "axis": {
@@ -35,6 +35,22 @@ STYLE_DEFAULTS: dict[str, dict[str, Any]] = {
         "bold": False,
         "italic": False,
         "color": "#000000",
+        "max_per_cluster": 1,
+        "style_policy": "first",
+        "lanes": 3,
+        "belt_baseline": True,
+        "span_siblings": True,
+        "use_v3": True,
+        "auto_mode": False,
+        "density_compact": 0.8,
+        "density_belt": 0.25,
+        "outline_enabled": False,
+        "outline_width": 0.0,
+        "outline_color": (1.0, 1.0, 1.0, 0.9),
+        "tooltips_enabled": True,
+        "legend_enabled": True,
+        "legend_loc": "upper right",
+        "tooltip_proximity": 10,
     },
     "pinned": {
         "font_family": "Arial",
@@ -112,6 +128,52 @@ def flatten_style_defaults(style: dict[str, dict[str, Any]] | None = None) -> di
         "event_bold": _get(events, "bold", STYLE_DEFAULTS["events"]["bold"]),
         "event_italic": _get(events, "italic", STYLE_DEFAULTS["events"]["italic"]),
         "event_color": _get(events, "color", STYLE_DEFAULTS["events"]["color"]),
+        "event_label_max_per_cluster": int(
+            _get(events, "max_per_cluster", STYLE_DEFAULTS["events"]["max_per_cluster"])
+        ),
+        "event_label_style_policy": _get(
+            events, "style_policy", STYLE_DEFAULTS["events"]["style_policy"]
+        ),
+        "event_label_lanes": int(_get(events, "lanes", STYLE_DEFAULTS["events"]["lanes"])),
+        "event_label_belt_baseline": bool(
+            _get(events, "belt_baseline", STYLE_DEFAULTS["events"]["belt_baseline"])
+        ),
+        "event_label_span_siblings": bool(
+            _get(events, "span_siblings", STYLE_DEFAULTS["events"]["span_siblings"])
+        ),
+        "event_labels_v3_enabled": bool(
+            _get(events, "use_v3", STYLE_DEFAULTS["events"]["use_v3"])
+        ),
+        "event_label_auto_mode": bool(
+            _get(events, "auto_mode", STYLE_DEFAULTS["events"]["auto_mode"])
+        ),
+        "event_label_density_compact": float(
+            _get(events, "density_compact", STYLE_DEFAULTS["events"]["density_compact"])
+        ),
+        "event_label_density_belt": float(
+            _get(events, "density_belt", STYLE_DEFAULTS["events"]["density_belt"])
+        ),
+        "event_label_outline_enabled": bool(
+            _get(events, "outline_enabled", STYLE_DEFAULTS["events"]["outline_enabled"])
+        ),
+        "event_label_outline_width": float(
+            _get(events, "outline_width", STYLE_DEFAULTS["events"]["outline_width"])
+        ),
+        "event_label_outline_color": tuple(
+            _get(events, "outline_color", STYLE_DEFAULTS["events"]["outline_color"])
+        ),
+        "event_label_tooltips_enabled": bool(
+            _get(events, "tooltips_enabled", STYLE_DEFAULTS["events"]["tooltips_enabled"])
+        ),
+        "event_label_legend_enabled": bool(
+            _get(events, "legend_enabled", STYLE_DEFAULTS["events"]["legend_enabled"])
+        ),
+        "event_label_legend_loc": _get(
+            events, "legend_loc", STYLE_DEFAULTS["events"]["legend_loc"]
+        ),
+        "event_label_tooltip_proximity": int(
+            _get(events, "tooltip_proximity", STYLE_DEFAULTS["events"]["tooltip_proximity"])
+        ),
         # Pinned annotations
         "pin_font_family": _get(pinned, "font_family", STYLE_DEFAULTS["pinned"]["font_family"]),
         "pin_font_size": _get(pinned, "font_size", STYLE_DEFAULTS["pinned"]["font_size"]),

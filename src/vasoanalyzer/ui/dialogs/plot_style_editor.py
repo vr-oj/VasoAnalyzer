@@ -6,11 +6,9 @@
 # PlotStyleEditor - redesigned dialog with live preview
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import (
-    Any,
-    TypedDict,
-)
+from typing import Any, TypedDict
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -38,6 +36,41 @@ from PyQt5.QtWidgets import (
 
 from ..constants import DEFAULT_STYLE
 from ..event_label_editor import EventLabelEditor
+
+
+def _to_hex_color(value: Any) -> str:
+    if isinstance(value, str):
+        rgba = _hex_to_rgba_tuple(value)
+        if rgba is None:
+            return value
+        r, g, b, _ = rgba
+        return f"#{int(round(r * 255)):02X}{int(round(g * 255)):02X}{int(round(b * 255)):02X}"
+    if isinstance(value, Sequence):
+        components = [float(component) for component in value]
+        if len(components) < 3:
+            components = list(components) + [0.0] * (3 - len(components))
+        r, g, b = (max(0.0, min(1.0, comp)) for comp in components[:3])
+        return f"#{int(round(r * 255)):02X}{int(round(g * 255)):02X}{int(round(b * 255)):02X}"
+    return ""
+
+
+def _hex_to_rgba_tuple(value: str | None) -> tuple[float, float, float, float] | None:
+    if not value:
+        return None
+    hex_value = value.lstrip("#")
+    if len(hex_value) not in {6, 8}:
+        return None
+    if len(hex_value) == 6:
+        hex_value = f"FF{hex_value}"
+    try:
+        a = int(hex_value[0:2], 16) / 255.0
+        r = int(hex_value[2:4], 16) / 255.0
+        g = int(hex_value[4:6], 16) / 255.0
+        b = int(hex_value[6:8], 16) / 255.0
+        return (r, g, b, a)
+    except ValueError:
+        return None
+
 
 EventMeta = dict[str, Any]
 
@@ -318,6 +351,249 @@ class PlotStyleEditor(QDialog):
         grp.setLayout(form)
         layout.addWidget(grp)
 
+        behaviour_box = QGroupBox("Label Layout & Behaviour")
+        behaviour_form = QFormLayout()
+        behaviour_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.event_auto_mode = QCheckBox("Automatic density switching")
+        self.event_auto_mode.setChecked(
+            bool(
+                self.initial.get(
+                    "event_label_auto_mode",
+                    DEFAULT_STYLE.get("event_label_auto_mode", False),
+                )
+            )
+        )
+        self.event_auto_mode.stateChanged.connect(self._on_change)
+        behaviour_form.addRow("Auto Mode:", self.event_auto_mode)
+
+        self.event_density_compact = QDoubleSpinBox()
+        self.event_density_compact.setRange(0.0, 10.0)
+        self.event_density_compact.setDecimals(3)
+        self.event_density_compact.setSingleStep(0.05)
+        self.event_density_compact.setValue(
+            float(
+                self.initial.get(
+                    "event_label_density_compact",
+                    DEFAULT_STYLE.get("event_label_density_compact", 0.8),
+                )
+            )
+        )
+        self.event_density_compact.valueChanged.connect(self._on_change)
+        behaviour_form.addRow("Compact Threshold:", self.event_density_compact)
+
+        self.event_density_belt = QDoubleSpinBox()
+        self.event_density_belt.setRange(0.0, 10.0)
+        self.event_density_belt.setDecimals(3)
+        self.event_density_belt.setSingleStep(0.05)
+        self.event_density_belt.setValue(
+            float(
+                self.initial.get(
+                    "event_label_density_belt",
+                    DEFAULT_STYLE.get("event_label_density_belt", 0.25),
+                )
+            )
+        )
+        self.event_density_belt.valueChanged.connect(self._on_change)
+        behaviour_form.addRow("Belt Threshold:", self.event_density_belt)
+
+        self.event_labels_v3_toggle = QCheckBox("Enable Event Labels v3")
+        self.event_labels_v3_toggle.setChecked(
+            bool(
+                self.initial.get(
+                    "event_labels_v3_enabled", DEFAULT_STYLE.get("event_labels_v3_enabled", False)
+                )
+            )
+        )
+        self.event_labels_v3_toggle.stateChanged.connect(self._on_change)
+        behaviour_form.addRow("Event Labels v3:", self.event_labels_v3_toggle)
+
+        self.event_cluster_style = QComboBox()
+        self._cluster_policy_map = [
+            ("First label", "first"),
+            ("Most common style", "most_common"),
+            ("Highest priority", "priority"),
+            ("Blend colour", "blend_color"),
+        ]
+        for label_text, value in self._cluster_policy_map:
+            self.event_cluster_style.addItem(label_text, value)
+        initial_policy = str(
+            self.initial.get(
+                "event_label_style_policy",
+                DEFAULT_STYLE.get("event_label_style_policy", "first"),
+            )
+        ).lower()
+        idx = self.event_cluster_style.findData(initial_policy)
+        if idx < 0:
+            idx = 0
+        self.event_cluster_style.setCurrentIndex(idx)
+        self.event_cluster_style.currentIndexChanged.connect(self._on_change)
+        behaviour_form.addRow("Cluster Style:", self.event_cluster_style)
+
+        self.event_max_per_cluster = QSpinBox()
+        self.event_max_per_cluster.setRange(1, 4)
+        self.event_max_per_cluster.setValue(
+            int(
+                self.initial.get(
+                    "event_label_max_per_cluster",
+                    DEFAULT_STYLE.get("event_label_max_per_cluster", 1),
+                )
+            )
+        )
+        self.event_max_per_cluster.valueChanged.connect(self._on_change)
+        behaviour_form.addRow("Max per Cluster:", self.event_max_per_cluster)
+
+        self.event_label_lanes = QSpinBox()
+        self.event_label_lanes.setRange(1, 12)
+        self.event_label_lanes.setValue(
+            int(
+                self.initial.get(
+                    "event_label_lanes",
+                    DEFAULT_STYLE.get("event_label_lanes", 3),
+                )
+            )
+        )
+        self.event_label_lanes.valueChanged.connect(self._on_change)
+        self.event_label_lanes.valueChanged.connect(self._on_lane_spin_changed)
+        behaviour_form.addRow("Horizontal Lanes:", self.event_label_lanes)
+
+        self.event_belt_baseline = QCheckBox("Show belt baseline")
+        self.event_belt_baseline.setChecked(
+            bool(
+                self.initial.get(
+                    "event_label_belt_baseline",
+                    DEFAULT_STYLE.get("event_label_belt_baseline", True),
+                )
+            )
+        )
+        self.event_belt_baseline.stateChanged.connect(self._on_change)
+        behaviour_form.addRow("Belt Baseline:", self.event_belt_baseline)
+
+        self.event_span_siblings = QCheckBox("Span shared axes")
+        self.event_span_siblings.setChecked(
+            bool(
+                self.initial.get(
+                    "event_label_span_siblings",
+                    DEFAULT_STYLE.get("event_label_span_siblings", True),
+                )
+            )
+        )
+        self.event_span_siblings.stateChanged.connect(self._on_change)
+        behaviour_form.addRow("Span Axes:", self.event_span_siblings)
+
+        self.event_tooltips_enabled = QCheckBox("Show hover tooltips")
+        self.event_tooltips_enabled.setChecked(
+            bool(
+                self.initial.get(
+                    "event_label_tooltips_enabled",
+                    DEFAULT_STYLE.get("event_label_tooltips_enabled", True),
+                )
+            )
+        )
+        self.event_tooltips_enabled.stateChanged.connect(self._on_change)
+        behaviour_form.addRow("Tooltips:", self.event_tooltips_enabled)
+
+        self.event_tooltip_proximity = QSpinBox()
+        self.event_tooltip_proximity.setRange(1, 100)
+        self.event_tooltip_proximity.setValue(
+            int(
+                self.initial.get(
+                    "event_label_tooltip_proximity",
+                    DEFAULT_STYLE.get("event_label_tooltip_proximity", 10),
+                )
+            )
+        )
+        self.event_tooltip_proximity.valueChanged.connect(self._on_change)
+        behaviour_form.addRow("Tooltip Radius (px):", self.event_tooltip_proximity)
+
+        self.event_legend_enabled = QCheckBox("Show compact legend")
+        self.event_legend_enabled.setChecked(
+            bool(
+                self.initial.get(
+                    "event_label_legend_enabled",
+                    DEFAULT_STYLE.get("event_label_legend_enabled", True),
+                )
+            )
+        )
+        self.event_legend_enabled.stateChanged.connect(self._on_change)
+        behaviour_form.addRow("Compact Legend:", self.event_legend_enabled)
+
+        self.event_legend_location = QComboBox()
+        self.event_legend_location.addItems(
+            [
+                "upper right",
+                "upper left",
+                "lower left",
+                "lower right",
+                "upper center",
+                "lower center",
+                "center",
+                "center left",
+                "center right",
+            ]
+        )
+        self.event_legend_location.setCurrentText(
+            str(
+                self.initial.get(
+                    "event_label_legend_loc",
+                    DEFAULT_STYLE.get("event_label_legend_loc", "upper right"),
+                )
+            )
+        )
+        self.event_legend_location.currentIndexChanged.connect(self._on_change)
+        behaviour_form.addRow("Legend Position:", self.event_legend_location)
+
+        behaviour_box.setLayout(behaviour_form)
+        layout.addWidget(behaviour_box)
+
+        outline_box = QGroupBox("Text Outline")
+        outline_form = QFormLayout()
+        outline_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+
+        self.event_outline_enabled = QCheckBox("Enable outline")
+        self.event_outline_enabled.setChecked(
+            bool(
+                self.initial.get(
+                    "event_label_outline_enabled",
+                    DEFAULT_STYLE.get("event_label_outline_enabled", False),
+                )
+            )
+        )
+        self.event_outline_enabled.stateChanged.connect(self._on_change)
+        outline_form.addRow("Enabled:", self.event_outline_enabled)
+
+        self.event_outline_width = QDoubleSpinBox()
+        self.event_outline_width.setRange(0.0, 10.0)
+        self.event_outline_width.setDecimals(2)
+        self.event_outline_width.setSingleStep(0.1)
+        self.event_outline_width.setValue(
+            float(
+                self.initial.get(
+                    "event_label_outline_width",
+                    DEFAULT_STYLE.get("event_label_outline_width", 0.0),
+                )
+            )
+        )
+        self.event_outline_width.valueChanged.connect(self._on_change)
+        outline_form.addRow("Width (px):", self.event_outline_width)
+
+        self.event_outline_color_btn = QPushButton()
+        self.event_outline_color_btn.setFixedWidth(60)
+        self._set_button_color(
+            self.event_outline_color_btn,
+            self.initial.get(
+                "event_label_outline_color",
+                DEFAULT_STYLE.get("event_label_outline_color", (1.0, 1.0, 1.0, 0.9)),
+            ),
+        )
+        self.event_outline_color_btn.clicked.connect(
+            lambda: self._choose_color(self.event_outline_color_btn, self._on_change)
+        )
+        outline_form.addRow("Outline Color:", self.event_outline_color_btn)
+
+        outline_box.setLayout(outline_form)
+        layout.addWidget(outline_box)
+
         overrides_header = QLabel("Per-Event Overrides")
         overrides_header.setObjectName("EventOverridesHeader")
         overrides_header.setStyleSheet("font-weight: 600;")
@@ -379,7 +655,7 @@ class PlotStyleEditor(QDialog):
             entry.get("label", ""),
             entry.get("time", 0.0),
             entry.get("meta", {}),
-            max_lanes=2,
+            max_lanes=self.event_label_lanes.value() if hasattr(self, "event_label_lanes") else 2,
         )
         self._suppress_event_editor = False
 
@@ -397,6 +673,13 @@ class PlotStyleEditor(QDialog):
         self._event_entries[index]["label"] = normalized
         self._update_event_list_item(index)
         self._event_updates_fired = False
+
+    def _on_lane_spin_changed(self, value: int) -> None:
+        if self._suppress_event_editor or not hasattr(self, "event_list"):
+            return
+        current_row = self.event_list.currentRow()
+        if current_row >= 0:
+            self._on_event_row_changed(current_row)
 
     def _update_event_list_item(self, index: int) -> None:
         if not hasattr(self, "event_list"):
@@ -609,17 +892,44 @@ class PlotStyleEditor(QDialog):
 
     # ------------------------------------------------------------------
     # Helpers
-    def _set_button_color(self, btn: QPushButton, hexcolor: str | None) -> None:
-        value = hexcolor or ""
-        btn.setStyleSheet(f"background:{value};border:1px solid #888;")
-        btn.setProperty("color", value)
+    def _set_button_color(self, btn: QPushButton, hexcolor: Any) -> None:
+        property_value = None
+        if isinstance(hexcolor, str):
+            property_value = hexcolor
+            rgba = _hex_to_rgba_tuple(hexcolor)
+        elif isinstance(hexcolor, Sequence):
+            comps = [float(component) for component in hexcolor]
+            while len(comps) < 4:
+                comps.append(1.0 if len(comps) == 3 else 1.0)
+            rgba = (
+                max(0.0, min(1.0, comps[0])),
+                max(0.0, min(1.0, comps[1])),
+                max(0.0, min(1.0, comps[2])),
+                max(0.0, min(1.0, comps[3])),
+            )
+            property_value = f"#{int(round(rgba[3] * 255)):02X}{int(round(rgba[0] * 255)):02X}{int(round(rgba[1] * 255)):02X}{int(round(rgba[2] * 255)):02X}"
+        else:
+            rgba = None
+
+        if rgba is None:
+            css = _to_hex_color(hexcolor) or "#FFFFFF"
+        else:
+            css = f"#{int(round(rgba[0] * 255)):02X}{int(round(rgba[1] * 255)):02X}{int(round(rgba[2] * 255)):02X}"
+
+        btn.setStyleSheet(f"background:{css};border:1px solid #888;")
+        btn.setProperty("color", property_value or css)
 
     def _choose_color(self, btn: QPushButton, callback: Callable[[], None]) -> None:
         from PyQt5.QtWidgets import QColorDialog
 
-        col = QColorDialog.getColor(QColor(btn.property("color")), self)
+        current = btn.property("color") or "#FFFFFFFF"
+        col = QColorDialog.getColor(QColor(current), self)
         if col.isValid():
-            self._set_button_color(btn, col.name())
+            try:
+                hex_value = col.name(QColor.HexArgb)
+            except Exception:
+                hex_value = col.name()
+            self._set_button_color(btn, hex_value)
             callback()
 
     def _on_change(self) -> None:
@@ -665,6 +975,180 @@ class PlotStyleEditor(QDialog):
         self._set_button_color(
             self.event_color, style.get("event_color", DEFAULT_STYLE["event_color"])
         )
+
+        self.event_auto_mode.blockSignals(True)
+        self.event_auto_mode.setChecked(
+            bool(
+                style.get(
+                    "event_label_auto_mode", DEFAULT_STYLE.get("event_label_auto_mode", False)
+                )
+            )
+        )
+        self.event_auto_mode.blockSignals(False)
+
+        self.event_density_compact.blockSignals(True)
+        self.event_density_compact.setValue(
+            float(
+                style.get(
+                    "event_label_density_compact",
+                    DEFAULT_STYLE.get("event_label_density_compact", 0.8),
+                )
+            )
+        )
+        self.event_density_compact.blockSignals(False)
+
+        self.event_density_belt.blockSignals(True)
+        self.event_density_belt.setValue(
+            float(
+                style.get(
+                    "event_label_density_belt",
+                    DEFAULT_STYLE.get("event_label_density_belt", 0.25),
+                )
+            )
+        )
+        self.event_density_belt.blockSignals(False)
+
+        self.event_outline_enabled.blockSignals(True)
+        self.event_outline_enabled.setChecked(
+            bool(
+                style.get(
+                    "event_label_outline_enabled",
+                    DEFAULT_STYLE.get("event_label_outline_enabled", False),
+                )
+            )
+        )
+        self.event_outline_enabled.blockSignals(False)
+
+        self.event_outline_width.blockSignals(True)
+        self.event_outline_width.setValue(
+            float(
+                style.get(
+                    "event_label_outline_width",
+                    DEFAULT_STYLE.get("event_label_outline_width", 0.0),
+                )
+            )
+        )
+        self.event_outline_width.blockSignals(False)
+
+        self._set_button_color(
+            self.event_outline_color_btn,
+            style.get(
+                "event_label_outline_color",
+                DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF"),
+            ),
+        )
+
+        self.event_tooltips_enabled.blockSignals(True)
+        self.event_tooltips_enabled.setChecked(
+            bool(
+                style.get(
+                    "event_label_tooltips_enabled",
+                    DEFAULT_STYLE.get("event_label_tooltips_enabled", True),
+                )
+            )
+        )
+        self.event_tooltips_enabled.blockSignals(False)
+
+        self.event_tooltip_proximity.blockSignals(True)
+        self.event_tooltip_proximity.setValue(
+            int(
+                style.get(
+                    "event_label_tooltip_proximity",
+                    DEFAULT_STYLE.get("event_label_tooltip_proximity", 10),
+                )
+            )
+        )
+        self.event_tooltip_proximity.blockSignals(False)
+
+        self.event_legend_enabled.blockSignals(True)
+        self.event_legend_enabled.setChecked(
+            bool(
+                style.get(
+                    "event_label_legend_enabled",
+                    DEFAULT_STYLE.get("event_label_legend_enabled", True),
+                )
+            )
+        )
+        self.event_legend_enabled.blockSignals(False)
+
+        current_loc = str(
+            style.get(
+                "event_label_legend_loc",
+                DEFAULT_STYLE.get("event_label_legend_loc", "upper right"),
+            )
+        )
+        self.event_legend_location.blockSignals(True)
+        self.event_legend_location.setCurrentText(current_loc)
+        self.event_legend_location.blockSignals(False)
+
+        policy_value = str(
+            style.get(
+                "event_label_style_policy",
+                DEFAULT_STYLE.get("event_label_style_policy", "first"),
+            )
+        ).lower()
+        with contextlib.suppress(AttributeError):
+            self.event_cluster_style.blockSignals(True)
+            index = self.event_cluster_style.findData(policy_value)
+            if index < 0:
+                index = 0
+            self.event_cluster_style.setCurrentIndex(index)
+            self.event_cluster_style.blockSignals(False)
+        with contextlib.suppress(AttributeError):
+            self.event_max_per_cluster.blockSignals(True)
+            self.event_max_per_cluster.setValue(
+                int(
+                    style.get(
+                        "event_label_max_per_cluster",
+                        DEFAULT_STYLE.get("event_label_max_per_cluster", 1),
+                    )
+                )
+            )
+            self.event_max_per_cluster.blockSignals(False)
+        with contextlib.suppress(AttributeError):
+            self.event_label_lanes.blockSignals(True)
+            self.event_label_lanes.setValue(
+                int(
+                    style.get(
+                        "event_label_lanes",
+                        DEFAULT_STYLE.get("event_label_lanes", 3),
+                    )
+                )
+            )
+            self.event_label_lanes.blockSignals(False)
+        with contextlib.suppress(AttributeError):
+            self.event_belt_baseline.blockSignals(True)
+            self.event_belt_baseline.setChecked(
+                bool(
+                    style.get(
+                        "event_label_belt_baseline",
+                        DEFAULT_STYLE.get("event_label_belt_baseline", True),
+                    )
+                )
+            )
+            self.event_belt_baseline.blockSignals(False)
+        with contextlib.suppress(AttributeError):
+            self.event_span_siblings.blockSignals(True)
+            self.event_span_siblings.setChecked(
+                bool(
+                    style.get(
+                        "event_label_span_siblings",
+                        DEFAULT_STYLE.get("event_label_span_siblings", True),
+                    )
+                )
+            )
+            self.event_span_siblings.blockSignals(False)
+        with contextlib.suppress(AttributeError):
+            self.event_labels_v3_toggle.blockSignals(True)
+            self.event_labels_v3_toggle.setChecked(
+                bool(
+                    style.get(
+                        "event_labels_v3_enabled",
+                        DEFAULT_STYLE.get("event_labels_v3_enabled", False),
+                    )
+                )
+            )
+            self.event_labels_v3_toggle.blockSignals(False)
 
         self.pin_font_size.setValue(
             int(round(style.get("pin_font_size", DEFAULT_STYLE["pin_font_size"])))
@@ -737,6 +1221,25 @@ class PlotStyleEditor(QDialog):
             "event_bold": self.event_bold.isChecked(),
             "event_italic": self.event_italic.isChecked(),
             "event_color": self.event_color.property("color"),
+            "event_label_style_policy": self.event_cluster_style.currentData() or "first",
+            "event_label_max_per_cluster": int(self.event_max_per_cluster.value()),
+            "event_label_lanes": int(self.event_label_lanes.value()),
+            "event_label_belt_baseline": self.event_belt_baseline.isChecked(),
+            "event_label_span_siblings": self.event_span_siblings.isChecked(),
+            "event_labels_v3_enabled": self.event_labels_v3_toggle.isChecked(),
+            "event_label_auto_mode": self.event_auto_mode.isChecked(),
+            "event_label_density_compact": float(self.event_density_compact.value()),
+            "event_label_density_belt": float(self.event_density_belt.value()),
+            "event_label_outline_enabled": self.event_outline_enabled.isChecked(),
+            "event_label_outline_width": float(self.event_outline_width.value()),
+            "event_label_outline_color": _hex_to_rgba_tuple(
+                self.event_outline_color_btn.property("color")
+            )
+            or _hex_to_rgba_tuple(DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF")),
+            "event_label_tooltips_enabled": self.event_tooltips_enabled.isChecked(),
+            "event_label_tooltip_proximity": int(self.event_tooltip_proximity.value()),
+            "event_label_legend_enabled": self.event_legend_enabled.isChecked(),
+            "event_label_legend_loc": self.event_legend_location.currentText(),
             "pin_font_size": self.pin_font_size.value(),
             "pin_font_family": self.pin_font_family.currentText(),
             "pin_bold": self.pin_bold.isChecked(),

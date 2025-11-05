@@ -532,9 +532,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_toggle_btn.setCheckable(True)
         self.project_toggle_btn.setChecked(False)
         self.project_toggle_btn.setToolTip("Project")
-        self.project_toggle_btn.clicked.connect(
-            lambda checked: self.project_dock.setVisible(checked)
-        )
+        self.project_toggle_btn.clicked.connect(lambda checked: self.project_dock.set_open(checked))
         self.project_dock.visibilityChanged.connect(self.project_toggle_btn.setChecked)
         self.toolbar.addWidget(self.project_toggle_btn)
         self.project_dock.hide()
@@ -6954,20 +6952,18 @@ QPushButton[isGhost="true"]:hover {{
 
     def open_subplot_layout_dialog(self, fig=None):
         """Open dialog to adjust subplot paddings and spacing."""
-        fig = fig or self.fig
-        dialog = SubplotLayoutDialog(self, fig)
-        if dialog.exec_():
-            params = dialog.get_values()
-            fig.subplots_adjust(**params)
-            fig.canvas.draw_idle()
+        # Redirect to unified dialog, open Layout tab
+        self.open_unified_plot_settings_dialog(tab_name="layout")
 
     def open_axis_settings_dialog(self):
         """Open axis settings dialog for the main plot."""
-        self.open_axis_settings_dialog_for(self.ax, self.canvas, self.ax2)
+        # Redirect to unified dialog, open Axis tab
+        self.open_unified_plot_settings_dialog(tab_name="axis")
 
     def open_axis_settings_dialog_for(self, ax, canvas, ax2=None):
-        dialog = AxisSettingsDialog(self, ax, canvas, ax2)
-        dialog.exec_()
+        """Open axis settings dialog - redirects to unified dialog."""
+        # Redirect to unified dialog, open Axis tab
+        self.open_unified_plot_settings_dialog(tab_name="axis")
 
     def open_unified_plot_settings_dialog(self, tab_name=None):
         """Open combined dialog for layout, axis and style."""
@@ -6995,36 +6991,9 @@ QPushButton[isGhost="true"]:hover {{
 
     # [J] ========================= PLOT STYLE EDITOR ================================
     def open_plot_style_editor(self, tab_name=None):
-        from PyQt5.QtWidgets import QDialog
-
-        def capture_current_style():
-            return self._snapshot_style()
-
-        prev_style = capture_current_style()
-        dialog = PlotStyleEditor(
-            self,
-            initial=prev_style,
-            event_labels=self.event_labels,
-            event_times=self.event_times,
-            event_meta=self.event_label_meta,
-        )
-        self.plot_style_dialog = dialog
-        dialog.set_event_update_callback(self.apply_event_label_overrides)
-
-        if tab_name:
-            with contextlib.suppress(AttributeError):
-                dialog.select_tab(tab_name)
-
-        result = dialog.exec_()
-        if result == QDialog.Accepted:
-            if not dialog.event_updates_emitted():
-                labels, meta = dialog.get_event_overrides()
-                if labels is not None and meta is not None:
-                    self.apply_event_label_overrides(labels, meta)
-            style = dialog.get_style()
-            self.apply_plot_style(style, persist=True)
-        else:
-            self.apply_plot_style(prev_style, persist=False)
+        """Open plot style editor - redirects to unified dialog."""
+        # Redirect to unified dialog, open Style tab
+        self.open_unified_plot_settings_dialog(tab_name=tab_name or "style")
 
     def apply_plot_style(self, style, persist: bool = False):
         manager = self._ensure_style_manager()
@@ -7039,6 +7008,105 @@ QPushButton[isGhost="true"]:hover {{
             main_line=self.ax.lines[0] if self.ax.lines else None,
             od_line=self.od_line,
         )
+
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None:
+            defaults = DEFAULT_STYLE
+            try:
+                plot_host.set_event_labels_v3_enabled(
+                    effective_style.get(
+                        "event_labels_v3_enabled",
+                        defaults.get("event_labels_v3_enabled", False),
+                    )
+                )
+                plot_host.set_max_labels_per_cluster(
+                    effective_style.get(
+                        "event_label_max_per_cluster",
+                        defaults.get("event_label_max_per_cluster", 1),
+                    )
+                )
+                plot_host.set_cluster_style_policy(
+                    effective_style.get(
+                        "event_label_style_policy",
+                        defaults.get("event_label_style_policy", "first"),
+                    )
+                )
+                plot_host.set_label_lanes(
+                    effective_style.get(
+                        "event_label_lanes",
+                        defaults.get("event_label_lanes", 3),
+                    )
+                )
+                plot_host.set_belt_baseline(
+                    effective_style.get(
+                        "event_label_belt_baseline",
+                        defaults.get("event_label_belt_baseline", True),
+                    )
+                )
+                plot_host.set_event_label_span_siblings(
+                    effective_style.get(
+                        "event_label_span_siblings",
+                        defaults.get("event_label_span_siblings", True),
+                    )
+                )
+                plot_host.set_auto_event_label_mode(
+                    effective_style.get(
+                        "event_label_auto_mode",
+                        defaults.get("event_label_auto_mode", False),
+                    )
+                )
+                plot_host.set_label_density_thresholds(
+                    compact=effective_style.get(
+                        "event_label_density_compact",
+                        defaults.get("event_label_density_compact", 0.8),
+                    ),
+                    belt=effective_style.get(
+                        "event_label_density_belt",
+                        defaults.get("event_label_density_belt", 0.25),
+                    ),
+                )
+                plot_host.set_label_outline_enabled(
+                    effective_style.get(
+                        "event_label_outline_enabled",
+                        defaults.get("event_label_outline_enabled", False),
+                    )
+                )
+                plot_host.set_label_outline(
+                    effective_style.get(
+                        "event_label_outline_width",
+                        defaults.get("event_label_outline_width", 0.0),
+                    ),
+                    effective_style.get(
+                        "event_label_outline_color",
+                        defaults.get("event_label_outline_color", "#FFFFFFFF"),
+                    ),
+                )
+                plot_host.set_label_tooltips_enabled(
+                    effective_style.get(
+                        "event_label_tooltips_enabled",
+                        defaults.get("event_label_tooltips_enabled", True),
+                    )
+                )
+                plot_host.set_tooltip_proximity(
+                    effective_style.get(
+                        "event_label_tooltip_proximity",
+                        defaults.get("event_label_tooltip_proximity", 10),
+                    )
+                )
+                plot_host.set_compact_legend_enabled(
+                    effective_style.get(
+                        "event_label_legend_enabled",
+                        defaults.get("event_label_legend_enabled", True),
+                    )
+                )
+                plot_host.set_compact_legend_location(
+                    effective_style.get(
+                        "event_label_legend_loc",
+                        defaults.get("event_label_legend_loc", "upper right"),
+                    )
+                )
+            except Exception:
+                log.exception("Failed to apply event label style to PlotHost")
 
         self.canvas.draw_idle()
         if hasattr(self, "plot_style_dialog") and self.plot_style_dialog:
@@ -7193,22 +7261,84 @@ QPushButton[isGhost="true"]:hover {{
             DEFAULT_STYLE.get("event_highlight_duration_ms", 2000),
         )
 
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None:
+            style["event_labels_v3_enabled"] = plot_host.event_labels_v3_enabled()
+            style["event_label_max_per_cluster"] = plot_host.max_labels_per_cluster()
+            style["event_label_style_policy"] = plot_host.cluster_style_policy()
+            style["event_label_lanes"] = plot_host.event_label_lanes()
+            style["event_label_belt_baseline"] = plot_host.belt_baseline_enabled()
+            style["event_label_span_siblings"] = plot_host.span_event_lines_across_siblings()
+            style["event_label_auto_mode"] = plot_host.auto_event_label_mode()
+            compact_thr, belt_thr = plot_host.label_density_thresholds()
+            style["event_label_density_compact"] = compact_thr
+            style["event_label_density_belt"] = belt_thr
+            outline_enabled, outline_width, outline_color = plot_host.label_outline_settings()
+            style["event_label_outline_enabled"] = outline_enabled
+            style["event_label_outline_width"] = outline_width
+            style["event_label_outline_color"] = outline_color or DEFAULT_STYLE.get(
+                "event_label_outline_color", "#FFFFFFFF"
+            )
+            style["event_label_tooltips_enabled"] = plot_host.label_tooltips_enabled()
+            style["event_label_tooltip_proximity"] = plot_host.tooltip_proximity()
+            style["event_label_legend_enabled"] = plot_host.compact_legend_enabled()
+            style["event_label_legend_loc"] = plot_host.compact_legend_location()
+        else:
+            style.setdefault(
+                "event_labels_v3_enabled",
+                DEFAULT_STYLE.get("event_labels_v3_enabled", False),
+            )
+            style.setdefault(
+                "event_label_max_per_cluster",
+                DEFAULT_STYLE.get("event_label_max_per_cluster", 1),
+            )
+            style.setdefault(
+                "event_label_style_policy",
+                DEFAULT_STYLE.get("event_label_style_policy", "first"),
+            )
+            style.setdefault(
+                "event_label_lanes",
+                DEFAULT_STYLE.get("event_label_lanes", 3),
+            )
+            style.setdefault(
+                "event_label_belt_baseline",
+                DEFAULT_STYLE.get("event_label_belt_baseline", True),
+            )
+            style.setdefault(
+                "event_label_span_siblings",
+                DEFAULT_STYLE.get("event_label_span_siblings", True),
+            )
+            style.setdefault(
+                "event_label_auto_mode",
+                DEFAULT_STYLE.get("event_label_auto_mode", False),
+            )
+            style.setdefault(
+                "event_label_density_compact",
+                DEFAULT_STYLE.get("event_label_density_compact", 0.8),
+            )
+            style.setdefault(
+                "event_label_density_belt",
+                DEFAULT_STYLE.get("event_label_density_belt", 0.25),
+            )
+            style.setdefault(
+                "event_label_outline_enabled",
+                DEFAULT_STYLE.get("event_label_outline_enabled", False),
+            )
+            style.setdefault(
+                "event_label_outline_width",
+                DEFAULT_STYLE.get("event_label_outline_width", 0.0),
+            )
+            style.setdefault(
+                "event_label_outline_color",
+                DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF"),
+            )
+
         return style
 
     def open_plot_style_editor_for(self, ax, canvas, event_text_objects=None, pinned_points=None):
-        def capture_current_style():
-            secondary = self.ax2 if ax is self.ax else None
-            od_line = self.od_line if ax is self.ax else None
-            return self._snapshot_style(
-                ax=ax,
-                ax2=secondary,
-                event_text_objects=event_text_objects,
-                pinned_points=pinned_points,
-                od_line=od_line,
-            )
-
-        prev_style = capture_current_style()
-        dialog = PlotStyleEditor(self, initial=prev_style)
+        """Open plot style editor - redirects to unified dialog."""
+        # Redirect to unified dialog, open Style tab
+        self.open_unified_plot_settings_dialog(tab_name="style")
 
         def apply_local_style(style=None):
             style = style or dialog.get_style()

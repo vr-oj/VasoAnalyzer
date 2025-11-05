@@ -538,6 +538,18 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.event_bold = refs.event_bold
         self.event_italic = refs.event_italic
         self.event_color_btn = refs.event_color_btn
+        self.event_labels_v3_toggle = refs.event_labels_v3_toggle
+        self.event_cluster_style = refs.event_cluster_style
+        self.event_max_per_cluster = refs.event_max_per_cluster
+        self.event_label_lanes = refs.event_label_lanes
+        self.event_belt_baseline = refs.event_belt_baseline
+        self.event_span_siblings = refs.event_span_siblings
+        self.event_auto_mode = refs.event_auto_mode
+        self.event_density_compact = refs.event_density_compact
+        self.event_density_belt = refs.event_density_belt
+        self.event_outline_enabled = refs.event_outline_enabled
+        self.event_outline_width = refs.event_outline_width
+        self.event_outline_color_btn = refs.event_outline_color_btn
         self.event_list = refs.event_list
         self.event_editor = refs.event_editor
         self.event_overrides_box = refs.event_overrides_box
@@ -675,7 +687,9 @@ class UnifiedPlotSettingsDialog(QDialog):
                 entry.get("label", ""),
                 entry.get("time", 0.0),
                 entry.get("meta", {}),
-                max_lanes=2,
+                max_lanes=(
+                    int(self.event_label_lanes.value()) if hasattr(self, "event_label_lanes") else 2
+                ),
             )
         self._suppress_event_editor = False
 
@@ -692,6 +706,15 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._event_entries[index]["label"] = normalized
         self._update_event_list_item(index)
         self._event_updates_fired = False
+
+    def _on_event_lane_count_changed(self, value: int) -> None:
+        if self._suppress_event_editor:
+            return
+        if not hasattr(self, "event_list"):
+            return
+        current_row = self.event_list.currentRow()
+        if current_row >= 0:
+            self._on_event_row_changed(current_row)
 
     def _update_event_list_item(self, index: int) -> None:
         if not hasattr(self, "event_list"):
@@ -1172,12 +1195,32 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.style["event_bold"] = self.event_bold.isChecked()
         self.style["event_italic"] = self.event_italic.isChecked()
         self.style["event_color"] = self.event_color_btn.color
+        self.style["event_labels_v3_enabled"] = self.event_labels_v3_toggle.isChecked()
+        self.style["event_label_style_policy"] = self.event_cluster_style.currentData() or "first"
+        self.style["event_label_max_per_cluster"] = int(self.event_max_per_cluster.value())
+        self.style["event_label_lanes"] = int(self.event_label_lanes.value())
+        self.style["event_label_belt_baseline"] = self.event_belt_baseline.isChecked()
+        self.style["event_label_span_siblings"] = self.event_span_siblings.isChecked()
         self.style["pin_font_family"] = self.pin_font_family.currentText()
         self.style["pin_font_size"] = int(self.pin_font_size.value())
         self.style["pin_bold"] = self.pin_bold.isChecked()
         self.style["pin_italic"] = self.pin_italic.isChecked()
         self.style["pin_color"] = self.pin_color_btn.color
         self.style["pin_size"] = int(self.pin_marker_size.value())
+        self.style["event_label_auto_mode"] = self.event_auto_mode.isChecked()
+        self.style["event_label_density_compact"] = float(self.event_density_compact.value())
+        self.style["event_label_density_belt"] = float(self.event_density_belt.value())
+        self.style["event_label_outline_enabled"] = self.event_outline_enabled.isChecked()
+        self.style["event_label_outline_width"] = float(self.event_outline_width.value())
+        self.style["event_label_outline_color"] = self.event_outline_color_btn.color
+
+        # Event highlights
+        if hasattr(self, "event_highlight_color_btn"):
+            self.style["event_highlight_color"] = self.event_highlight_color_btn.color
+        if hasattr(self, "event_highlight_alpha"):
+            self.style["event_highlight_alpha"] = float(self.event_highlight_alpha.value())
+        if hasattr(self, "event_highlight_duration"):
+            self.style["event_highlight_duration_ms"] = int(self.event_highlight_duration.value())
 
         if self.ax2 is not None:
             if hasattr(self, "yo_axis_color_btn"):

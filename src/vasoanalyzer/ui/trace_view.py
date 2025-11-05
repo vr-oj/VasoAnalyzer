@@ -79,7 +79,8 @@ class TraceView:
                 transform=transform,
                 animated=True,
             )
-            col.set_zorder(10)
+            col.set_zorder(5.0)
+            col.set_clip_on(False)
             self.event_collection = col
             self.ax.add_collection(col)
         if self._mode == "dual":

@@ -249,9 +249,51 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
         line_form.addRow("Outer Line Color:", dialog.od_line_color_btn)
 
     grid.addWidget(line_box, 2, 0, 1, 2)
+
+    # Event highlights ----------------------------------------------
+    highlight_box = QGroupBox("Event Highlights")
+    highlight_form = QFormLayout(highlight_box)
+    highlight_form.setLabelAlignment(Qt.AlignRight)
+
+    dialog.event_highlight_color_btn = dialog._make_color_button(
+        dialog.style.get(
+            "event_highlight_color", DEFAULT_STYLE.get("event_highlight_color", "#1D5CFF")
+        )
+    )
+    highlight_form.addRow("Highlight Color:", dialog.event_highlight_color_btn)
+
+    dialog.event_highlight_alpha = QDoubleSpinBox()
+    dialog.event_highlight_alpha.setRange(0.0, 1.0)
+    dialog.event_highlight_alpha.setSingleStep(0.05)
+    dialog.event_highlight_alpha.setDecimals(2)
+    dialog.event_highlight_alpha.setValue(
+        float(
+            dialog.style.get(
+                "event_highlight_alpha", DEFAULT_STYLE.get("event_highlight_alpha", 0.95)
+            )
+        )
+    )
+    highlight_form.addRow("Base Opacity:", dialog.event_highlight_alpha)
+
+    dialog.event_highlight_duration = QSpinBox()
+    dialog.event_highlight_duration.setRange(0, 60000)
+    dialog.event_highlight_duration.setSingleStep(100)
+    dialog.event_highlight_duration.setSuffix(" ms")
+    dialog.event_highlight_duration.setValue(
+        int(
+            dialog.style.get(
+                "event_highlight_duration_ms",
+                DEFAULT_STYLE.get("event_highlight_duration_ms", 2000),
+            )
+        )
+    )
+    highlight_form.addRow("Fade Duration:", dialog.event_highlight_duration)
+
+    grid.addWidget(highlight_box, 3, 0, 1, 2)
+
     grid.setColumnStretch(0, 1)
     grid.setColumnStretch(1, 1)
-    grid.setRowStretch(3, 1)
+    grid.setRowStretch(4, 1)
 
     scroll = QScrollArea()
     scroll.setFrameShape(QScrollArea.NoFrame)

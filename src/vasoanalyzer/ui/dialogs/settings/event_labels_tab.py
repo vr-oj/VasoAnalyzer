@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -7,6 +8,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -51,6 +53,22 @@ class EventLabelsTabRefs:
     event_bold: QCheckBox
     event_italic: QCheckBox
     event_color_btn: QWidget  # created by dialog._make_color_button(...)
+    event_labels_v3_toggle: QCheckBox
+    event_cluster_style: QComboBox
+    event_max_per_cluster: QSpinBox
+    event_label_lanes: QSpinBox
+    event_belt_baseline: QCheckBox
+    event_span_siblings: QCheckBox
+    event_auto_mode: QCheckBox
+    event_density_compact: QDoubleSpinBox
+    event_density_belt: QDoubleSpinBox
+    event_outline_enabled: QCheckBox
+    event_outline_width: QDoubleSpinBox
+    event_outline_color_btn: QWidget
+    event_tooltips_enabled: QCheckBox
+    event_tooltip_proximity: QSpinBox
+    event_legend_enabled: QCheckBox
+    event_legend_location: QComboBox
     event_list: QListWidget
     event_editor: QWidget  # EventLabelEditor
     event_overrides_box: QGroupBox
@@ -118,6 +136,115 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
 
     layout.addWidget(defaults_box)
 
+    # Behaviour controls
+    behaviour_box = QGroupBox("Label Layout & Behaviour")
+    behaviour_form = QFormLayout(behaviour_box)
+    behaviour_form.setLabelAlignment(Qt.AlignRight)
+
+    event_auto_mode = QCheckBox("Automatic density switching")
+    event_auto_mode.setChecked(False)
+    behaviour_form.addRow("Auto Mode:", event_auto_mode)
+
+    event_density_compact = QDoubleSpinBox()
+    event_density_compact.setRange(0.0, 10.0)
+    event_density_compact.setDecimals(3)
+    event_density_compact.setSingleStep(0.05)
+    event_density_compact.setValue(0.8)
+    behaviour_form.addRow("Compact Threshold:", event_density_compact)
+
+    event_density_belt = QDoubleSpinBox()
+    event_density_belt.setRange(0.0, 10.0)
+    event_density_belt.setDecimals(3)
+    event_density_belt.setSingleStep(0.05)
+    event_density_belt.setValue(0.25)
+    behaviour_form.addRow("Belt Threshold:", event_density_belt)
+
+    event_labels_v3_toggle = QCheckBox("Enable Event Labels v3")
+    event_labels_v3_toggle.setChecked(False)
+    behaviour_form.addRow("Event Labels v3:", event_labels_v3_toggle)
+
+    event_cluster_style = QComboBox()
+    event_cluster_style.addItem("First label", "first")
+    event_cluster_style.addItem("Most common style", "most_common")
+    event_cluster_style.addItem("Highest priority", "priority")
+    event_cluster_style.addItem("Blend colour", "blend_color")
+    behaviour_form.addRow("Cluster Style:", event_cluster_style)
+
+    event_max_per_cluster = QSpinBox()
+    event_max_per_cluster.setRange(1, 4)
+    event_max_per_cluster.setValue(1)
+    behaviour_form.addRow("Max per Cluster:", event_max_per_cluster)
+
+    event_label_lanes = QSpinBox()
+    event_label_lanes.setRange(1, 12)
+    event_label_lanes.setValue(3)
+    behaviour_form.addRow("Horizontal Lanes:", event_label_lanes)
+
+    event_belt_baseline = QCheckBox("Show belt baseline")
+    event_belt_baseline.setChecked(True)
+    behaviour_form.addRow("Belt Baseline:", event_belt_baseline)
+
+    event_span_siblings = QCheckBox("Span shared axes")
+    event_span_siblings.setChecked(True)
+    behaviour_form.addRow("Span Axes:", event_span_siblings)
+
+    layout.addWidget(behaviour_box)
+
+    interaction_box = QGroupBox("Interaction & Legend")
+    interaction_form = QFormLayout(interaction_box)
+    interaction_form.setLabelAlignment(Qt.AlignRight)
+
+    event_tooltips_enabled = QCheckBox("Show hover tooltips")
+    event_tooltips_enabled.setChecked(True)
+    interaction_form.addRow("Tooltips:", event_tooltips_enabled)
+
+    event_tooltip_proximity = QSpinBox()
+    event_tooltip_proximity.setRange(1, 200)
+    event_tooltip_proximity.setValue(10)
+    interaction_form.addRow("Tooltip Radius (px):", event_tooltip_proximity)
+
+    event_legend_enabled = QCheckBox("Show compact legend")
+    event_legend_enabled.setChecked(True)
+    interaction_form.addRow("Compact Legend:", event_legend_enabled)
+
+    event_legend_location = QComboBox()
+    event_legend_location.addItems(
+        [
+            "upper right",
+            "upper left",
+            "lower left",
+            "lower right",
+            "upper center",
+            "lower center",
+            "center",
+            "center left",
+            "center right",
+        ]
+    )
+    interaction_form.addRow("Legend Position:", event_legend_location)
+
+    layout.addWidget(interaction_box)
+
+    outline_box = QGroupBox("Text Outline")
+    outline_form = QFormLayout(outline_box)
+    outline_form.setLabelAlignment(Qt.AlignRight)
+
+    event_outline_enabled = QCheckBox("Enable outline")
+    event_outline_enabled.setChecked(False)
+    outline_form.addRow("Enabled:", event_outline_enabled)
+
+    event_outline_width = QDoubleSpinBox()
+    event_outline_width.setRange(0.0, 10.0)
+    event_outline_width.setDecimals(2)
+    event_outline_width.setSingleStep(0.1)
+    outline_form.addRow("Width (px):", event_outline_width)
+
+    outline_default = DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF")
+    event_outline_color_btn = dialog._make_color_button(outline_default)
+    outline_form.addRow("Outline Color:", event_outline_color_btn)
+
+    layout.addWidget(outline_box)
+
     # Overrides group: list + editor
     overrides_box = QGroupBox("Per-Event Overrides")
     overrides_box.setObjectName("EventOverridesGroup")
@@ -153,6 +280,22 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
         event_bold=event_bold,
         event_italic=event_italic,
         event_color_btn=event_color_btn,
+        event_labels_v3_toggle=event_labels_v3_toggle,
+        event_cluster_style=event_cluster_style,
+        event_max_per_cluster=event_max_per_cluster,
+        event_label_lanes=event_label_lanes,
+        event_belt_baseline=event_belt_baseline,
+        event_span_siblings=event_span_siblings,
+        event_auto_mode=event_auto_mode,
+        event_density_compact=event_density_compact,
+        event_density_belt=event_density_belt,
+        event_outline_enabled=event_outline_enabled,
+        event_outline_width=event_outline_width,
+        event_outline_color_btn=event_outline_color_btn,
+        event_tooltips_enabled=event_tooltips_enabled,
+        event_tooltip_proximity=event_tooltip_proximity,
+        event_legend_enabled=event_legend_enabled,
+        event_legend_location=event_legend_location,
         event_list=event_list,
         event_editor=event_editor,
         event_overrides_box=overrides_box,
@@ -173,6 +316,18 @@ def populate_event_labels_tab(dialog: DialogT) -> None:
         [
             getattr(dialog, "event_font_family", None),
             getattr(dialog, "event_font_size", None),
+            getattr(dialog, "event_labels_v3_toggle", None),
+            getattr(dialog, "event_cluster_style", None),
+            getattr(dialog, "event_max_per_cluster", None),
+            getattr(dialog, "event_label_lanes", None),
+            getattr(dialog, "event_belt_baseline", None),
+            getattr(dialog, "event_span_siblings", None),
+            getattr(dialog, "event_auto_mode", None),
+            getattr(dialog, "event_density_compact", None),
+            getattr(dialog, "event_density_belt", None),
+            getattr(dialog, "event_outline_enabled", None),
+            getattr(dialog, "event_outline_width", None),
+            getattr(dialog, "event_outline_color_btn", None),
         ]
     ):
         dialog.event_font_family.setCurrentText(
@@ -181,6 +336,146 @@ def populate_event_labels_tab(dialog: DialogT) -> None:
         dialog.event_font_size.setValue(
             int(style.get("event_font_size", default_style.get("event_font_size", 10)))
         )
+        dialog.event_labels_v3_toggle.setChecked(
+            bool(
+                style.get(
+                    "event_labels_v3_enabled",
+                    default_style.get("event_labels_v3_enabled", False),
+                )
+            )
+        )
+        policy_value = str(
+            style.get(
+                "event_label_style_policy",
+                default_style.get("event_label_style_policy", "first"),
+            )
+        ).lower()
+        idx = dialog.event_cluster_style.findData(policy_value)
+        if idx < 0:
+            idx = 0
+        dialog.event_cluster_style.setCurrentIndex(idx)
+        dialog.event_max_per_cluster.setValue(
+            int(
+                style.get(
+                    "event_label_max_per_cluster",
+                    default_style.get("event_label_max_per_cluster", 1),
+                )
+            )
+        )
+        dialog.event_label_lanes.setValue(
+            int(
+                style.get(
+                    "event_label_lanes",
+                    default_style.get("event_label_lanes", 3),
+                )
+            )
+        )
+        dialog.event_belt_baseline.setChecked(
+            bool(
+                style.get(
+                    "event_label_belt_baseline",
+                    default_style.get("event_label_belt_baseline", True),
+                )
+            )
+        )
+        dialog.event_span_siblings.setChecked(
+            bool(
+                style.get(
+                    "event_label_span_siblings",
+                    default_style.get("event_label_span_siblings", True),
+                )
+            )
+        )
+
+        dialog.event_auto_mode.setChecked(
+            bool(
+                style.get(
+                    "event_label_auto_mode",
+                    default_style.get("event_label_auto_mode", False),
+                )
+            )
+        )
+        dialog.event_density_compact.setValue(
+            float(
+                style.get(
+                    "event_label_density_compact",
+                    default_style.get("event_label_density_compact", 0.8),
+                )
+            )
+        )
+        dialog.event_density_belt.setValue(
+            float(
+                style.get(
+                    "event_label_density_belt",
+                    default_style.get("event_label_density_belt", 0.25),
+                )
+            )
+        )
+        dialog.event_outline_enabled.setChecked(
+            bool(
+                style.get(
+                    "event_label_outline_enabled",
+                    default_style.get("event_label_outline_enabled", False),
+                )
+            )
+        )
+        dialog.event_outline_width.setValue(
+            float(
+                style.get(
+                    "event_label_outline_width",
+                    default_style.get("event_label_outline_width", 0.0),
+                )
+            )
+        )
+        with contextlib.suppress(AttributeError):
+            dialog.event_outline_color_btn.setProperty(
+                "color",
+                style.get(
+                    "event_label_outline_color",
+                    default_style.get("event_label_outline_color", "#FFFFFFFF"),
+                ),
+            )
+            if hasattr(dialog, "_set_button_color"):
+                dialog._set_button_color(
+                    dialog.event_outline_color_btn,
+                    style.get(
+                        "event_label_outline_color",
+                        default_style.get("event_label_outline_color", "#FFFFFFFF"),
+                    ),
+                )
+
+    dialog.event_tooltips_enabled.setChecked(
+        bool(
+            style.get(
+                "event_label_tooltips_enabled",
+                default_style.get("event_label_tooltips_enabled", True),
+            )
+        )
+    )
+    dialog.event_tooltip_proximity.setValue(
+        int(
+            style.get(
+                "event_label_tooltip_proximity",
+                default_style.get("event_label_tooltip_proximity", 10),
+            )
+        )
+    )
+    dialog.event_legend_enabled.setChecked(
+        bool(
+            style.get(
+                "event_label_legend_enabled",
+                default_style.get("event_label_legend_enabled", True),
+            )
+        )
+    )
+    dialog.event_legend_location.setCurrentText(
+        str(
+            style.get(
+                "event_label_legend_loc",
+                default_style.get("event_label_legend_loc", "upper right"),
+            )
+        )
+    )
 
     return
 
@@ -206,6 +501,10 @@ def wire_event_labels_tab(dialog: DialogT) -> None:
             event_editor.styleChanged.connect(dialog._on_event_style_changed)
         if hasattr(event_editor, "labelTextChanged"):
             event_editor.labelTextChanged.connect(dialog._on_event_label_changed)
+
+    lane_spin = getattr(dialog, "event_label_lanes", None)
+    if lane_spin is not None and hasattr(dialog, "_on_event_lane_count_changed"):
+        lane_spin.valueChanged.connect(dialog._on_event_lane_count_changed)
 
     dialog._event_labels_tab_wired = current_refs
     return

@@ -18,6 +18,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -46,6 +47,8 @@ class EventLabelOverrides(TypedDict, total=False):
     y_offset_axes: float
     lane: int
     color: str
+    pinned: bool
+    priority: int
 
 
 class EventLabelEditor(QWidget):
@@ -85,6 +88,9 @@ class EventLabelEditor(QWidget):
         self.visible_check = QCheckBox("Show label")
         self.visible_check.setChecked(True)
         visibility_row.addWidget(self.visible_check)
+
+        self.pinned_check = QCheckBox("Pin")
+        visibility_row.addWidget(self.pinned_check)
 
         self.color_button = QPushButton("Text Color…")
         self.color_button.setToolTip("Choose a custom color (leave blank for default).")
@@ -137,6 +143,16 @@ class EventLabelEditor(QWidget):
         lane_row.addWidget(self.reset_button)
         root_layout.addLayout(lane_row)
 
+        priority_row = QHBoxLayout()
+        priority_row.setSpacing(8)
+        priority_row.addWidget(QLabel("Priority"))
+        self.priority_spin = QSpinBox()
+        self.priority_spin.setRange(-999, 999)
+        self.priority_spin.setValue(0)
+        priority_row.addWidget(self.priority_spin)
+        priority_row.addStretch(1)
+        root_layout.addLayout(priority_row)
+
         root_layout.addStretch(1)
 
         self._default_font: QFont = self.font_combo.currentFont()
@@ -144,6 +160,7 @@ class EventLabelEditor(QWidget):
 
         self.label_edit.editingFinished.connect(self._emit_label_change)
         self.visible_check.toggled.connect(self._emit_style_change)
+        self.pinned_check.toggled.connect(self._emit_style_change)
         self.font_combo.currentFontChanged.connect(self._emit_style_change)
         self.font_size_spin.valueChanged.connect(self._emit_style_change)
         self.x_offset_spin.valueChanged.connect(self._emit_style_change)
@@ -151,6 +168,7 @@ class EventLabelEditor(QWidget):
         self.color_button.clicked.connect(self._select_color)
         self.lane_combo.currentIndexChanged.connect(self._emit_style_change)
         self.reset_button.clicked.connect(self._reset_overrides)
+        self.priority_spin.valueChanged.connect(self._emit_style_change)
 
         self._populate_lane_combo(self._max_lanes)
         self._set_controls_enabled(False)
@@ -162,6 +180,8 @@ class EventLabelEditor(QWidget):
         self.summary_label.setText("Select an event to edit its label.")
         self._default_color = ""
         self._render_color_button(self._default_color)
+        self.pinned_check.setChecked(False)
+        self.priority_spin.setValue(0)
 
     def set_event(
         self,
@@ -183,6 +203,7 @@ class EventLabelEditor(QWidget):
         self.summary_label.setText(f"{label} — {time_seconds:.2f} s")
         self.label_edit.setText(label)
         self.visible_check.setChecked(bool(meta_mapping.get("visible", True)))
+        self.pinned_check.setChecked(bool(meta_mapping.get("pinned", False)))
 
         font_override = meta_mapping.get("font") or meta_mapping.get("fontfamily")
         if isinstance(font_override, str) and font_override.strip():
@@ -215,6 +236,15 @@ class EventLabelEditor(QWidget):
         self._default_color = color_value if isinstance(color_value, str) else ""
         self._render_color_button(self._default_color)
 
+        priority_value = meta_mapping.get("priority")
+        if isinstance(priority_value, int | float | str):
+            try:
+                self.priority_spin.setValue(int(priority_value))
+            except (TypeError, ValueError):
+                self.priority_spin.setValue(0)
+        else:
+            self.priority_spin.setValue(0)
+
         self._updating = False
 
     # Internal helpers -------------------------------------------------
@@ -222,6 +252,7 @@ class EventLabelEditor(QWidget):
         for widget in (
             self.label_edit,
             self.visible_check,
+            self.pinned_check,
             self.font_combo,
             self.font_size_spin,
             self.x_offset_spin,
@@ -229,6 +260,7 @@ class EventLabelEditor(QWidget):
             self.lane_combo,
             self.color_button,
             self.reset_button,
+            self.priority_spin,
         ):
             widget.setEnabled(enabled)
 
@@ -259,6 +291,9 @@ class EventLabelEditor(QWidget):
         if not self.visible_check.isChecked():
             meta["visible"] = False
 
+        if self.pinned_check.isChecked():
+            meta["pinned"] = True
+
         current_font = self.font_combo.currentFont()
         if current_font.family() != self._default_font.family():
             meta["font"] = current_font.family()
@@ -281,6 +316,10 @@ class EventLabelEditor(QWidget):
 
         if self._default_color:
             meta["color"] = self._default_color
+
+        priority_value = int(self.priority_spin.value())
+        if priority_value != 0:
+            meta["priority"] = priority_value
 
         return meta
 
@@ -329,5 +368,7 @@ class EventLabelEditor(QWidget):
         self.lane_combo.setCurrentIndex(0)
         self._default_color = ""
         self._render_color_button(self._default_color)
+        self.pinned_check.setChecked(False)
+        self.priority_spin.setValue(0)
         self._updating = False
         self.styleChanged.emit(self._current_index, {})
