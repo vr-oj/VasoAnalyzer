@@ -1027,7 +1027,7 @@ class ExcelMapWizard(QWizard):
         try:
             pd.to_datetime(value)
             return True
-        except Exception:
+        except (ValueError, TypeError, pd.errors.OutOfBoundsDatetime):
             return False
 
     # --------------------------------------------------
@@ -1114,7 +1114,7 @@ class ExcelMapWizard(QWizard):
     def _normalize_numeric(value: Any) -> Any:
         try:
             return round(float(value), 4)
-        except Exception:
+        except (ValueError, TypeError):
             return str(value).strip()
 
     # --------------------------------------------------

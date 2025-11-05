@@ -18,7 +18,7 @@ import pandas as pd
 
 try:
     from vasoanalyzer.services.cache_service import DataCache
-except Exception:  # pragma: no cover - optional during bootstrap
+except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
 log = logging.getLogger(__name__)

@@ -201,7 +201,8 @@ class ExcelMappingDialog(QDialog):
                 desc_value = str(self.ws[f"A{self.current_row}"].value)
                 if desc_value:
                     description = f" \u2192 <i>{desc_value}</i>"
-            except Exception:
+            except (KeyError, AttributeError, TypeError):
+                # Cell doesn't exist or has no value
                 pass
         self.cell_label.setText(f"<b>Editing Cell:</b> {cell}{description}")
         self.update_preview_table()

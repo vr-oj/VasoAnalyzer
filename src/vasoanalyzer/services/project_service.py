@@ -86,7 +86,7 @@ def _load_tiff_stack(
                     if not np.any(raw_stack[-1]) and np.any(raw_stack[-2]):
                         view = raw_stack[:-1]
                         log.debug("Dropped trailing blank frame from %s", path)
-                except Exception:
+                except (IndexError, TypeError, ValueError):
                     # Any issue checking the tail should not block loading.
                     view = raw_stack
 

@@ -177,7 +177,8 @@ def _serialize_pins(pins):
                     "trace": getattr(marker, "trace_type", "inner"),
                 }
             )
-        except Exception:
+        except (AttributeError, IndexError, TypeError, ValueError):
+            # Skip markers with invalid data or missing attributes
             continue
     return serial
 
@@ -185,7 +186,8 @@ def _serialize_pins(pins):
 def _serialize_events(event_table):
     try:
         return len(event_table)
-    except Exception:
+    except (TypeError, AttributeError):
+        # event_table is None or doesn't support len()
         return 0
 
 

@@ -113,7 +113,8 @@ class WelcomeGuideDialog(QDialog):
                 widget = QSvgWidget(icon_path)
                 widget.setFixedSize(60, 60)
                 return widget
-            except Exception:
+            except (OSError, RuntimeError):
+                # Failed to load SVG, fall back to text badge
                 pass
 
         fallback = QLabel("VA")

@@ -16,7 +16,7 @@ import pandas as pd
 
 try:
     from vasoanalyzer.services.cache_service import DataCache
-except Exception:  # pragma: no cover - optional during bootstrap
+except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
 from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
