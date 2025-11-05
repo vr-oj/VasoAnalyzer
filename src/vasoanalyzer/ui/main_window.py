@@ -2788,10 +2788,22 @@ class VasoAnalyzerApp(QMainWindow):
     def open_preferences_dialog(self):
         QMessageBox.information(self, "Preferences", "Preferences will be implemented soon(ish).")
 
+    def _safe_remove_artist(self, artist):
+        """Remove the Matplotlib artist if it is still attached to a canvas."""
+        if artist is None:
+            return
+        if getattr(artist, "figure", None) is None and getattr(artist, "axes", None) is None:
+            return
+        try:
+            artist.remove()
+        except (NotImplementedError, ValueError):
+            if hasattr(artist, "set_visible"):
+                artist.set_visible(False)
+
     def clear_all_pins(self):
         for marker, label in self.pinned_points:
-            marker.remove()
-            label.remove()
+            self._safe_remove_artist(marker)
+            self._safe_remove_artist(label)
         self.pinned_points.clear()
         # Apply current (or default) font style after rebuilding the plot
         self.apply_plot_style(self.get_current_plot_style(), persist=False)
@@ -6616,8 +6628,8 @@ QPushButton[isGhost="true"]:hover {{
 
                     action = menu.exec_(self.canvas.mapToGlobal(event.guiEvent.pos()))
                     if action == delete_action:
-                        marker.remove()
-                        label.remove()
+                        self._safe_remove_artist(marker)
+                        self._safe_remove_artist(label)
                         self.pinned_points.remove((marker, label))
                         self.canvas.draw_idle()
                         self.mark_session_dirty()
@@ -7699,8 +7711,8 @@ QPushButton[isGhost="true"]:hover {{
                 QMessageBox.information(self, "No Pins", "There are no pins to clear.")
                 return
             for marker, label in self.pinned_points:
-                marker.remove()
-                label.remove()
+                self._safe_remove_artist(marker)
+                self._safe_remove_artist(label)
             self.pinned_points.clear()
             self.canvas.draw_idle()
             log.info("Cleared all pins.")
@@ -8015,8 +8027,8 @@ QPushButton[isGhost="true"]:hover {{
             self.event_table.setFont(font)
         if "pins" in state:
             for marker, label in self.pinned_points:
-                marker.remove()
-                label.remove()
+                self._safe_remove_artist(marker)
+                self._safe_remove_artist(label)
             self.pinned_points.clear()
             for x, y in state.get("pins", []):
                 marker = self.ax.plot(x, y, "ro", markersize=6)[0]
