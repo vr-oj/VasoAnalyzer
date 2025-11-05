@@ -85,7 +85,28 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.setWindowIcon(QIcon(resource_path("icons", "Aa.svg")))
         self.setFont(QFont("Arial", 10))
         self.setMinimumWidth(720)
+        self.setMinimumHeight(500)
         self.setSizeGripEnabled(True)
+
+        # Make dialog responsive to screen size
+        if parent:
+            screen = parent.screen()
+        else:
+            from PyQt5.QtWidgets import QApplication
+            screen = QApplication.primaryScreen()
+
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            # Set maximum height to 85% of available screen height
+            max_height = int(screen_geometry.height() * 0.85)
+            max_width = int(screen_geometry.width() * 0.90)
+            self.setMaximumHeight(max_height)
+            self.setMaximumWidth(max_width)
+
+            # Set initial size to something reasonable
+            initial_height = min(700, max_height)
+            initial_width = min(900, max_width)
+            self.resize(initial_width, initial_height)
 
         main = QVBoxLayout(self)
         main.setContentsMargins(14, 16, 14, 16)
