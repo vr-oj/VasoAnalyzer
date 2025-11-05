@@ -58,6 +58,7 @@ class ClusteredLabelV3:
     width_px: float = 0.0
     pinned: bool = False
     max_priority: int = 0
+    category: str | None = None
 
 
 @dataclass
@@ -237,6 +238,13 @@ class EventLabelerV3:
             mean_px = float(np.mean([px_coords[i] for i in group]))
             pinned = any(entry.pinned or bool(entry.meta.get("pinned")) for entry in members)
             max_priority = max((entry.priority for entry in members), default=0)
+
+            # Determine category: use category from highest priority event
+            category = None
+            if members:
+                sorted_by_priority = sorted(members, key=lambda e: e.priority, reverse=True)
+                category = sorted_by_priority[0].category
+
             label_text, style = self._compose_cluster_label(members, dpi, renderer)
             if not label_text:
                 continue
@@ -249,6 +257,7 @@ class EventLabelerV3:
                     style=style,
                     pinned=pinned,
                     max_priority=max_priority,
+                    category=category,
                 )
             )
         return result
@@ -365,13 +374,28 @@ class EventLabelerV3:
         for peer in self.sibling_axes:
             transform = peer.get_xaxis_transform()
             for cluster in clusters:
-                style_color = cluster.style.get("color")
-                color = style_color if style_color is not None else (0, 0, 0, 0.35)
+                # Use enhanced style color (includes category color)
+                enhanced_style = self._enhance_style_by_priority(
+                    cluster.style, cluster.max_priority, cluster.category
+                )
+                style_color = enhanced_style.get("color")
+
+                # Default to darker gray with higher opacity for better visibility
+                if style_color is not None:
+                    # If we have a color, use it with 50% opacity
+                    if isinstance(style_color, (list, tuple)) and len(style_color) >= 3:
+                        color = (*style_color[:3], 0.5)
+                    else:
+                        color = style_color
+                else:
+                    color = (0, 0, 0, 0.5)
+
                 guide = Line2D(
                     [cluster.x, cluster.x],
                     [0, 1],
                     linestyle=(0, (4, 4)),
                     color=color,
+                    linewidth=1.5,
                     transform=transform,
                     zorder=self.options.z_guides,
                     clip_on=False,
@@ -381,7 +405,10 @@ class EventLabelerV3:
 
         y_axes = 1.0
         for cluster in clusters:
-            text_kwargs = self._text_kwargs(cluster.style)
+            enhanced_style = self._enhance_style_by_priority(
+                cluster.style, cluster.max_priority, cluster.category
+            )
+            text_kwargs = self._text_kwargs(enhanced_style)
             text = ax.text(
                 cluster.x,
                 y_axes,
@@ -423,7 +450,10 @@ class EventLabelerV3:
             lane_y = 0.94 - (lane_index * lane_step)
             lane_end_px[lane_index] = cluster.px + width + 8.0
 
-            text_kwargs = self._text_kwargs(cluster.style)
+            enhanced_style = self._enhance_style_by_priority(
+                cluster.style, cluster.max_priority, cluster.category
+            )
+            text_kwargs = self._text_kwargs(enhanced_style)
             artist = ax.text(
                 cluster.x,
                 lane_y,
@@ -469,7 +499,10 @@ class EventLabelerV3:
             # distribute lanes within belt (avoid division by zero when single lane)
             y_axes = 0.5 if lanes == 1 else 0.15 + lane_index * 0.75 / max(1, lanes - 1)
 
-            text_kwargs = self._text_kwargs(cluster.style)
+            enhanced_style = self._enhance_style_by_priority(
+                cluster.style, cluster.max_priority, cluster.category
+            )
+            text_kwargs = self._text_kwargs(enhanced_style)
             bbox = text_kwargs.pop("bbox", None)
             artist = belt_ax.text(
                 cluster.x,
@@ -676,6 +709,58 @@ class EventLabelerV3:
             if px - lane_tail >= width + 8.0:
                 return lane_index
         return len(lane_end_px) - 1
+
+    def _get_category_color(self, category: str | None) -> tuple[float, float, float, float] | None:
+        """Get a consistent color for an event category."""
+        if not category:
+            return None
+
+        # Professional color palette for event categories
+        category_colors = {
+            "stimulus": (0.12, 0.47, 0.71, 1.0),      # Blue
+            "response": (0.84, 0.15, 0.16, 1.0),      # Red
+            "drug": (0.17, 0.63, 0.17, 1.0),          # Green
+            "baseline": (0.50, 0.50, 0.50, 1.0),      # Gray
+            "intervention": (1.00, 0.50, 0.00, 1.0),  # Orange
+            "measurement": (0.58, 0.40, 0.74, 1.0),   # Purple
+            "event": (0.09, 0.75, 0.81, 1.0),         # Cyan
+            "marker": (0.89, 0.47, 0.76, 1.0),        # Pink
+            "warning": (0.74, 0.50, 0.00, 1.0),       # Dark orange
+            "error": (0.65, 0.00, 0.00, 1.0),         # Dark red
+        }
+
+        # Case-insensitive lookup
+        key = str(category).lower().strip()
+        return category_colors.get(key)
+
+    def _enhance_style_by_priority(
+        self,
+        style: dict[str, Any],
+        priority: int,
+        category: str | None = None,
+    ) -> dict[str, Any]:
+        """Enhance text style based on event priority and category."""
+        enhanced = dict(style)
+
+        # Apply category color if available and no custom color is set
+        if category and "color" not in enhanced:
+            cat_color = self._get_category_color(category)
+            if cat_color is not None:
+                enhanced["color"] = cat_color
+
+        # Priority 0 = normal, 1-2 = medium priority, 3+ = high priority
+        if priority >= 3:
+            # High priority: bold and larger
+            enhanced["fontweight"] = "bold"
+            base_size = float(enhanced.get("fontsize", 9.0))
+            enhanced["fontsize"] = base_size * 1.3
+        elif priority >= 1:
+            # Medium priority: semi-bold and slightly larger
+            enhanced["fontweight"] = "semibold"
+            base_size = float(enhanced.get("fontsize", 9.0))
+            enhanced["fontsize"] = base_size * 1.15
+
+        return enhanced
 
     def _font_dict(self, style: dict[str, Any]) -> dict[str, Any]:
         return {

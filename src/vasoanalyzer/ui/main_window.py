@@ -7938,7 +7938,7 @@ QPushButton[isGhost="true"]:hover {{
                     xy=(x, y),
                     xytext=(6, 6),
                     textcoords="offset points",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", lw=1),
+                    bbox=dict(boxstyle="round,pad=0.3", fc="#F8F8F8", ec="#CCCCCC", lw=1),
                     fontsize=8,
                 )
                 self.pinned_points.append((marker, label))

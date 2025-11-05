@@ -75,7 +75,7 @@ class PlotHost:
         self._event_labels_visible: bool = False
         self._event_label_gap_px: int = 22
         self._feature_flags: dict[str, bool] = {
-            "event_labels_v3": is_enabled("event_labels_v3", default=False)
+            "event_labels_v3": is_enabled("event_labels_v3", default=True)
         }
         self._event_helper_v3: EventLabelerV3 | None = None
         self._event_entries_v3: list[EventEntryV3] = []
@@ -85,12 +85,12 @@ class PlotHost:
         self._event_label_lanes: int = 3
         self._belt_baseline_enabled: bool = True
         self._span_event_lines_across_siblings: bool = True
-        self._auto_event_label_mode: bool = False
+        self._auto_event_label_mode: bool = True
         self._density_threshold_compact: float = 0.8
         self._density_threshold_belt: float = 0.25
-        self._label_outline_enabled: bool = False
-        self._label_outline_width: float = 0.0
-        self._label_outline_color: tuple[float, float, float, float] | None = None
+        self._label_outline_enabled: bool = True
+        self._label_outline_width: float = 2.0
+        self._label_outline_color: tuple[float, float, float, float] | None = (1.0, 1.0, 1.0, 0.9)
         self._label_tooltips_enabled: bool = True
         self._tooltip_proximity_px: int = 10
         self._compact_legend_enabled: bool = True
@@ -482,12 +482,12 @@ class PlotHost:
         self._event_label_lanes = 3
         self._belt_baseline_enabled = True
         self._span_event_lines_across_siblings = True
-        self._auto_event_label_mode = False
+        self._auto_event_label_mode = True
         self._density_threshold_compact = 0.8
         self._density_threshold_belt = 0.25
-        self._label_outline_enabled = False
-        self._label_outline_width = 0.0
-        self._label_outline_color = None
+        self._label_outline_enabled = True
+        self._label_outline_width = 2.0
+        self._label_outline_color = (1.0, 1.0, 1.0, 0.9)
         self._label_tooltips_enabled = True
         self._tooltip_proximity_px = 10
         self._compact_legend_enabled = True
@@ -1044,7 +1044,7 @@ class PlotHost:
                     xy=(0, 0),
                     xytext=(10, 10),
                     textcoords="offset points",
-                    bbox=dict(boxstyle="round", fc="w", alpha=0.9),
+                    bbox=dict(boxstyle="round", fc="#F8F8F8", ec="#CCCCCC", lw=1.0, alpha=0.95),
                     zorder=100,
                 )
             hover = self._hover_annot

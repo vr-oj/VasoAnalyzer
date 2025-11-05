@@ -871,11 +871,11 @@ class EventLabeler:
                 bbox_kwargs = dict(bbox)
             else:
                 bbox_kwargs = {
-                    "facecolor": "white",
-                    "edgecolor": "0.7",
-                    "linewidth": 0.8,
-                    "boxstyle": "round,pad=0.3",
-                    "alpha": 0.9,
+                    "facecolor": "#F8F8F8",
+                    "edgecolor": "#CCCCCC",
+                    "linewidth": 1.0,
+                    "boxstyle": "round,pad=0.4",
+                    "alpha": 0.95,
                 }
 
             txt = belt.text(
@@ -1010,11 +1010,11 @@ class EventLabeler:
                 bbox_kwargs = dict(bbox)
             else:
                 bbox_kwargs = {
-                    "facecolor": "white",
-                    "edgecolor": "0.7",
-                    "linewidth": 0.8,
-                    "boxstyle": "round,pad=0.3",
-                    "alpha": 0.9,
+                    "facecolor": "#F8F8F8",
+                    "edgecolor": "#CCCCCC",
+                    "linewidth": 1.0,
+                    "boxstyle": "round,pad=0.4",
+                    "alpha": 0.95,
                 }
 
             txt = host.text(
