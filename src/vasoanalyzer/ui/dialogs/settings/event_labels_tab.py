@@ -101,8 +101,8 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # Two-column grid layout for group boxes
     grid = QGridLayout()
     grid.setSpacing(12)
-    grid.setColumnStretch(0, 1)
-    grid.setColumnStretch(1, 1)
+    grid.setColumnStretch(0, 2)
+    grid.setColumnStretch(1, 3)
 
     # Global Label Style
     defaults_box = QGroupBox("Global Label Style")
@@ -271,10 +271,12 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     event_list.setAlternatingRowColors(True)
     event_list.setSelectionMode(QListWidget.SingleSelection)
     event_list.setMinimumWidth(220)
+    event_list.setMaximumWidth(300)
     # NOTE: signal connects move to wire_event_labels_tab
     overrides_layout.addWidget(event_list, 1)
 
     event_editor = EventLabelEditor(dialog)
+    event_editor.setMinimumWidth(350)
     # NOTE: connects move to wire_event_labels_tab
     overrides_layout.addWidget(event_editor, 2)
 

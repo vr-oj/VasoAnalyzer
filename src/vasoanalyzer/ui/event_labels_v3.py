@@ -461,7 +461,7 @@ class EventLabelerV3:
                 transform=ax.get_xaxis_transform(),
                 ha=text_kwargs.pop("ha", "center"),
                 va=text_kwargs.pop("va", "top"),
-                clip_on=True,
+                clip_on=False,
                 zorder=self.options.z_label,
                 **text_kwargs,
             )

@@ -523,7 +523,7 @@ class EventLabeler:
             alpha = self._meta_float(meta, "alpha", None)
             if alpha is not None:
                 kwargs["alpha"] = max(0.0, min(alpha, 1.0))
-            clip_on = bool(meta.get("clip_on", True))
+            clip_on = bool(meta.get("clip_on", False))
             rotation = meta.get("rotation", 90)
 
             text_value = meta.get("text_override", cluster.text)
@@ -670,7 +670,7 @@ class EventLabeler:
             alpha = self._meta_float(meta, "alpha", None)
             if alpha is not None:
                 kwargs["alpha"] = max(0.0, min(alpha, 1.0))
-            clip_on = bool(meta.get("clip_on", True))
+            clip_on = bool(meta.get("clip_on", False))
             rotation = meta.get("rotation", 0)
 
             txt = host.text(
