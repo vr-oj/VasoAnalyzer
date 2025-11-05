@@ -340,7 +340,7 @@ def populate_event_labels_tab(dialog: DialogT) -> None:
             bool(
                 style.get(
                     "event_labels_v3_enabled",
-                    default_style.get("event_labels_v3_enabled", False),
+                    default_style.get("event_labels_v3_enabled", True),
                 )
             )
         )

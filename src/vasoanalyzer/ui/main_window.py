@@ -7050,12 +7050,8 @@ QPushButton[isGhost="true"]:hover {{
         if plot_host is not None:
             defaults = DEFAULT_STYLE
             try:
-                plot_host.set_event_labels_v3_enabled(
-                    effective_style.get(
-                        "event_labels_v3_enabled",
-                        defaults.get("event_labels_v3_enabled", True),
-                    )
-                )
+                # Always use v3 - force upgrade from old saved settings
+                plot_host.set_event_labels_v3_enabled(True)
                 plot_host.set_max_labels_per_cluster(
                     effective_style.get(
                         "event_label_max_per_cluster",
@@ -7345,7 +7341,7 @@ QPushButton[isGhost="true"]:hover {{
         else:
             style.setdefault(
                 "event_labels_v3_enabled",
-                DEFAULT_STYLE.get("event_labels_v3_enabled", False),
+                DEFAULT_STYLE.get("event_labels_v3_enabled", True),
             )
             style.setdefault(
                 "event_label_max_per_cluster",

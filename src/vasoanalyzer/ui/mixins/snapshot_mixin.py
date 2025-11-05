@@ -808,7 +808,7 @@ class SnapshotMixin:
         else:
             style.setdefault(
                 "event_labels_v3_enabled",
-                DEFAULT_STYLE.get("event_labels_v3_enabled", False),
+                DEFAULT_STYLE.get("event_labels_v3_enabled", True),
             )
             style.setdefault(
                 "event_label_max_per_cluster",
