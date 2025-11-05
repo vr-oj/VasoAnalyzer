@@ -5,26 +5,31 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
-import io
 import hashlib
+import io
 import json
 import logging
 import os
 import string
 import tempfile
-import zipfile
 import time
+import zipfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, cast
 
-import pandas as pd
 import numpy as np
-from vasoanalyzer.io.events import _standardize_headers
+import pandas as pd
+
 from utils.config import APP_VERSION
-from vasoanalyzer.storage import sqlite_store
+from vasoanalyzer.app.flags import is_enabled
+from vasoanalyzer.core.project_context import ProjectContext
+from vasoanalyzer.core.repo_factory import get_repo
+from vasoanalyzer.services.types import ProjectRepository
 
 __all__ = [
     "Project",
@@ -37,6 +42,12 @@ __all__ = [
     "write_project_autosave",
     "restore_project_from_autosave",
     "autosave_path_for",
+    "open_project_ctx",
+    "close_project_ctx",
+    "open_project",
+    "close_project",
+    "convert_project",
+    "ProjectUpgradeRequired",
     "Attachment",
     "export_sample",
     "events_dataframe_from_rows",
@@ -50,18 +61,94 @@ SCHEMA_VERSION = 2
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
 
+class ProjectUpgradeRequired(RuntimeError):
+    """Raised when a legacy project must be converted to the sqlite-v3 format."""
+
+    def __init__(self, path: str, version: int):
+        self.path = path
+        self.version = version
+        super().__init__(
+            f"Project at {path} uses legacy schema version {version}; conversion to sqlite-v3 is required."
+        )
+
+
+def open_project_ctx(path: str, repo: ProjectRepository | None = None) -> ProjectContext:
+    """
+    Open ``path`` and return a :class:`ProjectContext`.
+
+    When ``repo`` is provided it is assumed to be pre-configured; otherwise the
+    default repository factory is used.
+    """
+
+    if repo is not None:
+        repository = repo
+    else:
+        from vasoanalyzer.storage.sqlite_store import LegacyProjectError
+
+        try:
+            repository = get_repo(path)
+        except LegacyProjectError as exc:
+            raise ProjectUpgradeRequired(exc.path.as_posix(), exc.version) from exc
+    open_method = getattr(repository, "open", None)
+    if repo is not None and callable(open_method):
+        open_method(path)
+    meta: dict[str, Any] = {}
+    read_meta = getattr(repository, "read_meta", None)
+    if callable(read_meta):
+        try:
+            meta = dict(read_meta())
+        except Exception:
+            meta = {}
+    return ProjectContext(path=path, repo=repository, meta=meta)
+
+
+def close_project_ctx(ctx: ProjectContext) -> None:
+    """Close a :class:`ProjectContext`."""
+
+    ctx.close()
+
+
+def open_project(path: str, *args, **kwargs) -> ProjectContext:
+    """Backwards compatible project opener returning a context."""
+
+    return open_project_ctx(path, *args, **kwargs)
+
+
+def close_project(obj) -> None:
+    """Backwards compatible close wrapper accepting ProjectContext."""
+
+    if isinstance(obj, ProjectContext):
+        close_project_ctx(obj)
+
+
+def convert_project(path: str) -> ProjectContext:
+    """Convert a legacy project to sqlite-v3 and return an open context."""
+
+    from vasoanalyzer.services.project_service import convert_project_repository
+
+    repo = convert_project_repository(path)
+    meta: dict[str, Any] = {}
+    read_meta = getattr(repo, "read_meta", None)
+    if callable(read_meta):
+        try:
+            meta = dict(read_meta())
+        except Exception:
+            meta = {}
+    return ProjectContext(path=path, repo=repo, meta=meta)
+
+
 @dataclass
 class Attachment:
     """Lightweight descriptor for rich assets stored inside a project."""
 
     name: str
-    filename: Optional[str] = None
-    description: Optional[str] = None
-    media_type: Optional[str] = None
-    source_path: Optional[str] = field(default=None, repr=False, compare=False)
-    data_path: Optional[str] = field(default=None, repr=False, compare=False)
+    filename: str | None = None
+    description: str | None = None
+    media_type: str | None = None
+    source_path: str | None = field(default=None, repr=False, compare=False)
+    data_path: str | None = field(default=None, repr=False, compare=False)
 
-    def to_metadata(self) -> Dict[str, Any]:
+    def to_metadata(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "filename": self.filename,
@@ -70,7 +157,7 @@ class Attachment:
         }
 
     @classmethod
-    def from_metadata(cls, data: Dict[str, Any]) -> "Attachment":
+    def from_metadata(cls, data: dict[str, Any]) -> Attachment:
         return cls(
             name=data.get("name", ""),
             filename=data.get("filename", ""),
@@ -82,34 +169,34 @@ class Attachment:
 @dataclass
 class SampleN:
     name: str
-    trace_path: Optional[str] = None
-    events_path: Optional[str] = None
-    trace_relative: Optional[str] = None
-    events_relative: Optional[str] = None
-    trace_hint: Optional[str] = None
-    events_hint: Optional[str] = None
-    trace_signature: Optional[str] = None
-    events_signature: Optional[str] = None
-    snapshot_path: Optional[str] = None
-    diameter_data: Optional[List[float]] = None
+    trace_path: str | None = None
+    events_path: str | None = None
+    trace_relative: str | None = None
+    events_relative: str | None = None
+    trace_hint: str | None = None
+    events_hint: str | None = None
+    trace_signature: str | None = None
+    events_signature: str | None = None
+    snapshot_path: str | None = None
+    diameter_data: list[float] | None = None
     exported: bool = False
-    column: Optional[str] = None
-    trace_data: Optional[pd.DataFrame] = None
-    events_data: Optional[pd.DataFrame] = None
-    ui_state: Optional[dict] = None
-    snapshots: Optional[np.ndarray] = None
-    notes: Optional[str] = None
-    analysis_results: Optional[Dict[str, Any]] = None
-    figure_configs: Optional[Dict[str, Any]] = None
-    attachments: List[Attachment] = field(default_factory=list)
-    dataset_id: Optional[int] = None
-    asset_roles: Dict[str, int] = field(default_factory=dict)
-    snapshot_role: Optional[str] = None
-    snapshot_tiff_role: Optional[str] = None
-    snapshot_format: Optional[str] = None
-    analysis_result_keys: Optional[List[str]] = None
+    column: str | None = None
+    trace_data: pd.DataFrame | None = None
+    events_data: pd.DataFrame | None = None
+    ui_state: dict | None = None
+    snapshots: np.ndarray | None = None
+    notes: str | None = None
+    analysis_results: dict[str, Any] | None = None
+    figure_configs: dict[str, Any] | None = None
+    attachments: list[Attachment] = field(default_factory=list)
+    dataset_id: int | None = None
+    asset_roles: dict[str, int] = field(default_factory=dict)
+    snapshot_role: str | None = None
+    snapshot_tiff_role: str | None = None
+    snapshot_format: str | None = None
+    analysis_result_keys: list[str] | None = None
 
-    def copy(self) -> "SampleN":
+    def copy(self) -> SampleN:
         """Return a deep copy of this sample."""
         attachments_copy = [
             Attachment(
@@ -154,8 +241,7 @@ class SampleN:
             snapshot_role=self.snapshot_role,
             snapshot_tiff_role=self.snapshot_tiff_role,
             snapshot_format=self.snapshot_format,
-            analysis_result_keys=
-            (
+            analysis_result_keys=(
                 list(self.analysis_result_keys)
                 if isinstance(self.analysis_result_keys, list)
                 else self.analysis_result_keys
@@ -166,28 +252,28 @@ class SampleN:
 @dataclass
 class Experiment:
     name: str
-    excel_path: Optional[str] = None
+    excel_path: str | None = None
     next_column: str = "B"
-    samples: List[SampleN] = field(default_factory=list)
-    style: Optional[dict] = None
-    notes: Optional[str] = None
-    tags: List[str] = field(default_factory=list)
+    samples: list[SampleN] = field(default_factory=list)
+    style: dict | None = None
+    notes: str | None = None
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Project:
     name: str
-    experiments: List[Experiment] = field(default_factory=list)
-    path: Optional[str] = None
-    ui_state: Optional[dict] = None
-    resources: "ProjectResources" = field(
+    experiments: list[Experiment] = field(default_factory=list)
+    path: str | None = None
+    ui_state: dict | None = None
+    resources: ProjectResources = field(
         default_factory=lambda: ProjectResources(), repr=False, compare=False
     )
-    description: Optional[str] = None
-    tags: List[str] = field(default_factory=list)
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-    attachments: List[Attachment] = field(default_factory=list)
+    description: str | None = None
+    tags: list[str] = field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+    attachments: list[Attachment] = field(default_factory=list)
 
     # --------------------------------------------------
     def close(self) -> None:
@@ -204,7 +290,7 @@ class Project:
             self.resources.add_closer(closer)
 
     # --------------------------------------------------
-    def __enter__(self) -> "Project":
+    def __enter__(self) -> Project:
         return self
 
     # --------------------------------------------------
@@ -223,12 +309,12 @@ class Project:
 class ProjectResources:
     """Container for temporary resources tied to a :class:`Project`."""
 
-    tempdir_manager: Optional["tempfile.TemporaryDirectory[str]"] = None
-    tempdir_path: Optional[str] = None
-    closers: List[Callable[[], None]] = field(default_factory=list)
+    tempdir_manager: tempfile.TemporaryDirectory[str] | None = None
+    tempdir_path: str | None = None
+    closers: list[Callable[[], None]] = field(default_factory=list)
 
     # --------------------------------------------------
-    def register_tempdir(self, manager, path: Optional[str]) -> None:
+    def register_tempdir(self, manager, path: str | None) -> None:
         self.tempdir_manager = manager
         self.tempdir_path = path
 
@@ -270,7 +356,7 @@ def _hash_file(path: str) -> str:
     return h.hexdigest()
 
 
-def _add_file(z: "zipfile.ZipFile", full: str, rel: str) -> None:
+def _add_file(z: zipfile.ZipFile, full: str, rel: str) -> None:
     """Add file at ``full`` to ``z`` as ``rel`` with deterministic metadata."""
     info = zipfile.ZipInfo(rel)
     info.date_time = FIXED_ZIP_TIME
@@ -280,7 +366,7 @@ def _add_file(z: "zipfile.ZipFile", full: str, rel: str) -> None:
         z.writestr(info, f.read())
 
 
-def _safe_extractall(z: "zipfile.ZipFile", path: str) -> None:
+def _safe_extractall(z: zipfile.ZipFile, path: str) -> None:
     """Extract ``z`` into ``path`` ensuring no member escapes ``path``."""
     base = os.path.abspath(path)
     for member in z.namelist():
@@ -290,10 +376,10 @@ def _safe_extractall(z: "zipfile.ZipFile", path: str) -> None:
     z.extractall(path)
 
 
-def _serialize_analysis_results(results: Dict[str, Any]) -> Dict[str, Any]:
+def _serialize_analysis_results(results: dict[str, Any]) -> dict[str, Any]:
     """Return a JSON-serialisable representation of ``results``."""
 
-    serialised: Dict[str, Any] = {}
+    serialised: dict[str, Any] = {}
     for name, value in results.items():
         if isinstance(value, pd.DataFrame):
             serialised[name] = {
@@ -305,10 +391,10 @@ def _serialize_analysis_results(results: Dict[str, Any]) -> Dict[str, Any]:
     return serialised
 
 
-def _deserialize_analysis_results(data: Dict[str, Any]) -> Dict[str, Any]:
+def _deserialize_analysis_results(data: dict[str, Any]) -> dict[str, Any]:
     """Reconstruct analysis results from a JSON payload."""
 
-    restored: Dict[str, Any] = {}
+    restored: dict[str, Any] = {}
     for name, value in data.items():
         if isinstance(value, dict) and value.get("__type__") == "dataframe":
             payload = value.get("value", {})
@@ -325,7 +411,7 @@ def _deserialize_analysis_results(data: Dict[str, Any]) -> Dict[str, Any]:
 # JSON I/O --------------------------------------------------------------
 
 
-def _normalise_path_value(value: Optional[str | os.PathLike[str] | Path]) -> Optional[str]:
+def _normalise_path_value(value: str | os.PathLike[str] | Path | None) -> str | None:
     if value is None:
         return None
     if isinstance(value, Path):
@@ -336,7 +422,7 @@ def _normalise_path_value(value: Optional[str | os.PathLike[str] | Path]) -> Opt
         return str(value)
 
 
-def _path_signature(path: Optional[Path]) -> Optional[str]:
+def _path_signature(path: Path | None) -> str | None:
     if path is None:
         return None
     try:
@@ -348,12 +434,12 @@ def _path_signature(path: Optional[Path]) -> Optional[str]:
 
 def _sample_link_payload(
     *,
-    path_value: Optional[str | os.PathLike[str] | Path],
-    relative_hint: Optional[str | os.PathLike[str] | Path],
-    absolute_hint: Optional[str | os.PathLike[str] | Path],
-    base_dir: Optional[Path],
-    signature_hint: Optional[str] = None,
-) -> Optional[dict[str, str]]:
+    path_value: str | os.PathLike[str] | Path | None,
+    relative_hint: str | os.PathLike[str] | Path | None,
+    absolute_hint: str | os.PathLike[str] | Path | None,
+    base_dir: Path | None,
+    signature_hint: str | None = None,
+) -> dict[str, str] | None:
     path_str = _normalise_path_value(path_value)
     relative_str = _normalise_path_value(relative_hint)
     absolute_str = _normalise_path_value(absolute_hint)
@@ -376,16 +462,18 @@ def _sample_link_payload(
     candidate_paths: list[Path] = []
     if path_str:
         if base_dir is not None:
-            candidate_paths.append(_absolute_path(path_str, base_dir))
+            candidate = _absolute_path(path_str, base_dir)
+            if candidate is not None:
+                candidate_paths.append(candidate)
         else:
             candidate_paths.append(Path(path_str).expanduser().resolve(strict=False))
     if "relative" in payload and base_dir is not None:
-        candidate_paths.append(_absolute_path(payload["relative"], base_dir))
+        relative_candidate = _absolute_path(payload["relative"], base_dir)
+        if relative_candidate is not None:
+            candidate_paths.append(relative_candidate)
     if "hint" in payload:
-        try:
+        with contextlib.suppress(Exception):
             candidate_paths.append(Path(payload["hint"]).expanduser().resolve(strict=False))
-        except Exception:
-            pass
 
     if not signature:
         for candidate in candidate_paths:
@@ -402,10 +490,10 @@ def _sample_link_payload(
 
 
 def _resolve_linked_path(
-    path_entry: Optional[str],
-    link_meta: Optional[dict[str, Any]],
+    path_entry: str | None,
+    link_meta: dict[str, Any] | None,
     base_dir: Path,
-) -> Optional[str]:
+) -> str | None:
     candidates: list[Path] = []
     entry_str = _normalise_path_value(path_entry)
     if entry_str:
@@ -438,8 +526,8 @@ def _resolve_linked_path(
 def _populate_link_metadata(
     sample: SampleN,
     prefix: str,
-    path_value: Optional[str],
-    link_meta: Optional[dict[str, Any]],
+    path_value: str | None,
+    link_meta: dict[str, Any] | None,
     base_dir: Path,
 ) -> None:
     path_attr = f"{prefix}_path"
@@ -555,7 +643,7 @@ def project_to_dict(project: Project, manifest: dict | None = None) -> dict:
     """Return ``project`` serialized to a dictionary."""
     base_dir = os.path.dirname(project.path) if project.path else None
 
-    proj_dict = {
+    proj_dict: dict[str, Any] = {
         "name": project.name,
         "path": project.path,
         "experiments": [],
@@ -577,9 +665,11 @@ def project_to_dict(project: Project, manifest: dict | None = None) -> dict:
         proj_dict["manifest"] = manifest
 
     for exp in project.experiments:
-        exp_dict = {
+        exp_dict: dict[str, Any] = {
             "name": exp.name,
-            "excel_path": os.path.relpath(exp.excel_path, base_dir) if base_dir and exp.excel_path else exp.excel_path,
+            "excel_path": os.path.relpath(exp.excel_path, base_dir)
+            if base_dir and exp.excel_path
+            else exp.excel_path,
             "next_column": exp.next_column,
             "samples": [sample_to_dict(s, base_dir) for s in exp.samples],
         }
@@ -589,7 +679,8 @@ def project_to_dict(project: Project, manifest: dict | None = None) -> dict:
             exp_dict["notes"] = exp.notes
         if exp.tags:
             exp_dict["tags"] = list(exp.tags)
-        proj_dict["experiments"].append(exp_dict)
+        experiments_list = cast(list[dict[str, Any]], proj_dict["experiments"])
+        experiments_list.append(exp_dict)
 
     return proj_dict
 
@@ -728,15 +819,15 @@ def project_from_dict(data: dict) -> Project:
     )
 
 
-
 def _save_project_legacy_zip(project: Project, path: str) -> None:
     """Save ``project`` to ``path`` as a zipped .vaso archive."""
     import shutil
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         manifest: dict[str, str] = {}
 
-        def _attachment_source(att: Attachment) -> Optional[str]:
+        def _attachment_source(att: Attachment) -> str | None:
             for candidate in (att.source_path, att.data_path):
                 if candidate and os.path.exists(candidate):
                     return candidate
@@ -768,7 +859,7 @@ def _save_project_legacy_zip(project: Project, path: str) -> None:
             return candidate
 
         def _embed_attachments(
-            attachments: List[Attachment],
+            attachments: list[Attachment],
             dest_dir: str,
             fallback: str,
             used: set[str],
@@ -776,7 +867,9 @@ def _save_project_legacy_zip(project: Project, path: str) -> None:
             for att in attachments:
                 source = _attachment_source(att)
                 if source is None:
-                    log.warning("Skipping attachment %s; source unavailable", att.name or att.filename)
+                    log.warning(
+                        "Skipping attachment %s; source unavailable", att.name or att.filename
+                    )
                     continue
                 filename = _determine_filename(att, fallback, used)
                 os.makedirs(dest_dir, exist_ok=True)
@@ -805,9 +898,7 @@ def _save_project_legacy_zip(project: Project, path: str) -> None:
                 events_df_to_save = sample.events_data
 
                 if isinstance(sample.ui_state, dict):
-                    ui_rows = normalize_event_table_rows(
-                        sample.ui_state.get("event_table_data")
-                    )
+                    ui_rows = normalize_event_table_rows(sample.ui_state.get("event_table_data"))
                     if ui_rows:
                         events_from_state = events_dataframe_from_rows(ui_rows)
                         if events_from_state is not None:
@@ -849,7 +940,9 @@ def _save_project_legacy_zip(project: Project, path: str) -> None:
                 used=set(),
             )
 
-        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        now_iso = (
+            datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        )
         if not project.created_at:
             project.created_at = now_iso
         project.updated_at = now_iso
@@ -870,6 +963,7 @@ def _save_project_legacy_zip(project: Project, path: str) -> None:
             shutil.copy2(path, f"{path}.bak")
         os.replace(tmp_zip, path)
 
+
 def _load_project_legacy_zip(path: str) -> Project:
     """Load a zipped ``.vaso`` project, falling back to ``.bak`` if needed."""
     import os
@@ -884,7 +978,7 @@ def _load_project_legacy_zip(path: str) -> Project:
                 _safe_extractall(z, tmpdir)
                 meta_path = os.path.join(tmpdir, "metadata.json")
                 if os.path.exists(meta_path):
-                    with open(meta_path, "r", encoding="utf-8") as f:
+                    with open(meta_path, encoding="utf-8") as f:
                         data = json.load(f)
                     manifest = data.get("manifest", {})
                     for rel, checksum in manifest.items():
@@ -912,6 +1006,7 @@ def _load_project_legacy_zip(path: str) -> Project:
                             if os.path.exists(snap_path) and sample.snapshots is None:
                                 try:
                                     import tifffile
+
                                     sample.snapshots = tifffile.imread(snap_path)
                                 except Exception:
                                     npy = snap_path + ".npy"
@@ -928,9 +1023,13 @@ def _load_project_legacy_zip(path: str) -> Project:
                                         att.data_path = candidate
 
                             if sample.trace_path and not os.path.isabs(sample.trace_path):
-                                sample.trace_path = os.path.normpath(os.path.join(base_dir, sample.trace_path))
+                                sample.trace_path = os.path.normpath(
+                                    os.path.join(base_dir, sample.trace_path)
+                                )
                             if sample.events_path and not os.path.isabs(sample.events_path):
-                                sample.events_path = os.path.normpath(os.path.join(base_dir, sample.events_path))
+                                sample.events_path = os.path.normpath(
+                                    os.path.join(base_dir, sample.events_path)
+                                )
                             if (
                                 isinstance(sample.ui_state, dict)
                                 and "event_table_data" in sample.ui_state
@@ -959,11 +1058,13 @@ def _load_project_legacy_zip(path: str) -> Project:
                     manifest_file = os.path.join(tmpdir, "manifest.json")
                     state_file = os.path.join(tmpdir, "state.json")
                     if not (os.path.exists(manifest_file) and os.path.exists(state_file)):
-                        raise FileNotFoundError("metadata.json not found and archive lacks manifest.json/state.json")
+                        raise FileNotFoundError(
+                            "metadata.json not found and archive lacks manifest.json/state.json"
+                        )
 
-                    with open(manifest_file, "r", encoding="utf-8") as f:
+                    with open(manifest_file, encoding="utf-8") as f:
                         manifest = json.load(f)
-                    with open(state_file, "r", encoding="utf-8") as f:
+                    with open(state_file, encoding="utf-8") as f:
                         state = json.load(f)
 
                     project_state = state.get("project_ui", state)
@@ -981,10 +1082,15 @@ def _load_project_legacy_zip(path: str) -> Project:
                                 events_user_df = pd.read_csv(path_evt_user)
 
                         snapshots = None
-                        tiff = os.path.join(tmpdir, meta["tiff_file"]) if meta.get("tiff_file") else None
+                        tiff = (
+                            os.path.join(tmpdir, meta["tiff_file"])
+                            if meta.get("tiff_file")
+                            else None
+                        )
                         if tiff and os.path.exists(tiff):
                             try:
                                 import tifffile
+
                                 snapshots = tifffile.imread(tiff)
                             except Exception:
                                 pass
@@ -1080,19 +1186,39 @@ def _write_sqlite_project(
 
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    from vasoanalyzer.services.project_service import create_project_repository
+
     with tempfile.TemporaryDirectory(dir=dest.parent) as tmpdir:
         tmp_path = Path(tmpdir) / dest.name
-        store = sqlite_store.create_project(tmp_path, app_version=APP_VERSION, timezone=timezone_name)
+        repo = create_project_repository(
+            tmp_path.as_posix(),
+            app_version=APP_VERSION,
+            timezone=timezone_name,
+        )
         try:
-            _populate_store_from_project(project, store, base_dir)
-            sqlite_store.save_project(store)
+            _populate_store_from_project(project, repo, base_dir)
+            repo.save()
         finally:
-            store.close()
+            repo.close()
 
         os.replace(tmp_path, dest)
 
+    if is_enabled("pkg_save", default=False):
+        try:
+            from vasoanalyzer.pkg.exporter import export_project_to_package
 
-def _populate_store_from_project(project: Project, store: sqlite_store.ProjectStore, base_dir: Path) -> None:
+            package_path = dest.parent / f"{dest.stem}.pkg.vaso"
+            export_project_to_package(
+                project,
+                package_path,
+                base_dir=base_dir,
+                timezone=timezone_name,
+            )
+        except Exception:  # pragma: no cover - best effort sidecar export
+            log.debug("Failed to export pkg.vaso sidecar", exc_info=True)
+
+
+def _populate_store_from_project(project: Project, repo: ProjectRepository, base_dir: Path) -> None:
     """Populate ``store`` with the contents of ``project``."""
 
     base_dir = base_dir.resolve()
@@ -1108,7 +1234,9 @@ def _populate_store_from_project(project: Project, store: sqlite_store.ProjectSt
     if project.tags:
         meta_entries.append(("project_tags", _json_dumps(project.tags)))
     if project.ui_state is not None:
-        meta_entries.append(("project_ui_state", _json_dumps(_normalise_json_data(project.ui_state))))
+        meta_entries.append(
+            ("project_ui_state", _json_dumps(_normalise_json_data(project.ui_state)))
+        )
     if project.path:
         meta_entries.append(("project_path", project.path))
 
@@ -1123,55 +1251,54 @@ def _populate_store_from_project(project: Project, store: sqlite_store.ProjectSt
         }
     meta_entries.append(("experiments_meta", _json_dumps(experiments_payload)))
 
-    store.conn.executemany(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-        meta_entries,
-    )
+    repo.write_meta(dict(meta_entries))
 
-    source_store: Optional[sqlite_store.ProjectStore] = None
-    source_path = None
+    source_ctx: ProjectContext | None = None
+    source_repo: ProjectRepository | None = None
     if project.path:
         try:
-            source_path = Path(project.path).expanduser().resolve(strict=False)
+            candidate = Path(project.path).expanduser().resolve(strict=False)
         except Exception:
-            source_path = Path(project.path)
-    if source_path and source_path.exists():
-        try:
-            source_store = sqlite_store.open_project(source_path)
-        except Exception:
-            source_store = None
+            candidate = Path(project.path)
+        if candidate.exists():
+            try:
+                source_ctx = open_project_ctx(candidate.as_posix())
+                source_repo = source_ctx.repo
+            except Exception:
+                source_ctx = None
+                source_repo = None
 
     try:
-        for exp_index, exp in enumerate(project.experiments):
+        for _exp_index, exp in enumerate(project.experiments):
             for sample_index, sample in enumerate(exp.samples):
                 _save_sample_to_store(
-                    store=store,
+                    repo=repo,
                     base_dir=base_dir,
                     experiment=exp,
                     sample=sample,
                     sample_index=sample_index,
-                    source_store=source_store,
+                    source_repo=source_repo,
                 )
 
         if project.attachments:
-            _store_project_attachments(store, project.attachments, base_dir)
+            _store_project_attachments(repo, project.attachments, base_dir)
     finally:
-        if source_store is not None:
-            source_store.close()
+        if source_ctx is not None:
+            close_project_ctx(source_ctx)
 
 
 def _save_sample_to_store(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     base_dir: Path,
     experiment: Experiment,
     sample: SampleN,
     sample_index: int,
-    source_store: sqlite_store.ProjectStore | None = None,
+    source_repo: ProjectRepository | None = None,
 ) -> None:
     """Serialize an individual ``sample`` into ``store``."""
 
-    trace_df = _resolve_trace_dataframe(sample, base_dir, source_store)
-    events_df = _resolve_events_dataframe(sample, base_dir, source_store)
+    trace_df = _resolve_trace_dataframe(sample, base_dir, source_repo)
+    events_df = _resolve_events_dataframe(sample, base_dir, source_repo)
 
     extra = _build_sample_extra(experiment, sample, base_dir)
     metadata = {
@@ -1179,8 +1306,7 @@ def _save_sample_to_store(
         "extra_json": extra,
     }
 
-    dataset_id = sqlite_store.add_dataset(
-        store,
+    dataset_id = repo.add_dataset(
         sample.name or f"Sample {sample_index + 1}",
         trace_df,
         events_df,
@@ -1188,15 +1314,15 @@ def _save_sample_to_store(
     )
     sample.dataset_id = dataset_id
 
-    attachments_payload = _persist_sample_attachments(store, dataset_id, sample, base_dir)
+    attachments_payload = _persist_sample_attachments(repo, dataset_id, sample, base_dir)
     snapshot_info = _persist_sample_snapshots(
-        store,
+        repo,
         dataset_id,
         sample,
         base_dir,
-        source_store=source_store,
+        source_repo=source_repo,
     )
-    analysis_keys = _persist_sample_results(store, dataset_id, sample)
+    analysis_keys = _persist_sample_results(repo, dataset_id, sample)
 
     if attachments_payload:
         extra["attachments"] = attachments_payload
@@ -1208,16 +1334,16 @@ def _save_sample_to_store(
     else:
         extra.pop("analysis_result_keys", None)
 
-    assets = sqlite_store.list_assets(store, dataset_id)
+    assets = repo.list_assets(dataset_id)
     sample.asset_roles = {asset["role"]: asset["id"] for asset in assets if asset.get("role")}
 
-    sqlite_store.update_dataset_meta(store, dataset_id, extra_json=extra)
+    repo.update_dataset_meta(dataset_id, extra_json=extra)
 
 
 def _resolve_trace_dataframe(
     sample: SampleN,
     base_dir: Path,
-    source_store: sqlite_store.ProjectStore | None = None,
+    source_repo: ProjectRepository | None = None,
 ) -> pd.DataFrame:
     if isinstance(sample.trace_data, pd.DataFrame):
         return sample.trace_data
@@ -1228,22 +1354,24 @@ def _resolve_trace_dataframe(
                 return pd.read_csv(path)
             except Exception:
                 log.debug("Failed to reload trace CSV from %s", path, exc_info=True)
-    if source_store is not None and sample.dataset_id is not None:
-        try:
-            return sqlite_store.get_trace(source_store, sample.dataset_id)
-        except Exception:
-            log.debug(
-                "Failed to copy trace data from source store for dataset %s",
-                sample.dataset_id,
-                exc_info=True,
-            )
+    if source_repo is not None and sample.dataset_id is not None:
+        get_trace = getattr(source_repo, "get_trace", None)
+        if callable(get_trace):
+            try:
+                return cast(pd.DataFrame, get_trace(sample.dataset_id))
+            except Exception:
+                log.debug(
+                    "Failed to copy trace data from source repo for dataset %s",
+                    sample.dataset_id,
+                    exc_info=True,
+                )
     return pd.DataFrame()
 
 
 def _resolve_events_dataframe(
     sample: SampleN,
     base_dir: Path,
-    source_store: sqlite_store.ProjectStore | None = None,
+    source_repo: ProjectRepository | None = None,
 ) -> pd.DataFrame | None:
     if isinstance(sample.events_data, pd.DataFrame):
         return sample.events_data
@@ -1254,15 +1382,17 @@ def _resolve_events_dataframe(
                 return pd.read_csv(path)
             except Exception:
                 log.debug("Failed to reload events CSV from %s", path, exc_info=True)
-    if source_store is not None and sample.dataset_id is not None:
-        try:
-            return sqlite_store.get_events(source_store, sample.dataset_id)
-        except Exception:
-            log.debug(
-                "Failed to copy events data from source store for dataset %s",
-                sample.dataset_id,
-                exc_info=True,
-            )
+    if source_repo is not None and sample.dataset_id is not None:
+        get_events = getattr(source_repo, "get_events", None)
+        if callable(get_events):
+            try:
+                return cast(pd.DataFrame, get_events(sample.dataset_id))
+            except Exception:
+                log.debug(
+                    "Failed to copy events data from source repo for dataset %s",
+                    sample.dataset_id,
+                    exc_info=True,
+                )
     return None
 
 
@@ -1283,7 +1413,9 @@ def _build_sample_extra(experiment: Experiment, sample: SampleN, base_dir: Path)
     )
     payload: dict[str, Any] = {
         "experiment": experiment.name,
-        "experiment_index": experiment.samples.index(sample) if sample in experiment.samples else None,
+        "experiment_index": experiment.samples.index(sample)
+        if sample in experiment.samples
+        else None,
         "exported": sample.exported,
         "column": sample.column,
         "trace_path": _relativize_path(sample.trace_path, base_dir),
@@ -1296,11 +1428,11 @@ def _build_sample_extra(experiment: Experiment, sample: SampleN, base_dir: Path)
         payload["trace_link"] = trace_link
     if events_link:
         payload["events_link"] = events_link
-    return _normalise_json_data(payload)
+    return cast(dict[str, Any], _normalise_json_data(payload))
 
 
 def _persist_sample_attachments(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset_id: int,
     sample: SampleN,
     base_dir: Path,
@@ -1312,18 +1444,17 @@ def _persist_sample_attachments(
         meta["asset_role"] = role
         meta["source_path"] = _relativize_path(att.source_path, base_dir)
         meta["data_path"] = _relativize_path(att.data_path, base_dir)
-        payload.append(_normalise_json_data(meta))
+        payload.append(cast(dict[str, Any], _normalise_json_data(meta)))
 
         source = att.source_path or att.data_path
         path = _absolute_path(source, base_dir) if source else None
         if path and path.exists():
             try:
                 data = path.read_bytes()
-                sqlite_store.add_or_update_asset(
-                    store,
+                repo.add_or_update_asset(
                     dataset_id,
-                    role=role,
-                    path_or_bytes=data,
+                    role,
+                    data,
                     embed=True,
                     mime=None,
                 )
@@ -1333,16 +1464,16 @@ def _persist_sample_attachments(
 
 
 def _persist_sample_snapshots(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset_id: int,
     sample: SampleN,
     base_dir: Path,
-    source_store: sqlite_store.ProjectStore | None = None,
+    source_repo: ProjectRepository | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {}
 
     snapshot_role = sample.snapshot_role or "snapshot_stack"
-    snapshot_bytes: Optional[bytes] = None
+    snapshot_bytes: bytes | None = None
     snapshot_format = (sample.snapshot_format or "").lower() or "npz"
     snapshot_mime = "application/x-npz"
 
@@ -1352,14 +1483,17 @@ def _persist_sample_snapshots(
         snapshot_bytes = buffer.getvalue()
         snapshot_format = "npz"
         snapshot_mime = "application/x-npz"
-    elif source_store is not None and sample.dataset_id is not None:
+    elif source_repo is not None and sample.dataset_id is not None:
         asset_roles = sample.asset_roles or {}
         asset_id = asset_roles.get(snapshot_role)
         if asset_id:
-            try:
-                existing = sqlite_store.get_asset_bytes(source_store, asset_id)
-            except Exception:
-                existing = None
+            existing = None
+            get_asset_bytes = getattr(source_repo, "get_asset_bytes", None)
+            if callable(get_asset_bytes):
+                try:
+                    existing = cast(bytes, get_asset_bytes(asset_id))
+                except Exception:
+                    existing = None
             if existing:
                 snapshot_bytes = existing
                 if existing.startswith(b"PK"):
@@ -1377,11 +1511,10 @@ def _persist_sample_snapshots(
                     )
 
     if snapshot_bytes:
-        sqlite_store.add_or_update_asset(
-            store,
+        repo.add_or_update_asset(
             dataset_id,
-            role=snapshot_role,
-            path_or_bytes=snapshot_bytes,
+            snapshot_role,
+            snapshot_bytes,
             embed=True,
             mime=snapshot_mime,
         )
@@ -1397,13 +1530,13 @@ def _persist_sample_snapshots(
         payload["snapshot_path"] = rel_path
         if abs_path and abs_path.exists():
             try:
-                sqlite_store.add_or_update_asset(
-                    store,
+                repo.add_or_update_asset(
                     dataset_id,
-                    role="snapshot_tiff",
-                    path_or_bytes=abs_path,
-                    embed=False,
+                    "snapshot_tiff",
+                    abs_path,
+                    embed=True,
                     mime="image/tiff",
+                    note="snapshot-tiff",
                 )
                 payload["snapshot_tiff_role"] = "snapshot_tiff"
                 sample.snapshot_tiff_role = "snapshot_tiff"
@@ -1413,7 +1546,7 @@ def _persist_sample_snapshots(
 
 
 def _persist_sample_results(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset_id: int,
     sample: SampleN,
 ) -> list[str]:
@@ -1422,8 +1555,7 @@ def _persist_sample_results(
     serialized = _serialize_analysis_results(sample.analysis_results)
     keys: list[str] = []
     for kind, payload in serialized.items():
-        sqlite_store.add_result(
-            store,
+        repo.add_result(
             dataset_id,
             kind=kind,
             version=APP_VERSION,
@@ -1434,17 +1566,16 @@ def _persist_sample_results(
 
 
 def _store_project_attachments(
-    store: sqlite_store.ProjectStore,
-    attachments: List[Attachment],
+    repo: ProjectRepository,
+    attachments: list[Attachment],
     base_dir: Path,
 ) -> None:
     base_dir = base_dir.resolve()
     metadata = {"extra_json": {"kind": "project_attachments"}}
-    dataset_id = sqlite_store.add_dataset(
-        store,
-        name="__project_attachments__",
-        trace_df=pd.DataFrame(),
-        events_df=None,
+    dataset_id = repo.add_dataset(
+        "__project_attachments__",
+        pd.DataFrame(),
+        None,
         metadata=metadata,
     )
     payload: list[dict[str, Any]] = []
@@ -1454,18 +1585,17 @@ def _store_project_attachments(
         meta["asset_role"] = role
         meta["source_path"] = _relativize_path(att.source_path, base_dir)
         meta["data_path"] = _relativize_path(att.data_path, base_dir)
-        payload.append(_normalise_json_data(meta))
+        payload.append(cast(dict[str, Any], _normalise_json_data(meta)))
 
         source = att.source_path or att.data_path
         path = _absolute_path(source, base_dir) if source else None
         if path and path.exists():
             try:
                 data = path.read_bytes()
-                sqlite_store.add_or_update_asset(
-                    store,
+                repo.add_or_update_asset(
                     dataset_id,
-                    role=role,
-                    path_or_bytes=data,
+                    role,
+                    data,
                     embed=True,
                     mime=None,
                 )
@@ -1473,15 +1603,16 @@ def _store_project_attachments(
                 log.debug("Failed to embed project attachment %s", path, exc_info=True)
 
     extra = {"kind": "project_attachments", "attachments": payload}
-    sqlite_store.update_dataset_meta(store, dataset_id, extra_json=extra)
+    repo.update_dataset_meta(dataset_id, extra_json=extra)
 
 
 def _load_project_sqlite(path: str) -> Project:
     """Load a SQLite project file into memory."""
 
-    store = sqlite_store.open_project(path)
+    ctx = open_project_ctx(path)
+    repo = ctx.repo
     try:
-        meta_rows = dict(store.conn.execute("SELECT key, value FROM meta"))
+        meta_rows = repo.read_meta()
         experiments_meta = _json_loads(meta_rows.get("experiments_meta"), default={})
 
         project_name = meta_rows.get("project_name") or Path(path).stem
@@ -1496,19 +1627,19 @@ def _load_project_sqlite(path: str) -> Project:
         tmp_root = Path(tmp_manager.name)
 
         experiments_map: dict[str, Experiment] = {}
-        project_attachments: List[Attachment] = []
+        project_attachments: list[Attachment] = []
 
-        for record in sqlite_store.iter_datasets(store):
+        for record in repo.iter_datasets():
             dataset_id = record["id"]
             extra = record.get("extra") or {}
             if extra.get("kind") == "project_attachments":
                 project_attachments.extend(
-                    _load_project_attachments(store, dataset_id, extra, tmp_root, base_dir)
+                    _load_project_attachments(repo, dataset_id, extra, tmp_root, base_dir)
                 )
                 continue
 
             sample, experiment_name = _dataset_to_sample(
-                store=store,
+                repo=repo,
                 dataset=record,
                 base_dir=base_dir,
                 tmp_root=tmp_root,
@@ -1517,14 +1648,22 @@ def _load_project_sqlite(path: str) -> Project:
             exp_meta = experiments_meta.get(experiment_name, {})
             experiment = experiments_map.get(experiment_name)
             if experiment is None:
+                excel_meta = exp_meta.get("excel_path")
+                excel_path_value: str | None = None
+                if isinstance(excel_meta, str):
+                    absolute_excel = _absolute_path(excel_meta, base_dir)
+                    excel_path_value = absolute_excel.as_posix() if absolute_excel else excel_meta
+
                 experiment = Experiment(
                     name=experiment_name,
-                    excel_path=_absolute_path(exp_meta.get("excel_path"), base_dir),
+                    excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
                     style=exp_meta.get("style"),
                     notes=exp_meta.get("notes"),
-                    tags=list(exp_meta.get("tags", [])) if isinstance(exp_meta.get("tags"), list) else [],
+                    tags=list(exp_meta.get("tags", []))
+                    if isinstance(exp_meta.get("tags"), list)
+                    else [],
                 )
                 experiments_map[experiment_name] = experiment
 
@@ -1542,10 +1681,10 @@ def _load_project_sqlite(path: str) -> Project:
             attachments=project_attachments,
         )
 
-        project.resources.register_tempdir(tmp_manager, tmp_manager.name)
+        project.resources.register_tempdir(tmp_manager, tmp_root.as_posix())
         return project
     finally:
-        store.close()
+        close_project_ctx(ctx)
 
 
 def autosave_path_for(project_path: str | Path) -> Path:
@@ -1553,7 +1692,7 @@ def autosave_path_for(project_path: str | Path) -> Path:
     return path.with_suffix(path.suffix + ".autosave")
 
 
-def write_project_autosave(project: Project, autosave_path: Optional[str] = None) -> str:
+def write_project_autosave(project: Project, autosave_path: str | None = None) -> str:
     """Write an autosave snapshot for ``project`` and return its path."""
 
     if not project.path:
@@ -1583,7 +1722,7 @@ def write_project_autosave(project: Project, autosave_path: Optional[str] = None
 
 def restore_project_from_autosave(
     autosave_path: str | Path,
-    project_path: Optional[str] = None,
+    project_path: str | None = None,
 ) -> Project:
     """Restore ``autosave_path`` to ``project_path`` and load the project."""
 
@@ -1591,9 +1730,11 @@ def restore_project_from_autosave(
     if not autosave_path.exists():
         raise FileNotFoundError(autosave_path)
     if project_path is None:
-        project_path = autosave_path.with_suffix("")
+        project_path = autosave_path.with_suffix("").as_posix()
     dest = Path(project_path)
-    sqlite_store.restore_autosave(autosave_path, dest)
+    from vasoanalyzer.services.project_service import restore_sqlite_autosave
+
+    restore_sqlite_autosave(autosave_path, dest)
     return load_project(dest.as_posix())
 
 
@@ -1609,25 +1750,29 @@ def pack_project_bundle(
         raise ValueError("Project must be saved before bundling")
 
     save_project(project, project.path)
-    sqlite_store.pack_bundle(project.path, bundle_path, embed_threshold_mb=embed_threshold_mb)
+    from vasoanalyzer.services.project_service import pack_sqlite_bundle
+
+    pack_sqlite_bundle(project.path, bundle_path, embed_threshold_mb=embed_threshold_mb)
     return str(bundle_path)
 
 
 def unpack_project_bundle(
     bundle_path: str | Path,
-    dest_dir: Optional[str | Path] = None,
+    dest_dir: str | Path | None = None,
 ) -> Project:
     """Unpack ``bundle_path`` into ``dest_dir`` and load the resulting project."""
 
     bundle_path = Path(bundle_path)
     destination = Path(dest_dir) if dest_dir else bundle_path.parent
     destination.mkdir(parents=True, exist_ok=True)
-    project_path = sqlite_store.unpack_bundle(bundle_path, destination)
-    return load_project(project_path.as_posix())
+    from vasoanalyzer.services.project_service import unpack_sqlite_bundle
+
+    project_path = unpack_sqlite_bundle(bundle_path, destination)
+    return load_project(Path(project_path).as_posix())
 
 
 def _dataset_to_sample(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset: dict[str, Any],
     base_dir: Path,
     tmp_root: Path,
@@ -1635,10 +1780,10 @@ def _dataset_to_sample(
     dataset_id = dataset["id"]
     extra = dataset.get("extra") or {}
 
-    assets = sqlite_store.list_assets(store, dataset_id)
+    assets = repo.list_assets(dataset_id)
     assets_by_role = {asset["role"]: asset for asset in assets if asset.get("role")}
     attachments = _load_sample_attachments(
-        store,
+        repo,
         dataset_id,
         extra,
         base_dir,
@@ -1656,12 +1801,6 @@ def _dataset_to_sample(
         snapshot_path = abs_snapshot.as_posix() if abs_snapshot else raw_snapshot
     else:
         snapshot_path = None
-        snapshot_tiff_role = extra.get("snapshot_tiff_role")
-        if snapshot_tiff_role:
-            asset = assets_by_role.get(snapshot_tiff_role)
-            if asset and asset.get("storage") == "external" and asset.get("rel_path"):
-                abs_path = _absolute_path(asset["rel_path"], base_dir)
-                snapshot_path = abs_path.as_posix() if abs_path else asset["rel_path"]
     snapshot_role = extra.get("snapshot_role")
     if snapshot_role is None and "snapshot_stack" in assets_by_role:
         snapshot_role = "snapshot_stack"
@@ -1745,8 +1884,8 @@ def _format_events_df(df: pd.DataFrame) -> pd.DataFrame | None:
     return formatted
 
 
-def _load_sample_results(store: sqlite_store.ProjectStore, dataset_id: int) -> Optional[dict[str, Any]]:
-    rows = sqlite_store.get_results(store, dataset_id)
+def _load_sample_results(repo: ProjectRepository, dataset_id: int) -> dict[str, Any] | None:
+    rows = repo.get_results(dataset_id)
     if not rows:
         return None
     results: dict[str, Any] = {}
@@ -1762,14 +1901,14 @@ def _load_sample_results(store: sqlite_store.ProjectStore, dataset_id: int) -> O
 
 
 def _load_sample_attachments(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset_id: int,
     extra: dict[str, Any],
     base_dir: Path,
     tmp_root: Path,
     assets: dict[str, dict[str, Any]],
-) -> List[Attachment]:
-    attachments: List[Attachment] = []
+) -> list[Attachment]:
+    attachments: list[Attachment] = []
 
     for meta in extra.get("attachments", []) or []:
         attachment = Attachment.from_metadata(meta)
@@ -1785,7 +1924,7 @@ def _load_sample_attachments(
 
         if role and role in assets:
             asset = assets[role]
-            data = sqlite_store.get_asset_bytes(store, asset["id"])
+            data = repo.get_asset_bytes(asset["id"])
             if data:
                 target_dir = tmp_root / f"dataset_{dataset_id}" / "attachments"
                 target_dir.mkdir(parents=True, exist_ok=True)
@@ -1799,19 +1938,19 @@ def _load_sample_attachments(
 
 
 def _load_sample_snapshots(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset_id: int,
     extra: dict[str, Any],
     base_dir: Path,
     tmp_root: Path,
-) -> tuple[Optional[np.ndarray], Optional[str]]:
-    assets = {asset["role"]: asset for asset in sqlite_store.list_assets(store, dataset_id)}
+) -> tuple[np.ndarray | None, str | None]:
+    assets = {asset["role"]: asset for asset in repo.list_assets(dataset_id)}
 
     snapshot_role = extra.get("snapshot_role", "snapshot_stack")
     snapshot_asset = assets.get(snapshot_role)
-    stack_array: Optional[np.ndarray] = None
+    stack_array: np.ndarray | None = None
     if snapshot_asset:
-        data = sqlite_store.get_asset_bytes(store, snapshot_asset["id"])
+        data = repo.get_asset_bytes(snapshot_asset["id"])
         if data:
             try:
                 buffer = io.BytesIO(data)
@@ -1819,31 +1958,26 @@ def _load_sample_snapshots(
             except Exception:
                 log.debug("Failed to load snapshot stack for dataset %s", dataset_id, exc_info=True)
 
-    snapshot_path: Optional[str] = None
+    snapshot_path: str | None = None
     tiff_role = extra.get("snapshot_tiff_role")
     if tiff_role and tiff_role in assets:
         asset = assets[tiff_role]
-        rel_path = asset.get("rel_path")
-        storage = asset.get("storage")
-        if storage == "external" and rel_path:
-            abs_path = _absolute_path(rel_path, base_dir)
-            snapshot_path = abs_path.as_posix() if abs_path else rel_path
-        else:
-            data = sqlite_store.get_asset_bytes(store, asset["id"])
-            if data:
-                out_dir = tmp_root / f"dataset_{dataset_id}" / "snapshots"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                ext = ".tif"
-                if asset.get("mime") and not asset["mime"].endswith("tiff"):
-                    ext = ".bin"
-                sha = asset.get("sha256") or "snapshot"
-                out_path = out_dir / f"{sha[:16]}{ext}"
-                try:
-                    with open(out_path, "wb") as fh:
-                        fh.write(data)
-                    snapshot_path = out_path.as_posix()
-                except OSError:
-                    snapshot_path = None
+        data = repo.get_asset_bytes(asset["id"])
+        if data:
+            out_dir = tmp_root / f"dataset_{dataset_id}" / "snapshots"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ext = ".tif"
+            mime = asset.get("mime")
+            if mime and not mime.endswith("tiff"):
+                ext = ".bin"
+            sha = asset.get("sha256") or "snapshot"
+            out_path = out_dir / f"{sha[:16]}{ext}"
+            try:
+                with open(out_path, "wb") as fh:
+                    fh.write(data)
+                snapshot_path = out_path.as_posix()
+            except OSError:
+                snapshot_path = None
 
     if snapshot_path is None:
         raw = extra.get("snapshot_path")
@@ -1855,14 +1989,14 @@ def _load_sample_snapshots(
 
 
 def _load_project_attachments(
-    store: sqlite_store.ProjectStore,
+    repo: ProjectRepository,
     dataset_id: int,
     extra: dict[str, Any],
     tmp_root: Path,
     base_dir: Path,
-) -> List[Attachment]:
-    attachments: List[Attachment] = []
-    assets = {asset["role"]: asset for asset in sqlite_store.list_assets(store, dataset_id)}
+) -> list[Attachment]:
+    attachments: list[Attachment] = []
+    assets = {asset["role"]: asset for asset in repo.list_assets(dataset_id)}
     for meta in extra.get("attachments", []) or []:
         attachment = Attachment.from_metadata(meta)
         role = meta.get("asset_role")
@@ -1876,7 +2010,7 @@ def _load_project_attachments(
             attachment.data_path = abs_data.as_posix() if abs_data else rel_data
         if role and role in assets:
             asset = assets[role]
-            data = sqlite_store.get_asset_bytes(store, asset["id"])
+            data = repo.get_asset_bytes(asset["id"])
             if data:
                 target_dir = tmp_root / "project_attachments"
                 target_dir.mkdir(parents=True, exist_ok=True)
@@ -1899,7 +2033,7 @@ def _project_timezone() -> str:
     return "UTC"
 
 
-def _relativize_path(path: Optional[str], base_dir: Path) -> Optional[str]:
+def _relativize_path(path: str | None, base_dir: Path) -> str | None:
     if not path:
         return None
     try:
@@ -1911,7 +2045,7 @@ def _relativize_path(path: Optional[str], base_dir: Path) -> Optional[str]:
         return path
 
 
-def _absolute_path(path: Optional[str], base_dir: Path) -> Optional[Path]:
+def _absolute_path(path: str | None, base_dir: Path) -> Path | None:
     if not path:
         return None
     candidate = Path(path)
@@ -1938,7 +2072,7 @@ def _json_dumps(value: Any) -> str:
     return json.dumps(value, default=_json_default)
 
 
-def _json_loads(payload: Optional[str], default=None):
+def _json_loads(payload: str | None, default=None):
     if not payload:
         return default
     try:
@@ -1968,34 +2102,60 @@ def _normalise_json_data(value: Any) -> Any:
         return [_normalise_json_data(v) for v in value]
     if isinstance(value, Path):
         return value.as_posix()
+    if isinstance(value, np.generic):
+        try:
+            return value.item()
+        except Exception:
+            return float(value)
     if isinstance(value, np.ndarray):
         return value.tolist()
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, pd.Timedelta):
+        return value.isoformat()
+    if isinstance(value, pd.Series):
+        return [_normalise_json_data(v) for v in value.tolist()]
+    if isinstance(value, pd.Index):
+        return [_normalise_json_data(v) for v in value.tolist()]
+    if hasattr(value, "tolist"):
+        try:
+            return value.tolist()
+        except Exception:
+            pass
     return value
+
+
 # Export helpers --------------------------------------------------------
+
 
 def _column_to_number(col: str) -> int:
     """Convert an Excel style column label (e.g. 'A', 'AA') to a 1-based number."""
     import string
+
     letters = string.ascii_uppercase
     num = 0
     for c in col.upper():
         num = num * 26 + letters.index(c) + 1
     return num
 
+
 def _number_to_column(n: int) -> str:
     """Convert a 1-based column number to its Excel style label."""
     import string
+
     letters = string.ascii_uppercase
-    col = ''
+    col = ""
     while n > 0:
         n -= 1
         col = letters[n % 26] + col
         n //= 26
     return col
 
+
 def _increment_column(col: str) -> str:
     """Return the next column label after ``col``."""
     return _number_to_column(_column_to_number(col) + 1)
+
 
 def export_sample(exp: Experiment, sample: SampleN) -> None:
     """Mark ``sample`` as exported and update ``exp.next_column``."""

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -20,7 +20,7 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 class EventLayer:
     times: np.ndarray
     colors: np.ndarray
-    labels: Optional[np.ndarray] = None
+    labels: np.ndarray | None = None
 
 
 class TraceView:
@@ -32,23 +32,23 @@ class TraceView:
         canvas: FigureCanvasQTAgg,
         *,
         mode: str = "dual",
-        y_label: Optional[str] = None,
+        y_label: str | None = None,
     ) -> None:
         if mode not in {"inner", "outer", "dual"}:
             raise ValueError(f"Unsupported trace view mode: {mode}")
         self.ax = ax
         self.canvas = canvas
-        self.ax2: Optional[Axes] = None
-        self.model: Optional[TraceModel] = None
-        self.inner_line: Optional[Line2D] = None
-        self.outer_line: Optional[Line2D] = None
-        self.inner_band: Optional[PolyCollection] = None
-        self.outer_band: Optional[PolyCollection] = None
-        self.event_collection: Optional[LineCollection] = None
+        self.ax2: Axes | None = None
+        self.model: TraceModel | None = None
+        self.inner_line: Line2D | None = None
+        self.outer_line: Line2D | None = None
+        self.inner_band: PolyCollection | None = None
+        self.outer_band: PolyCollection | None = None
+        self.event_collection: LineCollection | None = None
         self._background = None
-        self._last_xlim: Optional[Tuple[float, float]] = None
-        self._event_layer: Optional[EventLayer] = None
-        self._current_window: Optional[TraceWindow] = None
+        self._last_xlim: tuple[float, float] | None = None
+        self._event_layer: EventLayer | None = None
+        self._current_window: TraceWindow | None = None
         self._mode = mode
         self._explicit_ylabel = y_label
         self._draw_cid = self.canvas.mpl_connect("draw_event", self._on_canvas_draw)
@@ -79,7 +79,8 @@ class TraceView:
                 transform=transform,
                 animated=True,
             )
-            col.set_zorder(10)
+            col.set_zorder(5.0)
+            col.set_clip_on(False)
             self.event_collection = col
             self.ax.add_collection(col)
         if self._mode == "dual":
@@ -137,8 +138,8 @@ class TraceView:
     def set_events(
         self,
         times: Sequence[float],
-        colors: Optional[Sequence[str]] = None,
-        labels: Optional[Sequence[str]] = None,
+        colors: Sequence[str] | None = None,
+        labels: Sequence[str] | None = None,
     ) -> None:
         if not times:
             self._event_layer = None
@@ -147,7 +148,9 @@ class TraceView:
             return
         times_arr = np.asarray(times, dtype=float)
         if colors is None:
-            colors_arr = np.full_like(times_arr, CURRENT_THEME.get("event_line", "#8A8A8A"), dtype=object)
+            colors_arr = np.full_like(
+                times_arr, CURRENT_THEME.get("event_line", "#8A8A8A"), dtype=object
+            )
         else:
             colors_arr = np.asarray(list(colors), dtype=object)
         labels_arr = None
@@ -156,7 +159,7 @@ class TraceView:
         self._event_layer = EventLayer(times=times_arr, colors=colors_arr, labels=labels_arr)
         self._update_events(None)
 
-    def update_window(self, x0: float, x1: float, *, pixel_width: Optional[int] = None) -> None:
+    def update_window(self, x0: float, x1: float, *, pixel_width: int | None = None) -> None:
         if self.model is None:
             return
         if pixel_width is None:
@@ -174,14 +177,18 @@ class TraceView:
             return "Outer Diameter (µm)"
         return "Inner Diameter (µm)"
 
-    def _primary_series(self, window: TraceWindow) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    def _primary_series(
+        self, window: TraceWindow
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         if self._mode == "outer":
             if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
         return window.inner_mean, window.inner_min, window.inner_max
 
-    def _secondary_series(self, window: TraceWindow) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    def _secondary_series(
+        self, window: TraceWindow
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         if self._mode == "dual":
             if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
@@ -228,7 +235,7 @@ class TraceView:
                 ax2.set_ylim(y_min, y_max)
         self._draw_artists()
 
-    def _update_events(self, window: Optional[TraceWindow]) -> None:
+    def _update_events(self, window: TraceWindow | None) -> None:
         if self._event_layer is None or self.event_collection is None:
             return
         times = self._event_layer.times
@@ -257,12 +264,12 @@ class TraceView:
         except Exception:
             pass
 
-    def current_window(self) -> Optional[TraceWindow]:
+    def current_window(self) -> TraceWindow | None:
         """Return the most recently rendered window."""
 
         return self._current_window
 
-    def data_limits(self) -> Optional[Tuple[float, float]]:
+    def data_limits(self) -> tuple[float, float] | None:
         """Return data limits for the active component in the current window."""
 
         window = self._current_window
@@ -322,8 +329,10 @@ class TraceView:
             self._background = canvas.copy_from_bbox(figure_bbox)
         else:
             canvas.restore_region(self._background)
-        ax.draw_artist(self.inner_band)
-        ax.draw_artist(self.inner_line)
+        if self.inner_band is not None:
+            ax.draw_artist(self.inner_band)
+        if self.inner_line is not None:
+            ax.draw_artist(self.inner_line)
         if self.event_collection is not None:
             ax.draw_artist(self.event_collection)
         if self.ax2 is not None:
@@ -336,7 +345,7 @@ class TraceView:
     def refresh_background(self) -> None:
         self._background = None
 
-    def current_xlim(self) -> Optional[Tuple[float, float]]:
+    def current_xlim(self) -> tuple[float, float] | None:
         return self._last_xlim
 
     def _on_canvas_draw(self, event) -> None:

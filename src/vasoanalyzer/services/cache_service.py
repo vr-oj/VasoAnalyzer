@@ -2,22 +2,49 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import platform
 import shutil
 import sys
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Optional
 
 import pandas as pd
 
-__all__ = ["DataCache", "cache_dir_for_project", "DEFAULT_CACHE_LIMIT_GB"]
+__all__ = ["DataCache", "cache_dir_for_project", "DEFAULT_CACHE_LIMIT_GB", "get_cache_root"]
 
 DEFAULT_CACHE_LIMIT_GB = 25
 
 
-def cache_dir_for_project(project_path: Optional[str | os.PathLike[str]]) -> Path:
+def get_cache_root(app_name: str = "VasoAnalyzer") -> Path | None:
+    """Return the system cache root when ``VASO_CACHE_MODE=system`` is set."""
+
+    mode = os.environ.get("VASO_CACHE_MODE", "").lower()
+    if mode != "system":
+        return None
+
+    system = platform.system().lower()
+    home = Path.home()
+
+    if system == "darwin":
+        base = home / "Library" / "Caches" / app_name
+    elif system == "windows":
+        base = (
+            Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
+            / app_name
+            / "Cache"
+        )
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", str(home / ".cache"))) / app_name
+
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def cache_dir_for_project(project_path: str | os.PathLike[str] | None) -> Path:
     """Return the cache directory associated with ``project_path``.
 
     When ``project_path`` points to a ``.vaso`` file the cache lives in a sibling
@@ -25,6 +52,22 @@ def cache_dir_for_project(project_path: Optional[str | os.PathLike[str]]) -> Pat
     is ``.vaso_cache`` within that directory.  A user-scoped fallback is used
     when no project path is available.
     """
+
+    system_root = get_cache_root()
+    if system_root is not None:
+        if project_path:
+            candidate = Path(project_path).expanduser().resolve(strict=False)
+            if candidate.is_dir():
+                stem = candidate.name or "project"
+                identifier_source = candidate.as_posix() + "/"
+            else:
+                stem = candidate.stem or "project"
+                identifier_source = candidate.as_posix()
+        else:
+            stem = "shared"
+            identifier_source = stem
+        digest = hashlib.sha1(identifier_source.encode("utf-8", "ignore")).hexdigest()[:10]
+        return system_root / "projects" / f"{stem}.vaso.cache-{digest}"
 
     if project_path:
         candidate = Path(project_path)
@@ -52,9 +95,10 @@ def _safe_read_json(path: Path) -> dict:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _safe_write_json(path: Path, payload: dict) -> None:
@@ -131,7 +175,7 @@ class DataCache:
         src_path: str | os.PathLike[str],
         loader: Callable[[Path], pd.DataFrame],
         *,
-        preserve_columns: Optional[Iterable[str]] = None,
+        preserve_columns: Iterable[str] | None = None,
         allow_parquet: bool = True,
         category_threshold: float = 0.2,
     ) -> pd.DataFrame:
@@ -162,7 +206,7 @@ class DataCache:
 
         if allow_parquet:
             try:
-                import pyarrow  # type: ignore  # noqa: F401
+                import pyarrow  # noqa: F401
 
                 cache_path = self._cache_path_for(src, ".parquet")
                 df.to_parquet(cache_path)
@@ -188,7 +232,7 @@ class DataCache:
         self,
         df: pd.DataFrame,
         *,
-        preserve_columns: Optional[Iterable[str]] = None,
+        preserve_columns: Iterable[str] | None = None,
         threshold: float,
     ) -> pd.DataFrame:
         if df.empty:
@@ -238,7 +282,7 @@ class DataCache:
         entries.sort(key=lambda item: item[0].stat().st_mtime if item[0].exists() else 0)
 
         current = total
-        for path, entry, size in entries:
+        for path, _entry, size in entries:
             if current <= limit_bytes:
                 break
             try:

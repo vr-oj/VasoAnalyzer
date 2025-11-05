@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import getpass
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-import getpass
-from typing import Any, Dict, Iterable, Iterator, List, Sequence, Tuple
+from typing import Any
 
 __all__ = [
     "EditAction",
@@ -29,14 +30,14 @@ def _ensure_utc(ts: datetime) -> datetime:
     return ts.astimezone(timezone.utc)
 
 
-def compress_indices(indices: Sequence[int]) -> List[Tuple[int, int]]:
+def compress_indices(indices: Sequence[int]) -> list[tuple[int, int]]:
     """Return inclusive ranges covering the provided indices."""
 
     if not indices:
         return []
 
     sorted_idx = sorted(int(i) for i in dict.fromkeys(indices))
-    ranges: List[Tuple[int, int]] = []
+    ranges: list[tuple[int, int]] = []
     start = prev = sorted_idx[0]
     for idx in sorted_idx[1:]:
         if idx == prev + 1:
@@ -48,10 +49,10 @@ def compress_indices(indices: Sequence[int]) -> List[Tuple[int, int]]:
     return ranges
 
 
-def expand_ranges(ranges: Iterable[Sequence[int]]) -> Tuple[int, ...]:
+def expand_ranges(ranges: Iterable[Sequence[int]]) -> tuple[int, ...]:
     """Expand ``(start, end)`` inclusive ranges back into explicit indices."""
 
-    values: List[int] = []
+    values: list[int] = []
     for entry in ranges:
         if not entry:
             continue
@@ -84,10 +85,12 @@ class EditAction:
 
     channel: str
     op: str
-    indices: Tuple[int, ...]
-    t_bounds: Tuple[float, float]
-    params: Dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=lambda: datetime.utcnow().replace(tzinfo=timezone.utc))
+    indices: tuple[int, ...]
+    t_bounds: tuple[float, float]
+    params: dict[str, Any] = field(default_factory=dict)
+    timestamp: datetime = field(
+        default_factory=lambda: datetime.utcnow().replace(tzinfo=timezone.utc)
+    )
     user: str = field(default_factory=_default_user)
 
     def __post_init__(self) -> None:
@@ -114,8 +117,8 @@ class EditAction:
     def last_index(self) -> int:
         return max(self.indices) if self.indices else -1
 
-    def to_dict(self) -> Dict[str, Any]:
-        payload: Dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
             "channel": _channel_label(self.channel),
             "op": self.op,
             "indices": compress_indices(self.indices),
@@ -127,10 +130,14 @@ class EditAction:
         return payload
 
     @classmethod
-    def from_dict(cls, payload: Dict[str, Any]) -> "EditAction":
+    def from_dict(cls, payload: dict[str, Any]) -> EditAction:
         channel = payload.get("channel", "ID")
         indices = expand_ranges(payload.get("indices", ()))
-        t_bounds = payload.get("t_bounds") or (0.0, 0.0)
+        t_bounds_raw = payload.get("t_bounds")
+        if isinstance(t_bounds_raw, list | tuple) and len(t_bounds_raw) >= 2:
+            t_bounds: tuple[float, float] = (float(t_bounds_raw[0]), float(t_bounds_raw[1]))
+        else:
+            t_bounds = (0.0, 0.0)
         params = payload.get("params") or {}
         timestamp_raw = payload.get("timestamp")
         if timestamp_raw:
@@ -145,23 +152,22 @@ class EditAction:
             channel=channel,
             op=str(payload.get("op", "")),
             indices=indices,
-            t_bounds=tuple(float(v) for v in t_bounds),
+            t_bounds=t_bounds,
             params=dict(params),
             timestamp=_ensure_utc(ts),
             user=user,
         )
 
 
-def serialize_edit_log(actions: Sequence[EditAction]) -> List[Dict[str, Any]]:
+def serialize_edit_log(actions: Sequence[EditAction]) -> list[dict[str, Any]]:
     return [action.to_dict() for action in actions]
 
 
-def deserialize_edit_log(payload: Iterable[Dict[str, Any]]) -> Tuple[EditAction, ...]:
-    actions: List[EditAction] = []
+def deserialize_edit_log(payload: Iterable[dict[str, Any]]) -> tuple[EditAction, ...]:
+    actions: list[EditAction] = []
     for entry in payload:
         try:
             actions.append(EditAction.from_dict(entry))
         except Exception:
             continue
     return tuple(actions)
-

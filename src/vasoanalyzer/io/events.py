@@ -9,17 +9,17 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 import pandas as pd
 
 try:
     from vasoanalyzer.services.cache_service import DataCache
-except Exception:  # pragma: no cover - optional during bootstrap
-    DataCache = None  # type: ignore
+except ImportError:  # pragma: no cover - optional during bootstrap
+    DataCache = None
 
 log = logging.getLogger(__name__)
 
@@ -99,11 +99,11 @@ def _is_numeric_or_time_series(series: pd.Series) -> bool:
         return False
 
     numeric = pd.to_numeric(series, errors="coerce")
-    if numeric.notna().mean() >= 0.8:
+    if float(numeric.notna().mean()) >= 0.8:
         return True
 
     td = pd.to_timedelta(series, errors="coerce")
-    return td.notna().mean() >= 0.8
+    return float(td.notna().mean()) >= 0.8
 
 
 def _find_column(
@@ -140,22 +140,19 @@ def _looks_like_number_or_time(val: str) -> bool:
         return False
     if re.fullmatch(r"[-+]?\d*(?:\.\d+)?(?:e[-+]?\d+)?", s):
         return True
-    if re.fullmatch(r"\d{1,2}(?::\d{2}){1,2}(?:\.\d+)?", s):
-        return True
-    return False
+    return bool(re.fullmatch(r"\d{1,2}(?::\d{2}){1,2}(?:\.\d+)?", s))
 
 
-def load_events(file_path, *, cache: DataCache | None = None):
+def load_events(file_path, *, cache: Any | None = None):
     """Return event labels, times and optional frames from a table file or DataFrame."""
 
     if isinstance(file_path, pd.DataFrame):
         log.info("Loading events from DataFrame")
         df = file_path.copy()
-        from_dataframe = True
         delimiter = ","
     else:
         log.info("Loading events from %s", file_path)
-        with open(file_path, "r", encoding="utf-8-sig") as handle:
+        with open(file_path, encoding="utf-8-sig") as handle:
             sample = handle.read(1024)
             try:
                 delimiter = csv.Sniffer().sniff(sample).delimiter
@@ -171,8 +168,7 @@ def load_events(file_path, *, cache: DataCache | None = None):
             frame = pd.read_csv(path, delimiter=delimiter)
             if isinstance(frame.columns, pd.MultiIndex):
                 frame.columns = [
-                    " ".join(str(part) for part in col if pd.notna(part))
-                    for col in frame.columns
+                    " ".join(str(part) for part in col if pd.notna(part)) for col in frame.columns
                 ]
             if any(_looks_like_number_or_time(c) for c in frame.columns):
                 frame = pd.read_csv(path, delimiter=delimiter, header=None)
@@ -183,13 +179,14 @@ def load_events(file_path, *, cache: DataCache | None = None):
             df = cache.read_dataframe(file_path, loader=_read_events)
         else:
             df = _read_events(Path(file_path))
-        from_dataframe = False
 
     df = _standardize_headers(df)
 
     if "EventLabel" in df.columns and df["EventLabel"].eq("-").all():
         possible_labels = df.index.astype(str)
-        if any(l != "-" and not l.replace(".", "", 1).isdigit() for l in possible_labels):
+        if any(
+            label != "-" and not label.replace(".", "", 1).isdigit() for label in possible_labels
+        ):
             df = df.reset_index()
             df.rename(columns={"index": "EventLabel"}, inplace=True)
 

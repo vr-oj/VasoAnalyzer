@@ -18,6 +18,7 @@ def resource_path(*parts: str) -> str:
     path that works in both cases.
     """
 
-    base = getattr(sys, "_MEIPASS", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+    base = getattr(
+        sys, "_MEIPASS", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    )
     return os.path.join(base, *parts)
-

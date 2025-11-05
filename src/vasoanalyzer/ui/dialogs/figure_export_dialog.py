@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -39,7 +41,7 @@ class FigureExportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Export Figure")
         self.setModal(True)
-        self._result = None
+        self._result: dict[str, Any] | None = None
         self._aspect_ratio = aspect_ratio if aspect_ratio > 0 else 0.6
 
         layout = QVBoxLayout(self)

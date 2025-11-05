@@ -3,14 +3,13 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-import os
+
 import pandas as pd
 from PyQt5.QtWidgets import (
-    QMessageBox,
     QInputDialog,
-    QMenu,
+    QMessageBox,
 )
-from PyQt5.QtGui import QCursor
+
 from vasoanalyzer.core.project import SampleN, save_project
 from vasoanalyzer.ui.dialogs.excel_map_wizard import ExcelMapWizard
 
@@ -77,17 +76,13 @@ def save_data_as_n(self):
         return
 
     if not self.current_project.experiments:
-        QMessageBox.warning(
-            self, "No Experiment", "Add an experiment to the project first."
-        )
+        QMessageBox.warning(self, "No Experiment", "Add an experiment to the project first.")
         return
 
     exp = self.current_experiment
     if exp is None:
         items = [e.name for e in self.current_project.experiments]
-        choice, ok = QInputDialog.getItem(
-            self, "Select Experiment", "Experiment:", items, 0, False
-        )
+        choice, ok = QInputDialog.getItem(self, "Select Experiment", "Experiment:", items, 0, False)
         if not ok:
             return
         exp = next(e for e in self.current_project.experiments if e.name == choice)
@@ -116,20 +111,6 @@ def save_data_as_n(self):
     self.refresh_project_tree()
     if self.current_project.path:
         save_project(self.current_project, self.current_project.path)
-
-
-def show_save_menu(self):
-    menu = QMenu(self)
-    act_plot = menu.addAction("High‑Res Plot…")
-    act_vaso = menu.addAction("Save Project (.vaso)…")
-    act_sample = menu.addAction("Save Data to Project…")
-    action = menu.exec_(QCursor.pos())
-    if action == act_plot:
-        self.export_high_res_plot()
-    elif action == act_vaso:
-        self.save_project_file_as()
-    elif action == act_sample:
-        self.save_data_as_n()
 
 
 def open_excel_mapping_dialog(self):

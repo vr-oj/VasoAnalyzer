@@ -7,22 +7,22 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QDockWidget,
-    QWidget,
-    QStackedWidget,
-    QVBoxLayout,
     QFormLayout,
-    QPlainTextEdit,
-    QLineEdit,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
     QPushButton,
-    QHBoxLayout,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from vasoanalyzer.core.project import Attachment, Experiment, Project, SampleN
@@ -47,7 +47,7 @@ def _parse_tags(text: str) -> list[str]:
 class _BaseForm(QWidget):
     """Shared helpers for the metadata forms."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._block_updates = False
 
@@ -65,7 +65,7 @@ class _ProjectMetadataForm(_BaseForm):
     attachment_remove_requested = pyqtSignal(int)
     attachment_open_requested = pyqtSignal(int)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
@@ -106,7 +106,7 @@ class _ProjectMetadataForm(_BaseForm):
         self.attachments_list.currentRowChanged.connect(self._on_attachment_selection)
 
     # ------------------------------------------------------------------
-    def set_metadata(self, project: Optional[Project]) -> None:
+    def set_metadata(self, project: Project | None) -> None:
         self._block()
         if project is None:
             self.description_edit.clear()
@@ -161,7 +161,7 @@ class _ExperimentMetadataForm(_BaseForm):
     notes_changed = pyqtSignal(str)
     tags_changed = pyqtSignal(list)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         layout = QFormLayout(self)
@@ -175,7 +175,7 @@ class _ExperimentMetadataForm(_BaseForm):
         self.tags_edit.editingFinished.connect(self._on_tags_edited)
         layout.addRow("Tags", self.tags_edit)
 
-    def set_metadata(self, experiment: Optional[Experiment]) -> None:
+    def set_metadata(self, experiment: Experiment | None) -> None:
         self._block()
         if experiment is None:
             self.notes_edit.clear()
@@ -202,7 +202,7 @@ class _SampleMetadataForm(_BaseForm):
     attachment_remove_requested = pyqtSignal(int)
     attachment_open_requested = pyqtSignal(int)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
@@ -251,7 +251,7 @@ class _SampleMetadataForm(_BaseForm):
 
         self.attachments_list.currentRowChanged.connect(self._on_attachment_selection)
 
-    def set_metadata(self, sample: Optional[SampleN]) -> None:
+    def set_metadata(self, sample: SampleN | None) -> None:
         self._block()
         if sample is None:
             self.notes_edit.clear()
@@ -294,7 +294,7 @@ class _SampleMetadataForm(_BaseForm):
             self.figure_summary.clear()
             return
         lines = []
-        for key in figure_configs.keys():
+        for key in figure_configs:
             lines.append(str(key))
         self.figure_summary.setPlainText("\n".join(lines))
 
@@ -332,10 +332,10 @@ class _SampleMetadataForm(_BaseForm):
 class MetadataDock(QDockWidget):
     """Dock widget that surfaces metadata for the current selection."""
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("Details", parent)
         self.setObjectName("MetadataDock")
-        self._current_kind = None
+        self._current_kind: str | None = None
 
         self.stacked = QStackedWidget()
         self.setWidget(self.stacked)
@@ -365,17 +365,17 @@ class MetadataDock(QDockWidget):
         self._current_kind = None
         self.stacked.setCurrentWidget(self._blank)
 
-    def show_project(self, project: Optional[Project]) -> None:
+    def show_project(self, project: Project | None) -> None:
         self._current_kind = "project"
         self.project_form.set_metadata(project)
         self.stacked.setCurrentWidget(self.project_form)
 
-    def show_experiment(self, experiment: Optional[Experiment]) -> None:
+    def show_experiment(self, experiment: Experiment | None) -> None:
         self._current_kind = "experiment"
         self.experiment_form.set_metadata(experiment)
         self.stacked.setCurrentWidget(self.experiment_form)
 
-    def show_sample(self, sample: Optional[SampleN]) -> None:
+    def show_sample(self, sample: SampleN | None) -> None:
         self._current_kind = "sample"
         self.sample_form.set_metadata(sample)
         self.stacked.setCurrentWidget(self.sample_form)

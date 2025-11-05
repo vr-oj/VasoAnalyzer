@@ -5,19 +5,21 @@
 
 """Improved Axis Settings dialog with tabbed layout and styled inputs."""
 
+import contextlib
+
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QIcon
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QVBoxLayout,
-    QTabWidget,
-    QWidget,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
-    QDoubleSpinBox,
     QLineEdit,
-    QCheckBox,
-    QDialogButtonBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
 )
 
 from utils import resource_path
@@ -155,21 +157,15 @@ class AxisSettingsDialog(QDialog):
     # ------------------------------------------------------------------
     def _apply(self):
         """Apply current values to the axes."""
-        try:
+        with contextlib.suppress(Exception):
             self.ax.set_xlim(self.x_min.value(), self.x_max.value())
-        except Exception:
-            pass
 
-        try:
+        with contextlib.suppress(Exception):
             self.ax.set_ylim(self.yi_min.value(), self.yi_max.value())
-        except Exception:
-            pass
 
         if self.ax2 is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self.ax2.set_ylim(self.yo_min.value(), self.yo_max.value())
-            except Exception:
-                pass
             self.ax2.set_ylabel(self.yo_title.text())
 
         x_label_text = self.x_title.text()

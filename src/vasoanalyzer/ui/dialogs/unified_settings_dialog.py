@@ -5,41 +5,41 @@
 
 """Combined dialog for subplot layout, axis settings and style."""
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon, QColor
-from PyQt5.QtWidgets import (
-    QDialog,
-    QTabWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGridLayout,
-    QGroupBox,
-    QFormLayout,
-    QLabel,
-    QWidget,
-    QComboBox,
-    QDoubleSpinBox,
-    QSpinBox,
-    QCheckBox,
-    QPushButton,
-    QSlider,
-    QLineEdit,
-    QColorDialog,
-    QDialogButtonBox,
-    QStyle,
-    QScrollArea,
-    QSizePolicy,
-)
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+import contextlib
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from matplotlib.colors import to_hex
+from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator
-from matplotlib.lines import Line2D
-from matplotlib.colors import to_hex
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QFont, QIcon
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QColorDialog,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidgetItem,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QStyle,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
-from vasoanalyzer.ui.theme import CURRENT_THEME
-from vasoanalyzer.ui.constants import DEFAULT_STYLE
 from utils import resource_path
+from vasoanalyzer.ui.constants import DEFAULT_STYLE
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 
 class UnifiedPlotSettingsDialog(QDialog):
@@ -55,12 +55,19 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.event_text_objects = event_text_objects or []
         self.pinned_points = pinned_points or []
 
+        self._font_choices: Sequence[str] = ("Arial", "Helvetica", "Times New Roman", "Courier New")
+        self._event_entries: list[dict[str, Any]] = []
+        self._event_times: list[float] = []
+        self._suppress_event_editor = False
+        self._event_updates_fired = False
+        self._event_update_callback = None
+
         self.parent_window = parent
         self.style = DEFAULT_STYLE.copy()
         try:
-            if hasattr(parent, '_snapshot_style'):
+            if hasattr(parent, "_snapshot_style"):
                 self.style.update(parent._snapshot_style())
-            elif hasattr(parent, 'get_current_plot_style'):
+            elif hasattr(parent, "get_current_plot_style"):
                 current = parent.get_current_plot_style() or {}
                 if isinstance(current, dict):
                     self.style.update(current)
@@ -72,11 +79,34 @@ class UnifiedPlotSettingsDialog(QDialog):
         if current_xlabel:
             self._set_shared_xlabel(current_xlabel)
 
+        self._initialize_event_sources(parent)
+
         self.setWindowTitle("Plot Settings")
         self.setWindowIcon(QIcon(resource_path("icons", "Aa.svg")))
         self.setFont(QFont("Arial", 10))
         self.setMinimumWidth(720)
+        self.setMinimumHeight(500)
         self.setSizeGripEnabled(True)
+
+        # Make dialog responsive to screen size
+        if parent:
+            screen = parent.screen()
+        else:
+            from PyQt5.QtWidgets import QApplication
+            screen = QApplication.primaryScreen()
+
+        if screen:
+            screen_geometry = screen.availableGeometry()
+            # Set maximum height to 85% of available screen height
+            max_height = int(screen_geometry.height() * 0.85)
+            max_width = int(screen_geometry.width() * 0.90)
+            self.setMaximumHeight(max_height)
+            self.setMaximumWidth(max_width)
+
+            # Set initial size to something reasonable
+            initial_height = min(700, max_height)
+            initial_width = min(900, max_width)
+            self.resize(initial_width, initial_height)
 
         main = QVBoxLayout(self)
         main.setContentsMargins(14, 16, 14, 16)
@@ -100,6 +130,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.tabs.addTab(self._make_layout_tab(), "Layout")
         self.tabs.addTab(self._make_axis_tab(), "Axis")
         self.tabs.addTab(self._make_style_tab(), "Style")
+        self.tabs.addTab(self._make_event_labels_tab(), "Event Labels")
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -167,92 +198,32 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Frame & Origin tab ------------------------------------------------
-    def _make_frame_tab(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        origin_box = QGroupBox("Axis Origin")
-        origin_layout = QVBoxLayout(origin_box)
-        origin_layout.setContentsMargins(12, 12, 12, 12)
-        origin_layout.setSpacing(8)
-
-        origin_hint = QLabel(
-            "Shift where the axes cross. Manual mode lets you anchor the axes to a specific data point."
+    def _make_frame_tab_legacy(self):
+        from vasoanalyzer.ui.dialogs.settings.frame_tab import (
+            create_frame_tab_widgets,
+            populate_frame_tab,
+            wire_frame_tab,
         )
-        origin_hint.setWordWrap(True)
-        origin_hint.setObjectName("PlotSettingsHint")
-        origin_layout.addWidget(origin_hint)
 
-        origin_form = QFormLayout()
-        origin_form.setLabelAlignment(Qt.AlignRight)
-        origin_form.setHorizontalSpacing(12)
-        origin_form.setVerticalSpacing(6)
+        refs = create_frame_tab_widgets(self, None)
+        content = refs.tab
+        self.origin_mode = refs.origin_mode
+        self.origin_x = refs.origin_x
+        self.origin_y = refs.origin_y
+        self.size_preset = refs.size_preset
+        self.fig_w = refs.fig_w
+        self.fig_h = refs.fig_h
 
-        self.origin_mode = QComboBox()
-        self.origin_mode.addItems(["Automatic", "Manual"])
-        origin_form.addRow("Mode:", self.origin_mode)
+        populate_frame_tab(self)
 
-        self.origin_x = QDoubleSpinBox()
-        self.origin_x.setDecimals(2)
-        self.origin_x.setRange(-1e6, 1e6)
-        self.origin_x.setValue(0.0)
-        origin_form.addRow("Y ↔ X at X:", self.origin_x)
-
-        self.origin_y = QDoubleSpinBox()
-        self.origin_y.setDecimals(2)
-        self.origin_y.setRange(-1e6, 1e6)
-        self.origin_y.setValue(0.0)
-        origin_form.addRow("X ↔ Y at Y:", self.origin_y)
-
-        origin_layout.addLayout(origin_form)
-        layout.addWidget(origin_box)
-
-        size_box = QGroupBox("Figure Size")
-        size_layout = QVBoxLayout(size_box)
-        size_layout.setContentsMargins(12, 12, 12, 12)
-        size_layout.setSpacing(8)
-
-        size_hint = QLabel(
-            "Choose a preset or enter custom width/height (inches) for export and layout decisions."
-        )
-        size_hint.setWordWrap(True)
-        size_hint.setObjectName("PlotSettingsHint")
-        size_layout.addWidget(size_hint)
-
-        size_form = QFormLayout()
-        size_form.setLabelAlignment(Qt.AlignRight)
-        size_form.setHorizontalSpacing(12)
-        size_form.setVerticalSpacing(6)
-
-        self.size_preset = QComboBox()
-        self.size_preset.addItems(["Auto (Wide)", "Square", "Custom"])
-        fig_w, fig_h = self.fig.get_size_inches()
-        self.fig_w = QDoubleSpinBox()
-        self.fig_w.setRange(1, 30)
-        self.fig_w.setDecimals(1)
-        self.fig_w.setValue(round(fig_w, 1))
-        self.fig_h = QDoubleSpinBox()
-        self.fig_h.setRange(1, 30)
-        self.fig_h.setDecimals(1)
-        self.fig_h.setValue(round(fig_h, 1))
-
-        size_form.addRow("Preset:", self.size_preset)
-        size_form.addRow("Width (in):", self.fig_w)
-        size_form.addRow("Height (in):", self.fig_h)
-
-        size_layout.addLayout(size_form)
-        layout.addWidget(size_box)
-
-        layout.addStretch(1)
-
-        self.origin_mode.currentTextChanged.connect(self._toggle_origin_inputs)
-        self.size_preset.currentTextChanged.connect(self._toggle_size_inputs)
+        wire_frame_tab(self)
         self._toggle_origin_inputs()
         self._toggle_size_inputs()
 
         return content
+
+    def _make_frame_tab(self):
+        return self._make_frame_tab_legacy()
 
     def _toggle_origin_inputs(self):
         manual = self.origin_mode.currentText() == "Manual"
@@ -266,95 +237,29 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Layout tab -------------------------------------------------------
-    def _make_slider_row(self, name, val):
-        container = QWidget()
-        row = QHBoxLayout(container)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 100)
-        spin = QDoubleSpinBox()
-        spin.setRange(0.0, 1.0)
-        spin.setSingleStep(0.01)
-        spin.setDecimals(2)
-        slider.setValue(int(val * 100))
-        spin.setValue(val)
-        slider.valueChanged.connect(lambda v, s=spin: s.setValue(v / 100))
-        spin.valueChanged.connect(lambda v, s=slider: s.setValue(int(v * 100)))
-        spin.valueChanged.connect(self.update_preview)
-        row.addWidget(slider, 1)
-        row.addWidget(spin)
-        return container, spin
-
-    def _make_layout_tab(self):
-        content = QWidget()
-        main = QHBoxLayout(content)
-        main.setContentsMargins(0, 0, 0, 0)
-        main.setSpacing(12)
-
-        controls_box = QGroupBox("Subplot Margins & Spacing")
-        controls_layout = QVBoxLayout(controls_box)
-        controls_layout.setContentsMargins(12, 12, 12, 12)
-        controls_layout.setSpacing(10)
-
-        help_lbl = QLabel(
-            "Adjust how the subplot fills the canvas. Values are in figure fraction (0 → edge, 1 → outside)."
+    def _make_layout_tab_legacy(self, window=None):
+        from vasoanalyzer.ui.dialogs.settings.layout_tab import (
+            create_layout_tab_widgets,
+            populate_layout_tab,
+            wire_layout_tab,
         )
-        help_lbl.setWordWrap(True)
-        help_lbl.setObjectName("PlotSettingsHint")
-        controls_layout.addWidget(help_lbl)
 
-        controls_form = QFormLayout()
-        controls_form.setLabelAlignment(Qt.AlignRight)
-        controls_form.setHorizontalSpacing(12)
-        controls_form.setVerticalSpacing(8)
+        refs = create_layout_tab_widgets(self, window)
+        tab = refs.tab
 
-        labels = [
-            ("left", "Left margin"),
-            ("right", "Right margin"),
-            ("top", "Top margin"),
-            ("bottom", "Bottom margin"),
-            ("wspace", "Width gap"),
-            ("hspace", "Height gap"),
-        ]
+        self.layout_controls = refs.layout_controls
+        self._layout_sliders = refs.layout_sliders
+        self.preview_fig = refs.preview_fig
+        self.preview_canvas = refs.preview_canvas
+        self.preview_ax = refs.preview_ax
 
-        self.layout_controls = {}
-        params = self._get_initial_layout()
-        self.initial_layout = dict(params)
-        for name, label_text in labels:
-            widget, spin = self._make_slider_row(name, params[name])
-            controls_form.addRow(f"{label_text}:", widget)
-            self.layout_controls[name] = spin
+        populate_layout_tab(self)
+        wire_layout_tab(self)
 
-        controls_layout.addLayout(controls_form)
-        controls_layout.addStretch(1)
+        return tab
 
-        main.addWidget(controls_box, 1)
-
-        preview_box = QGroupBox("Preview")
-        preview_layout = QVBoxLayout(preview_box)
-        preview_layout.setContentsMargins(12, 12, 12, 12)
-        preview_layout.setSpacing(8)
-
-        dpi = self.logicalDpiX()
-        self.preview_fig = Figure(
-            figsize=(2.5, 2.5), facecolor=CURRENT_THEME["window_bg"], dpi=dpi
-        )
-        self.preview_canvas = FigureCanvas(self.preview_fig)
-        self.preview_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.preview_ax = self.preview_fig.add_subplot(111)
-        self.preview_ax.axis("off")
-        preview_layout.addWidget(self.preview_canvas, 1)
-
-        main.addWidget(preview_box, 1)
-        main.setStretch(0, 1)
-        main.setStretch(1, 1)
-
-        scroll = QScrollArea()
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
-        return scroll
+    def _make_layout_tab(self, window=None):
+        return self._make_layout_tab_legacy(window)
 
     def _get_initial_layout(self):
         sp = self.fig.subplotpars
@@ -509,7 +414,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             return visible_lines[0]
         return self.ax2.lines[0] if self.ax2.lines else None
 
-    def _make_axis_tab(self):
+    def _make_axis_tab_legacy(self):
         content = QWidget()
         grid = QGridLayout(content)
         grid.setContentsMargins(0, 0, 0, 0)
@@ -609,7 +514,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         tick_grp = QGroupBox("Grid && Ticks")
         tick_form = QFormLayout(tick_grp)
         self.show_grid = QCheckBox("Show grid")
-        grid_state = getattr(self.parent_window, 'grid_visible', None)
+        grid_state = getattr(self.parent_window, "grid_visible", None)
         if grid_state is None:
             grid_state = any(line.get_visible() for line in self.ax.get_xgridlines())
         self.show_grid.setChecked(bool(grid_state))
@@ -635,6 +540,215 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         return scroll
 
+    def _make_axis_tab(self):
+        return self._make_axis_tab_legacy()
+
+    def _make_event_labels_tab_legacy(self, window=None):
+        from vasoanalyzer.ui.dialogs.settings.event_labels_tab import (
+            create_event_labels_tab_widgets,
+            populate_event_labels_tab,
+            wire_event_labels_tab,
+        )
+
+        refs = create_event_labels_tab_widgets(self, window)
+        container = refs.tab
+
+        # Reattach attributes so downstream code still finds them on self
+        self.event_font_family = refs.event_font_family
+        self.event_font_size = refs.event_font_size
+        self.event_bold = refs.event_bold
+        self.event_italic = refs.event_italic
+        self.event_color_btn = refs.event_color_btn
+        self.event_labels_v3_toggle = refs.event_labels_v3_toggle
+        self.event_cluster_style = refs.event_cluster_style
+        self.event_max_per_cluster = refs.event_max_per_cluster
+        self.event_label_lanes = refs.event_label_lanes
+        self.event_belt_baseline = refs.event_belt_baseline
+        self.event_span_siblings = refs.event_span_siblings
+        self.event_auto_mode = refs.event_auto_mode
+        self.event_density_compact = refs.event_density_compact
+        self.event_density_belt = refs.event_density_belt
+        self.event_outline_enabled = refs.event_outline_enabled
+        self.event_outline_width = refs.event_outline_width
+        self.event_outline_color_btn = refs.event_outline_color_btn
+        self.event_tooltips_enabled = refs.event_tooltips_enabled
+        self.event_tooltip_proximity = refs.event_tooltip_proximity
+        self.event_legend_enabled = refs.event_legend_enabled
+        self.event_legend_location = refs.event_legend_location
+        self.event_list = refs.event_list
+        self.event_editor = refs.event_editor
+        self.event_overrides_box = refs.event_overrides_box
+        self.event_empty_label = refs.event_empty_label
+
+        populate_event_labels_tab(self)
+        wire_event_labels_tab(self)
+
+        self._refresh_event_list()
+
+        return container
+
+    def _make_event_labels_tab(self, window=None):
+        return self._make_event_labels_tab_legacy(window)
+
+    # ------------------------------------------------------------------
+    # Event override helpers -------------------------------------------
+    def _initialize_event_sources(self, parent: object | None) -> None:
+        if parent is not None:
+            callback = getattr(parent, "apply_event_label_overrides", None)
+            if callable(callback):
+                self._event_update_callback = callback
+            labels = getattr(parent, "event_labels", None)
+            times = getattr(parent, "event_times", None)
+            meta = getattr(parent, "event_label_meta", None)
+        else:
+            labels = times = meta = None
+        self._load_event_entries(labels, times, meta)
+
+    def _load_event_entries(
+        self,
+        labels: Sequence[str] | None,
+        times: Sequence[float] | None,
+        meta: Sequence[Mapping[str, Any]] | None,
+    ) -> None:
+        self._event_entries.clear()
+        self._event_times = []
+        if not labels:
+            return
+
+        times_list: list[float] = []
+        if times is not None:
+            for value in times:
+                try:
+                    times_list.append(float(value))
+                except (TypeError, ValueError):
+                    times_list.append(0.0)
+        meta_list: list[Mapping[str, Any]] = list(meta or [])
+        if len(meta_list) < len(labels):
+            meta_list.extend({} for _ in range(len(labels) - len(meta_list)))
+
+        self._event_times = times_list[: len(labels)]
+
+        for idx, raw_label in enumerate(labels):
+            entry_meta = meta_list[idx] if idx < len(meta_list) else {}
+            label_text = str(raw_label) if raw_label is not None else ""
+            time_val = times_list[idx] if idx < len(times_list) else 0.0
+            self._event_entries.append(
+                {
+                    "label": label_text,
+                    "time": time_val,
+                    "meta": dict(entry_meta) if isinstance(entry_meta, Mapping) else {},
+                }
+            )
+
+    def set_event_update_callback(self, callback) -> None:
+        if callable(callback):
+            self._event_update_callback = callback
+
+    def event_updates_emitted(self) -> bool:
+        return bool(self._event_updates_fired)
+
+    def get_event_overrides(self) -> tuple[list[str], list[dict[str, Any]]]:
+        if not self._event_entries:
+            return ([], [])
+        labels = [entry.get("label", "") for entry in self._event_entries]
+        metadata = [dict(entry.get("meta", {})) for entry in self._event_entries]
+        return labels, metadata
+
+    def _emit_event_updates(self) -> None:
+        labels, meta = self.get_event_overrides()
+        if labels is None or meta is None:
+            return
+        if callable(self._event_update_callback):
+            self._event_update_callback(labels, meta)
+        self._event_updates_fired = True
+
+    def _format_event_list_item(self, entry: dict[str, Any]) -> str:
+        label = entry.get("label") or "(Untitled)"
+        try:
+            time_val = float(entry.get("time", 0.0))
+            return f"{label} — {time_val:.2f} s"
+        except (TypeError, ValueError):
+            return label
+
+    def _refresh_event_list(self) -> None:
+        if not hasattr(self, "event_list"):
+            return
+        self.event_list.blockSignals(True)
+        self.event_list.clear()
+        for entry in self._event_entries:
+            self.event_list.addItem(QListWidgetItem(self._format_event_list_item(entry)))
+        self.event_list.blockSignals(False)
+
+        has_events = bool(self._event_entries)
+        self.event_list.setEnabled(has_events)
+        if hasattr(self, "event_overrides_box"):
+            self.event_overrides_box.setVisible(has_events)
+        if hasattr(self, "event_empty_label"):
+            self.event_empty_label.setVisible(not has_events)
+
+        if not has_events:
+            if hasattr(self, "event_editor"):
+                self.event_editor.clear()
+            return
+
+        prev_block = self.event_list.blockSignals(True)
+        if self.event_list.currentRow() < 0:
+            self.event_list.setCurrentRow(0)
+        self.event_list.blockSignals(prev_block)
+        self._on_event_row_changed(self.event_list.currentRow())
+
+    def _on_event_row_changed(self, row: int) -> None:
+        if self._suppress_event_editor:
+            return
+        if not (0 <= row < len(self._event_entries)):
+            if hasattr(self, "event_editor"):
+                self.event_editor.clear()
+            return
+        entry = self._event_entries[row]
+        self._suppress_event_editor = True
+        if hasattr(self, "event_editor"):
+            self.event_editor.set_event(
+                row,
+                entry.get("label", ""),
+                entry.get("time", 0.0),
+                entry.get("meta", {}),
+                max_lanes=(
+                    int(self.event_label_lanes.value()) if hasattr(self, "event_label_lanes") else 2
+                ),
+            )
+        self._suppress_event_editor = False
+
+    def _on_event_style_changed(self, index: int, meta: dict[str, Any]) -> None:
+        if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
+            return
+        self._event_entries[index]["meta"] = dict(meta or {})
+        self._event_updates_fired = False
+
+    def _on_event_label_changed(self, index: int, text: str) -> None:
+        if self._suppress_event_editor or not (0 <= index < len(self._event_entries)):
+            return
+        normalized = text.strip()
+        self._event_entries[index]["label"] = normalized
+        self._update_event_list_item(index)
+        self._event_updates_fired = False
+
+    def _on_event_lane_count_changed(self, value: int) -> None:
+        if self._suppress_event_editor:
+            return
+        if not hasattr(self, "event_list"):
+            return
+        current_row = self.event_list.currentRow()
+        if current_row >= 0:
+            self._on_event_row_changed(current_row)
+
+    def _update_event_list_item(self, index: int) -> None:
+        if not hasattr(self, "event_list"):
+            return
+        item = self.event_list.item(index)
+        if item is None:
+            return
+        item.setText(self._format_event_list_item(self._event_entries[index]))
+
     def _pair(self, *widgets):
         row = QHBoxLayout()
         for w in widgets:
@@ -648,253 +762,15 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     # Style tab --------------------------------------------------------
+    def _make_style_tab_legacy(self):
+        from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
+
+        return build_style_tab(self)
+
     def _make_style_tab(self):
-        fonts = ["Arial", "Helvetica", "Times New Roman", "Courier New"]
+        from vasoanalyzer.ui.dialogs.settings.style_tab import build_style_tab
 
-        content = QWidget()
-        grid = QGridLayout(content)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(12)
-        grid.setVerticalSpacing(12)
-
-        # Axis titles ---------------------------------------------------
-        axis_box = QGroupBox("Axis Titles")
-        axis_form = QFormLayout(axis_box)
-        axis_form.setLabelAlignment(Qt.AlignRight)
-
-        self.title_edit = QLineEdit(self.ax.get_title())
-        self.title_edit.setPlaceholderText("Plot title")
-        axis_form.addRow("Plot Title:", self.title_edit)
-
-        self.xlabel_edit = QLineEdit(self._current_xlabel())
-        self.xlabel_edit.setPlaceholderText("X axis title")
-        axis_form.addRow("X Axis Title:", self.xlabel_edit)
-
-        self.yi_label_edit = QLineEdit(self.ax.get_ylabel())
-        self.yi_label_edit.setPlaceholderText("Top plot axis title")
-        axis_form.addRow("Top Plot Axis Title:", self.yi_label_edit)
-
-        if self.ax2 is not None:
-            self.yo_label_edit = QLineEdit(self.ax2.get_ylabel())
-            self.yo_label_edit.setPlaceholderText("Bottom plot axis title")
-            axis_form.addRow("Bottom Plot Axis Title:", self.yo_label_edit)
-
-        self.axis_font_family = QComboBox()
-        self.axis_font_family.addItems(fonts)
-        self.axis_font_family.setCurrentText(self.style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"]))
-        axis_form.addRow("Font Family:", self.axis_font_family)
-
-        self.axis_font_size = QSpinBox()
-        self.axis_font_size.setRange(6, 48)
-        self.axis_font_size.setValue(int(self.style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])))
-        axis_form.addRow("Font Size:", self.axis_font_size)
-
-        axis_style_row = QWidget()
-        axis_style_layout = QHBoxLayout(axis_style_row)
-        axis_style_layout.setContentsMargins(0, 0, 0, 0)
-        axis_style_layout.setSpacing(8)
-        self.axis_bold = QCheckBox("Bold")
-        self.axis_italic = QCheckBox("Italic")
-        axis_style_layout.addWidget(self.axis_bold)
-        axis_style_layout.addWidget(self.axis_italic)
-        axis_style_layout.addStretch(1)
-        axis_form.addRow("Text Style:", axis_style_row)
-
-        x_color_source = self._x_axis_target or self.ax
-        x_color = None
-        if x_color_source is not None:
-            try:
-                x_color = self._normalize_color(
-                    x_color_source.xaxis.label.get_color(),
-                    self.style.get("x_axis_color"),
-                )
-            except Exception:
-                x_color = None
-        x_color = x_color or self._normalize_color(
-            self.style.get("x_axis_color", DEFAULT_STYLE.get("x_axis_color", "#000000")),
-            DEFAULT_STYLE.get("x_axis_color", "#000000"),
-        )
-        self.x_axis_color_btn = self._make_color_button(x_color)
-        axis_form.addRow("X Title Color:", self.x_axis_color_btn)
-
-        self.yi_axis_color_btn = self._make_color_button(
-            self.style.get("y_axis_color", self.ax.yaxis.label.get_color())
-        )
-        axis_form.addRow("Top Plot Title Color:", self.yi_axis_color_btn)
-
-        if self.ax2 is not None:
-            self.yo_axis_color_btn = self._make_color_button(
-                self.style.get("right_axis_color", self.ax2.yaxis.label.get_color())
-            )
-            axis_form.addRow("Bottom Plot Title Color:", self.yo_axis_color_btn)
-
-        grid.addWidget(axis_box, 0, 0)
-
-        # Tick labels ---------------------------------------------------
-        tick_box = QGroupBox("Tick Labels")
-        tick_form = QFormLayout(tick_box)
-        tick_form.setLabelAlignment(Qt.AlignRight)
-
-        self.tick_font_size = QSpinBox()
-        self.tick_font_size.setRange(6, 32)
-        self.tick_font_size.setValue(int(self.style.get("tick_font_size", DEFAULT_STYLE["tick_font_size"])))
-        tick_form.addRow("Font Size:", self.tick_font_size)
-
-        self.x_tick_color_btn = self._make_color_button(
-            self.style.get("x_tick_color", self.ax.xaxis.label.get_color())
-        )
-        tick_form.addRow("X Tick Color:", self.x_tick_color_btn)
-
-        self.yi_tick_color_btn = self._make_color_button(
-            self.style.get("y_tick_color", self.ax.yaxis.label.get_color())
-        )
-        tick_form.addRow("Top Plot Tick Color:", self.yi_tick_color_btn)
-
-        if self.ax2 is not None:
-            self.yo_tick_color_btn = self._make_color_button(
-                self.style.get("right_tick_color", self.ax2.yaxis.label.get_color())
-            )
-            tick_form.addRow("Bottom Plot Tick Color:", self.yo_tick_color_btn)
-
-        grid.addWidget(tick_box, 0, 1)
-
-        # Event annotations ---------------------------------------------
-        event_box = QGroupBox("Event Labels")
-        event_form = QFormLayout(event_box)
-        event_form.setLabelAlignment(Qt.AlignRight)
-
-        self.event_font_family = QComboBox()
-        self.event_font_family.addItems(fonts)
-        self.event_font_family.setCurrentText(
-            self.style.get("event_font_family", DEFAULT_STYLE["event_font_family"])
-        )
-        event_form.addRow("Font Family:", self.event_font_family)
-
-        self.event_font_size = QSpinBox()
-        self.event_font_size.setRange(6, 32)
-        self.event_font_size.setValue(int(self.style.get("event_font_size", DEFAULT_STYLE["event_font_size"])))
-        event_form.addRow("Font Size:", self.event_font_size)
-
-        event_style_row = QWidget()
-        event_style_layout = QHBoxLayout(event_style_row)
-        event_style_layout.setContentsMargins(0, 0, 0, 0)
-        event_style_layout.setSpacing(8)
-        self.event_bold = QCheckBox("Bold")
-        self.event_italic = QCheckBox("Italic")
-        event_style_layout.addWidget(self.event_bold)
-        event_style_layout.addWidget(self.event_italic)
-        event_style_layout.addStretch(1)
-        event_form.addRow("Text Style:", event_style_row)
-
-        self.event_color_btn = self._make_color_button(
-            self.style.get("event_color", DEFAULT_STYLE["event_color"])
-        )
-        event_form.addRow("Event Color:", self.event_color_btn)
-
-        grid.addWidget(event_box, 1, 0)
-
-        # Pinned annotations -------------------------------------------
-        pin_box = QGroupBox("Pinned Labels")
-        pin_form = QFormLayout(pin_box)
-        pin_form.setLabelAlignment(Qt.AlignRight)
-
-        self.pin_font_family = QComboBox()
-        self.pin_font_family.addItems(fonts)
-        self.pin_font_family.setCurrentText(
-            self.style.get("pin_font_family", DEFAULT_STYLE["pin_font_family"])
-        )
-        pin_form.addRow("Font Family:", self.pin_font_family)
-
-        self.pin_font_size = QSpinBox()
-        self.pin_font_size.setRange(6, 32)
-        self.pin_font_size.setValue(int(self.style.get("pin_font_size", DEFAULT_STYLE["pin_font_size"])))
-        pin_form.addRow("Font Size:", self.pin_font_size)
-
-        pin_style_row = QWidget()
-        pin_style_layout = QHBoxLayout(pin_style_row)
-        pin_style_layout.setContentsMargins(0, 0, 0, 0)
-        pin_style_layout.setSpacing(8)
-        self.pin_bold = QCheckBox("Bold")
-        self.pin_italic = QCheckBox("Italic")
-        pin_style_layout.addWidget(self.pin_bold)
-        pin_style_layout.addWidget(self.pin_italic)
-        pin_style_layout.addStretch(1)
-        pin_form.addRow("Text Style:", pin_style_row)
-
-        self.pin_color_btn = self._make_color_button(
-            self.style.get("pin_color", DEFAULT_STYLE["pin_color"])
-        )
-        pin_form.addRow("Label Color:", self.pin_color_btn)
-
-        self.pin_marker_size = QSpinBox()
-        self.pin_marker_size.setRange(2, 20)
-        self.pin_marker_size.setValue(int(self.style.get("pin_size", DEFAULT_STYLE["pin_size"])))
-        pin_form.addRow("Marker Size:", self.pin_marker_size)
-
-        grid.addWidget(pin_box, 1, 1)
-
-        # Trace lines ---------------------------------------------------
-        line_box = QGroupBox("Trace Lines")
-        line_form = QFormLayout(line_box)
-        line_form.setLabelAlignment(Qt.AlignRight)
-
-        self.line_width = QDoubleSpinBox()
-        self.line_width.setRange(0.5, 10)
-        self.line_width.setValue(float(self.style.get("line_width", DEFAULT_STYLE["line_width"])))
-        line_form.addRow("Inner Line Width:", self.line_width)
-
-        self.line_style_combo = QComboBox()
-        for code, label in (("solid", "Solid"), ("dashed", "Dashed"), ("dotted", "Dotted"), ("dashdot", "DashDot")):
-            self.line_style_combo.addItem(label, code)
-        line_form.addRow("Inner Line Style:", self.line_style_combo)
-
-        primary_line = self._primary_trace_line()
-        primary_color = None
-        if primary_line is not None:
-            primary_color = self._normalize_color(primary_line.get_color(), self.style.get("line_color"))
-        primary_color = primary_color or self._normalize_color(
-            self.style.get("line_color", DEFAULT_STYLE["line_color"]),
-            DEFAULT_STYLE["line_color"],
-        )
-        self.line_color_btn = self._make_color_button(primary_color)
-        line_form.addRow("Inner Line Color:", self.line_color_btn)
-
-        if self.ax2 is not None:
-            self.od_line_width = QDoubleSpinBox()
-            self.od_line_width.setRange(0.5, 10)
-            self.od_line_width.setValue(float(self.style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"])))
-            line_form.addRow("Outer Line Width:", self.od_line_width)
-
-            self.od_line_style_combo = QComboBox()
-            for code, label in (("solid", "Solid"), ("dashed", "Dashed"), ("dotted", "Dotted"), ("dashdot", "DashDot")):
-                self.od_line_style_combo.addItem(label, code)
-            line_form.addRow("Outer Line Style:", self.od_line_style_combo)
-
-            secondary_line = self._secondary_trace_line()
-            secondary_color = None
-            if secondary_line is not None:
-                secondary_color = self._normalize_color(
-                    secondary_line.get_color(),
-                    self.style.get("outer_line_color"),
-                )
-            secondary_color = secondary_color or self._normalize_color(
-                self.style.get("outer_line_color", DEFAULT_STYLE["outer_line_color"]),
-                DEFAULT_STYLE["outer_line_color"],
-            )
-            self.od_line_color_btn = self._make_color_button(secondary_color)
-            line_form.addRow("Outer Line Color:", self.od_line_color_btn)
-
-        grid.addWidget(line_box, 2, 0, 1, 2)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        grid.setRowStretch(3, 1)
-
-        scroll = QScrollArea()
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(content)
-
-        return scroll
+        return build_style_tab(self)
 
     # ------------------------------------------------------------------
     def update_preview(self, *_):
@@ -916,7 +792,6 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.preview_ax.invert_yaxis()
         self.preview_canvas.draw_idle()
 
-    # ------------------------------------------------------------------
     def _populate_layout_controls(self, params):
         if not hasattr(self, "layout_controls"):
             return
@@ -981,7 +856,9 @@ class UnifiedPlotSettingsDialog(QDialog):
             self._toggle_range_inputs([self.yo_min, self.yo_max], not self.yo_auto.isChecked())
             y2_scale = state.get("bottom_scale", state.get("right_scale", self.ax2.get_yscale()))
             self.yo_scale.setCurrentText("Log" if y2_scale == "log" else "Linear")
-            bottom_ticks = state.get("bottom_ticks", state.get("right_ticks", self.yo_ticks.value()))
+            bottom_ticks = state.get(
+                "bottom_ticks", state.get("right_ticks", self.yo_ticks.value())
+            )
             self.yo_ticks.setValue(int(max(2, min(20, bottom_ticks))))
 
         grid_on = state.get("grid_on")
@@ -1034,17 +911,25 @@ class UnifiedPlotSettingsDialog(QDialog):
             style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"]),
         )
         self.axis_font_size.blockSignals(True)
-        self.axis_font_size.setValue(int(style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])))
+        self.axis_font_size.setValue(
+            int(style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"]))
+        )
         self.axis_font_size.blockSignals(False)
         self.axis_bold.blockSignals(True)
-        self.axis_bold.setChecked(bool(style.get("axis_bold", DEFAULT_STYLE.get("axis_bold", True))))
+        self.axis_bold.setChecked(
+            bool(style.get("axis_bold", DEFAULT_STYLE.get("axis_bold", True)))
+        )
         self.axis_bold.blockSignals(False)
         self.axis_italic.blockSignals(True)
-        self.axis_italic.setChecked(bool(style.get("axis_italic", DEFAULT_STYLE.get("axis_italic", False))))
+        self.axis_italic.setChecked(
+            bool(style.get("axis_italic", DEFAULT_STYLE.get("axis_italic", False)))
+        )
         self.axis_italic.blockSignals(False)
 
         self.tick_font_size.blockSignals(True)
-        self.tick_font_size.setValue(int(style.get("tick_font_size", DEFAULT_STYLE["tick_font_size"])))
+        self.tick_font_size.setValue(
+            int(style.get("tick_font_size", DEFAULT_STYLE["tick_font_size"]))
+        )
         self.tick_font_size.blockSignals(False)
 
         x_color_source = self._x_axis_target or self.ax
@@ -1095,13 +980,19 @@ class UnifiedPlotSettingsDialog(QDialog):
             style.get("event_font_family", DEFAULT_STYLE["event_font_family"]),
         )
         self.event_font_size.blockSignals(True)
-        self.event_font_size.setValue(int(style.get("event_font_size", DEFAULT_STYLE["event_font_size"])))
+        self.event_font_size.setValue(
+            int(style.get("event_font_size", DEFAULT_STYLE["event_font_size"]))
+        )
         self.event_font_size.blockSignals(False)
         self.event_bold.blockSignals(True)
-        self.event_bold.setChecked(bool(style.get("event_bold", DEFAULT_STYLE.get("event_bold", False))))
+        self.event_bold.setChecked(
+            bool(style.get("event_bold", DEFAULT_STYLE.get("event_bold", False)))
+        )
         self.event_bold.blockSignals(False)
         self.event_italic.blockSignals(True)
-        self.event_italic.setChecked(bool(style.get("event_italic", DEFAULT_STYLE.get("event_italic", False))))
+        self.event_italic.setChecked(
+            bool(style.get("event_italic", DEFAULT_STYLE.get("event_italic", False)))
+        )
         self.event_italic.blockSignals(False)
         self._set_button_color(
             self.event_color_btn,
@@ -1119,7 +1010,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.pin_bold.setChecked(bool(style.get("pin_bold", DEFAULT_STYLE.get("pin_bold", False))))
         self.pin_bold.blockSignals(False)
         self.pin_italic.blockSignals(True)
-        self.pin_italic.setChecked(bool(style.get("pin_italic", DEFAULT_STYLE.get("pin_italic", False))))
+        self.pin_italic.setChecked(
+            bool(style.get("pin_italic", DEFAULT_STYLE.get("pin_italic", False)))
+        )
         self.pin_italic.blockSignals(False)
         self._set_button_color(
             self.pin_color_btn,
@@ -1132,7 +1025,9 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.line_width.blockSignals(True)
         self.line_width.setValue(float(style.get("line_width", DEFAULT_STYLE["line_width"])))
         self.line_width.blockSignals(False)
-        idx = self.line_style_combo.findData(style.get("line_style", DEFAULT_STYLE["line_style"]).lower())
+        idx = self.line_style_combo.findData(
+            style.get("line_style", DEFAULT_STYLE["line_style"]).lower()
+        )
         if idx != -1:
             self.line_style_combo.blockSignals(True)
             self.line_style_combo.setCurrentIndex(idx)
@@ -1150,10 +1045,14 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         if hasattr(self, "od_line_width"):
             self.od_line_width.blockSignals(True)
-            self.od_line_width.setValue(float(style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"])))
+            self.od_line_width.setValue(
+                float(style.get("outer_line_width", DEFAULT_STYLE["outer_line_width"]))
+            )
             self.od_line_width.blockSignals(False)
         if hasattr(self, "od_line_style_combo"):
-            o_idx = self.od_line_style_combo.findData(style.get("outer_line_style", DEFAULT_STYLE["outer_line_style"]).lower())
+            o_idx = self.od_line_style_combo.findData(
+                style.get("outer_line_style", DEFAULT_STYLE["outer_line_style"]).lower()
+            )
             if o_idx != -1:
                 self.od_line_style_combo.blockSignals(True)
                 self.od_line_style_combo.setCurrentIndex(o_idx)
@@ -1222,14 +1121,14 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     # ------------------------------------------------------------------
     def apply_changes(self):
-        parent = getattr(self, 'parent_window', None) or self.parent()
+        parent = getattr(self, "parent_window", None) or self.parent()
 
         if self.origin_mode.currentText() == "Manual":
-            self.ax.spines['left'].set_position(('data', self.origin_x.value()))
-            self.ax.spines['bottom'].set_position(('data', self.origin_y.value()))
+            self.ax.spines["left"].set_position(("data", self.origin_x.value()))
+            self.ax.spines["bottom"].set_position(("data", self.origin_y.value()))
         else:
-            self.ax.spines['left'].set_position(('outward', 0))
-            self.ax.spines['bottom'].set_position(('outward', 0))
+            self.ax.spines["left"].set_position(("outward", 0))
+            self.ax.spines["bottom"].set_position(("outward", 0))
 
         preset = self.size_preset.currentText()
         if preset == "Custom":
@@ -1239,33 +1138,29 @@ class UnifiedPlotSettingsDialog(QDialog):
             self.fig.set_size_inches(side, side)
 
         layout_values = {n: c.value() for n, c in self.layout_controls.items()}
-        layout_values['left'] = max(0.0, min(layout_values['left'], 1.0))
-        layout_values['right'] = max(layout_values['left'] + 0.05, min(layout_values['right'], 1.0))
-        layout_values['bottom'] = max(0.0, min(layout_values['bottom'], 1.0))
-        layout_values['top'] = max(layout_values['bottom'] + 0.05, min(layout_values['top'], 1.0))
-        layout_values['wspace'] = max(0.0, layout_values['wspace'])
-        layout_values['hspace'] = max(0.0, layout_values['hspace'])
+        layout_values["left"] = max(0.0, min(layout_values["left"], 1.0))
+        layout_values["right"] = max(layout_values["left"] + 0.05, min(layout_values["right"], 1.0))
+        layout_values["bottom"] = max(0.0, min(layout_values["bottom"], 1.0))
+        layout_values["top"] = max(layout_values["bottom"] + 0.05, min(layout_values["top"], 1.0))
+        layout_values["wspace"] = max(0.0, layout_values["wspace"])
+        layout_values["hspace"] = max(0.0, layout_values["hspace"])
         self.fig.subplots_adjust(**layout_values)
 
         x_auto = self.x_auto.isChecked()
         self.ax.set_autoscalex_on(x_auto)
         if x_auto:
-            self.ax.autoscale(enable=True, axis='x')
+            self.ax.autoscale(enable=True, axis="x")
         else:
-            try:
+            with contextlib.suppress(Exception):
                 self.ax.set_xlim(self.x_min.value(), self.x_max.value())
-            except Exception:
-                pass
 
         y_auto = self.y_auto.isChecked()
         self.ax.set_autoscaley_on(y_auto)
         if y_auto:
-            self.ax.autoscale(enable=True, axis='y')
+            self.ax.autoscale(enable=True, axis="y")
         else:
-            try:
+            with contextlib.suppress(Exception):
                 self.ax.set_ylim(self.yi_min.value(), self.yi_max.value())
-            except Exception:
-                pass
 
         self.ax.set_xscale(self.x_scale.currentText().lower())
         self.ax.set_yscale(self.y_scale.currentText().lower())
@@ -1276,21 +1171,19 @@ class UnifiedPlotSettingsDialog(QDialog):
             y2_auto = self.yo_auto.isChecked()
             self.ax2.set_autoscaley_on(y2_auto)
             if y2_auto:
-                self.ax2.autoscale(enable=True, axis='y')
+                self.ax2.autoscale(enable=True, axis="y")
             else:
-                try:
+                with contextlib.suppress(Exception):
                     self.ax2.set_ylim(self.yo_min.value(), self.yo_max.value())
-                except Exception:
-                    pass
             self.ax2.set_yscale(self.yo_scale.currentText().lower())
             self.ax2.yaxis.set_major_locator(MaxNLocator(self.yo_ticks.value()))
 
         grid_on = self.show_grid.isChecked()
         if grid_on:
-            self.ax.grid(True, color=CURRENT_THEME.get('grid_color', '#e0e0e0'))
+            self.ax.grid(True, color=CURRENT_THEME.get("grid_color", "#e0e0e0"))
         else:
             self.ax.grid(False)
-        if parent is not None and hasattr(parent, 'grid_visible'):
+        if parent is not None and hasattr(parent, "grid_visible"):
             parent.grid_visible = bool(grid_on)
 
         self.ax.set_title(self.title_edit.text())
@@ -1304,51 +1197,80 @@ class UnifiedPlotSettingsDialog(QDialog):
         if self.ax2 is not None:
             self.ax2.set_ylabel(self.yo_label_edit.text())
 
-        self.style['axis_font_family'] = self.axis_font_family.currentText()
-        self.style['axis_font_size'] = int(self.axis_font_size.value())
-        self.style['axis_bold'] = self.axis_bold.isChecked()
-        self.style['axis_italic'] = self.axis_italic.isChecked()
-        self.style['tick_font_size'] = int(self.tick_font_size.value())
-        self.style['axis_color'] = self.x_axis_color_btn.color
-        self.style['x_axis_color'] = self.x_axis_color_btn.color
-        self.style['y_axis_color'] = self.yi_axis_color_btn.color
-        self.style['x_tick_color'] = self.x_tick_color_btn.color
-        self.style['y_tick_color'] = self.yi_tick_color_btn.color
-        self.style['tick_color'] = self.x_tick_color_btn.color
-        self.style['tick_length'] = float(self.tick_length.value())
-        self.style['tick_width'] = float(self.tick_width.value())
-        self.style['line_width'] = float(self.line_width.value())
-        self.style['line_style'] = (self.line_style_combo.currentData() or DEFAULT_STYLE['line_style']).lower()
-        self.style['line_color'] = self.line_color_btn.color
-        self.style['event_font_family'] = self.event_font_family.currentText()
-        self.style['event_font_size'] = int(self.event_font_size.value())
-        self.style['event_bold'] = self.event_bold.isChecked()
-        self.style['event_italic'] = self.event_italic.isChecked()
-        self.style['event_color'] = self.event_color_btn.color
-        self.style['pin_font_family'] = self.pin_font_family.currentText()
-        self.style['pin_font_size'] = int(self.pin_font_size.value())
-        self.style['pin_bold'] = self.pin_bold.isChecked()
-        self.style['pin_italic'] = self.pin_italic.isChecked()
-        self.style['pin_color'] = self.pin_color_btn.color
-        self.style['pin_size'] = int(self.pin_marker_size.value())
+        self.style["axis_font_family"] = self.axis_font_family.currentText()
+        self.style["axis_font_size"] = int(self.axis_font_size.value())
+        self.style["axis_bold"] = self.axis_bold.isChecked()
+        self.style["axis_italic"] = self.axis_italic.isChecked()
+        self.style["tick_font_size"] = int(self.tick_font_size.value())
+        self.style["axis_color"] = self.x_axis_color_btn.color
+        self.style["x_axis_color"] = self.x_axis_color_btn.color
+        self.style["y_axis_color"] = self.yi_axis_color_btn.color
+        self.style["x_tick_color"] = self.x_tick_color_btn.color
+        self.style["y_tick_color"] = self.yi_tick_color_btn.color
+        self.style["tick_color"] = self.x_tick_color_btn.color
+        self.style["tick_length"] = float(self.tick_length.value())
+        self.style["tick_width"] = float(self.tick_width.value())
+        self.style["line_width"] = float(self.line_width.value())
+        self.style["line_style"] = (
+            self.line_style_combo.currentData() or DEFAULT_STYLE["line_style"]
+        ).lower()
+        self.style["line_color"] = self.line_color_btn.color
+        self.style["event_font_family"] = self.event_font_family.currentText()
+        self.style["event_font_size"] = int(self.event_font_size.value())
+        self.style["event_bold"] = self.event_bold.isChecked()
+        self.style["event_italic"] = self.event_italic.isChecked()
+        self.style["event_color"] = self.event_color_btn.color
+        self.style["event_labels_v3_enabled"] = self.event_labels_v3_toggle.isChecked()
+        self.style["event_label_style_policy"] = self.event_cluster_style.currentData() or "first"
+        self.style["event_label_max_per_cluster"] = int(self.event_max_per_cluster.value())
+        self.style["event_label_lanes"] = int(self.event_label_lanes.value())
+        self.style["event_label_belt_baseline"] = self.event_belt_baseline.isChecked()
+        self.style["event_label_span_siblings"] = self.event_span_siblings.isChecked()
+        self.style["pin_font_family"] = self.pin_font_family.currentText()
+        self.style["pin_font_size"] = int(self.pin_font_size.value())
+        self.style["pin_bold"] = self.pin_bold.isChecked()
+        self.style["pin_italic"] = self.pin_italic.isChecked()
+        self.style["pin_color"] = self.pin_color_btn.color
+        self.style["pin_size"] = int(self.pin_marker_size.value())
+        self.style["event_label_auto_mode"] = self.event_auto_mode.isChecked()
+        self.style["event_label_density_compact"] = float(self.event_density_compact.value())
+        self.style["event_label_density_belt"] = float(self.event_density_belt.value())
+        self.style["event_label_outline_enabled"] = self.event_outline_enabled.isChecked()
+        self.style["event_label_outline_width"] = float(self.event_outline_width.value())
+        self.style["event_label_outline_color"] = self.event_outline_color_btn.color
+        self.style["event_label_tooltips_enabled"] = self.event_tooltips_enabled.isChecked()
+        self.style["event_label_tooltip_proximity"] = int(self.event_tooltip_proximity.value())
+        self.style["event_label_legend_enabled"] = self.event_legend_enabled.isChecked()
+        self.style["event_label_legend_location"] = self.event_legend_location.currentText()
+
+        # Event highlights
+        if hasattr(self, "event_highlight_color_btn"):
+            self.style["event_highlight_color"] = self.event_highlight_color_btn.color
+        if hasattr(self, "event_highlight_alpha"):
+            self.style["event_highlight_alpha"] = float(self.event_highlight_alpha.value())
+        if hasattr(self, "event_highlight_duration"):
+            self.style["event_highlight_duration_ms"] = int(self.event_highlight_duration.value())
 
         if self.ax2 is not None:
-            if hasattr(self, 'yo_axis_color_btn'):
-                self.style['right_axis_color'] = self.yo_axis_color_btn.color
-            if hasattr(self, 'yo_tick_color_btn'):
-                self.style['right_tick_color'] = self.yo_tick_color_btn.color
-            if hasattr(self, 'od_line_width'):
-                self.style['outer_line_width'] = float(self.od_line_width.value())
-            if hasattr(self, 'od_line_style_combo'):
-                self.style['outer_line_style'] = (self.od_line_style_combo.currentData() or DEFAULT_STYLE['outer_line_style']).lower()
-            if hasattr(self, 'od_line_color_btn'):
-                self.style['outer_line_color'] = self.od_line_color_btn.color
+            if hasattr(self, "yo_axis_color_btn"):
+                self.style["right_axis_color"] = self.yo_axis_color_btn.color
+            if hasattr(self, "yo_tick_color_btn"):
+                self.style["right_tick_color"] = self.yo_tick_color_btn.color
+            if hasattr(self, "od_line_width"):
+                self.style["outer_line_width"] = float(self.od_line_width.value())
+            if hasattr(self, "od_line_style_combo"):
+                self.style["outer_line_style"] = (
+                    self.od_line_style_combo.currentData() or DEFAULT_STYLE["outer_line_style"]
+                ).lower()
+            if hasattr(self, "od_line_color_btn"):
+                self.style["outer_line_color"] = self.od_line_color_btn.color
 
-        if parent is not None and hasattr(parent, 'apply_plot_style'):
+        self._emit_event_updates()
+
+        if parent is not None and hasattr(parent, "apply_plot_style"):
             parent.apply_plot_style(self.style, persist=True)
         else:
             self.canvas.draw_idle()
-
 
     # ------------------------------------------------------------------
     def get_style(self):

@@ -1,8 +1,49 @@
-# VasoAnalyzer v2.0
+# VasoAnalyzer v2.2
 
 **Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
 
 VasoAnalyzer is a **desktop** app (Windows/macOS) that streamlines analysis of pressure myography experiments. It pairs fast trace visualization with event editing, optional TIFF snapshots, and export‑ready figures/tables.
+
+---
+
+## 🧬 VasoAnalyzer Project Files (`.vaso`)
+
+As of **v2.0**, VasoAnalyzer stores and shares entire experiments as a single
+`.vaso` package — a structured, open, and portable format inspired by LabChart
+and GraphPad projects.
+
+Each `.vaso` file is a ZIP container that holds every component of an analysis:
+
+- **Datasets** (traces, ROIs, QC flags)
+- **Event labels** (semantic time-based annotations)
+- **Views** (layout, colors, label positions)
+- **Analysis graph & results** (Parquet tables)
+- **Figures & exports**
+- **Audit trail** (timestamped actions and provenance)
+
+Large raw files (TIFFs, CSVs) can be **referenced** externally or **embedded**
+for sharing. The format is fully JSON/YAML-based — no pickles, no binaries —
+and is designed for long-term reproducibility.
+
+> 📦 To pack or unpack a project:
+> ```bash
+> vaso pack study.vaso
+> vaso unpack study.vaso --to ./local_data
+> ```
+
+```bash
+# Create a new project
+vaso new study.vaso --title "My Study"
+
+# Add a dataset (10 Hz, channels ID:µm and PRES:mmHg)
+vaso add-dataset study.vaso --name Seg1 --rate 10 --channels ID:µm PRES:mmHg
+
+# Add an event
+vaso add-event study.vaso --id ev1 --dataset-id <DATASET_ID> --t 12.3 --label "CCh 1µM" --lane drug
+
+# Embed a TIFF
+vaso pack study.vaso --dataset-id <DATASET_ID> --file path/to/segment_001.tif
+```
 
 ---
 
@@ -48,9 +89,9 @@ VasoAnalyzer is a **desktop** app (Windows/macOS) that streamlines analysis of p
 
 ## 📦 Projects & Files
 
-- **Project format:** `*.vaso` (ZIP) containing `manifest.json` + `state.json`.
-- **Snapshots:** Not embedded inside the project by default; link to external TIFFs.
-- **Where exports go:** The event CSV and session JSON are written **alongside your trace file**.
+- **Project format:** `*.vaso` (ZIP) with a schema-validated manifest, datasets, views, analysis graph, and audit trail.
+- **Snapshots:** Link externally by default; embed with `vaso pack` for portable copies.
+- **Exports:** Figures/tables live under `/figures` and `/exports` inside the project; CLI helpers can unpack them for batch workflows.
 
 ---
 

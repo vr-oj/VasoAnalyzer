@@ -21,20 +21,25 @@ from collections import Counter, deque
 from dataclasses import dataclass, field
 from numbers import Real
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, cast
 
+import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from PyQt5.QtCore import QAbstractTableModel, QModelIndex, Qt, pyqtProperty
+from PyQt5.QtGui import QBrush, QColor, QFont
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
     QFileDialog,
     QFrame,
-    QFormLayout,
     QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
-    QSpinBox,
+    QSplitter,
     QTableView,
     QTableWidget,
     QTableWidgetItem,
@@ -42,21 +47,31 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWizard,
     QWizardPage,
-    QComboBox,
-    QHeaderView,
-    QAbstractItemView,
-    QSplitter,
-    QInputDialog,
 )
-from PyQt5.QtGui import QBrush, QColor, QFont
-import pandas as pd
 
 __all__ = ["ExcelMapWizard"]
+
+DEFAULT_QMODEL_INDEX = QModelIndex()
+
+
+class _WizardUnavailableError(RuntimeError):
+    """Raised when a wizard page cannot resolve its hosting wizard."""
+
+
+class WizardPageBase(QWizardPage):
+    """QWizardPage helper exposing a typed reference to the host wizard."""
+
+    def _wizard(self) -> "ExcelMapWizard":
+        wizard = super().wizard()
+        if wizard is None:
+            raise _WizardUnavailableError("Wizard is not available")
+        return cast("ExcelMapWizard", wizard)
 
 
 # ---------------------------------------------------------------------------
 # Helper utilities
 # ---------------------------------------------------------------------------
+
 
 def load_workbook_preserve(path: str):
     """Load an Excel workbook preserving formulas."""
@@ -67,7 +82,7 @@ def load_workbook_preserve(path: str):
 def load_events_csv(path: str) -> pd.DataFrame:
     """Load a CSV file containing event information."""
 
-    with open(path, "r", encoding="utf-8-sig") as handle:
+    with open(path, encoding="utf-8-sig") as handle:
         sample = handle.read(1024)
         handle.seek(0)
         try:
@@ -93,6 +108,7 @@ def save_workbook(wb, path: str) -> None:
 # Model for previewing pandas.DataFrame in a QTableView
 # ---------------------------------------------------------------------------
 
+
 class PandasModel(QAbstractTableModel):
     """Simple table model exposing a pandas DataFrame."""
 
@@ -100,19 +116,19 @@ class PandasModel(QAbstractTableModel):
         super().__init__()
         self._df = frame.reset_index(drop=True)
 
-    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+    def rowCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return len(self._df)
 
-    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:  # type: ignore[override]
+    def columnCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return len(self._df.columns)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):  # type: ignore[override]
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
         if not index.isValid() or role != Qt.DisplayRole:
             return None
         value = self._df.iat[index.row(), index.column()]
         return "" if pd.isna(value) else str(value)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):  # type: ignore[override]
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Horizontal:
@@ -124,7 +140,8 @@ class PandasModel(QAbstractTableModel):
 # Wizard Pages
 # ---------------------------------------------------------------------------
 
-class TemplatePage(QWizardPage):
+
+class TemplatePage(WizardPageBase):
     """Page for selecting the Excel template and event CSV."""
 
     def __init__(self) -> None:
@@ -167,15 +184,13 @@ class TemplatePage(QWizardPage):
     csvPath = pyqtProperty(str, fget=get_csvPath, fset=set_csvPath)
 
     # ------------------------------------------------------
-    def initializePage(self) -> None:  # type: ignore[override]
+    def initializePage(self) -> None:
         super().initializePage()
         self._update_events_status()
 
     # ------------------------------------------------------
     def load_template(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select .xlsx", "", "Excel Files (*.xlsx)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Select .xlsx", "", "Excel Files (*.xlsx)")
         if not path:
             return
         try:
@@ -185,7 +200,7 @@ class TemplatePage(QWizardPage):
             return
 
         ws = wb.active
-        wiz = self.wizard()
+        wiz = self._wizard()
         wiz.setField("templatePath", path)
         wiz.wb = wb
         wiz.ws = ws
@@ -195,9 +210,7 @@ class TemplatePage(QWizardPage):
 
     # ------------------------------------------------------
     def load_csv(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select CSV", "", "CSV Files (*.csv)"
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Select CSV", "", "CSV Files (*.csv)")
         if not path:
             return
         try:
@@ -209,7 +222,7 @@ class TemplatePage(QWizardPage):
             QMessageBox.critical(self, "Load Failed", str(exc))
             return
 
-        wiz = self.wizard()
+        wiz = self._wizard()
         wiz.reset_mapping_state()
         wiz.setField("csvPath", path)
         wiz.set_events_dataframe(df, source="csv")
@@ -217,14 +230,14 @@ class TemplatePage(QWizardPage):
         self.completeChanged.emit()
 
     # ------------------------------------------------------
-    def isComplete(self) -> bool:  # type: ignore[override]
-        wiz = self.wizard()
+    def isComplete(self) -> bool:
+        wiz = self._wizard()
         has_events = bool(self.field("csvPath")) or getattr(wiz, "eventsDF", None) is not None
         return bool(self.field("templatePath") and has_events)
 
     # ------------------------------------------------------
     def _update_events_status(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         df = getattr(wiz, "eventsDF", None)
         if df is None or df.empty:
             self.lbl_csv.setText("No events loaded.")
@@ -250,7 +263,7 @@ class TemplatePage(QWizardPage):
         if df is None or df.empty:
             raise ValueError("Event CSV is empty.")
 
-        rename_map: Dict[str, str] = {}
+        rename_map: dict[str, str] = {}
 
         def _norm(col: str) -> str:
             return "".join(ch for ch in col.lower() if ch.isalnum())
@@ -279,9 +292,7 @@ class TemplatePage(QWizardPage):
             raise ValueError("Event CSV must include 'ID (µm)' and/or 'OD (µm)' column.")
 
         desired_order = [
-            col
-            for col in ["Event", "Time (s)", "ID (µm)", "OD (µm)", "Frame"]
-            if col in df.columns
+            col for col in ["Event", "Time (s)", "ID (µm)", "OD (µm)", "Frame"] if col in df.columns
         ]
         df = df[desired_order].copy()
         df["Event"] = df["Event"].astype(str)
@@ -299,8 +310,8 @@ class TemplatePage(QWizardPage):
 class SessionEventInfo:
     index: int
     label: str
-    time_value: Optional[float]
-    values: Dict[str, Any] = field(default_factory=dict)
+    time_value: float | None
+    values: dict[str, Any] = field(default_factory=dict)
 
     @property
     def combo_text(self) -> str:
@@ -327,7 +338,7 @@ class DateColumnOption:
 
     @property
     def letter(self) -> str:
-        return get_column_letter(self.column_index)
+        return str(get_column_letter(self.column_index))
 
     @property
     def display(self) -> str:
@@ -341,7 +352,7 @@ class DateColumnOption:
         return base
 
 
-class RowMappingPage(QWizardPage):
+class RowMappingPage(WizardPageBase):
     """Interactive mapping page with preview and row-by-row controls."""
 
     PREVIEW_ROW_LIMIT = 30
@@ -350,9 +361,9 @@ class RowMappingPage(QWizardPage):
         super().__init__()
         self.setTitle("Step 2: Map Events to Template Rows")
 
-        self._event_row_widgets: Dict[int, QComboBox] = {}
-        self._value_items: Dict[int, QTableWidgetItem] = {}
-        self._status_items: Dict[int, QTableWidgetItem] = {}
+        self._event_row_widgets: dict[int, QComboBox] = {}
+        self._value_items: dict[int, QTableWidgetItem] = {}
+        self._status_items: dict[int, QTableWidgetItem] = {}
         self._initialised = False
 
         root = QVBoxLayout(self)
@@ -412,12 +423,13 @@ class RowMappingPage(QWizardPage):
         self.mapping_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         splitter.addWidget(self.mapping_table)
 
-        helper_text = QLabel(
-            "Headers are any Column A cells that are bold and filled; the wizard never writes to them.\n"
-            "To add an event row, type its label in Column A with normal text and no fill.\n"
-            "Pick the active date column in the row of dates; values go into that column.\n"
-            "Override matches using the dropdowns—your selections control the final export."
-        )
+        helper_lines = [
+            "Headers use bold, filled Column A cells; the wizard never writes to them.",
+            "To add an event row, type its label in Column A with normal text and no fill.",
+            "Pick the active date column in the row of dates; values go into that column.",
+            "Override matches using the dropdowns—your selections control the final export.",
+        ]
+        helper_text = QLabel("\n".join(helper_lines))
         helper_text.setWordWrap(True)
         helper_text.setStyleSheet("color: #555;")
         root.addWidget(helper_text)
@@ -428,9 +440,9 @@ class RowMappingPage(QWizardPage):
         self.select_unmapped_btn.clicked.connect(self._select_all_unmapped)
 
     # --------------------------------------------------
-    def initializePage(self) -> None:  # type: ignore[override]
+    def initializePage(self) -> None:
         super().initializePage()
-        wiz = self.wizard()
+        wiz = self._wizard()
         if not wiz or wiz.wb is None or wiz.ws is None or wiz.eventsDF is None:
             self.info_label.setText("Load an Excel template and event data first.")
             self.setFinalPage(True)
@@ -449,7 +461,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _populate_measurement_options(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         self.measurement_combo.blockSignals(True)
         self.measurement_combo.clear()
         for col in wiz.measurement_columns:
@@ -464,7 +476,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _populate_date_options(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         options = wiz.date_columns or []
 
         self.pick_date_combo.blockSignals(True)
@@ -490,7 +502,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _rebuild_mapping_table(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         event_rows = [row for row in wiz.event_rows if not row.is_header]
 
         self.mapping_table.setRowCount(len(event_rows))
@@ -524,7 +536,9 @@ class RowMappingPage(QWizardPage):
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
 
-            combo.currentIndexChanged.connect(self._make_row_selection_handler(event_row.row_index, combo))
+            combo.currentIndexChanged.connect(
+                self._make_row_selection_handler(event_row.row_index, combo)
+            )
             self.mapping_table.setCellWidget(row_idx, 2, combo)
             self._event_row_widgets[event_row.row_index] = combo
 
@@ -544,7 +558,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _refresh_value_column(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         measurement = wiz.current_measurement
         for row_index, item in self._value_items.items():
             assignment = wiz.row_assignments.get(row_index)
@@ -561,7 +575,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _refresh_status_icons(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         assignments = Counter(
             assignment for assignment in wiz.row_assignments.values() if assignment is not None
         )
@@ -584,7 +598,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _refresh_preview(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         preview_data = wiz.preview_template_data(limit=self.PREVIEW_ROW_LIMIT)
         self.preview_table.clear()
         if not preview_data:
@@ -592,7 +606,7 @@ class RowMappingPage(QWizardPage):
             self.preview_table.setColumnCount(0)
             return
 
-        headers = [key for key in preview_data[0].keys() if not key.startswith("_")]
+        headers = [key for key in preview_data[0] if not key.startswith("_")]
         self.preview_table.setColumnCount(len(headers))
         self.preview_table.setHorizontalHeaderLabels(headers)
         self.preview_table.setRowCount(len(preview_data))
@@ -622,28 +636,30 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _update_status_banner(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         if getattr(wiz, "manual_date_selection_required", False):
             self.info_label.setText(
-                "Multiple date columns detected. Pick the active date column above before continuing."
+                "Multiple date columns detected. Pick the active date column before continuing."
             )
             self.info_label.setStyleSheet("color: #8a6d3b;")
             return
         unmapped = sum(1 for value in wiz.row_assignments.values() if value is None)
         if unmapped:
             self.info_label.setText(
-                f"{unmapped} event row(s) are still unmapped. You can continue, but mapped rows only will be written."
+                f"{unmapped} event row(s) are still unmapped. Only mapped rows will be written."
             )
             self.info_label.setStyleSheet("color: #8a6d3b;")
             self.select_unmapped_btn.setVisible(True)
         else:
-            self.info_label.setText("Review the mappings below. You can override any row before saving.")
+            self.info_label.setText(
+                "Review the mappings below. You can override any row before saving."
+            )
             self.info_label.setStyleSheet("color: #333;")
             self.select_unmapped_btn.setVisible(False)
 
     # --------------------------------------------------
     def _on_measurement_changed(self, value: str) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         wiz.current_measurement = value
         self._refresh_value_column()
         self._refresh_status_icons()
@@ -652,7 +668,7 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _on_redetect(self) -> None:
-        wiz = self.wizard()
+        wiz = self._wizard()
         if not wiz.prepare_layout(auto=True, force=True):
             self.info_label.setText(wiz.layout_error or "Could not re-run detection.")
             self.info_label.setStyleSheet("color: #a94442;")
@@ -669,7 +685,7 @@ class RowMappingPage(QWizardPage):
         option = self.pick_date_combo.itemData(index)
         if not isinstance(option, DateColumnOption):
             return
-        wiz = self.wizard()
+        wiz = self._wizard()
         wiz.set_active_date_column(option)
         wiz.ensure_active_date_value(self)
         self._refresh_preview()
@@ -678,7 +694,7 @@ class RowMappingPage(QWizardPage):
     # --------------------------------------------------
     def _make_row_selection_handler(self, row_index: int, combo: QComboBox):
         def handler() -> None:
-            wiz = self.wizard()
+            wiz = self._wizard()
             value = combo.currentData()
             wiz.update_row_assignment(row_index, value)
             self._refresh_value_column()
@@ -689,23 +705,23 @@ class RowMappingPage(QWizardPage):
 
     # --------------------------------------------------
     def _select_all_unmapped(self) -> None:
-        for row_index, combo in self._event_row_widgets.items():
+        for _row_index, combo in self._event_row_widgets.items():
             if combo.currentData() is None:
                 combo.showPopup()
                 break
 
     # --------------------------------------------------
-    def validatePage(self) -> bool:  # type: ignore[override]
-        wiz = self.wizard()
+    def validatePage(self) -> bool:
+        wiz = self._wizard()
         wiz.persist_assignments()
         return True
 
     # --------------------------------------------------
-    def isComplete(self) -> bool:  # type: ignore[override]
+    def isComplete(self) -> bool:
         return True
 
 
-class PreviewPage(QWizardPage):
+class PreviewPage(WizardPageBase):
     """Final page showing a preview and allowing export."""
 
     def __init__(self) -> None:
@@ -719,8 +735,8 @@ class PreviewPage(QWizardPage):
         layout.addWidget(self.btn_save)
 
     # ------------------------------------------------------
-    def initializePage(self) -> None:  # type: ignore[override]
-        wiz = self.wizard()
+    def initializePage(self) -> None:
+        wiz = self._wizard()
         if wiz is None:
             return
 
@@ -757,7 +773,7 @@ class PreviewPage(QWizardPage):
         if confirm != QMessageBox.Yes:
             return
 
-        wiz = self.wizard()
+        wiz = self._wizard()
         wiz.apply_mapping()
 
         try:
@@ -766,28 +782,25 @@ class PreviewPage(QWizardPage):
             QMessageBox.critical(self, "Save Failed", str(exc))
             return
 
-        QMessageBox.information(
-            self,
-            "Template Updated",
-            f"Mappings written to {target_path}"
-        )
+        QMessageBox.information(self, "Template Updated", f"Mappings written to {target_path}")
         self.completeChanged.emit()
 
     # ------------------------------------------------------
-    def isComplete(self) -> bool:  # type: ignore[override]
-        return getattr(self.wizard(), "wb", None) is not None
+    def isComplete(self) -> bool:
+        return self._wizard().wb is not None
 
 
 # ---------------------------------------------------------------------------
 # Main wizard class
 # ---------------------------------------------------------------------------
 
+
 class ExcelMapWizard(QWizard):
     """Wizard dialog used to map events to Excel templates."""
 
     MAX_PREVIEW_COLUMNS = 6
 
-    def __init__(self, parent=None, events_df: Optional[pd.DataFrame] = None) -> None:
+    def __init__(self, parent=None, events_df: pd.DataFrame | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Map Events to Excel")
         self.setWizardStyle(QWizard.ModernStyle)
@@ -796,30 +809,30 @@ class ExcelMapWizard(QWizard):
         # Workbook/session state
         self.wb = None
         self.ws = None
-        self.eventsDF: Optional[pd.DataFrame] = None
-        self.events_source: Optional[str] = None
+        self.eventsDF: pd.DataFrame | None = None
+        self.events_source: str | None = None
 
         # Derived session data
-        self.session_events: List[SessionEventInfo] = []
-        self.measurement_columns: List[str] = []
-        self.current_measurement: Optional[str] = None
+        self.session_events: list[SessionEventInfo] = []
+        self.measurement_columns: list[str] = []
+        self.current_measurement: str | None = None
 
         # Template layout metadata
-        self.values_block: Optional[Tuple[int, int, int, int]] = None
-        self.date_row_index: Optional[int] = None
-        self.date_columns: List[DateColumnOption] = []
-        self.active_date_column: Optional[DateColumnOption] = None
+        self.values_block: tuple[int, int, int, int] | None = None
+        self.date_row_index: int | None = None
+        self.date_columns: list[DateColumnOption] = []
+        self.active_date_column: DateColumnOption | None = None
         self.manual_date_selection_required: bool = False
         self.pending_new_date: bool = False
-        self.date_columns_bounds: Tuple[int, int] = (0, 0)
+        self.date_columns_bounds: tuple[int, int] = (0, 0)
 
         # Row mapping state
-        self.event_rows: List[EventRowInfo] = []
-        self.row_assignments: Dict[int, Optional[int]] = {}
+        self.event_rows: list[EventRowInfo] = []
+        self.row_assignments: dict[int, int | None] = {}
 
         # Cell history for safe replay
-        self._original_values: Dict[str, Any] = {}
-        self._mapped_cells: Set[str] = set()
+        self._original_values: dict[str, Any] = {}
+        self._mapped_cells: set[str] = set()
 
         # Layout detection cache
         self._layout_ready = False
@@ -837,7 +850,7 @@ class ExcelMapWizard(QWizard):
         self.eventsDF = df.reset_index(drop=True)
         self.events_source = source
 
-        numeric_cols: List[str] = []
+        numeric_cols: list[str] = []
         for col in self.eventsDF.columns:
             if col == "Event":
                 continue
@@ -862,9 +875,15 @@ class ExcelMapWizard(QWizard):
         time_series = self.eventsDF["Time (s)"] if "Time (s)" in self.eventsDF.columns else None
         for idx, row in self.eventsDF.iterrows():
             label = str(row.get("Event", f"Event {idx + 1}"))
-            time_val = float(row["Time (s)"]) if time_series is not None and not pd.isna(row["Time (s)"]) else None
+            time_val = (
+                float(row["Time (s)"])
+                if time_series is not None and not pd.isna(row["Time (s)"])
+                else None
+            )
             values = {col: row[col] for col in numeric_cols}
-            self.session_events.append(SessionEventInfo(index=idx, label=label, time_value=time_val, values=values))
+            self.session_events.append(
+                SessionEventInfo(index=idx, label=label, time_value=time_val, values=values)
+            )
 
         self._layout_ready = False
         self.row_assignments = {}
@@ -900,7 +919,7 @@ class ExcelMapWizard(QWizard):
         self.row_assignments = {}
 
     # --------------------------------------------------
-    def _get_defined_range(self, name: str) -> Optional[str]:
+    def _get_defined_range(self, name: str) -> str | None:
         if self.wb is None or self.ws is None:
             return None
         defined = self.wb.defined_names.get(name)
@@ -940,9 +959,7 @@ class ExcelMapWizard(QWizard):
         if not fill:
             return False
         pattern = getattr(fill, "patternType", None)
-        if not pattern or pattern.lower() == "none":
-            return False
-        return True
+        return not (not pattern or pattern.lower() == "none")
 
     # --------------------------------------------------
     def _extract_event_rows(self) -> None:
@@ -951,19 +968,27 @@ class ExcelMapWizard(QWizard):
             return
 
         min_row, max_row, _, _ = self.values_block
-        rows: List[EventRowInfo] = []
+        rows: list[EventRowInfo] = []
         for row_idx in range(min_row, max_row + 1):
             cell = self.ws.cell(row=row_idx, column=1)
             value = cell.value
             label = str(value).strip() if value not in (None, "") else ""
             if not label:
                 continue
-            is_header = bool(getattr(cell, "font", None) and getattr(cell.font, "bold", False)) and self._has_fill(cell)
-            rows.append(EventRowInfo(row_index=row_idx, label=label, is_header=is_header, label_cell=cell.coordinate))
+            is_header = bool(
+                getattr(cell, "font", None) and getattr(cell.font, "bold", False)
+            ) and self._has_fill(cell)
+            rows.append(
+                EventRowInfo(
+                    row_index=row_idx, label=label, is_header=is_header, label_cell=cell.coordinate
+                )
+            )
 
         self.event_rows = rows
         valid_rows = {row.row_index for row in self.event_rows if not row.is_header}
-        self.row_assignments = {row_idx: self.row_assignments.get(row_idx) for row_idx in valid_rows}
+        self.row_assignments = {
+            row_idx: self.row_assignments.get(row_idx) for row_idx in valid_rows
+        }
 
     # --------------------------------------------------
     def _build_date_options(self) -> None:
@@ -1002,7 +1027,7 @@ class ExcelMapWizard(QWizard):
         try:
             pd.to_datetime(value)
             return True
-        except Exception:
+        except (ValueError, TypeError, pd.errors.OutOfBoundsDatetime):
             return False
 
     # --------------------------------------------------
@@ -1050,7 +1075,7 @@ class ExcelMapWizard(QWizard):
         if cell.value not in (None, "") and not self.pending_new_date:
             return
 
-        prompt = "Enter the column label (e.g., experiment date) for this mapping:" 
+        prompt = "Enter the column label (e.g., experiment date) for this mapping:"
         text, ok = QInputDialog.getText(parent, "Set Date Label", prompt)
         if not ok or not text.strip():
             return
@@ -1078,7 +1103,7 @@ class ExcelMapWizard(QWizard):
         self.auto_assign_rows(force=False)
 
     # --------------------------------------------------
-    def update_row_assignment(self, row_index: int, event_index: Optional[int]) -> None:
+    def update_row_assignment(self, row_index: int, event_index: int | None) -> None:
         if event_index is None:
             self.row_assignments[row_index] = None
         else:
@@ -1089,7 +1114,7 @@ class ExcelMapWizard(QWizard):
     def _normalize_numeric(value: Any) -> Any:
         try:
             return round(float(value), 4)
-        except Exception:
+        except (ValueError, TypeError):
             return str(value).strip()
 
     # --------------------------------------------------
@@ -1098,7 +1123,7 @@ class ExcelMapWizard(QWizard):
             return
         col_idx = self.active_date_column.column_index
         measurement = self.current_measurement
-        value_map: Dict[Any, List[int]] = {}
+        value_map: dict[Any, list[int]] = {}
         for event in self.session_events:
             value = event.values.get(measurement)
             if pd.isna(value):
@@ -1109,7 +1134,10 @@ class ExcelMapWizard(QWizard):
         for row in self.event_rows:
             if row.is_header:
                 continue
-            if row.row_index not in self.row_assignments or self.row_assignments[row.row_index] is not None:
+            if (
+                row.row_index not in self.row_assignments
+                or self.row_assignments[row.row_index] is not None
+            ):
                 continue
             cell_value = self.ws.cell(row=row.row_index, column=col_idx).value
             if cell_value in (None, ""):
@@ -1125,12 +1153,14 @@ class ExcelMapWizard(QWizard):
         if force or not self.row_assignments:
             self.row_assignments = {row_idx: None for row_idx in valid_rows}
         else:
-            self.row_assignments = {row_idx: self.row_assignments.get(row_idx) for row_idx in valid_rows}
+            self.row_assignments = {
+                row_idx: self.row_assignments.get(row_idx) for row_idx in valid_rows
+            }
 
         if self.active_date_column:
             self._load_existing_assignments_from_sheet()
 
-        label_map: Dict[str, deque[int]] = {}
+        label_map: dict[str, deque[int]] = {}
         for event in self.session_events:
             key = event.label.strip().lower()
             label_map.setdefault(key, deque()).append(event.index)
@@ -1146,7 +1176,7 @@ class ExcelMapWizard(QWizard):
                 self.row_assignments[row.row_index] = queue.popleft()
 
     # --------------------------------------------------
-    def value_for_event(self, event_index: int, measurement: Optional[str]) -> Any:
+    def value_for_event(self, event_index: int, measurement: str | None) -> Any:
         if measurement is None:
             return float("nan")
         if event_index < 0 or event_index >= len(self.session_events):
@@ -1184,7 +1214,7 @@ class ExcelMapWizard(QWizard):
         return True
 
     # --------------------------------------------------
-    def preview_template_data(self, limit: int = 30) -> List[Dict[str, Any]]:
+    def preview_template_data(self, limit: int = 30) -> list[dict[str, Any]]:
         if self.ws is None or self.values_block is None:
             return []
 
@@ -1198,7 +1228,7 @@ class ExcelMapWizard(QWizard):
                 cols.append(active_col)
         cols = sorted(set(cols))
 
-        data: List[Dict[str, Any]] = []
+        data: list[dict[str, Any]] = []
         for row_idx in range(min_row, max_row + 1):
             if len(data) >= limit:
                 break
@@ -1211,7 +1241,7 @@ class ExcelMapWizard(QWizard):
                     is_header = event_row.is_header
                     is_event = not event_row.is_header
                     break
-            row_data: Dict[str, Any] = {
+            row_data: dict[str, Any] = {
                 "Row": row_idx,
                 "Label": label,
                 "_is_header": is_header,
@@ -1226,9 +1256,9 @@ class ExcelMapWizard(QWizard):
         return data
 
     # --------------------------------------------------
-    def apply_mapping(self) -> List[Tuple[int, str, Any]]:
+    def apply_mapping(self) -> list[tuple[int, str, Any]]:
         self.clear_mapped_cells()
-        results: List[Tuple[int, str, Any]] = []
+        results: list[tuple[int, str, Any]] = []
 
         if (
             self.ws is None
@@ -1274,14 +1304,10 @@ class ExcelMapWizard(QWizard):
 
     # --------------------------------------------------
     def get_preview_dataframe(self, limit: int = 25) -> pd.DataFrame:
-        if (
-            self.ws is None
-            or self.active_date_column is None
-            or not self.current_measurement
-        ):
+        if self.ws is None or self.active_date_column is None or not self.current_measurement:
             return pd.DataFrame()
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         col_idx = self.active_date_column.column_index
         measurement = self.current_measurement
 

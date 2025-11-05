@@ -9,13 +9,11 @@ from utils.style_defaults import (
     STYLE_DEFAULTS,
     STYLE_SCHEMA_VERSION,
     flatten_style_defaults,
-    load_flat_factory_defaults,
     load_factory_defaults,
+    load_flat_factory_defaults,
 )
 
-PREVIOUS_PLOT_PATH = os.path.join(
-    os.path.expanduser("~"), ".vasoanalyzer_last_plot.json"
-)
+PREVIOUS_PLOT_PATH = os.path.join(os.path.expanduser("~"), ".vasoanalyzer_last_plot.json")
 
 # Flattened snapshot for legacy consumers; use helper functions for copies.
 DEFAULT_STYLE = load_flat_factory_defaults()

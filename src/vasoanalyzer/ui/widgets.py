@@ -5,6 +5,7 @@
 
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 
+
 class CustomToolbar(NavigationToolbar):
     """Navigation toolbar that resets using stored full limits."""
 

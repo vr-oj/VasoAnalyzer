@@ -5,26 +5,25 @@
 
 """Helper routines for loading diameter trace CSV files."""
 
-
 from __future__ import annotations
 
-
 import csv
-import re
 import logging
+import re
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 try:
     from vasoanalyzer.services.cache_service import DataCache
-except Exception:  # pragma: no cover - optional during bootstrap
-    DataCache = None  # type: ignore
+except ImportError:  # pragma: no cover - optional during bootstrap
+    DataCache = None
 
 log = logging.getLogger(__name__)
 
 
-def load_trace(file_path, *, cache: DataCache | None = None):
+def load_trace(file_path, *, cache: Any | None = None):
     """Load a trace CSV and return a standardized DataFrame.
 
     Args:
@@ -43,7 +42,7 @@ def load_trace(file_path, *, cache: DataCache | None = None):
     log.info("Loading trace from %s", file_path)
 
     # Auto-detect delimiter using the CSV sniffer
-    with open(file_path, "r", encoding="utf-8-sig") as f:
+    with open(file_path, encoding="utf-8-sig") as f:
         sample = f.read(1024)
         try:
             delimiter = csv.Sniffer().sniff(sample).delimiter
@@ -67,10 +66,7 @@ def load_trace(file_path, *, cache: DataCache | None = None):
         df = _load_csv(file_path)
 
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [
-            " ".join(str(part) for part in col if pd.notna(part))
-            for col in df.columns
-        ]
+        df.columns = [" ".join(str(part) for part in col if pd.notna(part)) for col in df.columns]
 
     # Drop any entirely empty columns that may appear due to malformed files
     df = df.dropna(axis=1, how="all")
@@ -82,7 +78,9 @@ def load_trace(file_path, *, cache: DataCache | None = None):
         if numeric_preview.iloc[0].isna().all() and numeric_preview.iloc[1:].notna().any().any():
             if textual_mask.any():
                 new_columns = []
-                for col, extra, is_textual in zip(df.columns, header_row, textual_mask):
+                for col, extra, is_textual in zip(
+                    df.columns, header_row, textual_mask, strict=False
+                ):
                     if is_textual:
                         combined = f"{col} {extra}".strip()
                         new_columns.append(combined)
@@ -106,11 +104,7 @@ def load_trace(file_path, *, cache: DataCache | None = None):
 
     for c in df.columns:
         norm = _normalize(c)
-        if time_col is None and (
-            "time" in norm
-            or "sec" in norm
-            or norm in {"t", "ts"}
-        ):
+        if time_col is None and ("time" in norm or "sec" in norm or norm in {"t", "ts"}):
             time_col = c
 
         if "inner" in norm and "diam" in norm:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
-
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -11,7 +9,6 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -34,7 +31,7 @@ def _format_float(value: float) -> str:
     return f"{value:.6g}"
 
 
-def _parse_modifiers(key: Optional[str]) -> Tuple[bool, bool]:
+def _parse_modifiers(key: str | None) -> tuple[bool, bool]:
     """Return (additive, toggle) flags given a Matplotlib key descriptor."""
 
     if not key:
@@ -48,15 +45,15 @@ def _parse_modifiers(key: Optional[str]) -> Tuple[bool, bool]:
 class PointEditorDialog(QDialog):
     """Interactive dialog that previews manual point edits."""
 
-    def __init__(self, session: PointEditorSession, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, session: PointEditorSession, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Point Editor – {session.channel_label}")
         self.setModal(True)
         self.session = session
-        self._committed_actions: Tuple = tuple()
-        self._summary: Optional[SessionSummary] = None
+        self._committed_actions: tuple = tuple()
+        self._summary: SessionSummary | None = None
         self._updating_table_selection = False
-        self._drag_origin: Optional[Tuple[float, float, str, float, float]] = None
+        self._drag_origin: tuple[float, float, str, float, float] | None = None
 
         self._visible_indices = self.session.visible_indices()
         self._visible_times = self.session.visible_times()
@@ -110,9 +107,15 @@ class PointEditorDialog(QDialog):
         raw = self._visible_raw
         clean = self.session.visible_clean()
 
-        self._raw_line = self.ax.plot(times, raw, color=raw_color, linewidth=1.0, alpha=0.85, label="Raw")[0]
-        self._preview_line = self.ax.plot(times, clean, color=preview_color, linewidth=1.8, label="Preview")[0]
-        self._selected_scatter = self.ax.scatter([], [], s=36, color=selection_color, edgecolors="#333333", linewidths=0.6, zorder=5)
+        self._raw_line = self.ax.plot(
+            times, raw, color=raw_color, linewidth=1.0, alpha=0.85, label="Raw"
+        )[0]
+        self._preview_line = self.ax.plot(
+            times, clean, color=preview_color, linewidth=1.8, label="Preview"
+        )[0]
+        self._selected_scatter = self.ax.scatter(
+            [], [], s=36, color=selection_color, edgecolors="#333333", linewidths=0.6, zorder=5
+        )
 
         self.ax.legend(loc="upper right", frameon=False)
         self.canvas.mpl_connect("button_press_event", self._on_plot_press)
@@ -204,8 +207,8 @@ class PointEditorDialog(QDialog):
         clean = self.session.visible_clean()
         row_count = len(times)
         self.table.setRowCount(row_count)
-        self._row_to_index: List[int] = []
-        self._index_to_row: Dict[int, int] = {}
+        self._row_to_index: list[int] = []
+        self._index_to_row: dict[int, int] = {}
         for row in range(row_count):
             idx = int(self._visible_indices[row])
             self._row_to_index.append(idx)
@@ -242,8 +245,10 @@ class PointEditorDialog(QDialog):
             self.ax.set_xlim(xmin, xmax)
         finite_clean = clean[np.isfinite(clean)]
         finite_raw = raw[np.isfinite(raw)]
-        combined = np.concatenate([finite_clean, finite_raw]) if finite_raw.size and finite_clean.size else (
-            finite_clean if finite_clean.size else finite_raw
+        combined = (
+            np.concatenate([finite_clean, finite_raw])
+            if finite_raw.size and finite_clean.size
+            else (finite_clean if finite_clean.size else finite_raw)
         )
         if combined.size:
             ymin = float(np.min(combined))
@@ -329,10 +334,21 @@ class PointEditorDialog(QDialog):
 
     # ------------------------------------------------------------------ plot interaction
     def _on_plot_press(self, event) -> None:
-        if event.inaxes != self.ax or event.button != 1 or event.xdata is None or event.ydata is None:
+        if (
+            event.inaxes != self.ax
+            or event.button != 1
+            or event.xdata is None
+            or event.ydata is None
+        ):
             self._drag_origin = None
             return
-        self._drag_origin = (float(event.xdata), float(event.ydata), event.key or "", float(getattr(event, "x", 0.0)), float(getattr(event, "y", 0.0)))
+        self._drag_origin = (
+            float(event.xdata),
+            float(event.ydata),
+            event.key or "",
+            float(getattr(event, "x", 0.0)),
+            float(getattr(event, "y", 0.0)),
+        )
 
     def _on_plot_release(self, event) -> None:
         if self._drag_origin is None or event.inaxes != self.ax or event.button != 1:
@@ -350,7 +366,7 @@ class PointEditorDialog(QDialog):
             self._select_box(x0, y0, x1, y1, key)
         self._drag_origin = None
 
-    def _select_nearest_point(self, x_data: float, key: Optional[str]) -> None:
+    def _select_nearest_point(self, x_data: float, key: str | None) -> None:
         times = self._visible_times
         if times.size == 0:
             return
@@ -359,13 +375,13 @@ class PointEditorDialog(QDialog):
         additive, toggle = _parse_modifiers(key)
         self.session.set_selection([idx_global], additive=additive, toggle=toggle)
 
-    def _select_box(self, x0: float, y0: float, x1: float, y1: float, key: Optional[str]) -> None:
+    def _select_box(self, x0: float, y0: float, x1: float, y1: float, key: str | None) -> None:
         xmin, xmax = sorted((x0, x1))
         ymin, ymax = sorted((y0, y1))
-        indices: List[int] = []
+        indices: list[int] = []
         times = self._visible_times
         raw = self._visible_raw
-        for local_idx, (tx, ty) in enumerate(zip(times, raw)):
+        for local_idx, (tx, ty) in enumerate(zip(times, raw, strict=False)):
             if xmin <= tx <= xmax and ymin <= ty <= ymax:
                 indices.append(int(self._visible_indices[local_idx]))
         if not indices:
@@ -436,8 +452,8 @@ class PointEditorDialog(QDialog):
         self.accept()
 
     # ------------------------------------------------------------------ public accessors
-    def committed_actions(self) -> Tuple:
+    def committed_actions(self) -> tuple:
         return self._committed_actions
 
-    def session_summary(self) -> Optional[SessionSummary]:
+    def session_summary(self) -> SessionSummary | None:
         return self._summary

@@ -9,23 +9,36 @@ external resources.
 
 from __future__ import annotations
 
-import hashlib
+import contextlib
 import json
+import mimetypes
 import os
 import shutil
 import sqlite3
 import tempfile
-import zipfile
 import time
+import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Optional, Sequence
+from typing import Any, cast
 
 import pandas as pd
+
+from vasoanalyzer.storage.sqlite import assets as _assets
+from vasoanalyzer.storage.sqlite import events as _events
+from vasoanalyzer.storage.sqlite import projects as _projects
+from vasoanalyzer.storage.sqlite import traces as _traces
+from vasoanalyzer.storage.sqlite.utils import open_db
+
+from .sqlite_utils import backup_to_delete_mode as _sqlite_backup_to_delete_mode
+from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
+from .sqlite_utils import optimize as _sqlite_optimize
 
 __all__ = [
     "ProjectStore",
     "SCHEMA_VERSION",
+    "LegacyProjectError",
     "create_project",
     "open_project",
     "close_project",
@@ -46,10 +59,22 @@ __all__ = [
     "unpack_bundle",
     "write_autosave",
     "restore_autosave",
+    "convert_legacy_project",
 ]
 
-SCHEMA_VERSION = 1
-DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MiB
+SCHEMA_VERSION = 3
+DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
+
+
+class LegacyProjectError(RuntimeError):
+    """Raised when attempting to open a legacy project that requires conversion."""
+
+    def __init__(self, path: str | os.PathLike[str], version: int):
+        self.path = Path(path)
+        self.version = version
+        super().__init__(
+            f"Project at {self.path} uses schema version {version}; conversion to sqlite-v3 is required."
+        )
 
 
 @dataclass
@@ -74,7 +99,7 @@ class ProjectStore:
         finally:
             self.conn.close()
 
-    def __enter__(self) -> "ProjectStore":
+    def __enter__(self) -> ProjectStore:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -85,15 +110,23 @@ class ProjectStore:
 # Project lifecycle helpers
 
 
-def create_project(path: str | os.PathLike[str], *, app_version: str, timezone: str) -> ProjectStore:
+def create_project(
+    path: str | os.PathLike[str], *, app_version: str, timezone: str
+) -> ProjectStore:
     """Create a new SQLite project file at ``path`` and return an open store."""
 
     project_path = Path(path)
     project_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(project_path.as_posix())
-    _apply_pragmas(conn)
-    _initialise_schema(conn, app_version=app_version, timezone=timezone)
+    conn = open_db(project_path.as_posix(), apply_pragmas=False)
+    _projects.apply_default_pragmas(conn)
+    _projects.ensure_schema(
+        conn,
+        schema_version=SCHEMA_VERSION,
+        now=_utc_now(),
+        app_version=app_version,
+        timezone=timezone,
+    )
     return ProjectStore(path=project_path, conn=conn, dirty=False)
 
 
@@ -104,15 +137,20 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
     if not project_path.exists():
         raise FileNotFoundError(path)
 
-    conn = sqlite3.connect(project_path.as_posix())
-    _apply_pragmas(conn)
+    conn = open_db(project_path.as_posix(), apply_pragmas=False)
+    _projects.apply_default_pragmas(conn)
 
-    version = _get_user_version(conn)
+    version = _projects.get_user_version(conn)
     if version == 0:
         # A bare database; initialise it now.
-        _initialise_schema(conn)
+        _projects.ensure_schema(
+            conn,
+            schema_version=SCHEMA_VERSION,
+            now=_utc_now(),
+        )
     elif version < SCHEMA_VERSION:
-        _run_migrations(conn, version, SCHEMA_VERSION)
+        conn.close()
+        raise LegacyProjectError(project_path, version)
     elif version > SCHEMA_VERSION:
         raise RuntimeError(
             f"Project schema version {version} is newer than supported {SCHEMA_VERSION}"
@@ -125,11 +163,31 @@ def save_project(store: ProjectStore) -> None:
     """Flush pending changes and update ``modified_utc`` metadata."""
 
     now = _utc_now()
-    store.conn.execute(
-        "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-        ("modified_utc", now),
-    )
+    _projects.write_meta(store.conn, {"modified_utc": now, "modified_at": now})
     store.commit()
+    _sqlite_checkpoint_full(store.conn)
+
+    project_path = getattr(store, "path", None)
+    if not project_path:
+        return
+
+    tmp_path = project_path.with_suffix(project_path.suffix + ".tmp")
+    try:
+        _sqlite_backup_to_delete_mode(project_path, tmp_path)
+        with open(tmp_path, "rb") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
+        store.conn.close()
+        os.replace(tmp_path, project_path)
+        conn = open_db(project_path.as_posix(), apply_pragmas=False)
+        _projects.apply_default_pragmas(conn)
+        store.conn = conn
+        store.dirty = False
+        _sqlite_optimize(store.conn)
+    finally:
+        if tmp_path.exists():
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
 
 
 def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> None:
@@ -138,9 +196,7 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     dest_path = Path(new_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fd, tmp_name = tempfile.mkstemp(
-        suffix=dest_path.suffix or ".vaso", dir=dest_path.parent
-    )
+    fd, tmp_name = tempfile.mkstemp(suffix=dest_path.suffix or ".vaso", dir=dest_path.parent)
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
@@ -153,11 +209,13 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
 
     # Re-open connection so WAL and temp files point at the new location.
     store.conn.close()
-    conn = sqlite3.connect(dest_path.as_posix())
-    _apply_pragmas(conn)
+    conn = open_db(dest_path.as_posix(), apply_pragmas=False)
+    _projects.apply_default_pragmas(conn)
     store.conn = conn
     store.path = dest_path
     store.dirty = False
+    _sqlite_checkpoint_full(store.conn)
+    _sqlite_optimize(store.conn)
 
 
 def close_project(store: ProjectStore) -> None:
@@ -174,13 +232,13 @@ def add_dataset(
     store: ProjectStore,
     name: str,
     trace_df: pd.DataFrame,
-    events_df: Optional[pd.DataFrame],
+    events_df: pd.DataFrame | None,
     *,
-    metadata: Optional[dict] = None,
-    tiff_path: Optional[str] = None,
+    metadata: dict | None = None,
+    tiff_path: str | None = None,
     embed_tiff: bool = False,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
-    thumbnail_png: Optional[bytes] = None,
+    thumbnail_png: bytes | None = None,
 ) -> int:
     """Insert a dataset with trace/events rows and optional TIFF asset."""
 
@@ -189,11 +247,12 @@ def add_dataset(
     extra_json = json.dumps(metadata.get("extra_json", {})) if metadata.get("extra_json") else None
 
     with store.conn:
+        dataset_sql = (
+            "INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, "
+            "t0_seconds, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
         cur = store.conn.execute(
-            """
-            INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, t0_seconds, extra_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
+            dataset_sql,
             (
                 name,
                 now,
@@ -204,9 +263,12 @@ def add_dataset(
                 extra_json,
             ),
         )
-        dataset_id = cur.lastrowid
+        dataset_rowid = cur.lastrowid
+        if dataset_rowid is None:
+            raise RuntimeError("Failed to insert dataset row")
+        dataset_id = int(dataset_rowid)
 
-        trace_rows = list(_prepare_trace_rows(dataset_id, trace_df))
+        trace_rows = list(_traces.prepare_trace_rows(dataset_id, trace_df))
         if trace_rows:
             store.conn.executemany(
                 """
@@ -217,13 +279,14 @@ def add_dataset(
             )
 
         if events_df is not None and not events_df.empty:
-            event_rows = list(_prepare_event_rows(dataset_id, events_df))
+            event_rows = list(_events.prepare_event_rows(dataset_id, events_df))
             if event_rows:
                 store.conn.executemany(
-                    """
-                    INSERT INTO event(dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    (
+                        "INSERT INTO event("
+                        "dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json"
+                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    ),
                     event_rows,
                 )
 
@@ -239,8 +302,9 @@ def add_dataset(
                 dataset_id,
                 role="tiff",
                 path_or_bytes=tiff_path,
-                embed=embed_tiff,
+                embed=True,
                 chunk_size=chunk_size,
+                note="source-tiff",
             )
 
     store.mark_dirty()
@@ -275,84 +339,87 @@ def add_or_update_asset(
     path_or_bytes: str | os.PathLike[str] | bytes | bytearray,
     *,
     embed: bool,
-    mime: Optional[str] = None,
+    mime: str | None = None,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    note: str | None = None,
+    original_name: str | None = None,
 ) -> int:
-    """Insert or replace an asset for ``dataset_id``."""
+    """Insert or replace an embedded asset reference for ``dataset_id``."""
 
-    if isinstance(path_or_bytes, (bytes, bytearray)):
-        data_bytes = bytes(path_or_bytes)
-        sha256 = hashlib.sha256(data_bytes).hexdigest()
-        size = len(data_bytes)
-        rel_path = None
-        storage = "embedded" if embed else "external"
+    if not embed:
+        raise ValueError("External assets are not supported in the sqlite-v3 project format")
+
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer")
+
+    mime_source: str | os.PathLike[str] | None = None
+    original_name_hint = original_name
+
+    if isinstance(path_or_bytes, bytes | bytearray):
+        payload_bytes = bytes(path_or_bytes)
+        prepared = _assets.prepare_asset_from_bytes(payload_bytes, chunk_size=chunk_size)
     else:
         asset_path = Path(path_or_bytes)
         if not asset_path.exists():
             raise FileNotFoundError(asset_path)
-        sha256 = _hash_file(asset_path)
-        size = asset_path.stat().st_size
-        storage = "embedded" if embed else "external"
-        rel_path = (
-            asset_path
-            if storage == "embedded"
-            else os.path.relpath(asset_path, store.path.parent)
-        )
-        data_bytes = None
+        prepared = _assets.prepare_asset_from_path(asset_path, chunk_size=chunk_size)
+        mime_source = asset_path
+        original_name_hint = asset_path.name
 
-    mime = mime or _guess_mime(rel_path if isinstance(rel_path, str) else path_or_bytes)
+    if mime_source is None and isinstance(path_or_bytes, str | os.PathLike):
+        mime_source = path_or_bytes
+    mime = mime or _guess_mime(mime_source)
 
-    with store.conn:
-        cur = store.conn.execute(
-            """
-            SELECT id FROM asset
-            WHERE dataset_id = ? AND role = ?
-            """,
-            (dataset_id, role),
-        )
-        row = cur.fetchone()
-        if row:
-            asset_id = int(row[0])
-            store.conn.execute(
-                """
-                UPDATE asset
-                   SET storage = ?, rel_path = ?, sha256 = ?, bytes = ?, mime = ?
-                 WHERE id = ?
-                """,
-                (
-                    storage,
-                    rel_path,
-                    sha256,
-                    size,
-                    mime,
-                    asset_id,
-                ),
-            )
-            store.conn.execute("DELETE FROM blob_chunk WHERE asset_id = ?", (asset_id,))
-        else:
-            cur = store.conn.execute(
-                """
-                INSERT INTO asset(dataset_id, role, storage, rel_path, sha256, bytes, mime)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    dataset_id,
-                    role,
-                    storage,
-                    rel_path,
-                    sha256,
-                    size,
-                    mime,
-                ),
-            )
-            asset_id = cur.lastrowid
+    asset_id: int
+    previous_asset_id: int | None = None
 
-        if storage == "embedded":
-            if data_bytes is not None:
-                _write_blob_chunks(store.conn, asset_id, _chunks_from_bytes(data_bytes, chunk_size))
+    try:
+        with store.conn:
+            ref_row = _assets.get_ref_by_role(store.conn, dataset_id, role)
+            if ref_row:
+                previous_asset_id = ref_row[0]
+
+            existing = _assets.find_asset_by_sha(store.conn, prepared.sha256)
+            if existing:
+                asset_id = existing[0]
             else:
-                assert not isinstance(path_or_bytes, (bytes, bytearray))
-                _write_blob_chunks(store.conn, asset_id, _chunks_from_file(Path(path_or_bytes), chunk_size))
+                asset_id = _assets.register_asset(
+                    store.conn,
+                    kind=role,
+                    sha256=prepared.sha256,
+                    size_bytes=prepared.size_bytes,
+                    compressed=prepared.compressed,
+                    chunk_size=prepared.chunk_size,
+                    original_name=original_name_hint,
+                    mime=mime,
+                )
+                prepared.source.seek(0)
+                _assets.write_blob_chunks_from_stream(
+                    store.conn,
+                    asset_id,
+                    prepared.source,
+                    chunk_size=prepared.chunk_size,
+                )
+
+            _assets.upsert_ref(
+                store.conn,
+                asset_id=asset_id,
+                dataset_id=dataset_id,
+                role=role,
+                note=note,
+            )
+
+            if previous_asset_id is not None and previous_asset_id != asset_id:
+                _assets.delete_ref(
+                    store.conn,
+                    asset_id=previous_asset_id,
+                    dataset_id=dataset_id,
+                    role=role,
+                )
+                if _assets.count_refs(store.conn, previous_asset_id) == 0:
+                    _assets.delete_asset(store.conn, previous_asset_id)
+    finally:
+        prepared.closer()
 
     store.mark_dirty()
     return asset_id
@@ -361,59 +428,23 @@ def add_or_update_asset(
 def get_trace(
     store: ProjectStore,
     dataset_id: int,
-    t0: Optional[float] = None,
-    t1: Optional[float] = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> pd.DataFrame:
     """Return a trace DataFrame for ``dataset_id`` filtered to ``[t0, t1]``."""
 
-    query = [
-        "SELECT t_seconds, inner_diam, outer_diam, p_avg, p1, p2",
-        "FROM trace",
-        "WHERE dataset_id = ?",
-    ]
-    params: list[object] = [dataset_id]
-    if t0 is not None:
-        query.append("AND t_seconds >= ?")
-        params.append(float(t0))
-    if t1 is not None:
-        query.append("AND t_seconds <= ?")
-        params.append(float(t1))
-    query.append("ORDER BY t_seconds ASC")
-    sql = " ".join(query)
-    df = pd.read_sql_query(sql, store.conn, params=params)
-    return df
+    return _traces.fetch_trace_dataframe(store.conn, dataset_id, t0, t1)
 
 
 def get_events(
     store: ProjectStore,
     dataset_id: int,
-    t0: Optional[float] = None,
-    t1: Optional[float] = None,
+    t0: float | None = None,
+    t1: float | None = None,
 ) -> pd.DataFrame:
     """Return events for ``dataset_id``."""
 
-    query = [
-        "SELECT t_seconds, label, frame, p_avg, p1, p2, temp, extra_json",
-        "FROM event",
-        "WHERE dataset_id = ?",
-    ]
-    params: list[object] = [dataset_id]
-    if t0 is not None:
-        query.append("AND t_seconds >= ?")
-        params.append(float(t0))
-    if t1 is not None:
-        query.append("AND t_seconds <= ?")
-        params.append(float(t1))
-    query.append("ORDER BY t_seconds ASC")
-
-    df = pd.read_sql_query(" ".join(query), store.conn, params=params)
-    if not df.empty and "extra_json" in df.columns:
-        extras = []
-        for payload in df["extra_json"]:
-            extras.append(json.loads(payload) if isinstance(payload, str) and payload else {})
-        df = df.drop(columns=["extra_json"])
-        df["extra"] = extras
-    return df
+    return _events.fetch_events_dataframe(store.conn, dataset_id, t0, t1)
 
 
 def add_result(
@@ -434,14 +465,17 @@ def add_result(
         (dataset_id, kind, version, now, json.dumps(payload)),
     )
     store.mark_dirty()
-    return int(cur.lastrowid)
+    result_rowid = cur.lastrowid
+    if result_rowid is None:
+        raise RuntimeError("Failed to insert result row")
+    return int(result_rowid)
 
 
 def get_results(
     store: ProjectStore,
     dataset_id: int,
-    kind: Optional[str] = None,
-) -> list[dict]:
+    kind: str | None = None,
+) -> list[dict[str, Any]]:
     """Return result payloads for ``dataset_id`` (optionally filtered by kind)."""
 
     query = "SELECT id, kind, version, created_utc, payload_json FROM result WHERE dataset_id = ?"
@@ -468,51 +502,19 @@ def get_results(
     return results
 
 
-def list_assets(store: ProjectStore, dataset_id: int) -> list[dict]:
+def list_assets(store: ProjectStore, dataset_id: int) -> list[dict[str, Any]]:
     """Return metadata for assets linked to ``dataset_id``."""
 
-    rows = store.conn.execute(
-        """
-        SELECT id, role, storage, rel_path, sha256, bytes, mime
-          FROM asset
-         WHERE dataset_id = ?
-         ORDER BY id ASC
-        """,
-        (dataset_id,),
-    ).fetchall()
-    return [
-        {
-            "id": row[0],
-            "role": row[1],
-            "storage": row[2],
-            "rel_path": row[3],
-            "sha256": row[4],
-            "bytes": row[5],
-            "mime": row[6],
-        }
-        for row in rows
-    ]
+    return cast(list[dict[str, Any]], _assets.list_assets(store.conn, dataset_id))
 
 
 def get_asset_bytes(store: ProjectStore, asset_id: int) -> bytes:
     """Return the binary payload for ``asset_id``."""
 
-    row = store.conn.execute(
-        "SELECT storage, rel_path FROM asset WHERE id = ?", (asset_id,)
-    ).fetchone()
-    if row is None:
-        raise KeyError(f"Asset {asset_id} does not exist")
-    storage, rel_path = row
-    if storage == "embedded":
-        return _reassemble_blob(store.conn, asset_id)
-    if storage == "external" and rel_path:
-        asset_path = store.path.parent / rel_path
-        if asset_path.exists():
-            return asset_path.read_bytes()
-    return b""
+    return cast(bytes, _assets.fetch_asset_bytes(store.conn, asset_id))
 
 
-def iter_datasets(store: ProjectStore) -> Iterator[dict]:
+def iter_datasets(store: ProjectStore) -> Iterator[dict[str, Any]]:
     """Yield metadata dictionaries for all datasets in the project."""
 
     cursor = store.conn.execute(
@@ -571,7 +573,9 @@ def pack_bundle(
     *,
     embed_threshold_mb: int = 64,
 ) -> None:
-    """Create a ``.vasopack`` bundle containing the project and its assets."""
+    """Create a ``.vasopack`` bundle containing the project file."""
+
+    del embed_threshold_mb  # Threshold unused in single-file format.
 
     project_path = Path(vaso_path)
     if not project_path.exists():
@@ -582,70 +586,14 @@ def pack_bundle(
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_root = Path(tmpdir)
-
-        # Copy project file to allow modifications without touching the original.
         temp_project = tmp_root / "project.vaso"
         shutil.copy2(project_path, temp_project)
-
-        with sqlite3.connect(temp_project.as_posix()) as conn:
-            _apply_pragmas(conn)
-            asset_rows = conn.execute(
-                "SELECT id, storage, rel_path, sha256, role FROM asset"
-            ).fetchall()
-            project_dir = project_path.parent
-            assets_dir = tmp_root / "assets"
-            assets_dir.mkdir(exist_ok=True)
-
-            for asset_id, storage, rel_path, sha256, role in asset_rows:
-                if storage == "embedded":
-                    continue
-
-                if not rel_path:
-                    continue
-
-                abs_path = project_dir / rel_path
-                if not abs_path.exists():
-                    continue
-
-                size_mb = abs_path.stat().st_size / (1024 * 1024)
-                target_name = f"{sha256}{abs_path.suffix or ''}"
-                target_path = assets_dir / target_name
-                shutil.copy2(abs_path, target_path)
-
-                if size_mb <= embed_threshold_mb:
-                    _write_blob_chunks(
-                        conn,
-                        asset_id,
-                        _chunks_from_file(abs_path, DEFAULT_CHUNK_SIZE),
-                    )
-                    conn.execute(
-                        "UPDATE asset SET storage = ?, rel_path = ? WHERE id = ?",
-                        ("embedded", None, asset_id),
-                    )
-                    if target_path.exists():
-                        target_path.unlink()
-                else:
-                    new_rel = os.path.join("assets", target_name)
-                    conn.execute(
-                        "UPDATE asset SET rel_path = ? WHERE id = ?",
-                        (new_rel, asset_id),
-                    )
-
-            conn.execute(
-                "INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?)",
-                ("packed_utc", _utc_now()),
-            )
-            conn.commit()
 
         bundle_tmp = bundle_path.with_suffix(bundle_path.suffix + ".tmp")
         with zipfile.ZipFile(
             bundle_tmp, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True
         ) as zf:
-            for root, _dirs, files in os.walk(tmp_root):
-                for file in files:
-                    full = Path(root) / file
-                    rel = full.relative_to(tmp_root)
-                    zf.write(full, rel.as_posix())
+            zf.write(temp_project, "project.vaso")
         os.replace(bundle_tmp, bundle_path)
 
 
@@ -671,32 +619,245 @@ def unpack_bundle(vasopack_path: str | os.PathLike[str], dest_dir: str | os.Path
     if final_path.exists():
         final_path.unlink()
     project_path.rename(final_path)
-
-    assets_dir = dest / "assets"
-    if assets_dir.exists():
-        assets_dir.mkdir(exist_ok=True)
-        with sqlite3.connect(final_path.as_posix()) as conn:
-            _apply_pragmas(conn)
-            rows = conn.execute(
-                "SELECT id, storage, rel_path, mime FROM asset WHERE storage = 'embedded' AND rel_path IS NULL"
-            ).fetchall()
-            for asset_id, _storage, _rel_path, mime in rows:
-                blob = _reassemble_blob(conn, asset_id)
-                if not blob:
-                    continue
-                sha = hashlib.sha256(blob).hexdigest()
-                # Store the asset alongside the bundle for convenience.
-                ext = _extension_for_mime(mime)
-                out_path = assets_dir / f"{sha}{ext}"
-                with open(out_path, "wb") as fh:
-                    fh.write(blob)
-                conn.execute(
-                    "UPDATE asset SET storage = ?, rel_path = ? WHERE id = ?",
-                    ("external", os.path.relpath(out_path, final_path.parent), asset_id),
-                )
-            conn.commit()
-
     return final_path
+
+
+def convert_legacy_project(
+    path: str | os.PathLike[str],
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> ProjectStore:
+    """
+    Convert a legacy project file in-place to the sqlite-v3 single-file format.
+    """
+
+    src_path = Path(path)
+    if not src_path.exists():
+        raise FileNotFoundError(src_path)
+
+    tmp_path = src_path.with_suffix(src_path.suffix + ".v3tmp")
+    if tmp_path.exists():
+        tmp_path.unlink()
+
+    project_dir = src_path.parent
+
+    with sqlite3.connect(src_path.as_posix()) as legacy_conn:
+        legacy_conn.row_factory = sqlite3.Row
+        legacy_version = _projects.get_user_version(legacy_conn)
+        if legacy_version >= SCHEMA_VERSION:
+            return open_project(src_path)
+
+        legacy_meta = _projects.read_meta(legacy_conn)
+        timezone = legacy_meta.get("timezone", "UTC")
+        app_version = legacy_meta.get("app_version", "legacy")
+
+        new_store = create_project(tmp_path, app_version=app_version, timezone=timezone)
+        try:
+            _copy_legacy_tables(legacy_conn, new_store.conn)
+            _copy_legacy_assets(
+                legacy_conn,
+                new_store,
+                project_dir=project_dir,
+                chunk_size=chunk_size,
+            )
+            _write_converted_meta(new_store.conn, legacy_meta, legacy_version)
+            new_store.conn.commit()
+        finally:
+            new_store.close()
+
+    _rotate_backups(src_path)
+    os.replace(tmp_path, src_path)
+    return open_project(src_path)
+
+
+def _copy_legacy_tables(src_conn: sqlite3.Connection, dst_conn: sqlite3.Connection) -> None:
+    dataset_rows = src_conn.execute(
+        """
+        SELECT id, name, created_utc, notes, fps, pixel_size_um, t0_seconds, extra_json
+          FROM dataset
+        ORDER BY id
+        """
+    ).fetchall()
+    if dataset_rows:
+        dst_conn.executemany(
+            """
+            INSERT INTO dataset(id, name, created_utc, notes, fps, pixel_size_um, t0_seconds, extra_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [tuple(row) for row in dataset_rows],
+        )
+
+    with contextlib.suppress(sqlite3.OperationalError):
+        trace_rows = src_conn.execute(
+            """
+            SELECT dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2
+              FROM trace
+            ORDER BY dataset_id, t_seconds
+            """
+        ).fetchall()
+        if trace_rows:
+            dst_conn.executemany(
+                """
+                INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [tuple(row) for row in trace_rows],
+            )
+
+    with contextlib.suppress(sqlite3.OperationalError):
+        event_rows = src_conn.execute(
+            """
+            SELECT id, dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json
+              FROM event
+            ORDER BY id
+            """
+        ).fetchall()
+        if event_rows:
+            dst_conn.executemany(
+                """
+                INSERT INTO event(
+                    id, dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [tuple(row) for row in event_rows],
+            )
+
+    with contextlib.suppress(sqlite3.OperationalError):
+        result_rows = src_conn.execute(
+            """
+            SELECT id, dataset_id, kind, version, created_utc, payload_json
+              FROM result
+            ORDER BY id
+            """
+        ).fetchall()
+        if result_rows:
+            dst_conn.executemany(
+                """
+                INSERT INTO result(id, dataset_id, kind, version, created_utc, payload_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [tuple(row) for row in result_rows],
+            )
+
+    with contextlib.suppress(sqlite3.OperationalError):
+        thumbnail_rows = src_conn.execute("SELECT dataset_id, png FROM thumbnail").fetchall()
+        if thumbnail_rows:
+            dst_conn.executemany(
+                "INSERT INTO thumbnail(dataset_id, png) VALUES (?, ?)",
+                [tuple(row) for row in thumbnail_rows],
+            )
+
+
+def _copy_legacy_assets(
+    src_conn: sqlite3.Connection,
+    dst_store: ProjectStore,
+    *,
+    project_dir: Path,
+    chunk_size: int,
+) -> None:
+    asset_rows = src_conn.execute(
+        """
+        SELECT id, dataset_id, role, storage, rel_path, mime
+          FROM asset
+        ORDER BY id
+        """
+    ).fetchall()
+
+    for row in asset_rows:
+        asset_id = int(row["id"])
+        dataset_id = int(row["dataset_id"])
+        role = row["role"]
+        storage = (row["storage"] or "embedded").lower()
+        rel_path = row["rel_path"]
+        mime = row["mime"]
+
+        note = rel_path if rel_path else None
+        original_name = Path(rel_path).name if rel_path else None
+
+        if storage == "embedded" or not rel_path:
+            payload = _legacy_reassemble_blob(src_conn, asset_id)
+        else:
+            asset_path = _resolve_legacy_asset_path(project_dir, rel_path)
+            if not asset_path.exists():
+                raise FileNotFoundError(f"Linked asset not found: {rel_path}")
+            original_name = original_name or asset_path.name
+            payload = asset_path.read_bytes()
+
+        add_or_update_asset(
+            dst_store,
+            dataset_id,
+            role,
+            payload,
+            embed=True,
+            mime=mime,
+            chunk_size=chunk_size,
+            note=note,
+            original_name=original_name,
+        )
+
+
+def _write_converted_meta(
+    conn: sqlite3.Connection, legacy_meta: dict[str, str], legacy_version: int
+) -> None:
+    now = _utc_now()
+    meta = dict(legacy_meta)
+
+    for key in (
+        "format",
+        "project_version",
+        "schema_version",
+        "modified_at",
+        "modified_utc",
+        "converted_at",
+        "converted_from_version",
+    ):
+        meta.pop(key, None)
+
+    created_at = meta.get("created_at") or meta.get("created_utc")
+
+    meta_updates: dict[str, str] = {
+        "format": "sqlite-v3",
+        "project_version": str(SCHEMA_VERSION),
+        "schema_version": str(SCHEMA_VERSION),
+        "modified_at": now,
+        "modified_utc": now,
+        "converted_at": now,
+        "converted_from_version": str(legacy_version),
+    }
+    if created_at:
+        meta_updates["created_at"] = created_at
+        meta_updates["created_utc"] = created_at
+
+    meta.update(meta_updates)
+    _projects.write_meta(conn, meta)
+
+
+def _legacy_reassemble_blob(conn: sqlite3.Connection, asset_id: int) -> bytes:
+    rows = conn.execute(
+        "SELECT data FROM blob_chunk WHERE asset_id = ? ORDER BY seq ASC",
+        (asset_id,),
+    ).fetchall()
+    if not rows:
+        return b""
+    return b"".join(row["data"] for row in rows if row["data"])
+
+
+def _resolve_legacy_asset_path(project_dir: Path, rel_path: str) -> Path:
+    candidate = Path(rel_path)
+    if not candidate.is_absolute():
+        candidate = project_dir / rel_path
+    return candidate
+
+
+def _rotate_backups(path: Path) -> None:
+    bak1 = path.with_suffix(path.suffix + ".bak1")
+    bak2 = path.with_suffix(path.suffix + ".bak2")
+    if bak2.exists():
+        bak2.unlink()
+    if bak1.exists():
+        os.replace(bak1, bak2)
+    os.replace(path, bak1)
 
 
 # ---------------------------------------------------------------------------
@@ -712,8 +873,10 @@ def write_autosave(
     if store.path is None:
         raise ValueError("Project store has no associated path")
 
-    autosave = Path(autosave_path) if autosave_path else store.path.with_suffix(
-        store.path.suffix + ".autosave"
+    autosave = (
+        Path(autosave_path)
+        if autosave_path
+        else store.path.with_suffix(store.path.suffix + ".autosave")
     )
     autosave.parent.mkdir(parents=True, exist_ok=True)
 
@@ -721,15 +884,15 @@ def write_autosave(
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
-        with sqlite3.connect(tmp_path.as_posix()) as out_conn:
-            store.conn.backup(out_conn)
+        _sqlite_backup_to_delete_mode(store.path, tmp_path)
+        with open(tmp_path, "rb") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(tmp_path, autosave)
     finally:
         if tmp_path.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
     return autosave
 
 
@@ -753,374 +916,12 @@ def restore_autosave(
 # Internal helpers
 
 
-def _apply_pragmas(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA mmap_size = 268435456;")
-    conn.execute("PRAGMA cache_size = -131072;")
-
-
-def _get_user_version(conn: sqlite3.Connection) -> int:
-    cur = conn.execute("PRAGMA user_version")
-    row = cur.fetchone()
-    return int(row[0]) if row and row[0] is not None else 0
-
-
-def _initialise_schema(
-    conn: sqlite3.Connection,
-    *,
-    app_version: str | None = None,
-    timezone: str | None = None,
-) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS dataset (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_utc TEXT NOT NULL,
-            notes TEXT,
-            fps REAL,
-            pixel_size_um REAL,
-            t0_seconds REAL DEFAULT 0,
-            extra_json TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS trace (
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            t_seconds REAL NOT NULL,
-            inner_diam REAL,
-            outer_diam REAL,
-            p_avg REAL,
-            p1 REAL,
-            p2 REAL,
-            PRIMARY KEY (dataset_id, t_seconds)
-        ) WITHOUT ROWID;
-
-        CREATE INDEX IF NOT EXISTS trace_ds_t ON trace(dataset_id, t_seconds);
-
-        CREATE TABLE IF NOT EXISTS event (
-            id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            t_seconds REAL NOT NULL,
-            label TEXT NOT NULL,
-            frame INTEGER,
-            p_avg REAL,
-            p1 REAL,
-            p2 REAL,
-            temp REAL,
-            extra_json TEXT
-        );
-
-        CREATE INDEX IF NOT EXISTS event_ds_t ON event(dataset_id, t_seconds);
-
-        CREATE TABLE IF NOT EXISTS asset (
-            id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            role TEXT NOT NULL,
-            storage TEXT NOT NULL,
-            rel_path TEXT,
-            sha256 TEXT NOT NULL,
-            bytes INTEGER,
-            mime TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS blob_chunk (
-            asset_id INTEGER NOT NULL REFERENCES asset(id) ON DELETE CASCADE,
-            seq INTEGER NOT NULL,
-            data BLOB NOT NULL,
-            PRIMARY KEY (asset_id, seq)
-        ) WITHOUT ROWID;
-
-        CREATE TABLE IF NOT EXISTS result (
-            id INTEGER PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            kind TEXT NOT NULL,
-            version TEXT NOT NULL,
-            created_utc TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS thumbnail (
-            dataset_id INTEGER PRIMARY KEY REFERENCES dataset(id) ON DELETE CASCADE,
-            png BLOB NOT NULL
-        );
-        """
-    )
-    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-    now = _utc_now()
-    defaults = [
-        ("created_utc", now),
-        ("modified_utc", now),
-    ]
-    if app_version:
-        defaults.append(("app_version", app_version))
-    if timezone:
-        defaults.append(("timezone", timezone))
-
-    conn.executemany(
-        "INSERT OR IGNORE INTO meta(key, value) VALUES(?, ?)",
-        defaults,
-    )
-    conn.commit()
-
-
-def _run_migrations(conn: sqlite3.Connection, start: int, target: int) -> None:
-    version = start
-    while version < target:
-        if version == 0:
-            _initialise_schema(conn)
-            version = SCHEMA_VERSION
-        else:
-            raise RuntimeError(f"No migration path from {version} to {target}")
-    conn.execute(f"PRAGMA user_version = {target}")
-    conn.commit()
-
-
 def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def _prepare_trace_rows(dataset_id: int, df: pd.DataFrame) -> Iterable[tuple]:
-    if df is None or df.empty:
-        return []
-
-    df_local = df.copy()
-    rename_map = _match_trace_columns(df_local.columns)
-    if rename_map:
-        df_local = df_local.rename(columns=rename_map)
-
-    required = "t_seconds"
-    if required not in df_local.columns:
-        raise ValueError("Trace DataFrame must contain a time column")
-
-    df_local["t_seconds"] = pd.to_numeric(df_local["t_seconds"], errors="coerce")
-    for col in ("inner_diam", "outer_diam", "p_avg", "p1", "p2"):
-        if col in df_local.columns:
-            df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
-            if col in ("inner_diam", "outer_diam"):
-                df_local.loc[df_local[col] < 0, col] = pd.NA
-
-    df_local = df_local.dropna(subset=["t_seconds"])
-
-    rows = []
-    for _, row in df_local.iterrows():
-        rows.append(
-            (
-                dataset_id,
-                float(row.get("t_seconds")),
-                _nullable_float(row.get("inner_diam")),
-                _nullable_float(row.get("outer_diam")),
-                _nullable_float(row.get("p_avg")),
-                _nullable_float(row.get("p1")),
-                _nullable_float(row.get("p2")),
-            )
-        )
-    return rows
-
-
-def _prepare_event_rows(dataset_id: int, df: pd.DataFrame) -> Iterable[tuple]:
-    if df is None or df.empty:
-        return []
-
-    df_local = df.copy()
-    rename_map = _match_event_columns(df_local.columns)
-    if rename_map:
-        df_local = df_local.rename(columns=rename_map)
-
-    if "t_seconds" not in df_local.columns or "label" not in df_local.columns:
-        raise ValueError("Events DataFrame must include time and label columns")
-
-    df_local["t_seconds"] = pd.to_numeric(df_local["t_seconds"], errors="coerce")
-    df_local = df_local.dropna(subset=["t_seconds"])
-    df_local["label"] = df_local["label"].astype(str)
-
-    for col in ("frame", "p_avg", "p1", "p2", "temp"):
-        if col in df_local.columns:
-            df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
-
-    rows = []
-    extra_cols = [c for c in df_local.columns if c not in {"t_seconds", "label", "frame", "p_avg", "p1", "p2", "temp"}]
-    for _, row in df_local.iterrows():
-        extra_json = None
-        if extra_cols:
-            payload = {c: row.get(c) for c in extra_cols if pd.notna(row.get(c))}
-            if payload:
-                extra_json = json.dumps(payload)
-        rows.append(
-            (
-                dataset_id,
-                float(row.get("t_seconds")),
-                row.get("label"),
-                _nullable_int(row.get("frame")),
-                _nullable_float(row.get("p_avg")),
-                _nullable_float(row.get("p1")),
-                _nullable_float(row.get("p2")),
-                _nullable_float(row.get("temp")),
-                extra_json,
-            )
-        )
-    return rows
-
-
-def _nullable_float(value) -> Optional[float]:
-    if value is None:
+def _guess_mime(path: str | os.PathLike[str] | None) -> str | None:
+    if not path:
         return None
-    try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
-    return float(value)
-
-
-def _nullable_int(value) -> Optional[int]:
-    if value is None:
-        return None
-    try:
-        if pd.isna(value):
-            return None
-    except TypeError:
-        pass
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
-    mapping = {}
-    for col in columns:
-        norm = _normalise_label(col)
-        if norm in {"times", "tseconds", "t", "time", "timestamp"} and "t_seconds" not in mapping.values():
-            mapping[col] = "t_seconds"
-        elif norm in {"innerdiameter", "innerdiam"} and "inner_diam" not in mapping.values():
-            mapping[col] = "inner_diam"
-        elif norm in {"outerdiameter", "outerdiam"} and "outer_diam" not in mapping.values():
-            mapping[col] = "outer_diam"
-        elif norm in {"pressureavg", "pavg"} and "p_avg" not in mapping.values():
-            mapping[col] = "p_avg"
-        elif norm in {"pressure1", "p1"} and "p1" not in mapping.values():
-            mapping[col] = "p1"
-        elif norm in {"pressure2", "p2"} and "p2" not in mapping.values():
-            mapping[col] = "p2"
-        elif norm in {"time"} and "t_seconds" not in mapping.values():
-            mapping[col] = "t_seconds"
-    if mapping:
-        return mapping
-
-    defaults = {}
-    for col in columns:
-        if col.lower().startswith("time") and "t_seconds" not in defaults.values():
-            defaults[col] = "t_seconds"
-        elif "inner" in col.lower() and "diam" in col.lower() and "inner_diam" not in defaults.values():
-            defaults[col] = "inner_diam"
-        elif "outer" in col.lower() and "diam" in col.lower() and "outer_diam" not in defaults.values():
-            defaults[col] = "outer_diam"
-    return defaults
-
-
-def _match_event_columns(columns: Sequence[str]) -> dict[str, str]:
-    mapping = {}
-    for col in columns:
-        norm = _normalise_label(col)
-        if norm in {"times", "time", "tseconds", "timestamp"} and "t_seconds" not in mapping.values():
-            mapping[col] = "t_seconds"
-        elif norm in {"event", "label"} and "label" not in mapping.values():
-            mapping[col] = "label"
-        elif norm in {"frame", "frames"} and "frame" not in mapping.values():
-            mapping[col] = "frame"
-        elif norm in {"pavg", "pressureavg"} and "p_avg" not in mapping.values():
-            mapping[col] = "p_avg"
-        elif norm == "p1" and "p1" not in mapping.values():
-            mapping[col] = "p1"
-        elif norm == "p2" and "p2" not in mapping.values():
-            mapping[col] = "p2"
-        elif norm in {"temp", "temperature"} and "temp" not in mapping.values():
-            mapping[col] = "temp"
-    if mapping:
-        return mapping
-    return {}
-
-
-def _normalise_label(label: str) -> str:
-    return "".join(ch for ch in label.lower() if ch.isalnum())
-
-
-def _chunks_from_file(path: Path, chunk_size: int) -> Iterator[bytes]:
-    with open(path, "rb") as fh:
-        while True:
-            chunk = fh.read(chunk_size)
-            if not chunk:
-                break
-            yield chunk
-
-
-def _chunks_from_bytes(data: bytes, chunk_size: int) -> Iterator[bytes]:
-    buf = memoryview(data)
-    for idx in range(0, len(buf), chunk_size):
-        yield bytes(buf[idx : idx + chunk_size])
-
-
-def _write_blob_chunks(
-    conn: sqlite3.Connection, asset_id: int, chunks: Iterable[bytes]
-) -> None:
-    conn.execute("DELETE FROM blob_chunk WHERE asset_id = ?", (asset_id,))
-    for seq, chunk in enumerate(chunks):
-        conn.execute(
-            "INSERT INTO blob_chunk(asset_id, seq, data) VALUES(?, ?, ?)",
-            (asset_id, seq, sqlite3.Binary(chunk)),
-        )
-
-
-def _reassemble_blob(conn: sqlite3.Connection, asset_id: int) -> bytes:
-    rows = conn.execute(
-        "SELECT data FROM blob_chunk WHERE asset_id = ? ORDER BY seq ASC",
-        (asset_id,),
-    ).fetchall()
-    if not rows:
-        return b""
-    return b"".join(row[0] for row in rows if row[0] is not None)
-
-
-def _hash_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(8192), b""):
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def _guess_mime(path: str | os.PathLike[str] | None) -> Optional[str]:
-    if path is None:
-        return None
-    path_obj = Path(path)
-    suffix = path_obj.suffix.lower()
-    suffixes = [s.lower() for s in path_obj.suffixes]
-    if suffixes[-2:] == [".ome", ".tif"] or suffixes[-2:] == [".ome", ".tiff"]:
-        return "image/tiff"
-    if suffix in {".tif", ".tiff"}:
-        return "image/tiff"
-    if suffix == ".png":
-        return "image/png"
-    if suffix == ".jpg" or suffix == ".jpeg":
-        return "image/jpeg"
-    return None
-
-
-def _extension_for_mime(mime: Optional[str]) -> str:
-    mapping = {
-        "image/tiff": ".tif",
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-    }
-    return mapping.get(mime, ".bin")
+    guess, _ = mimetypes.guess_type(str(path))
+    return guess

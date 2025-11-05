@@ -4,18 +4,17 @@
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
 import json
+import logging
 import os
 import pickle
 from datetime import datetime
 from pathlib import Path
 
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
 from matplotlib import rcParams
+from PyQt5.QtWidgets import QFileDialog, QMessageBox
 
 from vasoanalyzer.ui.dialogs.figure_export_dialog import FigureExportDialog
 from vasoanalyzer.ui.theme import CURRENT_THEME
-
-import logging
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +31,7 @@ def auto_export_editable_plot(self):
             "event_labels": self.event_labels,
             "event_times": self.event_times,
             "event_table_data": self.event_table_data,
+            "event_label_meta": getattr(self, "event_label_meta", []),
             "plot_style": self.get_current_plot_style(),
         }
         with open(pickle_path, "wb") as f:
@@ -168,7 +168,7 @@ def _safe_getattr(obj, name, default=None):
 
 def _serialize_pins(pins):
     serial = []
-    for marker, label in pins or []:
+    for marker, _label in pins or []:
         try:
             serial.append(
                 {
@@ -177,7 +177,8 @@ def _serialize_pins(pins):
                     "trace": getattr(marker, "trace_type", "inner"),
                 }
             )
-        except Exception:
+        except (AttributeError, IndexError, TypeError, ValueError):
+            # Skip markers with invalid data or missing attributes
             continue
     return serial
 
@@ -185,16 +186,17 @@ def _serialize_pins(pins):
 def _serialize_events(event_table):
     try:
         return len(event_table)
-    except Exception:
+    except (TypeError, AttributeError):
+        # event_table is None or doesn't support len()
         return 0
 
 
 def _ensure_json_safe(value):
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    if isinstance(value, str | int | float | bool) or value is None:
         return value
     if isinstance(value, dict):
         return {str(k): _ensure_json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, list | tuple):
         return [_ensure_json_safe(v) for v in value]
     return str(value)
 

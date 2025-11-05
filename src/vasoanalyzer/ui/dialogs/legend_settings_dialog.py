@@ -179,4 +179,3 @@ class LegendSettingsDialog(QDialog):
             "font_italic": self.font_italic_check.isChecked(),
             "labels": labels,
         }
-

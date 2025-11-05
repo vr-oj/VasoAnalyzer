@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence, Set
+from collections.abc import Iterable, Sequence
 
 import numpy as np
 
@@ -14,10 +14,10 @@ __all__ = [
 
 def _find_neighbor(
     values: np.ndarray,
-    forbidden: Set[int],
+    forbidden: set[int],
     start_idx: int,
     step: int,
-) -> Optional[int]:
+) -> int | None:
     idx = start_idx
     n = len(values)
     while 0 <= idx < n:
@@ -32,8 +32,8 @@ def _estimate_slope(
     values: np.ndarray,
     anchor_idx: int,
     direction: int,
-    forbidden: Set[int],
-) -> Optional[float]:
+    forbidden: set[int],
+) -> float | None:
     neighbor = _find_neighbor(values, forbidden, anchor_idx + direction, direction)
     if neighbor is None:
         return None
@@ -78,7 +78,7 @@ def cubic_hermite_bridge(
 ) -> np.ndarray:
     """Slope-preserving cubic Hermite bridge over the selected indices."""
 
-    forbidden_set = set(int(i) for i in forbidden)
+    forbidden_set = {int(i) for i in forbidden}
     span = float(time[right_idx] - time[left_idx])
     if span <= 0.0:
         return linear_bridge(time, clean_values, indices, left_idx=left_idx, right_idx=right_idx)
@@ -111,15 +111,11 @@ def cubic_hermite_bridge(
     for pos, idx in enumerate(indices):
         u = (float(time[idx]) - float(time[left_idx])) / span
         u = min(max(u, 0.0), 1.0)
-        h00 = (2 * u ** 3) - (3 * u ** 2) + 1
-        h10 = (u ** 3) - (2 * u ** 2) + u
-        h01 = (-2 * u ** 3) + (3 * u ** 2)
-        h11 = (u ** 3) - (u ** 2)
+        h00 = (2 * u**3) - (3 * u**2) + 1
+        h10 = (u**3) - (2 * u**2) + u
+        h01 = (-2 * u**3) + (3 * u**2)
+        h11 = (u**3) - (u**2)
         out[pos] = (
-            h00 * left_val
-            + h10 * span * slope_left
-            + h01 * right_val
-            + h11 * span * slope_right
+            h00 * left_val + h10 * span * slope_left + h01 * right_val + h11 * span * slope_right
         )
     return out
-
