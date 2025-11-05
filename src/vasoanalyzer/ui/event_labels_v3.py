@@ -383,7 +383,7 @@ class EventLabelerV3:
                 # Default to darker gray with higher opacity for better visibility
                 if style_color is not None:
                     # If we have a color, use it with 50% opacity
-                    if isinstance(style_color, (list, tuple)) and len(style_color) >= 3:
+                    if isinstance(style_color, list | tuple) and len(style_color) >= 3:
                         color = (*style_color[:3], 0.5)
                     else:
                         color = style_color
@@ -441,27 +441,50 @@ class EventLabelerV3:
         lane_end_px = [float("-inf")] * lanes
         lane_step = 0.8 / max(1, lanes - 1) if lanes > 1 else 0.0
 
+        # Get plot bounds in pixel coordinates for bounds checking
+        xlim = ax.get_xlim()
+        transform = ax.transData
+        x_min_px = transform.transform([(xlim[0], 0)])[0, 0]
+        x_max_px = transform.transform([(xlim[1], 0)])[0, 0]
+
         for cluster in selected_clusters:
             fontdict = self._font_dict(cluster.style)
             if cluster.width_px <= 0.0:
                 width, _ = self._cache.get(cluster.text, fontdict, dpi, renderer)
                 cluster.width_px = max(width, 0.0)
             width = max(cluster.width_px, 0.0)
-            lane_index = self._select_lane(cluster.px, width, lane_end_px)
+
+            # Add small gap between guide line and label
+            gap_px = 4.0
+
+            # Check if label would extend beyond right edge
+            label_end_px = cluster.px + gap_px + width
+            if label_end_px > x_max_px:
+                # Skip labels that would be cut off at the right edge
+                continue
+
+            lane_index = self._select_lane(cluster.px, width + gap_px, lane_end_px)
             lane_y = 0.94 - (lane_index * lane_step)
-            # Update lane end position with buffer for next label
-            lane_end_px[lane_index] = cluster.px + width + 12.0
+            # Update lane end position: guide position + gap + label width + buffer
+            lane_end_px[lane_index] = cluster.px + gap_px + width + 12.0
 
             enhanced_style = self._enhance_style_by_priority(
                 cluster.style, cluster.max_priority, cluster.category
             )
             text_kwargs = self._text_kwargs(enhanced_style)
+
+            # Position label to the RIGHT of the guide line (not centered on it)
+            # Convert from pixel coordinates to data coordinates for the offset
+            x_offset_data = transform.inverted().transform([(cluster.px + gap_px, 0)])[0, 0]
+            x_center_data = transform.inverted().transform([(cluster.px, 0)])[0, 0]
+            x_label = cluster.x + (x_offset_data - x_center_data)
+
             artist = ax.text(
-                cluster.x,
+                x_label,
                 lane_y,
                 cluster.text,
                 transform=ax.get_xaxis_transform(),
-                ha=text_kwargs.pop("ha", "center"),
+                ha=text_kwargs.pop("ha", "left"),  # Changed from "center" to "left"
                 va=text_kwargs.pop("va", "top"),
                 clip_on=False,
                 zorder=self.options.z_label,
@@ -489,15 +512,32 @@ class EventLabelerV3:
 
         lane_end_px = [float("-inf")] * lanes
 
+        # Get plot bounds in pixel coordinates for bounds checking
+        # Note: belt_ax shares x-axis with main ax
+        xlim = ax.get_xlim()
+        transform = ax.transData
+        x_min_px = transform.transform([(xlim[0], 0)])[0, 0]
+        x_max_px = transform.transform([(xlim[1], 0)])[0, 0]
+
         for cluster in selected_clusters:
             fontdict = self._font_dict(cluster.style)
             if cluster.width_px <= 0.0:
                 width, _ = self._cache.get(cluster.text, fontdict, dpi, renderer)
                 cluster.width_px = max(width, 0.0)
             width = max(cluster.width_px, 0.0)
-            lane_index = self._select_lane(cluster.px, width, lane_end_px)
-            # Update lane end position with buffer for next label
-            lane_end_px[lane_index] = cluster.px + width + 12.0
+
+            # Add small gap between guide line and label
+            gap_px = 4.0
+
+            # Check if label would extend beyond right edge
+            label_end_px = cluster.px + gap_px + width
+            if label_end_px > x_max_px:
+                # Skip labels that would be cut off at the right edge
+                continue
+
+            lane_index = self._select_lane(cluster.px, width + gap_px, lane_end_px)
+            # Update lane end position: guide position + gap + label width + buffer
+            lane_end_px[lane_index] = cluster.px + gap_px + width + 12.0
 
             # distribute lanes within belt (avoid division by zero when single lane)
             y_axes = 0.5 if lanes == 1 else 0.15 + lane_index * 0.75 / max(1, lanes - 1)
@@ -507,12 +547,19 @@ class EventLabelerV3:
             )
             text_kwargs = self._text_kwargs(enhanced_style)
             bbox = text_kwargs.pop("bbox", None)
+
+            # Position label to the RIGHT of the guide line (not centered on it)
+            # Convert from pixel coordinates to data coordinates for the offset
+            x_offset_data = transform.inverted().transform([(cluster.px + gap_px, 0)])[0, 0]
+            x_center_data = transform.inverted().transform([(cluster.px, 0)])[0, 0]
+            x_label = cluster.x + (x_offset_data - x_center_data)
+
             artist = belt_ax.text(
-                cluster.x,
+                x_label,
                 y_axes,
                 cluster.text,
                 transform=belt_ax.get_xaxis_transform(),
-                ha=text_kwargs.pop("ha", "center"),
+                ha=text_kwargs.pop("ha", "left"),  # Changed from "center" to "left"
                 va=text_kwargs.pop("va", "center"),
                 clip_on=False,
                 zorder=self.options.z_label,
@@ -727,16 +774,16 @@ class EventLabelerV3:
 
         # Professional color palette for event categories
         category_colors = {
-            "stimulus": (0.12, 0.47, 0.71, 1.0),      # Blue
-            "response": (0.84, 0.15, 0.16, 1.0),      # Red
-            "drug": (0.17, 0.63, 0.17, 1.0),          # Green
-            "baseline": (0.50, 0.50, 0.50, 1.0),      # Gray
+            "stimulus": (0.12, 0.47, 0.71, 1.0),  # Blue
+            "response": (0.84, 0.15, 0.16, 1.0),  # Red
+            "drug": (0.17, 0.63, 0.17, 1.0),  # Green
+            "baseline": (0.50, 0.50, 0.50, 1.0),  # Gray
             "intervention": (1.00, 0.50, 0.00, 1.0),  # Orange
-            "measurement": (0.58, 0.40, 0.74, 1.0),   # Purple
-            "event": (0.09, 0.75, 0.81, 1.0),         # Cyan
-            "marker": (0.89, 0.47, 0.76, 1.0),        # Pink
-            "warning": (0.74, 0.50, 0.00, 1.0),       # Dark orange
-            "error": (0.65, 0.00, 0.00, 1.0),         # Dark red
+            "measurement": (0.58, 0.40, 0.74, 1.0),  # Purple
+            "event": (0.09, 0.75, 0.81, 1.0),  # Cyan
+            "marker": (0.89, 0.47, 0.76, 1.0),  # Pink
+            "warning": (0.74, 0.50, 0.00, 1.0),  # Dark orange
+            "error": (0.65, 0.00, 0.00, 1.0),  # Dark red
         }
 
         # Case-insensitive lookup
@@ -785,15 +832,19 @@ class EventLabelerV3:
         """Extract only matplotlib-compatible text properties from style dict."""
         # Only include matplotlib text properties, exclude layout/positioning metadata
         valid_keys = {
-            "fontfamily", "fontstyle", "fontweight", "fontsize",
-            "color", "alpha", "rotation", "align", "valign",
-            "clip_on", "bbox"
+            "fontfamily",
+            "fontstyle",
+            "fontweight",
+            "fontsize",
+            "color",
+            "alpha",
+            "rotation",
+            "align",
+            "valign",
+            "clip_on",
+            "bbox",
         }
-        kwargs = {
-            key: value
-            for key, value in style.items()
-            if key in valid_keys
-        }
+        kwargs = {key: value for key, value in style.items() if key in valid_keys}
         kwargs.setdefault("ha", kwargs.pop("align", "center"))
         kwargs.setdefault("va", kwargs.pop("valign", "center"))
         return kwargs
