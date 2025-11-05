@@ -2173,10 +2173,13 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_dual_view(selected_samples)
         elif isinstance(obj, Experiment):
             add_n = menu.addAction("Add N")
+            import_folder = menu.addAction("Import Folder…")
             del_exp = menu.addAction("Delete Experiment")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == add_n:
                 self.add_sample(obj)
+            elif action == import_folder:
+                self._handle_import_folder(target_experiment=obj)
             elif action == del_exp:
                 self.delete_experiment(obj)
             elif action == open_act:
@@ -2313,6 +2316,126 @@ class VasoAnalyzerApp(QMainWindow):
 
         if self.current_project and self.current_project.path:
             save_project(self.current_project, self.current_project.path)
+
+    def _handle_import_folder(self, target_experiment=None):
+        """Handle the Import Folder action."""
+        from vasoanalyzer.services.folder_import_service import scan_folder_with_status
+        from vasoanalyzer.ui.dialogs.folder_import_dialog import FolderImportDialog
+
+        # Determine target experiment
+        if target_experiment is None:
+            target_experiment = self.current_experiment
+
+        if target_experiment is None:
+            QMessageBox.warning(
+                self,
+                "No Experiment Selected",
+                "Please select an experiment before importing a folder.",
+            )
+            return
+
+        # Prompt for folder selection
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder to Import",
+            "",
+            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+        )
+
+        if not folder_path:
+            return
+
+        # Scan folder for trace files
+        try:
+            candidates = scan_folder_with_status(folder_path, target_experiment)
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Scan Error",
+                f"Failed to scan folder:\n{e}",
+            )
+            log.exception("Error scanning folder: %s", folder_path)
+            return
+
+        if not candidates:
+            QMessageBox.information(
+                self,
+                "No Files Found",
+                "No trace files were found in the selected folder or its subfolders.",
+            )
+            return
+
+        # Show preview dialog
+        dialog = FolderImportDialog(candidates, self)
+        if dialog.exec_() != QDialog.Accepted:
+            return
+
+        selected = dialog.selected_candidates
+        if not selected:
+            return
+
+        # Import selected files
+        self._import_candidates(selected, target_experiment)
+
+    def _import_candidates(self, candidates, target_experiment):
+        """Import a list of candidates into an experiment."""
+        from vasoanalyzer.services.folder_import_service import get_file_signature
+
+        success_count = 0
+        error_count = 0
+        errors = []
+
+        for candidate in candidates:
+            try:
+                # Create sample
+                sample = SampleN(name=candidate.subfolder)
+
+                # Load trace data
+                df = self.load_trace_and_event_files(candidate.trace_file)
+                sample.trace_data = df
+
+                # Update metadata for trace
+                trace_obj = Path(candidate.trace_file).expanduser().resolve(strict=False)
+                self._update_sample_link_metadata(sample, "trace", trace_obj)
+
+                # Store file signature for change detection
+                sample.trace_sig = get_file_signature(candidate.trace_file)
+
+                # Load events if found
+                if candidate.events_file and os.path.exists(candidate.events_file):
+                    event_obj = Path(candidate.events_file).expanduser().resolve(strict=False)
+                    self._update_sample_link_metadata(sample, "events", event_obj)
+                    sample.events_sig = get_file_signature(candidate.events_file)
+
+                # Add to experiment
+                target_experiment.samples.append(sample)
+                success_count += 1
+
+            except Exception as e:
+                error_count += 1
+                errors.append(f"{candidate.subfolder}: {str(e)}")
+                log.exception("Error importing %s", candidate.trace_file)
+
+        # Refresh UI
+        self.refresh_project_tree()
+
+        # Save project
+        if self.current_project and self.current_project.path:
+            save_project(self.current_project, self.current_project.path)
+
+        # Show summary
+        if error_count == 0:
+            self.statusBar().showMessage(
+                f"✓ Successfully imported {success_count} sample(s) into '{target_experiment.name}'",
+                5000,
+            )
+        else:
+            message = f"Imported {success_count} sample(s) with {error_count} error(s)."
+            if errors:
+                message += "\n\nErrors:\n" + "\n".join(errors[:5])
+                if len(errors) > 5:
+                    message += f"\n... and {len(errors) - 5} more"
+            QMessageBox.warning(self, "Import Complete with Errors", message)
 
     def delete_sample(self, sample: SampleN):
         if not self.current_project:
@@ -2514,6 +2637,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_open_tiff.setShortcut("Ctrl+Shift+T")
         self.action_open_tiff.triggered.connect(self.load_snapshot)
         file_menu.addAction(self.action_open_tiff)
+
+        self.action_import_folder = QAction("Import Folder…", self)
+        self.action_import_folder.setShortcut("Ctrl+Shift+I")
+        self.action_import_folder.triggered.connect(self._handle_import_folder)
+        file_menu.addAction(self.action_import_folder)
 
         self.recent_menu = file_menu.addMenu("Recent Files")
         self.update_recent_files_menu()

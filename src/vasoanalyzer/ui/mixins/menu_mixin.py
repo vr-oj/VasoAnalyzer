@@ -111,6 +111,11 @@ class MenuMixin:
         self.action_open_tiff.triggered.connect(self.load_snapshot)
         file_menu.addAction(self.action_open_tiff)
 
+        self.action_import_folder = QAction("Import Folder…", self)
+        self.action_import_folder.setShortcut("Ctrl+Shift+I")
+        self.action_import_folder.triggered.connect(self._handle_import_folder)
+        file_menu.addAction(self.action_import_folder)
+
         self.recent_menu = file_menu.addMenu("Recent Files")
         self.update_recent_files_menu()
 
