@@ -107,17 +107,16 @@ class FolderImportDialog(QDialog):
 
     def _populate_table(self) -> None:
         """Populate the table with candidates."""
+        # Block signals while populating to avoid triggering itemChanged prematurely
+        self.table.blockSignals(True)
         self.table.setRowCount(len(self.candidates))
 
         for row, candidate in enumerate(self.candidates):
-            # Checkbox
-            checkbox = QCheckBox()
-            checkbox.setProperty("row", row)
-            checkbox.stateChanged.connect(self._on_checkbox_changed)
-            checkbox_widget = QTableWidgetItem()
-            checkbox_widget.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            checkbox_widget.setCheckState(Qt.Unchecked)
-            self.table.setItem(row, 0, checkbox_widget)
+            # Checkbox column
+            checkbox_item = QTableWidgetItem()
+            checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            checkbox_item.setCheckState(Qt.Unchecked)
+            self.table.setItem(row, 0, checkbox_item)
 
             # Sample name (subfolder name)
             name_item = QTableWidgetItem(candidate.subfolder)
@@ -148,6 +147,9 @@ class FolderImportDialog(QDialog):
             status_item.setToolTip(status_tooltip)
             status_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(row, 4, status_item)
+
+        # Unblock signals now that table is fully populated
+        self.table.blockSignals(False)
 
         # Apply default selection based on mode
         self._on_mode_changed()
@@ -199,18 +201,13 @@ class FolderImportDialog(QDialog):
         self._update_summary()
         self._update_button_states()
 
-    def _on_checkbox_changed(self, state: int) -> None:
-        """Handle checkbox state changes."""
-        # If user manually changes a checkbox, switch to custom mode
-        if not self.mode_custom.isChecked():
-            self.mode_custom.setChecked(True)
-
-        self._update_summary()
-        self._update_button_states()
-
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         """Handle table item changes."""
         if item.column() == 0:  # Checkbox column
+            # If user manually changes a checkbox, switch to custom mode
+            if not self.mode_custom.isChecked():
+                self.mode_custom.setChecked(True)
+
             self._update_summary()
             self._update_button_states()
 
@@ -219,7 +216,7 @@ class FolderImportDialog(QDialog):
         checked_count = sum(
             1
             for row in range(len(self.candidates))
-            if self.table.item(row, 0).checkState() == Qt.Checked
+            if self.table.item(row, 0) and self.table.item(row, 0).checkState() == Qt.Checked
         )
 
         if checked_count == 0:
@@ -234,7 +231,7 @@ class FolderImportDialog(QDialog):
         checked_count = sum(
             1
             for row in range(len(self.candidates))
-            if self.table.item(row, 0).checkState() == Qt.Checked
+            if self.table.item(row, 0) and self.table.item(row, 0).checkState() == Qt.Checked
         )
         self.ok_button.setEnabled(checked_count > 0)
 
@@ -242,7 +239,8 @@ class FolderImportDialog(QDialog):
         """Get the list of selected candidates."""
         selected = []
         for row, candidate in enumerate(self.candidates):
-            if self.table.item(row, 0).checkState() == Qt.Checked:
+            item = self.table.item(row, 0)
+            if item and item.checkState() == Qt.Checked:
                 selected.append(candidate)
         return selected
 
