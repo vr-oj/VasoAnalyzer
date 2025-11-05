@@ -414,9 +414,10 @@ class EventLabelerV3:
                 y_axes,
                 cluster.text,
                 rotation=self.options.rotation_deg,
+                rotation_mode="anchor",
                 transform=ax.get_xaxis_transform(),
                 ha=text_kwargs.pop("ha", "center"),
-                va=text_kwargs.pop("va", "top"),
+                va=text_kwargs.pop("va", "bottom"),
                 zorder=self.options.z_label,
                 clip_on=False,
                 **text_kwargs,
@@ -448,7 +449,8 @@ class EventLabelerV3:
             width = max(cluster.width_px, 0.0)
             lane_index = self._select_lane(cluster.px, width, lane_end_px)
             lane_y = 0.94 - (lane_index * lane_step)
-            lane_end_px[lane_index] = cluster.px + width + 8.0
+            # Update lane end position with buffer for next label
+            lane_end_px[lane_index] = cluster.px + width + 12.0
 
             enhanced_style = self._enhance_style_by_priority(
                 cluster.style, cluster.max_priority, cluster.category
@@ -494,7 +496,8 @@ class EventLabelerV3:
                 cluster.width_px = max(width, 0.0)
             width = max(cluster.width_px, 0.0)
             lane_index = self._select_lane(cluster.px, width, lane_end_px)
-            lane_end_px[lane_index] = cluster.px + width + 8.0
+            # Update lane end position with buffer for next label
+            lane_end_px[lane_index] = cluster.px + width + 12.0
 
             # distribute lanes within belt (avoid division by zero when single lane)
             y_axes = 0.5 if lanes == 1 else 0.15 + lane_index * 0.75 / max(1, lanes - 1)
@@ -704,11 +707,18 @@ class EventLabelerV3:
         width: float,
         lane_end_px: list[float],
     ) -> int:
+        """Select the best lane for a label at pixel position px with given width.
+
+        Returns the first lane where the label fits without overlap, or the
+        lane with the smallest tail position if none fit perfectly.
+        """
         width = max(width, 0.0)
+        # Try to find a lane where this label fits without overlap
         for lane_index, lane_tail in enumerate(lane_end_px):
-            if px - lane_tail >= width + 8.0:
+            if px >= lane_tail:
                 return lane_index
-        return len(lane_end_px) - 1
+        # If no lane fits perfectly, use the one that's least occupied
+        return min(range(len(lane_end_px)), key=lambda i: lane_end_px[i])
 
     def _get_category_color(self, category: str | None) -> tuple[float, float, float, float] | None:
         """Get a consistent color for an event category."""

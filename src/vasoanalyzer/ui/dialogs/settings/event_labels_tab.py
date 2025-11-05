@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -85,9 +86,15 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     """
     fonts = list(dialog._font_choices)
 
-    container = QWidget()
-    main_layout = QVBoxLayout(container)
-    main_layout.setContentsMargins(0, 0, 0, 0)
+    # Create scroll area to prevent widget collapse
+    scroll_area = QScrollArea()
+    scroll_area.setWidgetResizable(True)
+    scroll_area.setFrameShape(QScrollArea.NoFrame)
+
+    # Create content widget that will be scrolled
+    content_widget = QWidget()
+    main_layout = QVBoxLayout(content_widget)
+    main_layout.setContentsMargins(12, 12, 12, 12)
     main_layout.setSpacing(12)
 
     intro = QLabel(
@@ -289,6 +296,15 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     main_layout.addWidget(event_empty_label)
 
     main_layout.addStretch(1)
+
+    # Set content widget in scroll area
+    scroll_area.setWidget(content_widget)
+
+    # Create container widget with scroll area
+    container = QWidget()
+    container_layout = QVBoxLayout(container)
+    container_layout.setContentsMargins(0, 0, 0, 0)
+    container_layout.addWidget(scroll_area)
 
     # Return refs so the dialog can reattach attributes it expects
     return EventLabelsTabRefs(
