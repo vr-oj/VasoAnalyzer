@@ -59,6 +59,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -426,6 +427,15 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_recent_projects()
         self.setAcceptDrops(True)
         self.setStatusBar(QStatusBar(self))
+
+        # Setup progress bar in status bar
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setMaximumWidth(200)
+        self._progress_bar.setMaximumHeight(16)
+        self._progress_bar.setTextVisible(True)
+        self._progress_bar.hide()  # Hidden by default
+        self.statusBar().addPermanentWidget(self._progress_bar)
+
         self.current_project = None
         self.project_tree = None
         self.metadata_dock = None
@@ -3563,13 +3573,9 @@ class VasoAnalyzerApp(QMainWindow):
             self.statusBar().hide()
 
     def show_shortcuts(self):
-        text = (
-            "Ctrl+N: New Analysis\n"
-            "Ctrl+O: Open Trace & Events\n"
-            "Ctrl+T: Open TIFF…\n"
-            "Ctrl+Z/Y: Undo/Redo\n"
-        )
-        QMessageBox.information(self, "Keyboard Shortcuts", text)
+        from vasoanalyzer.ui.dialogs.keyboard_shortcuts_dialog import KeyboardShortcutsDialog
+        dialog = KeyboardShortcutsDialog(self)
+        dialog.exec_()
 
     def open_user_manual(self):
         manual_path = os.path.abspath(
@@ -4136,6 +4142,27 @@ QPushButton[isGhost="true"]:hover {{
         if not self.session_dirty:
             self.session_dirty = True
             self._update_status_chip()
+
+    # ------------------------------------------------------------------ progress bar helpers
+    def show_progress(self, message: str = "", maximum: int = 100) -> None:
+        """Show progress bar in status bar with optional message."""
+        self._progress_bar.setMaximum(maximum)
+        self._progress_bar.setValue(0)
+        self._progress_bar.setFormat(f"{message} %p%") if message else self._progress_bar.setFormat("%p%")
+        self._progress_bar.show()
+        if message:
+            self.statusBar().showMessage(message)
+
+    def update_progress(self, value: int) -> None:
+        """Update progress bar value."""
+        if self._progress_bar.isVisible():
+            self._progress_bar.setValue(value)
+            QApplication.processEvents()  # Force UI update
+
+    def hide_progress(self) -> None:
+        """Hide progress bar."""
+        self._progress_bar.hide()
+        self._progress_bar.setValue(0)
 
     # ------------------------------------------------------------------ trace editing helpers
     def _prepare_trace_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:

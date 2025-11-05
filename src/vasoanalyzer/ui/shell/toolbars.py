@@ -69,23 +69,39 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     if home_act:
         home_act.setText("Reset view")
         home_act.setShortcut(QKeySequence("R"))
-        home_act.setToolTip("Reset view (R) — show entire trace")
+        home_act.setToolTip(
+            "<b>Reset View</b> <kbd>R</kbd><br><br>"
+            "Resets plot to show entire trace.<br>"
+            "Use to return to full time range."
+        )
         home_act.setStatusTip("Reset the plot to the full time range.")
         home_act.setIcon(QIcon(window.icon_path("Home.svg")))
 
     if back_act:
         back_act.setText("Back")
-        back_act.setToolTip("Back — previous view")
+        back_act.setToolTip(
+            "<b>Back</b><br><br>"
+            "Return to previous view in history.<br>"
+            "Navigate backward through zoom history."
+        )
         back_act.setIcon(QIcon(window.icon_path("Back.svg")))
 
     if forward_act:
         forward_act.setText("Forward")
-        forward_act.setToolTip("Forward — next view")
+        forward_act.setToolTip(
+            "<b>Forward</b><br><br>"
+            "Go to next view in history.<br>"
+            "Navigate forward through zoom history."
+        )
         forward_act.setIcon(QIcon(window.icon_path("Forward.svg")))
 
     if pan_act:
         pan_act.setText("Pan")
-        pan_act.setToolTip("Pan (P) — drag to move")
+        pan_act.setToolTip(
+            "<b>Pan</b> <kbd>P</kbd><br><br>"
+            "Click and drag to move the view.<br>"
+            "Press <kbd>Esc</kbd> to exit pan mode."
+        )
         pan_act.setStatusTip("Drag to move the view. Press Esc to exit.")
         pan_act.setIcon(QIcon(window.icon_path("Pan.svg")))
         pan_act.setShortcut(QKeySequence("P"))
@@ -93,7 +109,11 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
 
     if zoom_act:
         zoom_act.setText("Zoom")
-        zoom_act.setToolTip("Zoom (Z) — draw a box to zoom")
+        zoom_act.setToolTip(
+            "<b>Zoom</b> <kbd>Z</kbd><br><br>"
+            "Drag a rectangle to zoom in.<br>"
+            "Press <kbd>Esc</kbd> to exit zoom mode."
+        )
         zoom_act.setStatusTip("Drag a rectangle to zoom in. Press Esc to exit.")
         zoom_act.setIcon(QIcon(window.icon_path("Zoom.svg")))
         zoom_act.setShortcut(QKeySequence("Z"))
@@ -137,14 +157,22 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     window.actGrid.setCheckable(True)
     window.actGrid.setChecked(window.grid_visible)
     window.actGrid.setShortcut(QKeySequence("G"))
-    window.actGrid.setToolTip("Toggle grid (G)")
+    window.actGrid.setToolTip(
+        "<b>Toggle Grid</b> <kbd>G</kbd><br><br>"
+        "Shows/hides coordinate grid overlay.<br>"
+        "Use for precise alignment and measurements."
+    )
     with contextlib.suppress(Exception):
         window.actGrid.triggered.disconnect(window._on_grid_action_triggered)
     window.actGrid.triggered.connect(window._on_grid_action_triggered)
     toolbar.addAction(window.actGrid)
 
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
-    window.actStyle.setToolTip("Open plot style settings")
+    window.actStyle.setToolTip(
+        "<b>Plot Settings</b><br><br>"
+        "Open unified plot settings dialog.<br>"
+        "Customize canvas, layout, axes, style, and event labels."
+    )
     with contextlib.suppress(Exception):
         window.actStyle.triggered.disconnect()
     window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
@@ -155,7 +183,11 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
         "Edit Points",
         window,
     )
-    window.actEditPoints.setToolTip("Edit raw points in the current view (opens the Point Editor)")
+    window.actEditPoints.setToolTip(
+        "<b>Edit Points</b><br><br>"
+        "Opens the Point Editor for manual trace correction.<br>"
+        "Edit raw data points in the current view."
+    )
     window.actEditPoints.setEnabled(False)
     window.actEditPoints.triggered.connect(window._on_edit_points_triggered)
     toolbar.addAction(window.actEditPoints)
