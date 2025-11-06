@@ -945,6 +945,9 @@ class VasoAnalyzerApp(QMainWindow):
                 first_exp_item = root_item.child(0)
                 self.project_tree.setCurrentItem(first_exp_item)
 
+        # Switch to analysis workspace so user can see project panel
+        self.show_analysis_workspace()
+
         self.statusBar().showMessage(
             "Project created. Use the Add Data actions to start populating your experiment.",
             6000,
@@ -3288,6 +3291,10 @@ class VasoAnalyzerApp(QMainWindow):
         self._replace_current_project(project)
         self.apply_ui_state(getattr(self.current_project, "ui_state", None))
         self.refresh_project_tree()
+
+        # Always show analysis workspace so user can see project panel
+        self.show_analysis_workspace()
+
         self.statusBar().showMessage(f"\u2713 Project loaded: {self.current_project.name}", 3000)
         self.update_recent_projects(path)
         if self.current_project.experiments and self.current_project.experiments[0].samples:
@@ -6281,6 +6288,10 @@ QPushButton[isGhost="true"]:hover {{
                 return
             self._replace_current_project(project)
             self.refresh_project_tree()
+
+            # Always show analysis workspace so user can see project panel
+            self.show_analysis_workspace()
+
             self.statusBar().showMessage(
                 f"\u2713 Project loaded: {self.current_project.name}", 3000
             )

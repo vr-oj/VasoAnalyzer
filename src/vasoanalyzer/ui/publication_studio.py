@@ -153,7 +153,7 @@ class PublicationStudioWindow(QMainWindow):
         self._channel_specs = [
             ChannelTrackSpec(
                 track_id=spec.track_id,
-                display_name=spec.display_name,
+                label=spec.label,
                 component=spec.component,
                 height_ratio=spec.height_ratio,
             )
@@ -616,7 +616,7 @@ class PublicationStudioWindow(QMainWindow):
                 new_ratio = layout_state.height_ratios[spec.track_id]
                 self._channel_specs[i] = ChannelTrackSpec(
                     track_id=spec.track_id,
-                    display_name=spec.display_name,
+                    label=spec.label,
                     component=spec.component,
                     height_ratio=new_ratio,
                 )
