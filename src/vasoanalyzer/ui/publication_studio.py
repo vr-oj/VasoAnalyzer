@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import (
@@ -11,6 +12,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSizePolicy,
+    QToolBar,
     QUndoCommand,
     QUndoStack,
     QVBoxLayout,
@@ -19,6 +21,8 @@ from PyQt5.QtWidgets import (
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.builtin_presets import get_builtin_presets
+from vasoanalyzer.ui.dialogs.axis_editor_dialog import AxisEditorDialog
+from vasoanalyzer.ui.dialogs.trace_editor_dialog import TraceEditorDialog
 from vasoanalyzer.ui.docks.advanced_style_dock import AdvancedStyleDock
 from vasoanalyzer.ui.docks.export_queue_dock import ExportQueueDock, ExportStatus
 from vasoanalyzer.ui.docks.layout_dock import LayoutDock
@@ -301,9 +305,50 @@ class PublicationStudioWindow(QMainWindow):
         # Embedded PlotHost for live preview
         self.plot_host = PlotHost(dpi=120)
         self.plot_host.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        # Add matplotlib navigation toolbar for zoom/pan/home controls
+        self.nav_toolbar = NavigationToolbar2QT(self.plot_host.canvas, self)
+        layout.addWidget(self.nav_toolbar)
+
+        # Add the canvas
         layout.addWidget(self.plot_host.canvas)
 
         self.setCentralWidget(central_widget)
+
+        # Create additional toolbar for custom tools
+        self._create_tools_toolbar()
+
+    def _create_tools_toolbar(self) -> None:
+        """Create toolbar with custom publication tools."""
+        toolbar = QToolBar("Publication Tools", self)
+        toolbar.setObjectName("PublicationToolsToolbar")
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+        # Axis editor action
+        axis_action = QAction("Edit Axes", self)
+        axis_action.setToolTip("Edit axis limits, labels, and ticks")
+        axis_action.triggered.connect(self._on_edit_axes)
+        toolbar.addAction(axis_action)
+
+        # Trace editor action
+        trace_action = QAction("Edit Traces", self)
+        trace_action.setToolTip("Edit trace appearance and visibility")
+        trace_action.triggered.connect(self._on_edit_traces)
+        toolbar.addAction(trace_action)
+
+        toolbar.addSeparator()
+
+        # Reset view action
+        reset_action = QAction("Reset View", self)
+        reset_action.setToolTip("Reset to full data view")
+        reset_action.triggered.connect(self._on_reset_view)
+        toolbar.addAction(reset_action)
+
+        # Fit to data action
+        fit_action = QAction("Fit Data", self)
+        fit_action.setToolTip("Auto-fit axes to data range")
+        fit_action.triggered.connect(self._on_fit_data)
+        toolbar.addAction(fit_action)
 
     def _create_menus(self) -> None:
         """Create menu bar."""
@@ -338,6 +383,31 @@ class PublicationStudioWindow(QMainWindow):
         # View menu
         view_menu = menubar.addMenu("&View")
         self._view_menu = view_menu  # Store for dock toggles
+
+        # Tools menu
+        tools_menu = menubar.addMenu("&Tools")
+
+        edit_axes_action = QAction("Edit &Axes...", self)
+        edit_axes_action.setShortcut("Ctrl+Shift+A")
+        edit_axes_action.triggered.connect(self._on_edit_axes)
+        tools_menu.addAction(edit_axes_action)
+
+        edit_traces_action = QAction("Edit &Traces...", self)
+        edit_traces_action.setShortcut("Ctrl+Shift+T")
+        edit_traces_action.triggered.connect(self._on_edit_traces)
+        tools_menu.addAction(edit_traces_action)
+
+        tools_menu.addSeparator()
+
+        reset_view_action = QAction("&Reset View", self)
+        reset_view_action.setShortcut("Ctrl+R")
+        reset_view_action.triggered.connect(self._on_reset_view)
+        tools_menu.addAction(reset_view_action)
+
+        fit_data_action = QAction("&Fit to Data", self)
+        fit_data_action.setShortcut("Ctrl+F")
+        fit_data_action.triggered.connect(self._on_fit_data)
+        tools_menu.addAction(fit_data_action)
 
         # Epochs menu
         epochs_menu = menubar.addMenu("E&pochs")
@@ -700,6 +770,89 @@ class PublicationStudioWindow(QMainWindow):
     def _on_epochs_edited(self, epochs: list[Epoch]) -> None:
         """Handle epochs edited in the editor dialog."""
         self.set_epochs(epochs)
+
+    def _on_edit_axes(self, checked: bool = False) -> None:
+        """Open axis editor dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        # Get all axes from plot host
+        axes_list = []
+        for track in self.plot_host._tracks.values():
+            if hasattr(track, "ax") and track.ax is not None:
+                axes_list.append(track.ax)
+
+        if not axes_list:
+            QMessageBox.information(
+                self,
+                "No Axes",
+                "No axes found to edit.\n\nPlease load data first.",
+            )
+            return
+
+        # Open axis editor
+        editor = AxisEditorDialog(axes_list, self)
+        editor.axes_changed.connect(lambda _: self.plot_host.canvas.draw_idle())
+        editor.show()
+
+    def _on_edit_traces(self, checked: bool = False) -> None:
+        """Open trace editor dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        # Get all axes from plot host
+        axes_list = []
+        for track in self.plot_host._tracks.values():
+            if hasattr(track, "ax") and track.ax is not None:
+                axes_list.append(track.ax)
+
+        if not axes_list:
+            QMessageBox.information(
+                self,
+                "No Traces",
+                "No traces found to edit.\n\nPlease load data first.",
+            )
+            return
+
+        # Open trace editor
+        editor = TraceEditorDialog(axes_list, self)
+        editor.traces_changed.connect(lambda _: self.plot_host.canvas.draw_idle())
+        editor.show()
+
+    def _on_reset_view(self, checked: bool = False) -> None:
+        """Reset view to full data range.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        if self._trace_model is None:
+            return
+
+        # Reset to full time range
+        t_min, t_max = self._trace_model.full_range
+        self.plot_host.set_time_window(t_min, t_max)
+
+        # Reset Y-axes to autoscale
+        for track in self.plot_host._tracks.values():
+            if hasattr(track, "ax") and track.ax is not None:
+                track.ax.autoscale(axis="y")
+
+        self.plot_host.canvas.draw_idle()
+
+    def _on_fit_data(self, checked: bool = False) -> None:
+        """Auto-fit all axes to data range.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        # Autoscale all axes
+        for track in self.plot_host._tracks.values():
+            if hasattr(track, "ax") and track.ax is not None:
+                track.ax.autoscale()
+
+        self.plot_host.canvas.draw_idle()
 
     # ------------------------------------------------------------------ Dock Signal Handlers
 
