@@ -41,7 +41,12 @@ def auto_export_editable_plot(self):
         log.error("Failed to save .pickle figure:\n%s", e)
 
 
-def export_high_res_plot(self):
+def export_high_res_plot(self, checked: bool = False):
+    """Export high-resolution plot.
+
+    Args:
+        checked: Unused boolean from Qt signal (ignored)
+    """
     if not self.trace_file_path:
         QMessageBox.warning(self, "Export Error", "No trace file loaded.")
         return

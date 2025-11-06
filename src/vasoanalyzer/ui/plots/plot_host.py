@@ -93,7 +93,7 @@ class PlotHost:
         self._label_outline_color: tuple[float, float, float, float] | None = (1.0, 1.0, 1.0, 0.9)
         self._label_tooltips_enabled: bool = True
         self._tooltip_proximity_px: int = 10
-        self._compact_legend_enabled: bool = True
+        self._compact_legend_enabled: bool = False
         self._compact_legend_location: str = "upper right"
         # Base event label style (applied to all labels before priority/category enhancements)
         self._event_font_family: str = "Arial"
@@ -513,7 +513,7 @@ class PlotHost:
         self._label_outline_color = (1.0, 1.0, 1.0, 0.9)
         self._label_tooltips_enabled = True
         self._tooltip_proximity_px = 10
-        self._compact_legend_enabled = True
+        self._compact_legend_enabled = False
         self._compact_legend_location = "upper right"
         self._event_font_family = "Arial"
         self._event_font_size = 15.0

@@ -81,8 +81,9 @@ class HomePage(QWidget):
         # Cloud storage warning
         cloud_warning = QLabel(
             (
-                "📁 <b>Important:</b> Store projects on your <b>local drive</b> (Documents, Desktop) for best reliability. "
-                "Avoid cloud storage (iCloud, Dropbox, Google Drive) as it can corrupt project files."
+                "📁 <b>Storage Recommendation:</b> Store active projects on your <b>local drive</b> "
+                "(Documents, Desktop) for best reliability. Cloud storage sync can interrupt database "
+                "writes, potentially causing corruption. Use .vasopack exports for cloud backup and sharing."
             ),
             hero,
         )
@@ -116,7 +117,7 @@ class HomePage(QWidget):
         window.home_resume_btn = window._make_home_button(
             "Return to workspace",
             "Back.svg",
-            window.show_analysis_workspace,
+            lambda: window.show_analysis_workspace(),
             secondary=True,
         )
         window.home_resume_btn.hide()
@@ -126,7 +127,7 @@ class HomePage(QWidget):
             window._make_home_button(
                 "Load trace & events",
                 "folder-open.svg",
-                window._handle_load_trace,
+                lambda: window._handle_load_trace(),
                 primary=True,
             )
         )
@@ -134,7 +135,7 @@ class HomePage(QWidget):
             window._make_home_button(
                 "Open Project",
                 "folder-open.svg",
-                window.open_project_file,
+                lambda: window.open_project_file(),
                 secondary=True,
             )
         )
@@ -149,7 +150,7 @@ class HomePage(QWidget):
             window._make_home_button(
                 "Create Project",
                 "folder-plus.svg",
-                window.new_project,
+                lambda: window.new_project(),
                 secondary=True,
             )
         )

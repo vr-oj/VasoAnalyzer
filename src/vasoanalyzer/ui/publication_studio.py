@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSizePolicy,
+    QUndoCommand,
     QUndoStack,
     QVBoxLayout,
     QWidget,
@@ -19,7 +20,7 @@ from PyQt5.QtWidgets import (
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.builtin_presets import get_builtin_presets
 from vasoanalyzer.ui.docks.advanced_style_dock import AdvancedStyleDock
-from vasoanalyzer.ui.docks.export_queue_dock import ExportQueueDock
+from vasoanalyzer.ui.docks.export_queue_dock import ExportQueueDock, ExportStatus
 from vasoanalyzer.ui.docks.layout_dock import LayoutDock
 from vasoanalyzer.ui.docks.preset_library_dock import PresetLibraryDock
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
@@ -28,6 +29,44 @@ from vasoanalyzer.ui.style_manager import PlotStyleManager
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["PublicationStudioWindow"]
+
+
+class StyleChangeCommand(QUndoCommand):
+    """Undo command for style changes."""
+
+    def __init__(
+        self,
+        studio: PublicationStudioWindow,
+        old_style: dict[str, Any],
+        new_style: dict[str, Any],
+        description: str = "Change Style",
+    ) -> None:
+        super().__init__(description)
+        self.studio = studio
+        self.old_style = old_style.copy()
+        self.new_style = new_style.copy()
+
+    def redo(self) -> None:
+        """Apply new style."""
+        if self.studio._style_manager:
+            self.studio._style_manager.replace(self.new_style)
+            self.studio._current_preset_name = None  # Custom style, no preset
+            self.studio._apply_style_to_plot()
+            self.studio.plot_host.canvas.draw_idle()
+            # Update style dock
+            if hasattr(self.studio, "_advanced_style_dock"):
+                self.studio._advanced_style_dock.set_style(self.new_style)
+
+    def undo(self) -> None:
+        """Revert to old style."""
+        if self.studio._style_manager:
+            self.studio._style_manager.replace(self.old_style)
+            self.studio._current_preset_name = None  # Custom style, no preset
+            self.studio._apply_style_to_plot()
+            self.studio.plot_host.canvas.draw_idle()
+            # Update style dock
+            if hasattr(self.studio, "_advanced_style_dock"):
+                self.studio._advanced_style_dock.set_style(self.old_style)
 
 
 class PublicationStudioWindow(QMainWindow):
@@ -114,7 +153,7 @@ class PublicationStudioWindow(QMainWindow):
         self._channel_specs = [
             ChannelTrackSpec(
                 track_id=spec.track_id,
-                display_name=spec.display_name,
+                label=spec.label,
                 component=spec.component,
                 height_ratio=spec.height_ratio,
             )
@@ -138,25 +177,35 @@ class PublicationStudioWindow(QMainWindow):
             return cast(dict[str, Any], self._style_manager.style())
         return {}
 
-    def apply_preset(self, preset: dict[str, Any]) -> None:
+    def apply_preset(self, preset: dict[str, Any], with_undo: bool = True) -> None:
         """
         Apply a style preset to the current figure.
 
         Args:
             preset: Preset dictionary (must contain "style" key)
+            with_undo: Whether to add to undo stack (default True)
         """
         if not self._style_manager:
             self._style_manager = PlotStyleManager()
 
-        # Use PlotStyleManager's from_preset method
-        self._style_manager.from_preset(preset)
+        if with_undo:
+            # Create undo command for preset application
+            old_style = self._style_manager.style()
+            preset_style = preset.get("style", {})
+            preset_name = preset.get("name", "Unknown")
+            command = StyleChangeCommand(
+                self, old_style, preset_style, f"Apply Preset: {preset_name}"
+            )
+            self.undo_stack.push(command)
+        else:
+            # Direct application without undo
+            self._style_manager.from_preset(preset)
+            self._apply_style_to_plot()
+            self._current_preset_name = preset.get("name")
 
-        self._apply_style_to_plot()
-        self._current_preset_name = preset.get("name")
-
-        # Update style dock with new style
-        if hasattr(self, "_advanced_style_dock"):
-            self._advanced_style_dock.set_style(self._style_manager.style())
+            # Update style dock with new style
+            if hasattr(self, "_advanced_style_dock"):
+                self._advanced_style_dock.set_style(self._style_manager.style())
 
     def save_current_as_preset(
         self, name: str, description: str = "", tags: list[str] | None = None
@@ -350,18 +399,17 @@ class PublicationStudioWindow(QMainWindow):
         )
 
         # Apply layout state
-        if self._layout_state:
-            self.plot_host.set_layout_state(self._layout_state)
+        if self._layout_state and hasattr(self, "_layout_dock"):
+            # Note: PlotHost doesn't have set_layout_state, layout is applied via channel specs
             # Update layout dock
-            if hasattr(self, "_layout_dock"):
-                self._layout_dock.set_layout_state(self._layout_state)
+            self._layout_dock.set_layout_state(self._layout_state)
 
         # Apply initial style
         if self._style_manager:
             self._apply_style_to_plot()
-            # Update style dock
+            # Update style dock with flat style
             if hasattr(self, "_advanced_style_dock"):
-                self._advanced_style_dock.set_style(self._style_manager._style)
+                self._advanced_style_dock.set_style(self._style_manager.style())
 
         # Refresh canvas
         self.plot_host.canvas.draw_idle()
@@ -371,39 +419,120 @@ class PublicationStudioWindow(QMainWindow):
         if not self._style_manager:
             return
 
-        # TODO: Extract artists from PlotHost and call style_manager.apply()
-        # This requires accessing PlotHost's internal axes, lines, text objects
-        # Will be implemented once we have style panel controls
-        pass
+        # Apply style to all channel tracks in PlotHost
+        for track in self.plot_host._tracks.values():
+            if not track.ax:
+                continue
+
+            # Get track's axes
+            ax = track.ax
+            ax_secondary = track.ax_secondary if hasattr(track, "ax_secondary") else None
+
+            # Get main and OD lines if they exist
+            main_line = track.inner_line if hasattr(track, "inner_line") else None
+            od_line = track.outer_line if hasattr(track, "outer_line") else None
+
+            # Apply style to this track
+            self._style_manager.apply(
+                ax=ax,
+                ax_secondary=ax_secondary,
+                x_axis=None,  # Use the track's own x-axis
+                event_text_objects=None,  # Events handled separately
+                pinned_points=None,  # Pinned points handled separately
+                main_line=main_line,
+                od_line=od_line,
+            )
+
+        # Apply style to event labeler if present
+        if (
+            hasattr(self.plot_host, "_event_helper_v3")
+            and self.plot_host._event_helper_v3
+            and hasattr(self.plot_host, "_refresh_event_labels_v3")
+        ):
+            # Event labels will pick up the style from the updated axes
+            # Force refresh of event labels
+            self.plot_host._refresh_event_labels_v3()
 
     # ------------------------------------------------------------------ Actions
 
-    def _on_export(self) -> None:
-        """Export current figure (placeholder)."""
-        QMessageBox.information(
+    def _on_export(self, checked: bool = False) -> None:
+        """Export current figure to file.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        from PyQt5.QtWidgets import QFileDialog
+
+        # Get export format and path
+        file_filter = "TIFF Files (*.tiff);;SVG Files (*.svg);;PNG Files (*.png);;PDF Files (*.pdf)"
+        output_path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Export",
-            "Export functionality will be implemented in Phase 4 (Batch Exporter).",
+            "Export Figure",
+            "figure.tiff",
+            file_filter,
         )
 
-    def _on_save_preset(self) -> None:
-        """Save current style as preset (placeholder)."""
-        QMessageBox.information(
-            self,
-            "Save Preset",
-            "Preset save will be implemented in Phase 3 (Style Preset System).",
-        )
+        if not output_path:
+            return
 
-    def _on_load_preset(self) -> None:
-        """Load a saved preset (placeholder)."""
+        # Determine DPI based on format
+        dpi = 300  # Default high-quality DPI
+
+        try:
+            self.plot_host.figure.savefig(
+                output_path,
+                dpi=dpi,
+                bbox_inches="tight",
+                pad_inches=0.1,
+            )
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Figure exported successfully to:\n{output_path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"Failed to export figure:\n{str(e)}",
+            )
+
+    def _on_save_preset(self, checked: bool = False) -> None:
+        """Save current style as preset via the preset library dock.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        # Trigger the preset library dock's save button
+        if hasattr(self, "_preset_library_dock"):
+            self._preset_library_dock._on_save_clicked()
+        else:
+            QMessageBox.warning(
+                self,
+                "Preset Library Unavailable",
+                "Preset library dock is not available. Please use the dock panel to save presets.",
+            )
+
+    def _on_load_preset(self, checked: bool = False) -> None:
+        """Load a preset via the preset library dock.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        # Show message directing to preset library
         QMessageBox.information(
             self,
             "Load Preset",
-            "Preset loading will be implemented in Phase 3 (Style Preset System).",
+            "Please use the Preset Library dock (left panel) to browse and load presets.\n\n"
+            "You can double-click a preset to apply it, or select it and click 'Load'.",
         )
 
-    def _on_about(self) -> None:
-        """Show about dialog."""
+    def _on_about(self, checked: bool = False) -> None:
+        """Show about dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         QMessageBox.about(
             self,
             "About Publication Studio",
@@ -424,7 +553,7 @@ class PublicationStudioWindow(QMainWindow):
 
     def _on_preset_load_requested(self, preset: dict[str, Any]) -> None:
         """Handle preset load request."""
-        self.apply_preset(preset.get("style", {}))
+        self.apply_preset(preset)
 
     def _on_preset_save_requested(self, name: str, description: str, tags: list[str]) -> None:
         """Handle preset save request."""
@@ -445,20 +574,57 @@ class PublicationStudioWindow(QMainWindow):
             self._style_manager.update(style)
 
     def _on_style_apply(self) -> None:
-        """Apply current style to plot."""
-        self._apply_style_to_plot()
-        self.plot_host.canvas.draw_idle()
+        """Apply current style to plot with undo support."""
+        if not self._style_manager:
+            return
+
+        # Get current and new styles for undo
+        old_style = self._style_manager.style()
+        new_style = (
+            self._advanced_style_dock.get_style()
+            if hasattr(self, "_advanced_style_dock")
+            else old_style
+        )
+
+        # Create undo command
+        command = StyleChangeCommand(self, old_style, new_style, "Apply Style")
+        self.undo_stack.push(command)
 
     def _on_style_revert(self) -> None:
-        """Revert to previous style."""
-        # TODO: Implement undo/redo
-        QMessageBox.information(self, "Revert", "Undo/redo will be implemented in Phase 5.")
+        """Revert to previous style using undo stack."""
+        if self.undo_stack.canUndo():
+            self.undo_stack.undo()
+        else:
+            QMessageBox.information(
+                self, "Nothing to Revert", "No previous style changes to revert."
+            )
 
     def _on_layout_changed(self, layout_state: LayoutState) -> None:
         """Handle layout change from LayoutDock."""
-        if hasattr(self.plot_host, "set_layout_state"):
-            self.plot_host.set_layout_state(layout_state)
-            self.plot_host.canvas.draw_idle()
+        # Update channel visibility and height ratios
+        for track_id, visible in layout_state.visibility.items():
+            if track_id in self.plot_host._tracks:
+                track = self.plot_host._tracks[track_id]
+                if hasattr(track, "set_visible"):
+                    track.set_visible(visible)
+                elif track.ax:
+                    track.ax.set_visible(visible)
+
+        # Update height ratios by modifying channel specs
+        for i, spec in enumerate(self._channel_specs):
+            if spec.track_id in layout_state.height_ratios:
+                new_ratio = layout_state.height_ratios[spec.track_id]
+                self._channel_specs[i] = ChannelTrackSpec(
+                    track_id=spec.track_id,
+                    label=spec.label,
+                    component=spec.component,
+                    height_ratio=new_ratio,
+                )
+
+        # Re-apply layout by recreating the plot structure
+        # This is a simplified approach - a full implementation would need
+        # to update GridSpec parameters dynamically
+        self.plot_host.canvas.draw_idle()
 
     def _on_margins_changed(self, margins: dict[str, float]) -> None:
         """Handle margin changes."""
@@ -472,10 +638,63 @@ class PublicationStudioWindow(QMainWindow):
 
     def _on_export_requested(self, jobs: list) -> None:
         """Handle batch export request."""
+        if not jobs:
+            QMessageBox.warning(self, "No Jobs", "No jobs to export.")
+            return
+
+        from PyQt5.QtCore import QTimer
+
+        # Process export jobs
+        successful = 0
+        failed = 0
+
+        for job in jobs:
+            try:
+                # Apply preset if specified
+                if job.preset_name and hasattr(self, "_preset_library_dock"):
+                    # Find and apply preset
+                    all_presets = (
+                        self._preset_library_dock._presets
+                        + self._preset_library_dock._built_in_presets
+                    )
+                    preset = next(
+                        (p for p in all_presets if p.get("name") == job.preset_name), None
+                    )
+                    if preset:
+                        self.apply_preset(preset)
+
+                # Set figure size (convert mm to inches: 1 inch = 25.4 mm)
+                width_inches = job.width_mm / 25.4
+                height_inches = job.height_mm / 25.4
+                self.plot_host.figure.set_size_inches(width_inches, height_inches)
+
+                # Export with specified settings
+                self.plot_host.figure.savefig(
+                    job.output_path,
+                    dpi=job.dpi,
+                    format=job.format.lower(),
+                    bbox_inches="tight",
+                    pad_inches=0.1,
+                )
+
+                # Update job status
+                if hasattr(self, "_export_queue_dock"):
+                    self._export_queue_dock.update_job_status(job.name, ExportStatus.COMPLETED)
+                successful += 1
+
+            except Exception as e:
+                if hasattr(self, "_export_queue_dock"):
+                    self._export_queue_dock.update_job_status(job.name, ExportStatus.FAILED, str(e))
+                failed += 1
+
+        # Show summary
         QMessageBox.information(
             self,
-            "Export",
-            f"Batch export of {len(jobs)} jobs will be implemented in Phase 4 (Batch Exporter).",
+            "Batch Export Complete",
+            f"Export completed:\n"
+            f"✓ {successful} successful\n"
+            f"✗ {failed} failed\n\n"
+            f"Check the Export Queue for details.",
         )
 
     # ------------------------------------------------------------------ Event Handlers
