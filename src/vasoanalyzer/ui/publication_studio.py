@@ -351,7 +351,7 @@ class PublicationStudioWindow(QMainWindow):
 
         # Apply layout state
         if self._layout_state:
-            self.plot_host.set_layout_state(self._layout_state)
+            # Note: PlotHost doesn't have set_layout_state, layout is applied via channel specs
             # Update layout dock
             if hasattr(self, "_layout_dock"):
                 self._layout_dock.set_layout_state(self._layout_state)
@@ -359,9 +359,9 @@ class PublicationStudioWindow(QMainWindow):
         # Apply initial style
         if self._style_manager:
             self._apply_style_to_plot()
-            # Update style dock
+            # Update style dock with flat style
             if hasattr(self, "_advanced_style_dock"):
-                self._advanced_style_dock.set_style(self._style_manager._style)
+                self._advanced_style_dock.set_style(self._style_manager.style())
 
         # Refresh canvas
         self.plot_host.canvas.draw_idle()
@@ -371,10 +371,36 @@ class PublicationStudioWindow(QMainWindow):
         if not self._style_manager:
             return
 
-        # TODO: Extract artists from PlotHost and call style_manager.apply()
-        # This requires accessing PlotHost's internal axes, lines, text objects
-        # Will be implemented once we have style panel controls
-        pass
+        # Apply style to all channel tracks in PlotHost
+        for track in self.plot_host._tracks.values():
+            if not track.ax:
+                continue
+
+            # Get track's axes
+            ax = track.ax
+            ax_secondary = track.ax_secondary if hasattr(track, "ax_secondary") else None
+
+            # Get main and OD lines if they exist
+            main_line = track.inner_line if hasattr(track, "inner_line") else None
+            od_line = track.outer_line if hasattr(track, "outer_line") else None
+
+            # Apply style to this track
+            self._style_manager.apply(
+                ax=ax,
+                ax_secondary=ax_secondary,
+                x_axis=None,  # Use the track's own x-axis
+                event_text_objects=None,  # Events handled separately
+                pinned_points=None,  # Pinned points handled separately
+                main_line=main_line,
+                od_line=od_line,
+            )
+
+        # Apply style to event labeler if present
+        if hasattr(self.plot_host, "_event_helper_v3") and self.plot_host._event_helper_v3:
+            # Event labels will pick up the style from the updated axes
+            # Force refresh of event labels
+            if hasattr(self.plot_host, "_refresh_event_labels_v3"):
+                self.plot_host._refresh_event_labels_v3()
 
     # ------------------------------------------------------------------ Actions
 
@@ -424,7 +450,7 @@ class PublicationStudioWindow(QMainWindow):
 
     def _on_preset_load_requested(self, preset: dict[str, Any]) -> None:
         """Handle preset load request."""
-        self.apply_preset(preset.get("style", {}))
+        self.apply_preset(preset)
 
     def _on_preset_save_requested(self, name: str, description: str, tags: list[str]) -> None:
         """Handle preset save request."""
@@ -456,9 +482,30 @@ class PublicationStudioWindow(QMainWindow):
 
     def _on_layout_changed(self, layout_state: LayoutState) -> None:
         """Handle layout change from LayoutDock."""
-        if hasattr(self.plot_host, "set_layout_state"):
-            self.plot_host.set_layout_state(layout_state)
-            self.plot_host.canvas.draw_idle()
+        # Update channel visibility and height ratios
+        for track_id, visible in layout_state.visibility.items():
+            if track_id in self.plot_host._tracks:
+                track = self.plot_host._tracks[track_id]
+                if hasattr(track, "set_visible"):
+                    track.set_visible(visible)
+                elif track.ax:
+                    track.ax.set_visible(visible)
+
+        # Update height ratios by modifying channel specs
+        for i, spec in enumerate(self._channel_specs):
+            if spec.track_id in layout_state.height_ratios:
+                new_ratio = layout_state.height_ratios[spec.track_id]
+                self._channel_specs[i] = ChannelTrackSpec(
+                    track_id=spec.track_id,
+                    display_name=spec.display_name,
+                    component=spec.component,
+                    height_ratio=new_ratio,
+                )
+
+        # Re-apply layout by recreating the plot structure
+        # This is a simplified approach - a full implementation would need
+        # to update GridSpec parameters dynamically
+        self.plot_host.canvas.draw_idle()
 
     def _on_margins_changed(self, margins: dict[str, float]) -> None:
         """Handle margin changes."""

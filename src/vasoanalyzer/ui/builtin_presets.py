@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from utils.style_defaults import STYLE_DEFAULTS, flatten_style_defaults
+from vasoanalyzer.ui.constants import FACTORY_STYLE_DEFAULTS, get_factory_style
+from utils.style_defaults import flatten_style_defaults
 
 __all__ = ["BUILTIN_PRESETS", "get_builtin_presets"]
 
@@ -20,7 +21,7 @@ def _create_nature_preset() -> dict:
     - Line width: 0.5-1pt
     - Black/grayscale for lines
     """
-    base = deepcopy(STYLE_DEFAULTS)
+    base = deepcopy(get_factory_style())
 
     # Compact fonts for space efficiency
     base["axis"]["font_family"] = "Arial"
@@ -55,7 +56,7 @@ def _create_cell_preset() -> dict:
     - Font: Arial or Helvetica, 6-8pt minimum
     - High contrast, clear labels
     """
-    base = deepcopy(STYLE_DEFAULTS)
+    base = deepcopy(get_factory_style())
 
     # Clear, readable fonts
     base["axis"]["font_family"] = "Arial"
@@ -89,7 +90,7 @@ def _create_jphysiol_preset() -> dict:
     - Font: Times New Roman or Arial, minimum 8pt after reduction
     - Clear, professional appearance
     """
-    base = deepcopy(STYLE_DEFAULTS)
+    base = deepcopy(get_factory_style())
 
     # Professional serif font
     base["axis"]["font_family"] = "Times New Roman"
@@ -124,7 +125,7 @@ def _create_presentation_preset() -> dict:
     - Large auditorium viewing
     - High contrast, bold elements
     """
-    base = deepcopy(STYLE_DEFAULTS)
+    base = deepcopy(get_factory_style())
 
     # Large, bold fonts for visibility
     base["axis"]["font_family"] = "Arial"
@@ -162,7 +163,7 @@ def _create_minimal_preset() -> dict:
     - Internal reports
     - Draft figures
     """
-    base = deepcopy(STYLE_DEFAULTS)
+    base = deepcopy(get_factory_style())
 
     # Clean sans-serif
     base["axis"]["font_family"] = "Helvetica"
@@ -199,7 +200,7 @@ def _create_plos_preset() -> dict:
     - Font: Arial, Helvetica, or Times, minimum 6pt
     - Sans-serif preferred
     """
-    base = deepcopy(STYLE_DEFAULTS)
+    base = deepcopy(get_factory_style())
 
     base["axis"]["font_family"] = "Arial"
     base["axis"]["font_size"] = 9

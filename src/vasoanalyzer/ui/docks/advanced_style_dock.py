@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from utils.style_defaults import STYLE_DEFAULTS
+from vasoanalyzer.ui.constants import FACTORY_STYLE_DEFAULTS
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["AdvancedStyleDock"]
@@ -55,8 +55,8 @@ class AdvancedStyleDock(QDockWidget):
         super().__init__("Advanced Style", parent)
         self.setObjectName("AdvancedStyleDock")
 
-        # Current style dictionary
-        self._style: dict[str, Any] = STYLE_DEFAULTS.copy()
+        # Current style dictionary (nested structure)
+        self._style: dict[str, Any] = self._flat_to_nested(FACTORY_STYLE_DEFAULTS)
 
         # Font choices
         self._font_families = [
@@ -73,13 +73,90 @@ class AdvancedStyleDock(QDockWidget):
     # ------------------------------------------------------------------ Public API
 
     def set_style(self, style: dict[str, Any]) -> None:
-        """Update style controls from dictionary."""
-        self._style = style.copy()
+        """Update style controls from dictionary (expects flat structure)."""
+        self._style = self._flat_to_nested(style)
         self._populate_controls()
 
     def get_style(self) -> dict[str, Any]:
-        """Get current style from controls."""
-        return self._style.copy()
+        """Get current style from controls (returns flat structure)."""
+        return self._nested_to_flat(self._style)
+
+    # ------------------------------------------------------------------ Style Conversion
+
+    def _flat_to_nested(self, flat_style: dict[str, Any]) -> dict[str, Any]:
+        """Convert flat style dictionary to nested structure for internal use."""
+        nested: dict[str, Any] = {
+            "axis": {
+                "font": {
+                    "family": flat_style.get("axis_font_family", "Arial"),
+                    "size": flat_style.get("axis_font_size", 12),
+                    "bold": flat_style.get("axis_bold", False),
+                    "italic": flat_style.get("axis_italic", False),
+                }
+            },
+            "ticks": {
+                "font_size": flat_style.get("tick_font_size", 10),
+                "length": flat_style.get("tick_length", 4.0),
+                "width": flat_style.get("tick_width", 1.0),
+            },
+            "lines": {
+                "inner_width": flat_style.get("line_width", 1.5),
+                "inner_color": flat_style.get("line_color", "#000000"),
+                "outer_width": flat_style.get("outer_line_width", 1.5),
+                "outer_color": flat_style.get("outer_line_color", "tab:orange"),
+            },
+            "events": {
+                "font": {
+                    "family": flat_style.get("event_font_family", "Arial"),
+                    "size": flat_style.get("event_font_size", 15.0),
+                    "bold": flat_style.get("event_bold", False),
+                    "italic": flat_style.get("event_italic", False),
+                },
+                "mode": flat_style.get("event_label_mode", "vertical"),
+                "max_per_cluster": flat_style.get("event_label_max_per_cluster", 1),
+                "lanes": flat_style.get("event_label_lanes", 3),
+                "outline_enabled": flat_style.get("event_label_outline_enabled", True),
+                "outline_width": flat_style.get("event_label_outline_width", 2.0),
+            },
+        }
+        return nested
+
+    def _nested_to_flat(self, nested_style: dict[str, Any]) -> dict[str, Any]:
+        """Convert nested style dictionary to flat structure for external use."""
+        axis = nested_style.get("axis", {})
+        axis_font = axis.get("font", {})
+        ticks = nested_style.get("ticks", {})
+        lines = nested_style.get("lines", {})
+        events = nested_style.get("events", {})
+        event_font = events.get("font", {})
+
+        flat: dict[str, Any] = {
+            # Axis fonts
+            "axis_font_family": axis_font.get("family", "Arial"),
+            "axis_font_size": axis_font.get("size", 12),
+            "axis_bold": axis_font.get("bold", False),
+            "axis_italic": axis_font.get("italic", False),
+            # Ticks
+            "tick_font_size": ticks.get("font_size", 10),
+            "tick_length": ticks.get("length", 4.0),
+            "tick_width": ticks.get("width", 1.0),
+            # Lines
+            "line_width": lines.get("inner_width", 1.5),
+            "line_color": lines.get("inner_color", "#000000"),
+            "outer_line_width": lines.get("outer_width", 1.5),
+            "outer_line_color": lines.get("outer_color", "tab:orange"),
+            # Events
+            "event_font_family": event_font.get("family", "Arial"),
+            "event_font_size": event_font.get("size", 15.0),
+            "event_bold": event_font.get("bold", False),
+            "event_italic": event_font.get("italic", False),
+            "event_label_mode": events.get("mode", "vertical"),
+            "event_label_max_per_cluster": events.get("max_per_cluster", 1),
+            "event_label_lanes": events.get("lanes", 3),
+            "event_label_outline_enabled": events.get("outline_enabled", True),
+            "event_label_outline_width": events.get("outline_width", 2.0),
+        }
+        return flat
 
     # ------------------------------------------------------------------ UI Construction
 
