@@ -56,6 +56,9 @@ a = Analysis(
         'tkinter.filedialog',
         'tkinter.messagebox',
         'PIL._tkinter_finder',
+        'vasoanalyzer.ui.publication_studio',
+        'vasoanalyzer.ui.dialogs.unified_settings_dialog',
+        'vasoanalyzer.ui.dialogs.settings.frame_tab',
     ] + req_subs + xl_subs,
     hookspath=[],
     hooksconfig={},
@@ -63,6 +66,9 @@ a = Analysis(
     excludes=[],
     noarchive=False,
     optimize=0,
+    module_collection_mode={
+        'vasoanalyzer': 'py',
+    },
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)

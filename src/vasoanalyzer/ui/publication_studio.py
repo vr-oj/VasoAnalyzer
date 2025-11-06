@@ -777,23 +777,14 @@ class PublicationStudioWindow(QMainWindow):
 
         # Export button
         self.export_now_btn = QPushButton("Export Figure...")
-        self.export_now_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #0066CC;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #0052A3;
-            }
-            QPushButton:pressed {
-                background-color: #003D7A;
-            }
-        """)
+        # Simplified stylesheet to avoid PyInstaller bytecode issues on Windows
+        export_btn_style = (
+            "QPushButton { background-color: #0066CC; color: white; border: none; "
+            "border-radius: 6px; padding: 10px; font-weight: bold; font-size: 13px; } "
+            "QPushButton:hover { background-color: #0052A3; } "
+            "QPushButton:pressed { background-color: #003D7A; }"
+        )
+        self.export_now_btn.setStyleSheet(export_btn_style)
         self.export_now_btn.clicked.connect(self._on_export_now)
         export_actions_layout.addWidget(self.export_now_btn)
 
