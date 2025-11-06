@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import (
@@ -21,7 +20,7 @@ from PyQt5.QtWidgets import (
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.builtin_presets import get_builtin_presets
-from vasoanalyzer.ui.dialogs.axis_editor_dialog import AxisEditorDialog
+from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
 from vasoanalyzer.ui.dialogs.trace_editor_dialog import TraceEditorDialog
 from vasoanalyzer.ui.docks.advanced_style_dock import AdvancedStyleDock
 from vasoanalyzer.ui.docks.export_queue_dock import ExportQueueDock, ExportStatus
@@ -38,6 +37,7 @@ from vasoanalyzer.ui.publication import (
 )
 from vasoanalyzer.ui.style_manager import PlotStyleManager
 from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.widgets import CustomToolbar
 
 __all__ = ["PublicationStudioWindow"]
 
@@ -306,8 +306,12 @@ class PublicationStudioWindow(QMainWindow):
         self.plot_host = PlotHost(dpi=120)
         self.plot_host.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # Add matplotlib navigation toolbar for zoom/pan/home controls
-        self.nav_toolbar = NavigationToolbar2QT(self.plot_host.canvas, self)
+        # Add matplotlib navigation toolbar with custom reset callback
+        self.nav_toolbar = CustomToolbar(
+            self.plot_host.canvas,
+            self,
+            reset_callback=self._on_reset_view
+        )
         layout.addWidget(self.nav_toolbar)
 
         # Add the canvas
@@ -777,13 +781,9 @@ class PublicationStudioWindow(QMainWindow):
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        # Get all axes from plot host
-        axes_list = []
-        for track in self.plot_host._tracks.values():
-            if hasattr(track, "ax") and track.ax is not None:
-                axes_list.append(track.ax)
-
-        if not axes_list:
+        # Get primary axes from plot host
+        primary_ax = self._get_primary_axes()
+        if not primary_ax:
             QMessageBox.information(
                 self,
                 "No Axes",
@@ -791,10 +791,16 @@ class PublicationStudioWindow(QMainWindow):
             )
             return
 
-        # Open axis editor
-        editor = AxisEditorDialog(axes_list, self)
-        editor.axes_changed.connect(lambda _: self.plot_host.canvas.draw_idle())
-        editor.show()
+        # Check for secondary axis (outer diameter)
+        secondary_ax = None
+        for track in self.plot_host._tracks.values():
+            if hasattr(track, "ax_secondary") and track.ax_secondary is not None:
+                secondary_ax = track.ax_secondary
+                break
+
+        # Open existing axis settings dialog
+        dialog = AxisSettingsDialog(self, primary_ax, self.plot_host.canvas, ax2=secondary_ax)
+        dialog.exec_()
 
     def _on_edit_traces(self, checked: bool = False) -> None:
         """Open trace editor dialog.
