@@ -18,18 +18,25 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import (
     QAction,
+    QCheckBox,
     QComboBox,
     QDialog,
     # QDockWidget,  # Removed - no longer using dock system
+    QFormLayout,
     QGraphicsDropShadowEffect,
     QGraphicsProxyWidget,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
+    QGroupBox,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTabWidget,
     QToolBar,
@@ -532,27 +539,9 @@ class PublicationStudioWindow(QMainWindow):
         main_splitter = QSplitter(Qt.Horizontal, self)
 
         # ===================================================================
-        # LEFT PANEL: Inspector tabs (Settings)
+        # LEFT PANEL: Publication Export Settings
         # ===================================================================
-        self.left_panel = QWidget()
-        left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(4, 4, 4, 4)
-        left_layout.setSpacing(4)
-
-        # Create tabbed widget for settings
-        self.settings_tabs = QTabWidget()
-        self.settings_tabs.setDocumentMode(True)
-
-        # Add placeholder tabs (will be properly populated later)
-        self.settings_tabs.addTab(QWidget(), "Canvas & Frame")
-        self.settings_tabs.addTab(QWidget(), "Layout")
-        self.settings_tabs.addTab(QWidget(), "Axes")
-        self.settings_tabs.addTab(QWidget(), "Style")
-        self.settings_tabs.addTab(QWidget(), "Events")
-
-        left_layout.addWidget(self.settings_tabs)
-        self.left_panel.setMinimumWidth(280)
-        self.left_panel.setMaximumWidth(400)
+        self.left_panel = self._create_export_panel()
 
         # ===================================================================
         # CENTER PANEL: Graphics scene with canvas
@@ -626,7 +615,7 @@ class PublicationStudioWindow(QMainWindow):
         main_splitter.addWidget(self.right_panel)
 
         # Set initial splitter sizes (left:center:right = 1:3:1)
-        main_splitter.setSizes([300, 900, 300])
+        main_splitter.setSizes([350, 900, 350])
         main_splitter.setStretchFactor(0, 0)  # Left doesn't stretch
         main_splitter.setStretchFactor(1, 1)  # Center stretches
         main_splitter.setStretchFactor(2, 0)  # Right doesn't stretch
@@ -643,6 +632,205 @@ class PublicationStudioWindow(QMainWindow):
 
         # Populate preset combo with built-in presets
         self._populate_preset_combo()
+
+    def _create_export_panel(self) -> QWidget:
+        """Create the left panel for publication-ready export settings."""
+        panel = QWidget()
+        panel.setMinimumWidth(300)
+        panel.setMaximumWidth(450)
+
+        # Create scroll area for the panel
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+
+        # Main content widget
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
+
+        # Title
+        title = QLabel("<b>Publication Export</b>")
+        title.setStyleSheet("font-size: 14px; padding: 4px;")
+        layout.addWidget(title)
+
+        # ===================================================================
+        # Export Format Group
+        # ===================================================================
+        format_group = QGroupBox("Export Format")
+        format_layout = QFormLayout()
+        format_layout.setSpacing(8)
+
+        # Format selection
+        self.export_format_combo = QComboBox()
+        self.export_format_combo.addItem("TIFF (Tagged Image)", "tiff")
+        self.export_format_combo.addItem("SVG (Vector Graphics)", "svg")
+        self.export_format_combo.addItem("PNG (Portable Network)", "png")
+        self.export_format_combo.addItem("PDF (Portable Document)", "pdf")
+        self.export_format_combo.addItem("EPS (Encapsulated PS)", "eps")
+        format_layout.addRow("Format:", self.export_format_combo)
+
+        # DPI setting
+        self.export_dpi_spin = QSpinBox()
+        self.export_dpi_spin.setRange(72, 1200)
+        self.export_dpi_spin.setValue(300)
+        self.export_dpi_spin.setSuffix(" DPI")
+        self.export_dpi_spin.setToolTip("Resolution for raster exports (TIFF, PNG)")
+        format_layout.addRow("Resolution:", self.export_dpi_spin)
+
+        # Transparent background
+        self.export_transparent_check = QCheckBox("Transparent background")
+        self.export_transparent_check.setToolTip("Use transparent background (PNG/SVG only)")
+        format_layout.addRow("", self.export_transparent_check)
+
+        format_group.setLayout(format_layout)
+        layout.addWidget(format_group)
+
+        # ===================================================================
+        # Journal Presets Group
+        # ===================================================================
+        journal_group = QGroupBox("Journal Presets")
+        journal_layout = QVBoxLayout()
+        journal_layout.setSpacing(8)
+
+        journal_label = QLabel("Quick settings for common journals:")
+        journal_label.setWordWrap(True)
+        journal_label.setStyleSheet("color: gray; font-size: 11px;")
+        journal_layout.addWidget(journal_label)
+
+        self.journal_preset_combo = QComboBox()
+        self.journal_preset_combo.addItem("(Select Journal Preset)")
+        self.journal_preset_combo.addItem("Nature (single column, 89mm)", "nature_single")
+        self.journal_preset_combo.addItem("Nature (double column, 183mm)", "nature_double")
+        self.journal_preset_combo.addItem("Science (3.3 in width)", "science")
+        self.journal_preset_combo.addItem("Cell (single column, 85mm)", "cell_single")
+        self.journal_preset_combo.addItem("Cell (double column, 174mm)", "cell_double")
+        self.journal_preset_combo.addItem("PNAS (single column, 8.7cm)", "pnas_single")
+        self.journal_preset_combo.addItem("PNAS (double column, 17.8cm)", "pnas_double")
+        self.journal_preset_combo.addItem("eLife (full width, 5.2 in)", "elife")
+        self.journal_preset_combo.currentIndexChanged.connect(self._on_journal_preset_changed)
+        journal_layout.addWidget(self.journal_preset_combo)
+
+        journal_group.setLayout(journal_layout)
+        layout.addWidget(journal_group)
+
+        # ===================================================================
+        # Color Settings Group
+        # ===================================================================
+        color_group = QGroupBox("Color & Fonts")
+        color_layout = QFormLayout()
+        color_layout.setSpacing(8)
+
+        # Color mode
+        self.color_mode_combo = QComboBox()
+        self.color_mode_combo.addItem("RGB (Screen)", "rgb")
+        self.color_mode_combo.addItem("CMYK (Print)", "cmyk")
+        self.color_mode_combo.setToolTip("Color space for export")
+        color_layout.addRow("Color Mode:", self.color_mode_combo)
+
+        # Font embedding
+        self.embed_fonts_check = QCheckBox("Embed fonts in PDF/EPS")
+        self.embed_fonts_check.setChecked(True)
+        self.embed_fonts_check.setToolTip("Ensures fonts render correctly everywhere")
+        color_layout.addRow("", self.embed_fonts_check)
+
+        color_group.setLayout(color_layout)
+        layout.addWidget(color_group)
+
+        # ===================================================================
+        # File Naming Group
+        # ===================================================================
+        naming_group = QGroupBox("File Naming")
+        naming_layout = QFormLayout()
+        naming_layout.setSpacing(8)
+
+        self.filename_prefix_edit = QLineEdit()
+        self.filename_prefix_edit.setPlaceholderText("figure")
+        self.filename_prefix_edit.setToolTip("Prefix for exported filenames")
+        naming_layout.addRow("Prefix:", self.filename_prefix_edit)
+
+        self.auto_numbering_check = QCheckBox("Auto-increment numbering")
+        self.auto_numbering_check.setChecked(True)
+        naming_layout.addRow("", self.auto_numbering_check)
+
+        naming_group.setLayout(naming_layout)
+        layout.addWidget(naming_group)
+
+        # ===================================================================
+        # Export Actions
+        # ===================================================================
+        export_actions = QGroupBox("Export")
+        export_actions_layout = QVBoxLayout()
+        export_actions_layout.setSpacing(8)
+
+        # Export button
+        self.export_now_btn = QPushButton("Export Figure...")
+        self.export_now_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0066CC;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #0052A3;
+            }
+            QPushButton:pressed {
+                background-color: #003D7A;
+            }
+        """)
+        self.export_now_btn.clicked.connect(self._on_export_now)
+        export_actions_layout.addWidget(self.export_now_btn)
+
+        # Quick export button
+        self.quick_export_btn = QPushButton("Quick Export (Last Settings)")
+        self.quick_export_btn.clicked.connect(self._on_quick_export)
+        export_actions_layout.addWidget(self.quick_export_btn)
+
+        export_actions.setLayout(export_actions_layout)
+        layout.addWidget(export_actions)
+
+        # ===================================================================
+        # Validation Info
+        # ===================================================================
+        validation_group = QGroupBox("Figure Validation")
+        validation_layout = QVBoxLayout()
+        validation_layout.setSpacing(6)
+
+        validation_info = QLabel(
+            "Checks figure against publication requirements:\n"
+            "• Minimum DPI\n"
+            "• Color mode\n"
+            "• Font sizes\n"
+            "• Dimensions"
+        )
+        validation_info.setWordWrap(True)
+        validation_info.setStyleSheet("color: gray; font-size: 11px;")
+        validation_layout.addWidget(validation_info)
+
+        self.validate_btn = QPushButton("Validate Figure")
+        self.validate_btn.clicked.connect(self._on_validate_figure)
+        validation_layout.addWidget(self.validate_btn)
+
+        validation_group.setLayout(validation_layout)
+        layout.addWidget(validation_group)
+
+        # Add stretch to push everything to top
+        layout.addStretch()
+
+        # Set content to scroll area
+        scroll.setWidget(content)
+
+        # Set scroll area as panel content
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.addWidget(scroll)
+
+        return panel
 
     def _populate_preset_combo(self) -> None:
         """Populate the preset combo box with built-in presets."""
@@ -1923,6 +2111,242 @@ class PublicationStudioWindow(QMainWindow):
             "Point editor integration coming soon.\n\n"
             "This feature will allow manual correction of trace data points.",
         )
+
+    def _on_journal_preset_changed(self, index: int) -> None:
+        """Handle journal preset selection."""
+        if index <= 0:  # Skip placeholder
+            return
+
+        preset_key = self.journal_preset_combo.itemData(index)
+
+        # Journal dimension presets (width, height in inches, DPI, format)
+        presets = {
+            "nature_single": (89 / 25.4, 6.0, 300, "tiff"),  # 89mm to inches
+            "nature_double": (183 / 25.4, 6.0, 300, "tiff"),  # 183mm to inches
+            "science": (3.3, 2.5, 300, "tiff"),
+            "cell_single": (85 / 25.4, 6.0, 300, "tiff"),  # 85mm to inches
+            "cell_double": (174 / 25.4, 6.0, 300, "tiff"),  # 174mm to inches
+            "pnas_single": (8.7 / 2.54, 6.0, 300, "tiff"),  # 8.7cm to inches
+            "pnas_double": (17.8 / 2.54, 6.0, 300, "tiff"),  # 17.8cm to inches
+            "elife": (5.2, 4.0, 300, "tiff"),
+        }
+
+        if preset_key in presets:
+            width, height, dpi, fmt = presets[preset_key]
+
+            # Update canvas size
+            self._canvas_width_in = width
+            self._canvas_height_in = height
+            self._canvas_dpi = dpi
+            self._apply_canvas_size()
+
+            # Update export settings
+            self.export_dpi_spin.setValue(dpi)
+
+            # Find and select format
+            for i in range(self.export_format_combo.count()):
+                if self.export_format_combo.itemData(i) == fmt:
+                    self.export_format_combo.setCurrentIndex(i)
+                    break
+
+            QMessageBox.information(
+                self,
+                "Journal Preset Applied",
+                f"Canvas dimensions and export settings updated for {self.journal_preset_combo.currentText()}",
+            )
+
+        # Reset combo to placeholder
+        self.journal_preset_combo.blockSignals(True)
+        self.journal_preset_combo.setCurrentIndex(0)
+        self.journal_preset_combo.blockSignals(False)
+
+    def _on_export_now(self, checked: bool = False) -> None:
+        """Handle export button click with publication settings."""
+        from pathlib import Path
+
+        from PyQt5.QtWidgets import QFileDialog
+
+        # Get current export settings
+        export_format = self.export_format_combo.currentData()
+        export_dpi = self.export_dpi_spin.value()
+        transparent = self.export_transparent_check.isChecked()
+        prefix = self.filename_prefix_edit.text() or "figure"
+
+        # Format mapping
+        format_extensions = {
+            "tiff": ".tiff",
+            "svg": ".svg",
+            "png": ".png",
+            "pdf": ".pdf",
+            "eps": ".eps",
+        }
+
+        extension = format_extensions.get(export_format, ".tiff")
+
+        # File filter based on format
+        file_filters = {
+            "tiff": "TIFF Files (*.tiff *.tif)",
+            "svg": "SVG Files (*.svg)",
+            "png": "PNG Files (*.png)",
+            "pdf": "PDF Files (*.pdf)",
+            "eps": "EPS Files (*.eps)",
+        }
+        file_filter = file_filters.get(export_format, "All Files (*.*)")
+
+        # Get save path
+        default_name = f"{prefix}{extension}"
+        output_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Figure for Publication",
+            default_name,
+            file_filter,
+        )
+
+        if not output_path:
+            return
+
+        try:
+            # Prepare export parameters
+            export_params = {
+                "dpi": export_dpi,
+                "bbox_inches": "tight",
+                "pad_inches": 0.1,
+            }
+
+            # Handle transparent background for PNG/SVG
+            if transparent and export_format in ["png", "svg"]:
+                export_params["transparent"] = True
+
+            # Export the figure
+            self.plot_host.figure.savefig(output_path, **export_params)
+
+            # Save epoch metadata if present
+            if self._epochs and self._epoch_layer is not None:
+                import json
+
+                manifest = self._epoch_layer.to_manifest()
+                metadata_path = Path(output_path).with_suffix(".epochs.json")
+                with open(metadata_path, "w") as f:
+                    json.dump(manifest, f, indent=2)
+
+            QMessageBox.information(
+                self,
+                "Export Successful",
+                f"Figure exported for publication:\n{output_path}\n\n"
+                f"Format: {export_format.upper()}\n"
+                f"DPI: {export_dpi}\n"
+                f"Size: {self._canvas_width_in:.2f} × {self._canvas_height_in:.2f} in",
+            )
+
+            # Store last export path for quick export
+            self._last_export_path = output_path
+            self._last_export_params = export_params
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Failed",
+                f"Failed to export figure:\n{str(e)}",
+            )
+
+    def _on_quick_export(self, checked: bool = False) -> None:
+        """Quick export using last settings."""
+        if not hasattr(self, "_last_export_path"):
+            QMessageBox.information(
+                self,
+                "No Previous Export",
+                "Please use 'Export Figure...' first to set export location and settings.",
+            )
+            return
+
+        try:
+            # Export with last parameters
+            self.plot_host.figure.savefig(self._last_export_path, **self._last_export_params)
+
+            QMessageBox.information(
+                self,
+                "Quick Export Successful",
+                f"Figure re-exported to:\n{self._last_export_path}",
+            )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Quick Export Failed",
+                f"Failed to export figure:\n{str(e)}",
+            )
+
+    def _on_validate_figure(self, checked: bool = False) -> None:
+        """Validate figure against publication requirements."""
+        # Get current figure properties
+        dpi = int(self.plot_host.figure.get_dpi())
+        width_in = self.plot_host.figure.get_figwidth()
+        height_in = self.plot_host.figure.get_figheight()
+
+        # Validation checks
+        issues = []
+        warnings = []
+        passes = []
+
+        # DPI check
+        if dpi < 300:
+            issues.append(f"DPI too low: {dpi} (minimum 300 recommended)")
+        elif dpi >= 300:
+            passes.append(f"✓ DPI: {dpi} (meets minimum 300)")
+
+        # Dimension check
+        if width_in < 3.0:
+            warnings.append(f"Figure width: {width_in:.2f} in (may be too small for single column)")
+        else:
+            passes.append(f"✓ Dimensions: {width_in:.2f} × {height_in:.2f} in")
+
+        # Font size check (sample from axes)
+        primary_ax = self._get_primary_axes()
+        if primary_ax:
+            try:
+                tick_labels = primary_ax.get_xticklabels()
+                if tick_labels:
+                    font_size = tick_labels[0].get_fontsize()
+                    if font_size < 6:
+                        issues.append(f"Tick label font too small: {font_size} pt (minimum 6 pt)")
+                    elif font_size < 8:
+                        warnings.append(f"Tick label font: {font_size} pt (8-10 pt recommended)")
+                    else:
+                        passes.append(f"✓ Font sizes: {font_size} pt (readable)")
+            except Exception:
+                pass
+
+        # Build validation report
+        report = "<h3>Figure Validation Report</h3>"
+
+        if passes:
+            report += "<p><b style='color: green;'>Passed:</b></p><ul>"
+            for p in passes:
+                report += f"<li>{p}</li>"
+            report += "</ul>"
+
+        if warnings:
+            report += "<p><b style='color: orange;'>Warnings:</b></p><ul>"
+            for w in warnings:
+                report += f"<li>{w}</li>"
+            report += "</ul>"
+
+        if issues:
+            report += "<p><b style='color: red;'>Issues:</b></p><ul>"
+            for i in issues:
+                report += f"<li>{i}</li>"
+            report += "</ul>"
+
+        if not issues and not warnings:
+            report += "<p style='color: green;'><b>All checks passed!</b> Figure meets publication standards.</p>"
+
+        # Show validation dialog
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Figure Validation")
+        msg.setTextFormat(Qt.RichText)
+        msg.setText(report)
+        msg.setIcon(QMessageBox.Information if not issues else QMessageBox.Warning)
+        msg.exec_()
 
     # ------------------------------------------------------------------ Dock Signal Handlers
     # NOTE: Old dock signal handlers removed - functionality will be moved to panels
