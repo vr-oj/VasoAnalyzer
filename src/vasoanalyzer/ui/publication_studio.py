@@ -36,7 +36,7 @@ class StyleChangeCommand(QUndoCommand):
 
     def __init__(
         self,
-        studio: "PublicationStudioWindow",
+        studio: PublicationStudioWindow,
         old_style: dict[str, Any],
         new_style: dict[str, Any],
         description: str = "Change Style",
@@ -193,7 +193,9 @@ class PublicationStudioWindow(QMainWindow):
             old_style = self._style_manager.style()
             preset_style = preset.get("style", {})
             preset_name = preset.get("name", "Unknown")
-            command = StyleChangeCommand(self, old_style, preset_style, f"Apply Preset: {preset_name}")
+            command = StyleChangeCommand(
+                self, old_style, preset_style, f"Apply Preset: {preset_name}"
+            )
             self.undo_stack.push(command)
         else:
             # Direct application without undo
@@ -397,11 +399,10 @@ class PublicationStudioWindow(QMainWindow):
         )
 
         # Apply layout state
-        if self._layout_state:
+        if self._layout_state and hasattr(self, "_layout_dock"):
             # Note: PlotHost doesn't have set_layout_state, layout is applied via channel specs
             # Update layout dock
-            if hasattr(self, "_layout_dock"):
-                self._layout_dock.set_layout_state(self._layout_state)
+            self._layout_dock.set_layout_state(self._layout_state)
 
         # Apply initial style
         if self._style_manager:
@@ -443,16 +444,23 @@ class PublicationStudioWindow(QMainWindow):
             )
 
         # Apply style to event labeler if present
-        if hasattr(self.plot_host, "_event_helper_v3") and self.plot_host._event_helper_v3:
+        if (
+            hasattr(self.plot_host, "_event_helper_v3")
+            and self.plot_host._event_helper_v3
+            and hasattr(self.plot_host, "_refresh_event_labels_v3")
+        ):
             # Event labels will pick up the style from the updated axes
             # Force refresh of event labels
-            if hasattr(self.plot_host, "_refresh_event_labels_v3"):
-                self.plot_host._refresh_event_labels_v3()
+            self.plot_host._refresh_event_labels_v3()
 
     # ------------------------------------------------------------------ Actions
 
-    def _on_export(self) -> None:
-        """Export current figure to file."""
+    def _on_export(self, checked: bool = False) -> None:
+        """Export current figure to file.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         from PyQt5.QtWidgets import QFileDialog
 
         # Get export format and path
@@ -474,7 +482,7 @@ class PublicationStudioWindow(QMainWindow):
             self.plot_host.figure.savefig(
                 output_path,
                 dpi=dpi,
-                bbox_inches='tight',
+                bbox_inches="tight",
                 pad_inches=0.1,
             )
             QMessageBox.information(
@@ -489,8 +497,12 @@ class PublicationStudioWindow(QMainWindow):
                 f"Failed to export figure:\n{str(e)}",
             )
 
-    def _on_save_preset(self) -> None:
-        """Save current style as preset via the preset library dock."""
+    def _on_save_preset(self, checked: bool = False) -> None:
+        """Save current style as preset via the preset library dock.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         # Trigger the preset library dock's save button
         if hasattr(self, "_preset_library_dock"):
             self._preset_library_dock._on_save_clicked()
@@ -501,8 +513,12 @@ class PublicationStudioWindow(QMainWindow):
                 "Preset library dock is not available. Please use the dock panel to save presets.",
             )
 
-    def _on_load_preset(self) -> None:
-        """Load a preset via the preset library dock."""
+    def _on_load_preset(self, checked: bool = False) -> None:
+        """Load a preset via the preset library dock.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         # Show message directing to preset library
         QMessageBox.information(
             self,
@@ -511,8 +527,12 @@ class PublicationStudioWindow(QMainWindow):
             "You can double-click a preset to apply it, or select it and click 'Load'.",
         )
 
-    def _on_about(self) -> None:
-        """Show about dialog."""
+    def _on_about(self, checked: bool = False) -> None:
+        """Show about dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         QMessageBox.about(
             self,
             "About Publication Studio",
@@ -560,7 +580,11 @@ class PublicationStudioWindow(QMainWindow):
 
         # Get current and new styles for undo
         old_style = self._style_manager.style()
-        new_style = self._advanced_style_dock.get_style() if hasattr(self, "_advanced_style_dock") else old_style
+        new_style = (
+            self._advanced_style_dock.get_style()
+            if hasattr(self, "_advanced_style_dock")
+            else old_style
+        )
 
         # Create undo command
         command = StyleChangeCommand(self, old_style, new_style, "Apply Style")
@@ -572,9 +596,7 @@ class PublicationStudioWindow(QMainWindow):
             self.undo_stack.undo()
         else:
             QMessageBox.information(
-                self,
-                "Nothing to Revert",
-                "No previous style changes to revert."
+                self, "Nothing to Revert", "No previous style changes to revert."
             )
 
     def _on_layout_changed(self, layout_state: LayoutState) -> None:
@@ -632,10 +654,12 @@ class PublicationStudioWindow(QMainWindow):
                 if job.preset_name and hasattr(self, "_preset_library_dock"):
                     # Find and apply preset
                     all_presets = (
-                        self._preset_library_dock._presets +
-                        self._preset_library_dock._built_in_presets
+                        self._preset_library_dock._presets
+                        + self._preset_library_dock._built_in_presets
                     )
-                    preset = next((p for p in all_presets if p.get("name") == job.preset_name), None)
+                    preset = next(
+                        (p for p in all_presets if p.get("name") == job.preset_name), None
+                    )
                     if preset:
                         self.apply_preset(preset)
 
@@ -649,25 +673,18 @@ class PublicationStudioWindow(QMainWindow):
                     job.output_path,
                     dpi=job.dpi,
                     format=job.format.lower(),
-                    bbox_inches='tight',
+                    bbox_inches="tight",
                     pad_inches=0.1,
                 )
 
                 # Update job status
                 if hasattr(self, "_export_queue_dock"):
-                    self._export_queue_dock.update_job_status(
-                        job.name,
-                        ExportStatus.COMPLETED
-                    )
+                    self._export_queue_dock.update_job_status(job.name, ExportStatus.COMPLETED)
                 successful += 1
 
             except Exception as e:
                 if hasattr(self, "_export_queue_dock"):
-                    self._export_queue_dock.update_job_status(
-                        job.name,
-                        ExportStatus.FAILED,
-                        str(e)
-                    )
+                    self._export_queue_dock.update_job_status(job.name, ExportStatus.FAILED, str(e))
                 failed += 1
 
         # Show summary

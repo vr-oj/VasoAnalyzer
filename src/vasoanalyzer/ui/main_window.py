@@ -769,7 +769,12 @@ class VasoAnalyzerApp(QMainWindow):
             self._relink_dialog.relink_applied.connect(self._apply_relinked_assets)
         return self._relink_dialog
 
-    def show_relink_dialog(self):
+    def show_relink_dialog(self, checked: bool = False):
+        """Show dialog to relink missing assets.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if not self._missing_assets:
             QMessageBox.information(
                 self, "Relink Files", "All linked files are currently reachable."
@@ -870,7 +875,12 @@ class VasoAnalyzerApp(QMainWindow):
             if self._relink_dialog:
                 self._relink_dialog.hide()
 
-    def new_project(self):
+    def new_project(self, checked: bool = False):
+        """Create a new project.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         dialog = NewProjectDialog(self, settings=self.settings)
         if dialog.exec_() != QDialog.Accepted:
             return
@@ -1130,12 +1140,26 @@ class VasoAnalyzerApp(QMainWindow):
                 self.show_analysis_workspace()
         self._reset_session_dirty()
 
-    def open_project_file(self, path: str | None = None):
+    def open_project_file(self, path: str | bool | None = None):
+        """Open a project file.
+
+        Args:
+            path: Path to project file, or boolean from Qt signal (ignored), or None for file dialog
+        """
         from vasoanalyzer.app.openers import open_project_file as _open_project_file
+
+        # Ignore boolean argument from Qt signals (e.g., QAction.triggered)
+        if isinstance(path, bool):
+            path = None
 
         return _open_project_file(self, path)
 
-    def save_project_file(self):
+    def save_project_file(self, checked: bool = False):
+        """Save the current project file.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if self.current_project and self.current_project.path:
             # Prevent concurrent saves
             if self._save_in_progress:
@@ -1163,7 +1187,12 @@ class VasoAnalyzerApp(QMainWindow):
         elif self.current_project:
             self.save_project_file_as()
 
-    def save_project_file_as(self):
+    def save_project_file_as(self, checked: bool = False):
+        """Save project to a new file.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if not self.current_project:
             return
         path, _ = QFileDialog.getSaveFileName(
@@ -1216,7 +1245,12 @@ class VasoAnalyzerApp(QMainWindow):
         self._reset_session_dirty()
         self._update_window_title()
 
-    def export_project_bundle_action(self):
+    def export_project_bundle_action(self, checked: bool = False):
+        """Export project as .vasopack bundle.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if not self.current_project:
             QMessageBox.information(
                 self, "No Project", "Open or create a project before exporting."
@@ -1261,8 +1295,12 @@ class VasoAnalyzerApp(QMainWindow):
                 f"Could not export bundle:\n{exc}",
             )
 
-    def export_shareable_project(self):
-        """Export a DELETE-mode single-file copy of the current project."""
+    def export_shareable_project(self, checked: bool = False):
+        """Export a DELETE-mode single-file copy of the current project.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
 
         if not self.current_project:
             QMessageBox.information(
@@ -2329,7 +2367,12 @@ class VasoAnalyzerApp(QMainWindow):
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
 
-    def add_experiment(self):
+    def add_experiment(self, checked: bool = False):
+        """Add a new experiment to the current project.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if not self.current_project:
             return
         name, ok = QInputDialog.getText(self, "Experiment Name", "Name:")
@@ -2383,7 +2426,12 @@ class VasoAnalyzerApp(QMainWindow):
             experiment.samples.append(SampleN(name=nname))
             self.refresh_project_tree()
 
-    def add_sample_to_current_experiment(self):
+    def add_sample_to_current_experiment(self, checked: bool = False):
+        """Add a sample to the current experiment.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if not self.current_experiment:
             QMessageBox.warning(
                 self,
@@ -2445,9 +2493,17 @@ class VasoAnalyzerApp(QMainWindow):
             save_project(self.current_project, self.current_project.path)
 
     def _handle_import_folder(self, target_experiment=None):
-        """Handle the Import Folder action."""
+        """Handle the Import Folder action.
+
+        Args:
+            target_experiment: Target experiment or boolean from Qt signal (ignored if boolean)
+        """
         from vasoanalyzer.services.folder_import_service import scan_folder_with_status
         from vasoanalyzer.ui.dialogs.folder_import_dialog import FolderImportDialog
+
+        # Ignore boolean argument from Qt signals
+        if isinstance(target_experiment, bool):
+            target_experiment = None
 
         # Determine target experiment
         if target_experiment is None:
@@ -2994,7 +3050,12 @@ class VasoAnalyzerApp(QMainWindow):
         act_rel.triggered.connect(self.show_release_notes)
         help_menu.addAction(act_rel)
 
-    def show_project_file_info(self) -> None:
+    def show_project_file_info(self, checked: bool = False) -> None:
+        """Show information about project file format.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         message = (
             "<b>Single-File .vaso Projects</b><br><br>"
             "<ul>"
@@ -3045,7 +3106,12 @@ class VasoAnalyzerApp(QMainWindow):
         clear_action.triggered.connect(self.clear_recent_projects)
         self.recent_projects_menu.addAction(clear_action)
 
-    def open_preferences_dialog(self):
+    def open_preferences_dialog(self, checked: bool = False):
+        """Open preferences dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         QMessageBox.information(self, "Preferences", "Preferences will be implemented soon(ish).")
 
     def _safe_remove_artist(self, artist):
@@ -3060,7 +3126,12 @@ class VasoAnalyzerApp(QMainWindow):
             if hasattr(artist, "set_visible"):
                 artist.set_visible(False)
 
-    def clear_all_pins(self):
+    def clear_all_pins(self, checked: bool = False):
+        """Clear all pinned annotations.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         for marker, label in self.pinned_points:
             self._safe_remove_artist(marker)
             self._safe_remove_artist(label)
@@ -3150,7 +3221,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.build_recent_projects_menu()
         self._refresh_home_recent()
 
-    def clear_recent_projects(self):
+    def clear_recent_projects(self, checked: bool = False):
+        """Clear recent projects list.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self.recent_projects = []
         self.save_recent_projects()
         self.build_recent_projects_menu()
@@ -3231,7 +3307,12 @@ class VasoAnalyzerApp(QMainWindow):
     def check_for_updates_at_startup(self) -> None:
         self._start_update_check(silent=True)
 
-    def check_for_updates(self) -> None:
+    def check_for_updates(self, checked: bool = False) -> None:
+        """Check for application updates.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self._start_update_check(silent=False)
 
     def _on_update_check_completed(self, silent: bool, latest: object, error: object) -> None:
@@ -3294,16 +3375,31 @@ class VasoAnalyzerApp(QMainWindow):
         self.ax.set_ylim(self.ylim_full)
         self.canvas.draw_idle()
 
-    def reset_view(self):
+    def reset_view(self, checked: bool = False):
+        """Reset view to full extent.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self.reset_to_full_view()
 
-    def fit_to_data(self):
+    def fit_to_data(self, checked: bool = False):
+        """Fit view to data bounds.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self.ax.relim()
         self.ax.autoscale_view()
         self.canvas.draw_idle()
 
-    def zoom_to_selection(self):
-        # if you later add box‐select, you’ll grab the extents here;
+    def zoom_to_selection(self, checked: bool = False):
+        """Zoom to current selection.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        # if you later add box‐select, you'll grab the extents here;
         # for now just stub it to full‐data
         self.fit_to_data()
 
@@ -3890,7 +3986,12 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_outer_diameter(self, checked: bool):
         self._apply_channel_toggle("outer", checked)
 
-    def toggle_fullscreen(self):
+    def toggle_fullscreen(self, checked: bool = False):
+        """Toggle fullscreen mode.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if self.isFullScreen():
             self.showNormal()
             self.menuBar().show()
@@ -3900,13 +4001,23 @@ class VasoAnalyzerApp(QMainWindow):
             self.menuBar().hide()
             self.statusBar().hide()
 
-    def show_shortcuts(self):
+    def show_shortcuts(self, checked: bool = False):
+        """Show keyboard shortcuts dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         from vasoanalyzer.ui.dialogs.keyboard_shortcuts_dialog import KeyboardShortcutsDialog
 
         dialog = KeyboardShortcutsDialog(self)
         dialog.exec_()
 
-    def open_user_manual(self):
+    def open_user_manual(self, checked: bool = False):
+        """Open user manual PDF.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         manual_path = os.path.abspath(
             os.path.join(
                 os.path.dirname(__file__),
@@ -3932,7 +4043,12 @@ class VasoAnalyzerApp(QMainWindow):
                 "Unable to open the user manual on this system.",
             )
 
-    def show_release_notes(self):
+    def show_release_notes(self, checked: bool = False):
+        """Show release notes.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         # You could load a local CHANGELOG.md and display it
         QMessageBox.information(
             self,
@@ -3945,14 +4061,24 @@ class VasoAnalyzerApp(QMainWindow):
             ),
         )
 
-    def show_about(self):
+    def show_about(self, checked: bool = False):
+        """Show about dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         QMessageBox.information(
             self,
             "About VasoAnalyzer",
             f"VasoAnalyzer {APP_VERSION} (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer",
         )
 
-    def show_tutorial(self):
+    def show_tutorial(self, checked: bool = False):
+        """Show tutorial dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         from .dialogs.tutorial_dialog import TutorialDialog
 
         dlg = TutorialDialog(self)
@@ -4296,7 +4422,12 @@ class VasoAnalyzerApp(QMainWindow):
             if isinstance(toolbar, QToolBar):
                 toolbar.setVisible(visible)
 
-    def show_home_screen(self):
+    def show_home_screen(self, checked: bool = False):
+        """Show the home/welcome screen.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self.stack.setCurrentWidget(self.home_page)
         self._refresh_home_recent()
         self._update_home_resume_button()
@@ -5373,7 +5504,12 @@ QPushButton[isGhost="true"]:hover {{
             QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
             return False
 
-    def load_snapshot(self):
+    def load_snapshot(self, checked: bool = False):
+        """Load a snapshot from TIFF file.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         # 1) Prompt for TIFF
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Open Result TIFF", "", "TIFF Files (*.tif *.tiff)"
@@ -6263,7 +6399,12 @@ QPushButton[isGhost="true"]:hover {{
         except Exception as e:
             QMessageBox.critical(self, "Load Failed", f"Error loading session:\n{e}")
 
-    def _handle_load_trace(self):
+    def _handle_load_trace(self, checked: bool = False):
+        """Handle loading a trace file.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         # Prompt for the trace file
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Select Trace File", "", "CSV Files (*.csv)"
@@ -7352,7 +7493,15 @@ QPushButton[isGhost="true"]:hover {{
             self.scroll_slider.hide()
 
     def open_subplot_layout_dialog(self, fig=None):
-        """Open dialog to adjust subplot paddings and spacing."""
+        """Open dialog to adjust subplot paddings and spacing.
+
+        Args:
+            fig: Figure object or boolean from Qt signal (ignored if boolean)
+        """
+        # Ignore boolean argument from Qt signals
+        if isinstance(fig, bool):
+            fig = None
+
         # Redirect to unified dialog, open Layout tab
         self.open_unified_plot_settings_dialog(tab_name="layout")
 
@@ -7367,7 +7516,15 @@ QPushButton[isGhost="true"]:hover {{
         self.open_unified_plot_settings_dialog(tab_name="axis")
 
     def open_unified_plot_settings_dialog(self, tab_name=None):
-        """Open combined dialog for layout, axis and style."""
+        """Open combined dialog for layout, axis and style.
+
+        Args:
+            tab_name: Name of tab to open, or boolean from Qt signal (ignored if boolean)
+        """
+        # Ignore boolean argument from Qt signals
+        if isinstance(tab_name, bool):
+            tab_name = None
+
         dialog = UnifiedPlotSettingsDialog(
             self,
             self.ax,
@@ -7391,8 +7548,12 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
-    def open_publication_studio(self):
-        """Open Publication Studio window for advanced figure styling."""
+    def open_publication_studio(self, checked: bool = False):
+        """Open Publication Studio window for advanced figure styling.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         # Check if trace is loaded
         if self.trace_model is None:
             QMessageBox.information(
@@ -7867,7 +8028,12 @@ QPushButton[isGhost="true"]:hover {{
         self.toolbar.edit_parameters()
         self.canvas.draw_idle()
 
-    def start_new_analysis(self):
+    def start_new_analysis(self, checked: bool = False):
+        """Start a new analysis session.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         confirm = QMessageBox.question(
             self,
             "Start New Analysis",
@@ -7877,7 +8043,12 @@ QPushButton[isGhost="true"]:hover {{
         if confirm == QMessageBox.Yes:
             self.clear_current_session()
 
-    def clear_current_session(self):
+    def clear_current_session(self, checked: bool = False):
+        """Clear the current analysis session.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self.trace_data = None
         self.trace_file_path = None
         self.snapshot_frames = []
@@ -8152,7 +8323,12 @@ QPushButton[isGhost="true"]:hover {{
         self.build_recent_files_menu()
         self._refresh_home_recent()
 
-    def clear_recent_files(self):
+    def clear_recent_files(self, checked: bool = False):
+        """Clear recent files list.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         self.recent_files = []
         self.save_recent_files()
         self.build_recent_files_menu()
@@ -8296,7 +8472,12 @@ QPushButton[isGhost="true"]:hover {{
         return splitter
 
     # [K] ========================= EXPORT LOGIC (CSV, FIG) ==============================
-    def auto_export_table(self):
+    def auto_export_table(self, checked: bool = False):
+        """Auto-export event table to CSV.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
         if not self.trace_file_path:
             log.warning("No trace path set. Cannot export event table.")
             return

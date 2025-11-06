@@ -113,7 +113,12 @@ def save_data_as_n(self):
         save_project(self.current_project, self.current_project.path)
 
 
-def open_excel_mapping_dialog(self):
+def open_excel_mapping_dialog(self, checked: bool = False):
+    """Open Excel mapping dialog for exporting event data.
+
+    Args:
+        checked: Unused boolean from Qt signal (ignored)
+    """
     if not self.event_table_data:
         QMessageBox.warning(self, "No Data", "No event data available to export.")
         return
