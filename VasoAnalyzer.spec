@@ -31,8 +31,14 @@ else:
 req_subs = collect_submodules('requests')
 xl_subs = collect_submodules('openpyxl')
 
-# Collect matplotlib data files and submodules for better Windows compatibility
-mpl_datas, mpl_binaries, mpl_hiddenimports = collect_all('matplotlib')
+# Collect matplotlib data files carefully - exclude tests to avoid bytecode errors
+try:
+    mpl_datas = collect_data_files('matplotlib', includes=['**/*.ttf', '**/*.afm', '**/*mplstyle'])
+except Exception:
+    mpl_datas = []
+mpl_binaries = []
+# Don't use collect_all for matplotlib - it causes bytecode issues on Windows
+mpl_hiddenimports = []
 
 # Collect toolbar icon SVGs from the project root
 icon_dir = os.path.join(project_dir, 'icons')
@@ -87,7 +93,13 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'matplotlib.tests',
+        'matplotlib.testing',
+        'numpy.tests',
+        'scipy.tests',
+        'pandas.tests',
+    ],
     noarchive=False,
     optimize=0,
     module_collection_mode={
