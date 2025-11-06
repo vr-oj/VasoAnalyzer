@@ -13,3 +13,9 @@ Replace the SQLite-centric project format with a single durable package that is 
 - Replace append-in-zip rewrites with atomic entry replacement to drop duplicate-name warnings.
 - Move GUI/project loading onto `VasoPackage` and expand dataset serialization (Parquet defaults, ROI metadata, figures).
 - Build full relink UI + checksum scanner and legacy migration workflow.
+
+### 2025-11-06 — Windows PyInstaller build fix
+
+- Removed stray CPython 3.13 bytecode (`__pycache__`, `*.pyc`) from the repo; they confused PyInstaller 6.x when run with Python 3.10 on Windows.
+- `.gitignore` already blocks future bytecode, but run `python -m compileall --invalidation-mode=unchecked-hash src` locally if you need fresh caches.
+- Before packaging on Windows: `pyinstaller --clean --noconfirm VasoAnalyzer.spec`. The `--clean` flag guarantees PyInstaller re-imports sources and skips stale bytecode from other platforms.
