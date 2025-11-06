@@ -592,33 +592,15 @@ class PublicationStudioWindow(QMainWindow):
         )
 
         # ===================================================================
-        # RIGHT PANEL: Export queue
-        # ===================================================================
-        self.right_panel = QWidget()
-        right_layout = QVBoxLayout(self.right_panel)
-        right_layout.setContentsMargins(4, 4, 4, 4)
-
-        # Export queue (placeholder)
-        export_label = QLabel("Export Queue")
-        export_label.setStyleSheet("font-weight: bold; font-size: 12px;")
-        right_layout.addWidget(export_label)
-        right_layout.addStretch()
-
-        self.right_panel.setMinimumWidth(250)
-        self.right_panel.setMaximumWidth(350)
-
-        # ===================================================================
         # Add panels to splitter
         # ===================================================================
         main_splitter.addWidget(self.left_panel)
         main_splitter.addWidget(self.canvas_view)
-        main_splitter.addWidget(self.right_panel)
 
-        # Set initial splitter sizes (left:center:right = 1:3:1)
-        main_splitter.setSizes([350, 900, 350])
+        # Set initial splitter sizes (left:center = 1:3)
+        main_splitter.setSizes([400, 1000])
         main_splitter.setStretchFactor(0, 0)  # Left doesn't stretch
         main_splitter.setStretchFactor(1, 1)  # Center stretches
-        main_splitter.setStretchFactor(2, 0)  # Right doesn't stretch
 
         self.setCentralWidget(main_splitter)
 
@@ -756,6 +738,35 @@ class PublicationStudioWindow(QMainWindow):
 
         naming_group.setLayout(naming_layout)
         layout.addWidget(naming_group)
+
+        # ===================================================================
+        # Visibility Controls Group
+        # ===================================================================
+        visibility_group = QGroupBox("Figure Elements")
+        visibility_layout = QVBoxLayout()
+        visibility_layout.setSpacing(8)
+
+        visibility_hint = QLabel("Show/hide elements for publication:")
+        visibility_hint.setWordWrap(True)
+        visibility_hint.setStyleSheet("color: gray; font-size: 11px;")
+        visibility_layout.addWidget(visibility_hint)
+
+        # Event labels toggle
+        self.show_event_labels_check = QCheckBox("Show event labels")
+        self.show_event_labels_check.setChecked(True)
+        self.show_event_labels_check.setToolTip("Toggle event label visibility")
+        self.show_event_labels_check.stateChanged.connect(self._on_toggle_event_labels)
+        visibility_layout.addWidget(self.show_event_labels_check)
+
+        # Event lines toggle
+        self.show_event_lines_check = QCheckBox("Show event markers (dashed lines)")
+        self.show_event_lines_check.setChecked(True)
+        self.show_event_lines_check.setToolTip("Toggle event marker line visibility")
+        self.show_event_lines_check.stateChanged.connect(self._on_toggle_event_lines)
+        visibility_layout.addWidget(self.show_event_lines_check)
+
+        visibility_group.setLayout(visibility_layout)
+        layout.addWidget(visibility_group)
 
         # ===================================================================
         # Export Actions
@@ -1579,6 +1590,15 @@ class PublicationStudioWindow(QMainWindow):
         if persist:
             self._current_preset_name = None
 
+        # Check if figure size changed and update canvas accordingly
+        if hasattr(self, "plot_host") and self.plot_host is not None:
+            fig_w, fig_h = self.plot_host.figure.get_size_inches()
+            if abs(fig_w - self._canvas_width_in) > 0.01 or abs(fig_h - self._canvas_height_in) > 0.01:
+                # Figure size changed, update canvas dimensions
+                self._canvas_width_in = fig_w
+                self._canvas_height_in = fig_h
+                self._apply_canvas_size()
+
         self._apply_style_to_plot()
         self._sync_canvas_size_to_figure()
 
@@ -2347,6 +2367,48 @@ class PublicationStudioWindow(QMainWindow):
         msg.setText(report)
         msg.setIcon(QMessageBox.Information if not issues else QMessageBox.Warning)
         msg.exec_()
+
+    def _on_toggle_event_labels(self, state: int) -> None:
+        """Toggle event label visibility."""
+        visible = state == Qt.Checked
+
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
+
+        # Get all axes and toggle event label visibility
+        for track in self.plot_host._tracks.values():
+            ax = getattr(track, "ax", None)
+            if ax is None:
+                continue
+
+            # Hide/show all text annotations (event labels)
+            for text in ax.texts:
+                text.set_visible(visible)
+
+        self.plot_host.canvas.draw_idle()
+
+    def _on_toggle_event_lines(self, state: int) -> None:
+        """Toggle event marker line visibility."""
+        visible = state == Qt.Checked
+
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
+
+        # Get all axes and toggle event line visibility
+        for track in self.plot_host._tracks.values():
+            ax = getattr(track, "ax", None)
+            if ax is None:
+                continue
+
+            # Hide/show vertical lines (event markers)
+            for line in ax.lines:
+                # Check if this is a vertical event line (has same x coordinates)
+                xdata = line.get_xdata()
+                if len(xdata) == 2 and abs(xdata[0] - xdata[1]) < 0.001:
+                    # This is likely a vertical event line
+                    line.set_visible(visible)
+
+        self.plot_host.canvas.draw_idle()
 
     # ------------------------------------------------------------------ Dock Signal Handlers
     # NOTE: Old dock signal handlers removed - functionality will be moved to panels
