@@ -59,6 +59,12 @@ a = Analysis(
         'vasoanalyzer.ui.publication_studio',
         'vasoanalyzer.ui.dialogs.unified_settings_dialog',
         'vasoanalyzer.ui.dialogs.settings.frame_tab',
+        # Matplotlib backends for figure export
+        'matplotlib.backends.backend_svg',
+        'matplotlib.backends.backend_pdf',
+        'matplotlib.backends.backend_ps',
+        'matplotlib.backends.backend_agg',
+        'matplotlib.backends.backend_tkagg',
     ] + req_subs + xl_subs,
     hookspath=[],
     hooksconfig={},
