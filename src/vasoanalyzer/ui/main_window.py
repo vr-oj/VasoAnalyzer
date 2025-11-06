@@ -117,6 +117,7 @@ from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
+from vasoanalyzer.ui.publication_studio import PublicationStudioWindow
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.theme import (
     CURRENT_THEME,
@@ -400,6 +401,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.autosave_timer.setSingleShot(False)
         self.autosave_timer.timeout.connect(self._autosave_tick)
         self.autosave_timer.start()
+        self._save_in_progress = False  # Mutex to prevent concurrent saves
         self._event_highlight_color = DEFAULT_STYLE.get("event_highlight_color", "#1D5CFF")
         self._event_highlight_base_alpha = float(DEFAULT_STYLE.get("event_highlight_alpha", 0.95))
         self._event_highlight_duration_ms = int(
@@ -455,6 +457,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.metadata_dock = None
         self.zoom_dock = None
         self.scope_dock = None
+        self.publication_studio = None
         self.current_experiment = None
         self.current_sample = None
         self.project_ctx: ProjectContext | None = None
@@ -884,6 +887,29 @@ class VasoAnalyzerApp(QMainWindow):
             path_obj = path_obj.with_suffix(".vaso")
         normalised_path = str(path_obj.resolve(strict=False))
 
+        # Check if user is trying to save to cloud storage
+        from vasoanalyzer.core.project import _is_cloud_storage_path
+
+        is_cloud, cloud_service = _is_cloud_storage_path(normalised_path)
+        if is_cloud:
+            reply = QMessageBox.warning(
+                self,
+                "Cloud Storage Warning",
+                f"⚠️ You are creating a project in <b>{cloud_service}</b>.\n\n"
+                f"<b>WARNING:</b> SQLite project files are INCOMPATIBLE with cloud storage services "
+                f"and WILL become corrupted due to sync conflicts.\n\n"
+                f"<b>Recommendation:</b> Store your project in a local folder:\n"
+                f"  • ~/Documents/VasoAnalyzer/\n"
+                f"  • ~/Desktop/Projects/\n"
+                f"  • Any local-only folder\n\n"
+                f"<b>Do you want to continue anyway?</b>\n"
+                f"(Not recommended - may result in data loss)",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.No:
+                return
+
         project = Project(name=name, path=normalised_path)
         if exp_name:
             project.experiments.append(Experiment(name=exp_name))
@@ -995,11 +1021,57 @@ class VasoAnalyzerApp(QMainWindow):
                 try:
                     project = load_project(path)
                 except Exception as exc:
-                    QMessageBox.critical(
-                        self,
-                        "Project Load Error",
-                        f"Could not open project:\n{exc}",
-                    )
+                    error_msg = str(exc)
+
+                    # Check if this was a database corruption error
+                    if "corrupted" in error_msg.lower() or "malformed" in error_msg.lower():
+                        # Check if project is in cloud storage
+                        from vasoanalyzer.core.project import _is_cloud_storage_path
+
+                        is_cloud, cloud_service = _is_cloud_storage_path(path)
+
+                        cloud_warning = ""
+                        if is_cloud:
+                            cloud_warning = (
+                                f"\n\n⚠️ IMPORTANT: This project is stored in {cloud_service}.\n"
+                                f"SQLite databases are INCOMPATIBLE with cloud storage and will become corrupted.\n\n"
+                                f"To fix this:\n"
+                                f"1. Move this project to a LOCAL folder (e.g., ~/Documents or ~/Desktop)\n"
+                                f"2. Create a new project in the local folder\n"
+                                f"3. Never store .vaso projects in iCloud, Dropbox, or other cloud storage\n\n"
+                            )
+
+                        if "backup was created" in error_msg:
+                            # Recovery was attempted but failed
+                            QMessageBox.critical(
+                                self,
+                                "Project Database Corrupted",
+                                f"The project database is corrupted and automatic recovery failed.\n\n"
+                                f"Error: {exc}"
+                                f"{cloud_warning}\n"
+                                f"A backup of your corrupted file has been created at:\n"
+                                f"{path}.backup\n\n"
+                                f"Recovery options:\n"
+                                f"1. Try opening the backup file\n"
+                                f"2. Contact support for manual recovery\n"
+                                f"3. Create a new project and re-import your data",
+                            )
+                        else:
+                            # Generic database error
+                            QMessageBox.critical(
+                                self,
+                                "Project Database Error",
+                                f"Could not open project due to database error:\n\n{exc}"
+                                f"{cloud_warning}\n"
+                                f"The database may be corrupted. Please check the file:\n{path}",
+                            )
+                    else:
+                        # Other errors
+                        QMessageBox.critical(
+                            self,
+                            "Project Load Error",
+                            f"Could not open project:\n{exc}",
+                        )
                     return
 
         self._replace_current_project(project)
@@ -1061,16 +1133,29 @@ class VasoAnalyzerApp(QMainWindow):
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
-            self.current_project.ui_state = self.gather_ui_state()
-            if self.current_sample:
-                state = self.gather_sample_state()
-                self.current_sample.ui_state = state
-                self.project_state[id(self.current_sample)] = state
-            save_project_file(self.current_project)
-            self.update_recent_projects(self.current_project.path)
-            self.statusBar().showMessage("\u2713 Project saved", 3000)
-            self._reset_session_dirty()
-            self._update_window_title()
+            # Prevent concurrent saves
+            if self._save_in_progress:
+                log.debug("Save already in progress, skipping concurrent save request")
+                return
+
+            try:
+                self._save_in_progress = True
+                self.current_project.ui_state = self.gather_ui_state()
+                if self.current_sample:
+                    state = self.gather_sample_state()
+                    self.current_sample.ui_state = state
+                    self.project_state[id(self.current_sample)] = state
+                save_project_file(self.current_project)
+                self.update_recent_projects(self.current_project.path)
+                self.statusBar().showMessage("\u2713 Project saved", 3000)
+                self._reset_session_dirty()
+                self._update_window_title()
+            except Exception as e:
+                log.error(f"Failed to save project: {e}", exc_info=True)
+                self.statusBar().showMessage(f"Save failed: {e}", 5000)
+                raise
+            finally:
+                self._save_in_progress = False
         elif self.current_project:
             self.save_project_file_as()
 
@@ -1088,6 +1173,30 @@ class VasoAnalyzerApp(QMainWindow):
             if path_obj.suffix.lower() != ".vaso":
                 path_obj = path_obj.with_suffix(".vaso")
             path = str(path_obj.resolve(strict=False))
+
+            # Check if user is trying to save to cloud storage
+            from vasoanalyzer.core.project import _is_cloud_storage_path
+
+            is_cloud, cloud_service = _is_cloud_storage_path(path)
+            if is_cloud:
+                reply = QMessageBox.warning(
+                    self,
+                    "Cloud Storage Warning",
+                    f"⚠️ You are saving to <b>{cloud_service}</b>.\n\n"
+                    f"<b>WARNING:</b> SQLite project files are INCOMPATIBLE with cloud storage services "
+                    f"and WILL become corrupted due to sync conflicts.\n\n"
+                    f"<b>Recommendation:</b> Save to a local folder:\n"
+                    f"  • ~/Documents/VasoAnalyzer/\n"
+                    f"  • ~/Desktop/Projects/\n"
+                    f"  • Any local-only folder\n\n"
+                    f"<b>Do you want to continue anyway?</b>\n"
+                    f"(Not recommended - may result in data loss)",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply == QMessageBox.No:
+                    return
+
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -1223,7 +1332,15 @@ class VasoAnalyzerApp(QMainWindow):
         if not self.current_project or not self.current_project.path:
             return
 
+        # Prevent concurrent saves (don't autosave if manual save is in progress)
+        if self._save_in_progress:
+            log.debug("Manual save in progress, deferring autosave (reason=%s)", reason or "auto")
+            # Reschedule autosave for later
+            self.request_deferred_autosave(delay_ms=5000, reason=reason or "deferred")
+            return
+
         try:
+            self._save_in_progress = True
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -1240,6 +1357,8 @@ class VasoAnalyzerApp(QMainWindow):
                 )
         except Exception as exc:
             log.error("Failed to write autosave (%s): %s", reason or "manual", exc)
+        finally:
+            self._save_in_progress = False
 
     def _autosave_tick(self):
         if not self.current_project or not self.current_project.path:
@@ -2810,6 +2929,11 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
+        self.action_publication_studio = QAction("Publication Studio…", self)
+        self.action_publication_studio.setShortcut("Ctrl+Shift+P")
+        self.action_publication_studio.triggered.connect(self.open_publication_studio)
+        tools_menu.addAction(self.action_publication_studio)
+
         tools_menu.addSeparator()
 
         self.action_relink_assets = QAction("Relink Missing Files…", self)
@@ -3029,11 +3153,53 @@ class VasoAnalyzerApp(QMainWindow):
             self._clear_canvas_and_table()
             project = load_project(path)
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Project Load Error",
-                f"Could not open project:\n{e}",
-            )
+            error_msg = str(e)
+
+            # Check if this was a database corruption error
+            if "corrupted" in error_msg.lower() or "malformed" in error_msg.lower():
+                # Check if project is in cloud storage
+                from vasoanalyzer.core.project import _is_cloud_storage_path
+
+                is_cloud, cloud_service = _is_cloud_storage_path(path)
+
+                cloud_warning = ""
+                if is_cloud:
+                    cloud_warning = (
+                        f"\n\n⚠️ IMPORTANT: This project is stored in {cloud_service}.\n"
+                        f"SQLite databases are INCOMPATIBLE with cloud storage and will become corrupted.\n\n"
+                        f"To fix this:\n"
+                        f"1. Move this project to a LOCAL folder (e.g., ~/Documents or ~/Desktop)\n"
+                        f"2. Create a new project in the local folder\n"
+                        f"3. Never store .vaso projects in iCloud, Dropbox, or other cloud storage\n\n"
+                    )
+
+                if "backup was created" in error_msg:
+                    QMessageBox.critical(
+                        self,
+                        "Project Database Corrupted",
+                        f"The project database is corrupted and automatic recovery failed.\n\n"
+                        f"Error: {e}"
+                        f"{cloud_warning}\n"
+                        f"A backup was created at: {path}.backup\n\n"
+                        f"Recommendations:\n"
+                        f"1. Check the backup file\n"
+                        f"2. Contact support for manual recovery\n"
+                        f"3. Create a new project and re-import your data",
+                    )
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Project Database Error",
+                        f"Could not open project due to database error:\n\n{e}"
+                        f"{cloud_warning}\n"
+                        f"The database may be corrupted.",
+                    )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Project Load Error",
+                    f"Could not open project:\n{e}",
+                )
             return
         self._replace_current_project(project)
         self.apply_ui_state(getattr(self.current_project, "ui_state", None))
@@ -5925,11 +6091,49 @@ QPushButton[isGhost="true"]:hover {{
             try:
                 project = load_project(vaso_path)
             except Exception as e:
-                QMessageBox.critical(
-                    self,
-                    "Project Load Error",
-                    f"Could not open project:\n{e}",
-                )
+                error_msg = str(e)
+
+                # Check if this was a database corruption error
+                if "corrupted" in error_msg.lower() or "malformed" in error_msg.lower():
+                    # Check if project is in cloud storage
+                    from vasoanalyzer.core.project import _is_cloud_storage_path
+
+                    is_cloud, cloud_service = _is_cloud_storage_path(vaso_path)
+
+                    cloud_warning = ""
+                    if is_cloud:
+                        cloud_warning = (
+                            f"\n\n⚠️ IMPORTANT: This project is stored in {cloud_service}.\n"
+                            f"SQLite databases are INCOMPATIBLE with cloud storage and will become corrupted.\n\n"
+                            f"To fix this:\n"
+                            f"1. Move this project to a LOCAL folder (e.g., ~/Documents or ~/Desktop)\n"
+                            f"2. Create a new project in the local folder\n"
+                            f"3. Never store .vaso projects in iCloud, Dropbox, or other cloud storage\n\n"
+                        )
+
+                    if "backup was created" in error_msg:
+                        QMessageBox.critical(
+                            self,
+                            "Project Database Corrupted",
+                            f"The project database is corrupted and automatic recovery failed."
+                            f"{cloud_warning}\n"
+                            f"A backup was created at: {vaso_path}.backup\n\n"
+                            f"Please check the backup or create a new project.",
+                        )
+                    else:
+                        QMessageBox.critical(
+                            self,
+                            "Project Database Error",
+                            f"Could not open project due to database error."
+                            f"{cloud_warning}\n"
+                            f"The database may be corrupted.",
+                        )
+                else:
+                    QMessageBox.critical(
+                        self,
+                        "Project Load Error",
+                        f"Could not open project:\n{e}",
+                    )
                 return
             self._replace_current_project(project)
             self.refresh_project_tree()
@@ -7179,6 +7383,86 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
+    def open_publication_studio(self):
+        """Open Publication Studio window for advanced figure styling."""
+        # Check if trace is loaded
+        if self.trace_model is None:
+            QMessageBox.information(
+                self,
+                "No Trace Loaded",
+                "Please load a trace file before opening Publication Studio.",
+            )
+            return
+
+        # Create or show publication studio window
+        if self.publication_studio is None:
+            self.publication_studio = PublicationStudioWindow(self)
+            # Connect signals
+            self.publication_studio.studio_closed.connect(self._on_publication_studio_closed)
+            self.publication_studio.preset_saved.connect(self._on_publication_preset_saved)
+
+        # Load user presets from project (if available)
+        user_presets = []
+        if self.current_project and self.current_project.ui_state:
+            user_presets = self.current_project.ui_state.get("publication_presets", [])
+
+        # Gather current plot state
+        channel_specs = self.plot_host.channel_specs()
+        layout_state = self.plot_host.layout_state()
+        current_style = self.get_current_plot_style()
+
+        # Populate with current data
+        self.publication_studio.load_from_main_window(
+            trace_model=self.trace_model,
+            event_times=self.event_times,
+            event_colors=None,  # Colors managed by PlotHost
+            event_labels=self.event_labels,
+            event_label_meta=self.event_label_meta,
+            channel_specs=channel_specs,
+            layout_state=layout_state,
+            style_dict=current_style,
+        )
+
+        # Load user presets into preset library
+        if hasattr(self.publication_studio, "_preset_library_dock"):
+            built_in = self.publication_studio._preset_library_dock._built_in_presets
+            self.publication_studio._preset_library_dock.set_presets(user_presets, built_in)
+
+        # Show window
+        self.publication_studio.show()
+        self.publication_studio.raise_()
+        self.publication_studio.activateWindow()
+
+    def _on_publication_preset_saved(self, preset):
+        """Handle preset save from Publication Studio."""
+        # Store preset in current project's ui_state
+        if self.current_project:
+            if self.current_project.ui_state is None:
+                self.current_project.ui_state = {}
+
+            if "publication_presets" not in self.current_project.ui_state:
+                self.current_project.ui_state["publication_presets"] = []
+
+            # Check if preset with same name exists (update vs add)
+            presets = self.current_project.ui_state["publication_presets"]
+            existing_idx = next(
+                (i for i, p in enumerate(presets) if p.get("name") == preset.get("name")), None
+            )
+
+            if existing_idx is not None:
+                # Update existing preset
+                presets[existing_idx] = preset
+            else:
+                # Add new preset
+                presets.append(preset)
+
+    def _on_publication_studio_closed(self):
+        """Handle Publication Studio window close."""
+        # Clean up reference when window closes
+        if self.publication_studio is not None:
+            self.publication_studio.deleteLater()
+            self.publication_studio = None
+
     # [J] ========================= PLOT STYLE EDITOR ================================
     def apply_plot_style(self, style, persist: bool = False):
         manager = self._ensure_style_manager()
@@ -8248,7 +8532,27 @@ QPushButton[isGhost="true"]:hover {{
 
     def closeEvent(self, event):
         if self.current_project and self.current_project.path:
+            # Stop autosave timers to prevent concurrent saves during shutdown
+            self.autosave_timer.stop()
+            self._deferred_autosave_timer.stop()
+
             try:
+                # Wait for any in-progress save to complete (with timeout)
+                max_wait_iterations = 50  # 5 seconds max (50 * 100ms)
+                wait_iteration = 0
+                while self._save_in_progress and wait_iteration < max_wait_iterations:
+                    from PyQt5.QtCore import QCoreApplication
+
+                    QCoreApplication.processEvents()
+                    import time
+
+                    time.sleep(0.1)
+                    wait_iteration += 1
+
+                if self._save_in_progress:
+                    log.warning("Timed out waiting for save to complete, forcing save anyway")
+
+                self._save_in_progress = True
                 self.current_project.ui_state = self.gather_ui_state()
                 if self.current_sample:
                     state = self.gather_sample_state()
@@ -8258,6 +8562,8 @@ QPushButton[isGhost="true"]:hover {{
                 save_project_file(self.current_project, skip_optimize=True)
             except Exception as e:
                 log.error("Failed to auto-save project:\n%s", e)
+            finally:
+                self._save_in_progress = False
         self._replace_current_project(None)
         super().closeEvent(event)
 

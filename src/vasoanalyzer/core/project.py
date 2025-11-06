@@ -67,9 +67,11 @@ class ProjectUpgradeRequired(RuntimeError):
     def __init__(self, path: str, version: int):
         self.path = path
         self.version = version
-        super().__init__(
-            f"Project at {path} uses legacy schema version {version}; conversion to sqlite-v3 is required."
+        message = (
+            f"Project at {path} uses legacy schema version {version}; "
+            "conversion to sqlite-v3 is required."
         )
+        super().__init__(message)
 
 
 def open_project_ctx(path: str, repo: ProjectRepository | None = None) -> ProjectContext:
@@ -1150,7 +1152,39 @@ def load_project(path: str) -> Project:
     """Open ``path`` returning a populated :class:`Project` instance."""
 
     if _is_sqlite_file(path):
-        return _load_project_sqlite(path)
+        try:
+            return _load_project_sqlite(path)
+        except Exception as e:
+            import sqlite3
+
+            # Check if this is a database corruption error
+            error_msg = str(e).lower()
+            corruption_keywords = ["malformed", "corrupt", "damaged", "disk image"]
+            is_corruption_error = isinstance(e, sqlite3.DatabaseError) or any(
+                keyword in error_msg for keyword in corruption_keywords
+            )
+            if is_corruption_error:
+                log.warning(f"Database corruption detected in {path}, attempting recovery...")
+
+                # Attempt recovery
+                if _attempt_database_recovery(path):
+                    log.info("Database recovery successful, retrying load...")
+                    try:
+                        return _load_project_sqlite(path)
+                    except Exception as retry_error:
+                        raise RuntimeError(
+                            f"Database was recovered but still cannot be loaded: {retry_error}"
+                        ) from retry_error
+                else:
+                    raise RuntimeError(
+                        f"Database is corrupted and recovery failed. "
+                        f"A backup was created at {path}.backup. "
+                        f"Original error: {e}"
+                    ) from e
+            else:
+                # Re-raise non-corruption errors as-is
+                raise
+
     return _load_project_legacy_zip(path)
 
 
@@ -1159,6 +1193,16 @@ def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = F
 
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # Warn if saving to cloud storage
+    is_cloud, cloud_service = _is_cloud_storage_path(str(dest))
+    if is_cloud:
+        log.warning(
+            f"WARNING: Saving project to {cloud_service}. "
+            f"SQLite databases are INCOMPATIBLE with cloud storage and WILL become corrupted. "
+            "Please move your project to a local folder (e.g., ~/Documents, ~/Desktop) "
+            "to prevent data loss."
+        )
 
     now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if not project.created_at:
@@ -1613,6 +1657,218 @@ def _store_project_attachments(
 
     extra = {"kind": "project_attachments", "attachments": payload}
     repo.update_dataset_meta(dataset_id, extra_json=extra)
+
+
+def _is_cloud_storage_path(path: str) -> tuple[bool, str | None]:
+    """
+    Check if the path is in a cloud storage location.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        Tuple of (is_cloud, cloud_service_name)
+    """
+    path_lower = path.lower()
+
+    # macOS iCloud Drive
+    if "library/mobile documents/com~apple~cloudocs" in path_lower or "icloud" in path_lower:
+        return True, "iCloud Drive"
+
+    # Dropbox
+    if "dropbox" in path_lower:
+        return True, "Dropbox"
+
+    # Google Drive
+    if "google drive" in path_lower or "googledrive" in path_lower:
+        return True, "Google Drive"
+
+    # OneDrive
+    if "onedrive" in path_lower:
+        return True, "OneDrive"
+
+    # Box
+    if "box sync" in path_lower or "box.com" in path_lower:
+        return True, "Box"
+
+    return False, None
+
+
+def _attempt_database_recovery(db_path: str) -> bool:
+    """
+    Attempt to recover a corrupted SQLite database using multiple methods.
+
+    This function tries three recovery strategies in order:
+    1. CLI sqlite3 tool (most robust)
+    2. Python iterdump() method (fallback)
+    3. PRAGMA recovery mode (last resort)
+
+    Args:
+        db_path: Path to the corrupted database file
+
+    Returns:
+        True if recovery was successful, False otherwise
+    """
+    import shutil
+    import sqlite3
+    import subprocess
+
+    # Check if database is in cloud storage
+    is_cloud, cloud_service = _is_cloud_storage_path(db_path)
+    if is_cloud:
+        log.warning(
+            f"Database is located in {cloud_service}. "
+            f"SQLite databases are INCOMPATIBLE with cloud storage sync and will become corrupted. "
+            "Please move your project to a local folder (e.g., Documents, Desktop) "
+            "to prevent future corruption."
+        )
+
+    backup_path = f"{db_path}.backup"
+    recovered_path = f"{db_path}.recovered"
+    dump_path = f"{db_path}.sql"
+
+    try:
+        # Create backup of corrupted file
+        shutil.copy2(db_path, backup_path)
+        log.info(f"Created backup of corrupted database: {backup_path}")
+
+        # Method 1: Try CLI sqlite3 tool (most robust for corrupted databases)
+        log.info("Recovery Method 1: Attempting CLI sqlite3 .dump...")
+        try:
+            # Try to dump using command-line sqlite3
+            result = subprocess.run(
+                ["sqlite3", db_path, ".dump"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            if result.returncode == 0 and result.stdout:
+                # Create new database from dump
+                log.info("CLI dump succeeded, creating new database...")
+                recovery_conn = sqlite3.connect(recovered_path)
+                recovery_conn.executescript(result.stdout)
+                recovery_conn.commit()
+                recovery_conn.close()
+
+                # Replace original with recovered
+                shutil.move(recovered_path, db_path)
+                log.info(f"Database recovery successful (CLI method): {db_path}")
+                return True
+            else:
+                log.warning(f"CLI sqlite3 failed: {result.stderr}")
+
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception) as e:
+            log.warning(f"CLI sqlite3 method failed: {e}")
+
+        # Method 2: Try Python iterdump() (fallback)
+        log.info("Recovery Method 2: Attempting Python iterdump()...")
+        try:
+            conn = sqlite3.connect(db_path)
+            recovery_conn = sqlite3.connect(recovered_path)
+
+            # Attempt to recover what we can
+            recovered_lines = 0
+            for line in conn.iterdump():
+                try:
+                    recovery_conn.execute(line)
+                    recovered_lines += 1
+                except sqlite3.Error:
+                    pass  # Skip corrupted rows
+
+            recovery_conn.commit()
+            recovery_conn.close()
+            conn.close()
+
+            if recovered_lines > 0:
+                # Replace original with recovered
+                shutil.move(recovered_path, db_path)
+                log.info(
+                    "Database recovery successful (Python iterdump, %s lines): %s",
+                    recovered_lines,
+                    db_path,
+                )
+                return True
+            else:
+                log.warning("Python iterdump recovered 0 lines")
+
+        except Exception as e:
+            log.warning(f"Python iterdump method failed: {e}")
+
+        # Method 3: Try PRAGMA recovery mode (last resort)
+        log.info("Recovery Method 3: Attempting PRAGMA recovery mode...")
+        try:
+            conn = sqlite3.connect(db_path)
+            recovery_conn = sqlite3.connect(recovered_path)
+
+            # Enable recovery mode
+            conn.execute("PRAGMA writable_schema=ON")
+
+            # Try to copy readable tables
+            tables_recovered = 0
+            try:
+                cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                tables = cursor.fetchall()
+
+                for (table_name,) in tables:
+                    try:
+                        # Get table schema
+                        cursor = conn.execute(
+                            f"SELECT sql FROM sqlite_master WHERE name='{table_name}'"
+                        )
+                        schema = cursor.fetchone()
+                        if schema and schema[0]:
+                            recovery_conn.execute(schema[0])
+
+                        # Copy data
+                        cursor = conn.execute(f"SELECT * FROM {table_name}")
+                        rows = cursor.fetchall()
+                        if rows:
+                            placeholders = ",".join(["?"] * len(rows[0]))
+                            recovery_conn.executemany(
+                                f"INSERT INTO {table_name} VALUES ({placeholders})", rows
+                            )
+                            tables_recovered += 1
+                    except sqlite3.Error:
+                        pass  # Skip corrupted tables
+
+            except sqlite3.Error:
+                pass
+
+            recovery_conn.commit()
+            recovery_conn.close()
+            conn.close()
+
+            if tables_recovered > 0:
+                shutil.move(recovered_path, db_path)
+                log.info(
+                    "Database recovery successful (PRAGMA recovery, %s tables): %s",
+                    tables_recovered,
+                    db_path,
+                )
+                return True
+            else:
+                log.warning("PRAGMA recovery mode recovered 0 tables")
+
+        except Exception as e:
+            log.error(f"PRAGMA recovery method failed: {e}", exc_info=True)
+
+        # All methods failed
+        log.error("All recovery methods failed")
+        # Restore from backup
+        if Path(backup_path).exists():
+            shutil.copy2(backup_path, db_path)
+        return False
+
+    except Exception as e:
+        log.error(f"Could not create database backup: {e}", exc_info=True)
+        return False
+    finally:
+        # Cleanup temporary files
+        for temp_file in [recovered_path, dump_path]:
+            if Path(temp_file).exists():
+                with contextlib.suppress(Exception):
+                    Path(temp_file).unlink()
 
 
 def _load_project_sqlite(path: str) -> Project:

@@ -13,7 +13,6 @@ from a folder structure, with automatic status detection.
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QHeaderView,
@@ -180,6 +179,8 @@ class FolderImportDialog(QDialog):
             for row, candidate in enumerate(self.candidates):
                 should_check = candidate.status in ["NEW", "MODIFIED"]
                 item = self.table.item(row, 0)
+                if item is None:
+                    continue
                 item.setCheckState(Qt.Checked if should_check else Qt.Unchecked)
                 # Disable checkboxes when not in custom mode
                 item.setFlags(Qt.ItemIsEnabled)
@@ -189,6 +190,8 @@ class FolderImportDialog(QDialog):
             for row, candidate in enumerate(self.candidates):
                 should_check = candidate.status != "ALREADY_LOADED"
                 item = self.table.item(row, 0)
+                if item is None:
+                    continue
                 item.setCheckState(Qt.Checked if should_check else Qt.Unchecked)
                 item.setFlags(Qt.ItemIsEnabled)
 
@@ -196,6 +199,8 @@ class FolderImportDialog(QDialog):
             # Enable manual selection
             for row in range(len(self.candidates)):
                 item = self.table.item(row, 0)
+                if item is None:
+                    continue
                 item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
 
         self._update_summary()
@@ -213,11 +218,11 @@ class FolderImportDialog(QDialog):
 
     def _update_summary(self) -> None:
         """Update the summary label."""
-        checked_count = sum(
-            1
-            for row in range(len(self.candidates))
-            if self.table.item(row, 0) and self.table.item(row, 0).checkState() == Qt.Checked
-        )
+        checked_count = 0
+        for row in range(len(self.candidates)):
+            item = self.table.item(row, 0)
+            if item is not None and item.checkState() == Qt.Checked:
+                checked_count += 1
 
         if checked_count == 0:
             self.summary_label.setText("No files selected for import.")
@@ -228,11 +233,11 @@ class FolderImportDialog(QDialog):
 
     def _update_button_states(self) -> None:
         """Update the state of action buttons."""
-        checked_count = sum(
-            1
-            for row in range(len(self.candidates))
-            if self.table.item(row, 0) and self.table.item(row, 0).checkState() == Qt.Checked
-        )
+        checked_count = 0
+        for row in range(len(self.candidates)):
+            item = self.table.item(row, 0)
+            if item is not None and item.checkState() == Qt.Checked:
+                checked_count += 1
         self.ok_button.setEnabled(checked_count > 0)
 
     def get_selected_candidates(self) -> list[ImportCandidate]:
@@ -240,7 +245,7 @@ class FolderImportDialog(QDialog):
         selected = []
         for row, candidate in enumerate(self.candidates):
             item = self.table.item(row, 0)
-            if item and item.checkState() == Qt.Checked:
+            if item is not None and item.checkState() == Qt.Checked:
                 selected.append(candidate)
         return selected
 

@@ -46,6 +46,37 @@ class PlotStyleManager:
             self.replace(updated)
         return self._style
 
+    # ------------------------------------------------------------------ Preset Support
+
+    def to_preset(self, name: str, description: str = "", tags: list[str] | None = None) -> dict:
+        """
+        Convert current style to a preset dictionary.
+
+        Args:
+            name: Preset name
+            description: Optional description
+            tags: Optional tags (e.g., ["journal", "nature"])
+
+        Returns:
+            Preset dictionary with metadata and style
+        """
+        return {
+            "name": name,
+            "description": description,
+            "tags": tags or [],
+            "style": self._style.copy(),
+        }
+
+    def from_preset(self, preset: dict) -> None:
+        """
+        Load style from preset dictionary.
+
+        Args:
+            preset: Preset dictionary (must contain "style" key)
+        """
+        if "style" in preset:
+            self.replace(preset["style"])
+
     # ------------------------------------------------------------------
     def apply(
         self,

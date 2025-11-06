@@ -78,8 +78,29 @@ class HomePage(QWidget):
         subtitle.setWordWrap(True)
         subtitle.setObjectName("HeroSubtitle")
 
+        # Cloud storage warning
+        cloud_warning = QLabel(
+            (
+                "📁 <b>Important:</b> Store projects on your <b>local drive</b> (Documents, Desktop) for best reliability. "
+                "Avoid cloud storage (iCloud, Dropbox, Google Drive) as it can corrupt project files."
+            ),
+            hero,
+        )
+        cloud_warning.setWordWrap(True)
+        cloud_warning.setObjectName("CloudStorageWarning")
+        cloud_warning.setStyleSheet(f"""
+            QLabel#CloudStorageWarning {{
+                background-color: {CURRENT_THEME.get('warning_bg', '#FFF4E5')};
+                color: {CURRENT_THEME.get('warning_text', '#663C00')};
+                padding: 12px;
+                border-radius: 8px;
+                border: 1px solid {CURRENT_THEME.get('warning_border', '#FFD6A5')};
+            }}
+        """)
+
         text_column.addWidget(title)
         text_column.addWidget(subtitle)
+        text_column.addWidget(cloud_warning)
         text_column.addLayout(self._build_primary_actions())
         text_column.addLayout(self._build_secondary_actions())
         text_column.addStretch()
