@@ -294,18 +294,43 @@ class AxisEditorDialog(QDialog):
             self._x_scale_combo.setCurrentText(axes.get_xscale())
             self._y_scale_combo.setCurrentText(axes.get_yscale())
 
-            # Grid
-            grid_visible = axes.xaxis._gridOnMajor or axes.yaxis._gridOnMajor
+            # Grid - check if gridlines exist (safe method)
+            grid_visible = False
+            try:
+                # Check if any gridlines are visible
+                xgridlines = axes.xaxis.get_gridlines()
+                ygridlines = axes.yaxis.get_gridlines()
+                if xgridlines and ygridlines:
+                    grid_visible = xgridlines[0].get_visible() or ygridlines[0].get_visible()
+            except (AttributeError, IndexError):
+                # If we can't determine, default to False
+                grid_visible = False
+
             self._grid_checkbox.setChecked(grid_visible)
 
             # Spines
-            self._top_spine_checkbox.setChecked(axes.spines['top'].get_visible())
-            self._right_spine_checkbox.setChecked(axes.spines['right'].get_visible())
+            try:
+                self._top_spine_checkbox.setChecked(axes.spines['top'].get_visible())
+                self._right_spine_checkbox.setChecked(axes.spines['right'].get_visible())
+            except (KeyError, AttributeError):
+                # Default to visible if we can't determine
+                self._top_spine_checkbox.setChecked(True)
+                self._right_spine_checkbox.setChecked(True)
 
             # Tick labels
-            self._x_tick_labels_checkbox.setChecked(axes.xaxis.get_tick_params()['labelbottom'])
-            self._y_tick_labels_checkbox.setChecked(axes.yaxis.get_tick_params()['labelleft'])
+            try:
+                x_tick_params = axes.xaxis.get_tick_params()
+                y_tick_params = axes.yaxis.get_tick_params()
+                self._x_tick_labels_checkbox.setChecked(x_tick_params.get('labelbottom', True))
+                self._y_tick_labels_checkbox.setChecked(y_tick_params.get('labelleft', True))
+            except (AttributeError, KeyError):
+                # Default to visible
+                self._x_tick_labels_checkbox.setChecked(True)
+                self._y_tick_labels_checkbox.setChecked(True)
 
+        except Exception as e:
+            # Log error but don't crash
+            print(f"Warning: Could not load all axes properties: {e}")
         finally:
             self._block_signals(False)
 
@@ -351,42 +376,76 @@ class AxisEditorDialog(QDialog):
 
         axes = self._current_axes
 
-        # Apply limits
-        if not self._x_auto_checkbox.isChecked():
-            axes.set_xlim(self._x_min_spin.value(), self._x_max_spin.value())
+        try:
+            # Apply limits
+            if not self._x_auto_checkbox.isChecked():
+                x_min = self._x_min_spin.value()
+                x_max = self._x_max_spin.value()
+                if x_min < x_max:
+                    axes.set_xlim(x_min, x_max)
+                else:
+                    print(f"Warning: Invalid X limits ({x_min}, {x_max}), skipping")
 
-        if not self._y_auto_checkbox.isChecked():
-            axes.set_ylim(self._y_min_spin.value(), self._y_max_spin.value())
+            if not self._y_auto_checkbox.isChecked():
+                y_min = self._y_min_spin.value()
+                y_max = self._y_max_spin.value()
+                if y_min < y_max:
+                    axes.set_ylim(y_min, y_max)
+                else:
+                    print(f"Warning: Invalid Y limits ({y_min}, {y_max}), skipping")
 
-        # Apply labels
-        axes.set_xlabel(self._x_label_edit.text())
-        axes.set_ylabel(self._y_label_edit.text())
-        axes.set_title(self._title_edit.text())
+            # Apply labels
+            axes.set_xlabel(self._x_label_edit.text())
+            axes.set_ylabel(self._y_label_edit.text())
+            axes.set_title(self._title_edit.text())
 
-        # Apply scale
-        axes.set_xscale(self._x_scale_combo.currentText())
-        axes.set_yscale(self._y_scale_combo.currentText())
+            # Apply scale
+            try:
+                axes.set_xscale(self._x_scale_combo.currentText())
+                axes.set_yscale(self._y_scale_combo.currentText())
+            except (ValueError, AttributeError) as e:
+                print(f"Warning: Could not set axis scale: {e}")
 
-        # Apply grid
-        if self._grid_checkbox.isChecked():
-            axes.grid(True, which=self._grid_which_combo.currentText())
-        else:
-            axes.grid(False)
+            # Apply grid
+            try:
+                if self._grid_checkbox.isChecked():
+                    axes.grid(True, which=self._grid_which_combo.currentText())
+                else:
+                    axes.grid(False)
+            except Exception as e:
+                print(f"Warning: Could not set grid: {e}")
 
-        # Apply spines
-        axes.spines['top'].set_visible(self._top_spine_checkbox.isChecked())
-        axes.spines['right'].set_visible(self._right_spine_checkbox.isChecked())
+            # Apply spines
+            try:
+                if 'top' in axes.spines:
+                    axes.spines['top'].set_visible(self._top_spine_checkbox.isChecked())
+                if 'right' in axes.spines:
+                    axes.spines['right'].set_visible(self._right_spine_checkbox.isChecked())
+            except (KeyError, AttributeError) as e:
+                print(f"Warning: Could not set spine visibility: {e}")
 
-        # Apply tick label visibility
-        axes.tick_params(labelbottom=self._x_tick_labels_checkbox.isChecked())
-        axes.tick_params(labelleft=self._y_tick_labels_checkbox.isChecked())
+            # Apply tick label visibility
+            try:
+                axes.tick_params(labelbottom=self._x_tick_labels_checkbox.isChecked())
+                axes.tick_params(labelleft=self._y_tick_labels_checkbox.isChecked())
+            except Exception as e:
+                print(f"Warning: Could not set tick label visibility: {e}")
 
-        # Emit signal
-        self.axes_changed.emit({"axes": axes})
+            # Emit signal
+            self.axes_changed.emit({"axes": axes})
 
-        # Redraw canvas
-        if hasattr(axes.figure, "canvas"):
-            axes.figure.canvas.draw_idle()
+            # Redraw canvas
+            if hasattr(axes, 'figure') and hasattr(axes.figure, "canvas"):
+                axes.figure.canvas.draw_idle()
+
+        except Exception as e:
+            print(f"Error applying axis changes: {e}")
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Could not apply all changes:\n{str(e)}"
+            )
 
     def _on_reset(self) -> None:
         """Reset current axes to defaults."""
@@ -395,15 +454,25 @@ class AxisEditorDialog(QDialog):
 
         axes = self._current_axes
 
-        # Reset to autoscale
-        axes.autoscale()
+        try:
+            # Reset to autoscale
+            axes.autoscale()
 
-        # Reload properties
-        self._load_axes_properties(axes)
+            # Reload properties
+            self._load_axes_properties(axes)
 
-        # Redraw
-        if hasattr(axes.figure, "canvas"):
-            axes.figure.canvas.draw_idle()
+            # Redraw
+            if hasattr(axes, 'figure') and hasattr(axes.figure, "canvas"):
+                axes.figure.canvas.draw_idle()
+
+        except Exception as e:
+            print(f"Error resetting axes: {e}")
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Could not reset axes:\n{str(e)}"
+            )
 
 
 if __name__ == "__main__":

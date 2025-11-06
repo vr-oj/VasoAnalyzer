@@ -382,54 +382,36 @@ class EpochLayer:
         if self._axes is None:
             return
 
-        # Calculate label position (center of epoch)
-        x_center = (epoch.t_start + epoch.t_end) / 2.0
+        try:
+            # Calculate label position (center of epoch)
+            x_center = (epoch.t_start + epoch.t_end) / 2.0
 
-        # Get color for text
-        color = epoch.color or self.theme.get_color(epoch.channel)
-        if epoch.style == "shade":
-            # For shaded regions, use black text with white halo
-            color = "#111111"
+            # Get color for text
+            color = epoch.color or self.theme.get_color(epoch.channel)
+            if epoch.style == "shade":
+                # For shaded regions, use black text with white halo
+                color = "#111111"
 
-        # Create text
-        text = Text(
-            x=x_center,
-            y=y,
-            text=epoch.label,
-            transform=transform,
-            fontsize=self.theme.font_size_pt,
-            fontfamily=self.theme.font_family,
-            color=color,
-            ha="center",
-            va="center",
-            clip_on=False,
-            zorder=30,
-        )
+            # Create text with path effects for readability
+            self._axes.text(
+                x_center,
+                y,
+                epoch.label,
+                transform=transform,
+                fontsize=self.theme.font_size_pt,
+                fontfamily=self.theme.font_family,
+                color=color,
+                ha="center",
+                va="center",
+                clip_on=False,
+                zorder=30,
+                path_effects=[
+                    mpatches.withStroke(linewidth=2.0, foreground="white", alpha=0.7)
+                ],
+            )
 
-        # Add white halo for readability
-        text.set_path_effects([
-            mpatches.withStroke(linewidth=2.0, foreground="white", alpha=0.7)
-        ])
-
-        self._axes.text(
-            x_center,
-            y,
-            epoch.label,
-            transform=transform,
-            fontsize=self.theme.font_size_pt,
-            fontfamily=self.theme.font_family,
-            color=color,
-            ha="center",
-            va="center",
-            clip_on=False,
-            zorder=30,
-            path_effects=[
-                mpatches.withStroke(linewidth=2.0, foreground="white", alpha=0.7)
-            ],
-        )
-
-        # Note: We're using axes.text() instead of adding Text artist
-        # because it handles the positioning and rendering better
+        except Exception as e:
+            print(f"Warning: Could not render epoch label: {e}")
 
     def _px_to_axes_height(self, px: float) -> float:
         """Convert pixel height to axes coordinates (fraction of axes height)."""

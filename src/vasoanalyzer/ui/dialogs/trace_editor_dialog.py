@@ -227,51 +227,80 @@ class TraceEditorDialog(QDialog):
 
         try:
             # Visibility
-            self._visible_checkbox.setChecked(line.get_visible())
+            try:
+                self._visible_checkbox.setChecked(line.get_visible())
+            except (AttributeError, TypeError):
+                self._visible_checkbox.setChecked(True)
 
             # Color
-            color = line.get_color()
-            if color:
-                try:
+            try:
+                color = line.get_color()
+                if color:
                     qcolor = QColor(color)
-                    self._color_display.setStyleSheet(f"background-color: {qcolor.name()}; border: 1px solid black;")
-                except Exception:
-                    pass
+                    if qcolor.isValid():
+                        self._color_display.setStyleSheet(f"background-color: {qcolor.name()}; border: 1px solid black;")
+            except (AttributeError, TypeError):
+                pass
 
             # Line width
-            self._linewidth_spin.setValue(line.get_linewidth())
+            try:
+                linewidth = line.get_linewidth()
+                if linewidth is not None:
+                    self._linewidth_spin.setValue(float(linewidth))
+            except (AttributeError, TypeError, ValueError):
+                self._linewidth_spin.setValue(1.0)
 
             # Line style
-            linestyle = line.get_linestyle()
-            if linestyle == "solid":
-                linestyle = "-"
-            elif linestyle == "dashed":
-                linestyle = "--"
-            elif linestyle == "dashdot":
-                linestyle = "-."
-            elif linestyle == "dotted":
-                linestyle = ":"
-
-            self._linestyle_combo.setCurrentText(linestyle)
+            try:
+                linestyle = line.get_linestyle()
+                if linestyle == "solid":
+                    linestyle = "-"
+                elif linestyle == "dashed":
+                    linestyle = "--"
+                elif linestyle == "dashdot":
+                    linestyle = "-."
+                elif linestyle == "dotted":
+                    linestyle = ":"
+                self._linestyle_combo.setCurrentText(linestyle)
+            except (AttributeError, TypeError):
+                self._linestyle_combo.setCurrentText("-")
 
             # Alpha
-            alpha = line.get_alpha()
-            if alpha is None:
-                alpha = 1.0
-            self._alpha_spin.setValue(alpha)
+            try:
+                alpha = line.get_alpha()
+                if alpha is None:
+                    alpha = 1.0
+                self._alpha_spin.setValue(float(alpha))
+            except (AttributeError, TypeError, ValueError):
+                self._alpha_spin.setValue(1.0)
 
             # Marker
-            marker = line.get_marker()
-            if marker == "none" or marker == "None":
-                marker = "None"
-            self._marker_combo.setCurrentText(marker)
+            try:
+                marker = line.get_marker()
+                if marker == "none" or marker == "None" or marker is None:
+                    marker = "None"
+                self._marker_combo.setCurrentText(str(marker))
+            except (AttributeError, TypeError):
+                self._marker_combo.setCurrentText("None")
 
             # Marker size
-            self._markersize_spin.setValue(line.get_markersize())
+            try:
+                markersize = line.get_markersize()
+                if markersize is not None:
+                    self._markersize_spin.setValue(float(markersize))
+            except (AttributeError, TypeError, ValueError):
+                self._markersize_spin.setValue(6.0)
 
             # Z-order
-            self._zorder_spin.setValue(line.get_zorder())
+            try:
+                zorder = line.get_zorder()
+                if zorder is not None:
+                    self._zorder_spin.setValue(float(zorder))
+            except (AttributeError, TypeError, ValueError):
+                self._zorder_spin.setValue(2.0)
 
+        except Exception as e:
+            print(f"Warning: Could not load all trace properties: {e}")
         finally:
             self._block_signals(False)
 
@@ -298,8 +327,11 @@ class TraceEditorDialog(QDialog):
         if self._current_trace is None:
             return
 
-        current_color = self._current_trace.get_color()
-        qcolor = QColor(current_color) if current_color else QColor(Qt.blue)
+        try:
+            current_color = self._current_trace.get_color()
+            qcolor = QColor(current_color) if current_color else QColor(Qt.blue)
+        except (AttributeError, TypeError):
+            qcolor = QColor(Qt.blue)
 
         color = QColorDialog.getColor(qcolor, self, "Choose Trace Color")
 
@@ -313,46 +345,89 @@ class TraceEditorDialog(QDialog):
 
         line = self._current_trace
 
-        # Apply visibility
-        line.set_visible(self._visible_checkbox.isChecked())
+        try:
+            # Apply visibility
+            try:
+                line.set_visible(self._visible_checkbox.isChecked())
+            except (AttributeError, TypeError) as e:
+                print(f"Warning: Could not set visibility: {e}")
 
-        # Apply color
-        color_style = self._color_display.styleSheet()
-        if "background-color:" in color_style:
-            import re
+            # Apply color
+            try:
+                color_style = self._color_display.styleSheet()
+                if "background-color:" in color_style:
+                    import re
 
-            match = re.search(r"background-color:\s*([^;]+)", color_style)
-            if match:
-                color = match.group(1).strip()
-                line.set_color(color)
+                    match = re.search(r"background-color:\s*([^;]+)", color_style)
+                    if match:
+                        color = match.group(1).strip()
+                        line.set_color(color)
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set color: {e}")
 
-        # Apply line width
-        line.set_linewidth(self._linewidth_spin.value())
+            # Apply line width
+            try:
+                linewidth = self._linewidth_spin.value()
+                if linewidth > 0:
+                    line.set_linewidth(linewidth)
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set line width: {e}")
 
-        # Apply line style
-        line.set_linestyle(self._linestyle_combo.currentText())
+            # Apply line style
+            try:
+                line.set_linestyle(self._linestyle_combo.currentText())
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set line style: {e}")
 
-        # Apply alpha
-        line.set_alpha(self._alpha_spin.value())
+            # Apply alpha
+            try:
+                alpha = self._alpha_spin.value()
+                if 0 <= alpha <= 1:
+                    line.set_alpha(alpha)
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set alpha: {e}")
 
-        # Apply marker
-        marker = self._marker_combo.currentText()
-        if marker == "None":
-            marker = ""
-        line.set_marker(marker)
+            # Apply marker
+            try:
+                marker = self._marker_combo.currentText()
+                if marker == "None":
+                    marker = ""
+                line.set_marker(marker)
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set marker: {e}")
 
-        # Apply marker size
-        line.set_markersize(self._markersize_spin.value())
+            # Apply marker size
+            try:
+                markersize = self._markersize_spin.value()
+                if markersize >= 0:
+                    line.set_markersize(markersize)
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set marker size: {e}")
 
-        # Apply z-order
-        line.set_zorder(self._zorder_spin.value())
+            # Apply z-order
+            try:
+                line.set_zorder(self._zorder_spin.value())
+            except (AttributeError, ValueError) as e:
+                print(f"Warning: Could not set z-order: {e}")
 
-        # Emit signal
-        self.traces_changed.emit({"line": line})
+            # Emit signal
+            self.traces_changed.emit({"line": line})
 
-        # Redraw canvas
-        if hasattr(line.axes, "figure") and hasattr(line.axes.figure, "canvas"):
-            line.axes.figure.canvas.draw_idle()
+            # Redraw canvas
+            try:
+                if hasattr(line, 'axes') and hasattr(line.axes, "figure") and hasattr(line.axes.figure, "canvas"):
+                    line.axes.figure.canvas.draw_idle()
+            except Exception as e:
+                print(f"Warning: Could not redraw canvas: {e}")
+
+        except Exception as e:
+            print(f"Error applying trace changes: {e}")
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Could not apply all changes:\n{str(e)}"
+            )
 
 
 if __name__ == "__main__":
