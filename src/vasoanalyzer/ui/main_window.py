@@ -2996,7 +2996,7 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
-        self.action_publication_studio = QAction("Publication Studio…", self)
+        self.action_publication_studio = QAction("Figure Composer…", self)
         self.action_publication_studio.setShortcut("Ctrl+Shift+P")
         self.action_publication_studio.triggered.connect(self.open_publication_studio)
         tools_menu.addAction(self.action_publication_studio)
@@ -7560,7 +7560,7 @@ QPushButton[isGhost="true"]:hover {{
         dialog.exec_()
 
     def open_publication_studio(self, checked: bool = False):
-        """Open Publication Studio window for advanced figure styling.
+        """Open Figure Composer window for advanced figure styling.
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
@@ -7570,7 +7570,7 @@ QPushButton[isGhost="true"]:hover {{
             QMessageBox.information(
                 self,
                 "No Trace Loaded",
-                "Please load a trace file before opening Publication Studio.",
+                "Please load a trace file before opening Figure Composer.",
             )
             return
 
@@ -7614,7 +7614,7 @@ QPushButton[isGhost="true"]:hover {{
         self.publication_studio.activateWindow()
 
     def _on_publication_preset_saved(self, preset):
-        """Handle preset save from Publication Studio."""
+        """Handle preset save from Figure Composer."""
         # Store preset in current project's ui_state
         if self.current_project:
             if self.current_project.ui_state is None:
@@ -7637,7 +7637,7 @@ QPushButton[isGhost="true"]:hover {{
                 presets.append(preset)
 
     def _on_publication_studio_closed(self):
-        """Handle Publication Studio window close."""
+        """Handle Figure Composer window close."""
         # Clean up reference when window closes
         if self.publication_studio is not None:
             self.publication_studio.deleteLater()
