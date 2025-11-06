@@ -1,4 +1,4 @@
-"""Dockable panels for Publication Studio."""
+"""Dockable panels for Figure Composer."""
 
 from __future__ import annotations
 
