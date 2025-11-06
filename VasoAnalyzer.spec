@@ -6,9 +6,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
 from PyQt5.QtCore import QLibraryInfo
+
+# Increase recursion limit for Windows PyInstaller builds
+sys.setrecursionlimit(5000)
 
 spec_dir = os.path.abspath(os.path.dirname(sys.argv[0]))
 if os.path.isdir(os.path.join(spec_dir, 'src')):
@@ -29,6 +31,9 @@ else:
 req_subs = collect_submodules('requests')
 xl_subs = collect_submodules('openpyxl')
 
+# Collect matplotlib data files and submodules for better Windows compatibility
+mpl_datas, mpl_binaries, mpl_hiddenimports = collect_all('matplotlib')
+
 # Collect toolbar icon SVGs from the project root
 icon_dir = os.path.join(project_dir, 'icons')
 icon_datas = []
@@ -44,28 +49,41 @@ datas = [
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.svg'), 'vasoanalyzer'),
-] + icon_datas + qt_plugin_datas
+] + icon_datas + qt_plugin_datas + mpl_datas
 
 a = Analysis(
     [os.path.join(src_dir, 'main.py')],
     pathex=[src_dir],
-    binaries=[],
+    binaries=mpl_binaries,
     datas=datas,
     hiddenimports=[
         'tkinter',
         'tkinter.filedialog',
         'tkinter.messagebox',
         'PIL._tkinter_finder',
+        # VasoAnalyzer modules
         'vasoanalyzer.ui.publication_studio',
         'vasoanalyzer.ui.dialogs.unified_settings_dialog',
         'vasoanalyzer.ui.dialogs.settings.frame_tab',
+        'vasoanalyzer.ui.dialogs.settings.layout_tab',
+        'vasoanalyzer.ui.dialogs.settings.axis_tab',
+        'vasoanalyzer.ui.dialogs.settings.style_tab',
+        'vasoanalyzer.ui.dialogs.settings.event_labels_tab',
         # Matplotlib backends for figure export
         'matplotlib.backends.backend_svg',
         'matplotlib.backends.backend_pdf',
         'matplotlib.backends.backend_ps',
         'matplotlib.backends.backend_agg',
         'matplotlib.backends.backend_tkagg',
-    ] + req_subs + xl_subs,
+        'matplotlib.backends.backend_qt5agg',
+        # Numpy
+        'numpy',
+        'numpy.core._methods',
+        'numpy.lib.format',
+        # Pillow
+        'PIL',
+        'PIL.Image',
+    ] + req_subs + xl_subs + mpl_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -115,6 +133,12 @@ if sys.platform == 'darwin':
         info_plist=os.path.join(project_dir, 'packaging', 'macos', 'Info.plist'),
     )
 else:
+    # Windows build - disable UPX for better compatibility
+    exe_common_kwargs_win = exe_common_kwargs.copy()
+    exe_common_kwargs_win['upx'] = False
+    # Set console=True for debugging, change to False for production
+    exe_common_kwargs_win['console'] = False
+
     exe = EXE(
         pyz,
         a.scripts,
@@ -123,5 +147,5 @@ else:
         a.datas,
         [],
         exclude_binaries=False,
-        **exe_common_kwargs,
+        **exe_common_kwargs_win,
     )
