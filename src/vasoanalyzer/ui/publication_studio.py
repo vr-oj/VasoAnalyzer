@@ -25,6 +25,13 @@ from vasoanalyzer.ui.docks.layout_dock import LayoutDock
 from vasoanalyzer.ui.docks.preset_library_dock import PresetLibraryDock
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.plot_host import LayoutState, PlotHost
+from vasoanalyzer.ui.publication import (
+    Epoch,
+    EpochEditorDialog,
+    EpochLayer,
+    EpochTheme,
+    events_to_epochs,
+)
 from vasoanalyzer.ui.style_manager import PlotStyleManager
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -101,6 +108,12 @@ class PublicationStudioWindow(QMainWindow):
         self._channel_specs: list[ChannelTrackSpec] = []
         self._layout_state: LayoutState | None = None
 
+        # Epoch overlay state
+        self._epochs: list[Epoch] = []
+        self._epoch_layer: EpochLayer | None = None
+        self._epoch_theme: EpochTheme = EpochTheme()
+        self._epochs_visible: bool = True
+
         # Style management
         self._style_manager: PlotStyleManager | None = None
         self._current_preset_name: str | None = None
@@ -176,6 +189,53 @@ class PublicationStudioWindow(QMainWindow):
         if self._style_manager:
             return cast(dict[str, Any], self._style_manager.style())
         return {}
+
+    def set_epochs(self, epochs: list[Epoch]) -> None:
+        """Set epochs for protocol timeline overlay."""
+        self._epochs = epochs
+        if self._epoch_layer is not None:
+            self._epoch_layer.set_epochs(epochs)
+            self.plot_host.canvas.draw_idle()
+
+    def get_epochs(self) -> list[Epoch]:
+        """Get current epochs."""
+        return self._epochs.copy()
+
+    def auto_generate_epochs(self) -> None:
+        """Auto-generate epochs from event data."""
+        if not self._event_times:
+            return
+
+        # Convert events to epochs
+        epochs = events_to_epochs(
+            self._event_times,
+            self._event_labels,
+            self._event_label_meta,
+            default_duration=60.0,
+            merge_consecutive=True,
+        )
+
+        self.set_epochs(epochs)
+
+    def toggle_epochs_visibility(self, visible: bool) -> None:
+        """Toggle epoch overlay visibility."""
+        self._epochs_visible = visible
+        if self._epoch_layer is not None:
+            if visible:
+                self._epoch_layer.attach(self._get_primary_axes())
+            else:
+                self._epoch_layer.attach(None)
+            self.plot_host.canvas.draw_idle()
+
+    def _get_primary_axes(self) -> Any:
+        """Get the primary (top) axes for epoch overlay."""
+        if not self.plot_host._tracks:
+            return None
+        # Get first visible track's axes
+        for track in self.plot_host._tracks.values():
+            if hasattr(track, "ax") and track.ax is not None:
+                return track.ax
+        return None
 
     def apply_preset(self, preset: dict[str, Any], with_undo: bool = True) -> None:
         """
@@ -278,6 +338,28 @@ class PublicationStudioWindow(QMainWindow):
         # View menu
         view_menu = menubar.addMenu("&View")
         self._view_menu = view_menu  # Store for dock toggles
+
+        # Epochs menu
+        epochs_menu = menubar.addMenu("E&pochs")
+
+        auto_generate_action = QAction("&Auto-Generate from Events", self)
+        auto_generate_action.setShortcut("Ctrl+G")
+        auto_generate_action.triggered.connect(self._on_auto_generate_epochs)
+        epochs_menu.addAction(auto_generate_action)
+
+        edit_epochs_action = QAction("&Edit Epochs...", self)
+        edit_epochs_action.setShortcut("Ctrl+E")
+        edit_epochs_action.triggered.connect(self._on_edit_epochs)
+        epochs_menu.addAction(edit_epochs_action)
+
+        epochs_menu.addSeparator()
+
+        toggle_epochs_action = QAction("&Show Epoch Overlays", self)
+        toggle_epochs_action.setCheckable(True)
+        toggle_epochs_action.setChecked(self._epochs_visible)
+        toggle_epochs_action.triggered.connect(self._on_toggle_epochs)
+        epochs_menu.addAction(toggle_epochs_action)
+        self._toggle_epochs_action = toggle_epochs_action
 
         # Presets menu
         presets_menu = menubar.addMenu("&Presets")
@@ -398,6 +480,16 @@ class PublicationStudioWindow(QMainWindow):
             self._event_label_meta,
         )
 
+        # Initialize epoch layer
+        self._epoch_layer = EpochLayer(
+            epochs=self._epochs,
+            theme=self._epoch_theme,
+        )
+        if self._epochs_visible:
+            primary_ax = self._get_primary_axes()
+            if primary_ax is not None:
+                self._epoch_layer.attach(primary_ax)
+
         # Apply layout state
         if self._layout_state and hasattr(self, "_layout_dock"):
             # Note: PlotHost doesn't have set_layout_state, layout is applied via channel specs
@@ -461,6 +553,9 @@ class PublicationStudioWindow(QMainWindow):
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
+        import json
+        from pathlib import Path
+
         from PyQt5.QtWidgets import QFileDialog
 
         # Get export format and path
@@ -479,16 +574,26 @@ class PublicationStudioWindow(QMainWindow):
         dpi = 300  # Default high-quality DPI
 
         try:
+            # Export figure
             self.plot_host.figure.savefig(
                 output_path,
                 dpi=dpi,
                 bbox_inches="tight",
                 pad_inches=0.1,
             )
+
+            # Save epoch metadata as sidecar JSON if epochs exist
+            if self._epochs and self._epoch_layer is not None:
+                manifest = self._epoch_layer.to_manifest()
+                metadata_path = Path(output_path).with_suffix(".epochs.json")
+                with open(metadata_path, "w") as f:
+                    json.dump(manifest, f, indent=2)
+
             QMessageBox.information(
                 self,
                 "Export Successful",
-                f"Figure exported successfully to:\n{output_path}",
+                f"Figure exported successfully to:\n{output_path}"
+                + (f"\nEpoch metadata saved to:\n{metadata_path}" if self._epochs else ""),
             )
         except Exception as e:
             QMessageBox.critical(
@@ -545,9 +650,56 @@ class PublicationStudioWindow(QMainWindow):
             "<li>Style preset library</li>"
             "<li>Batch export queue</li>"
             "<li>Undo/redo for styling operations</li>"
+            "<li>Protocol epoch timeline overlays</li>"
             "</ul>"
             "<p><b>Version:</b> 1.0.0-alpha</p>",
         )
+
+    def _on_auto_generate_epochs(self, checked: bool = False) -> None:
+        """Auto-generate epochs from event data.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        if not self._event_times:
+            QMessageBox.information(
+                self,
+                "No Events",
+                "No events found to generate epochs from.\n\n"
+                "Please load event data in the main window before generating epochs.",
+            )
+            return
+
+        self.auto_generate_epochs()
+
+        QMessageBox.information(
+            self,
+            "Epochs Generated",
+            f"Successfully generated {len(self._epochs)} epoch(s) from event data.\n\n"
+            "Use the Epochs menu to toggle visibility or edit individual epochs.",
+        )
+
+    def _on_toggle_epochs(self, checked: bool) -> None:
+        """Toggle epoch overlay visibility.
+
+        Args:
+            checked: Visibility state from checkbox
+        """
+        self.toggle_epochs_visibility(checked)
+
+    def _on_edit_epochs(self, checked: bool = False) -> None:
+        """Open epoch editor dialog.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        editor = EpochEditorDialog(self._epochs, self)
+        editor.epochs_changed.connect(self._on_epochs_edited)
+        editor.show()
+
+    def _on_epochs_edited(self, epochs: list[Epoch]) -> None:
+        """Handle epochs edited in the editor dialog."""
+        self.set_epochs(epochs)
 
     # ------------------------------------------------------------------ Dock Signal Handlers
 
@@ -638,6 +790,9 @@ class PublicationStudioWindow(QMainWindow):
 
     def _on_export_requested(self, jobs: list) -> None:
         """Handle batch export request."""
+        import json
+        from pathlib import Path
+
         if not jobs:
             QMessageBox.warning(self, "No Jobs", "No jobs to export.")
             return
@@ -676,6 +831,13 @@ class PublicationStudioWindow(QMainWindow):
                     bbox_inches="tight",
                     pad_inches=0.1,
                 )
+
+                # Save epoch metadata as sidecar JSON if epochs exist
+                if self._epochs and self._epoch_layer is not None:
+                    manifest = self._epoch_layer.to_manifest()
+                    metadata_path = Path(job.output_path).with_suffix(".epochs.json")
+                    with open(metadata_path, "w") as f:
+                        json.dump(manifest, f, indent=2)
 
                 # Update job status
                 if hasattr(self, "_export_queue_dock"):
