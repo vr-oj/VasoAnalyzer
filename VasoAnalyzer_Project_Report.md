@@ -1,7 +1,7 @@
 # VasoAnalyzer — Project Technical Report
 _Generated: 2025-11-04 16:39_
 
-**Detected package:** `vasoanalyzer`  •  **App version:** `2.2`  
+**Detected package:** `vasoanalyzer`  •  **App version:** `2.2.5`  
 
 
 ## 1) Repository Layout (Top Level)

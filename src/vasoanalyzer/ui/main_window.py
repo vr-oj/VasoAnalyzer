@@ -356,7 +356,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.setMouseTracking(True)
 
         # ===== Setup App Window =====
-        self.setWindowTitle(f"VasoAnalyzer {APP_VERSION} - Python Edition")
+        self.setWindowTitle(f"VasoAnalyzer {APP_VERSION}")
         self.setGeometry(100, 100, 1280, 720)
         screen_size = QDesktopWidget().availableGeometry()
         self.resize(screen_size.width(), screen_size.height())
@@ -1383,7 +1383,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Prevent concurrent saves (don't autosave if manual save is in progress)
         if self._save_in_progress:
-            log.debug("Manual save in progress, deferring autosave (reason=%s)", reason or "auto")
+            log.debug(
+                "Manual save in progress, deferring autosave (reason=%s)",
+                reason or "auto",
+            )
             # Reschedule autosave for later
             self.request_deferred_autosave(delay_ms=5000, reason=reason or "deferred")
             return
@@ -2298,7 +2301,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.dual_window.show()
 
     def open_samples_in_dual_view(self, samples):
-        from vasoanalyzer.app.openers import open_samples_in_dual_view as _open_dual_view
+        from vasoanalyzer.app.openers import (
+            open_samples_in_dual_view as _open_dual_view,
+        )
 
         return _open_dual_view(self, samples)
 
@@ -4014,7 +4019,9 @@ class VasoAnalyzerApp(QMainWindow):
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        from vasoanalyzer.ui.dialogs.keyboard_shortcuts_dialog import KeyboardShortcutsDialog
+        from vasoanalyzer.ui.dialogs.keyboard_shortcuts_dialog import (
+            KeyboardShortcutsDialog,
+        )
 
         dialog = KeyboardShortcutsDialog(self)
         dialog.exec_()
@@ -4077,7 +4084,7 @@ class VasoAnalyzerApp(QMainWindow):
         QMessageBox.information(
             self,
             "About VasoAnalyzer",
-            f"VasoAnalyzer {APP_VERSION} (Python Edition)\nhttps://github.com/vr-oj/VasoAnalyzer",
+            f"VasoAnalyzer {APP_VERSION} ()\nhttps://github.com/vr-oj/VasoAnalyzer",
         )
 
     def show_tutorial(self, checked: bool = False):
@@ -4617,8 +4624,10 @@ QPushButton[isGhost="true"]:hover {{
         """Show progress bar in status bar with optional message."""
         self._progress_bar.setMaximum(maximum)
         self._progress_bar.setValue(0)
-        self._progress_bar.setFormat(f"{message} %p%") if message else self._progress_bar.setFormat(
-            "%p%"
+        (
+            self._progress_bar.setFormat(f"{message} %p%")
+            if message
+            else self._progress_bar.setFormat("%p%")
         )
         self._progress_bar.show()
         if message:
@@ -4863,7 +4872,7 @@ QPushButton[isGhost="true"]:hover {{
         self.undo_stack.push(command)
 
     def _update_window_title(self) -> None:
-        base = f"VasoAnalyzer {APP_VERSION} - Python Edition"
+        base = f"VasoAnalyzer {APP_VERSION}"
         if not self.current_project:
             self.setWindowTitle(base)
             return
@@ -4968,7 +4977,9 @@ QPushButton[isGhost="true"]:hover {{
         return _build_canvas_toolbar(self, canvas)
 
     def build_toolbar_for_canvas(self, *args, **kwargs):
-        from vasoanalyzer.ui.shell.toolbars import build_canvas_toolbar as _build_toolbar_adapter
+        from vasoanalyzer.ui.shell.toolbars import (
+            build_canvas_toolbar as _build_toolbar_adapter,
+        )
 
         return _build_toolbar_adapter(self, *args, **kwargs)
 
@@ -5363,7 +5374,9 @@ QPushButton[isGhost="true"]:hover {{
                     sample.snapshots = np.stack(snapshots)
                 except Exception:
                     log.debug(
-                        "Failed to materialise snapshot stack for %s", sample_name, exc_info=True
+                        "Failed to materialise snapshot stack for %s",
+                        sample_name,
+                        exc_info=True,
                     )
 
             target_experiment.samples.append(sample)
@@ -7626,7 +7639,8 @@ QPushButton[isGhost="true"]:hover {{
             # Check if preset with same name exists (update vs add)
             presets = self.current_project.ui_state["publication_presets"]
             existing_idx = next(
-                (i for i, p in enumerate(presets) if p.get("name") == preset.get("name")), None
+                (i for i, p in enumerate(presets) if p.get("name") == preset.get("name")),
+                None,
             )
 
             if existing_idx is not None:

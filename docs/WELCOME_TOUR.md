@@ -1,4 +1,4 @@
-# Welcome Tour — VasoAnalyzer v2.2
+# Welcome Tour — VasoAnalyzer v2.2.5
 
 Use this short tour for the in‑app welcome dialog or a first‑run overlay.
 
