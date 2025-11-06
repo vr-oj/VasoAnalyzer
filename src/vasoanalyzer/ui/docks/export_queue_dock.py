@@ -147,6 +147,28 @@ class ExportQueueDock(QDockWidget):
         dpi_layout.addWidget(self.dpi_spin, 1)
         config_layout.addLayout(dpi_layout)
 
+        # Width selector (mm)
+        width_layout = QHBoxLayout()
+        width_layout.addWidget(QLabel("Width (mm):"))
+        self.width_spin = QSpinBox()
+        self.width_spin.setRange(50, 500)
+        self.width_spin.setValue(180)  # Single column default
+        self.width_spin.setSingleStep(1)
+        self.width_spin.setToolTip("Figure width in millimeters (89mm single, 183mm double column)")
+        width_layout.addWidget(self.width_spin, 1)
+        config_layout.addLayout(width_layout)
+
+        # Height selector (mm)
+        height_layout = QHBoxLayout()
+        height_layout.addWidget(QLabel("Height (mm):"))
+        self.height_spin = QSpinBox()
+        self.height_spin.setRange(50, 500)
+        self.height_spin.setValue(120)  # Default aspect ratio
+        self.height_spin.setSingleStep(1)
+        self.height_spin.setToolTip("Figure height in millimeters")
+        height_layout.addWidget(self.height_spin, 1)
+        config_layout.addLayout(height_layout)
+
         # Preset selector (future enhancement)
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("Preset:"))
@@ -291,8 +313,8 @@ class ExportQueueDock(QDockWidget):
             output_path=output_path,
             format=self.format_combo.currentText(),
             dpi=self.dpi_spin.value(),
-            width_mm=180.0,  # Default single column
-            height_mm=120.0,  # Default aspect ratio
+            width_mm=float(self.width_spin.value()),
+            height_mm=float(self.height_spin.value()),
             preset_name=None
             if self.preset_combo.currentIndex() == 0
             else self.preset_combo.currentText(),
