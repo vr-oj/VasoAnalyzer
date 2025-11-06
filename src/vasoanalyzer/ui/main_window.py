@@ -894,16 +894,20 @@ class VasoAnalyzerApp(QMainWindow):
         if is_cloud:
             reply = QMessageBox.warning(
                 self,
-                "Cloud Storage Warning",
-                f"⚠️ You are creating a project in <b>{cloud_service}</b>.\n\n"
-                f"<b>WARNING:</b> SQLite project files are INCOMPATIBLE with cloud storage services "
-                f"and WILL become corrupted due to sync conflicts.\n\n"
-                f"<b>Recommendation:</b> Store your project in a local folder:\n"
-                f"  • ~/Documents/VasoAnalyzer/\n"
-                f"  • ~/Desktop/Projects/\n"
-                f"  • Any local-only folder\n\n"
-                f"<b>Do you want to continue anyway?</b>\n"
-                f"(Not recommended - may result in data loss)",
+                "Cloud Storage - Known Limitation",
+                f"<b>You are creating a project in {cloud_service}</b>\n\n"
+                f"<b>Technical Limitation:</b>\n"
+                f"SQLite databases (like .vaso files) can become corrupted when cloud sync services "
+                f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
+                f"database writes, breaking integrity.\n\n"
+                f"<b>Mitigations in place:</b>\n"
+                f"• VasoAnalyzer uses WAL mode for better resilience\n"
+                f"• Automatic recovery attempts if corruption occurs\n"
+                f"• Risk is highest during active editing and autosaves\n\n"
+                f"<b>Best practice:</b>\n"
+                f"Store active projects locally (~/Documents, ~/Desktop), then export .vasopack "
+                f"bundles to cloud storage for backup and sharing.\n\n"
+                f"<b>Continue creating project in {cloud_service}?</b>",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -1181,16 +1185,20 @@ class VasoAnalyzerApp(QMainWindow):
             if is_cloud:
                 reply = QMessageBox.warning(
                     self,
-                    "Cloud Storage Warning",
-                    f"⚠️ You are saving to <b>{cloud_service}</b>.\n\n"
-                    f"<b>WARNING:</b> SQLite project files are INCOMPATIBLE with cloud storage services "
-                    f"and WILL become corrupted due to sync conflicts.\n\n"
-                    f"<b>Recommendation:</b> Save to a local folder:\n"
-                    f"  • ~/Documents/VasoAnalyzer/\n"
-                    f"  • ~/Desktop/Projects/\n"
-                    f"  • Any local-only folder\n\n"
-                    f"<b>Do you want to continue anyway?</b>\n"
-                    f"(Not recommended - may result in data loss)",
+                    "Cloud Storage - Known Limitation",
+                    f"<b>You are saving to {cloud_service}</b>\n\n"
+                    f"<b>Technical Limitation:</b>\n"
+                    f"SQLite databases (like .vaso files) can become corrupted when cloud sync services "
+                    f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
+                    f"database writes, breaking integrity.\n\n"
+                    f"<b>Mitigations in place:</b>\n"
+                    f"• VasoAnalyzer uses WAL mode for better resilience\n"
+                    f"• Automatic recovery attempts if corruption occurs\n"
+                    f"• Risk is highest during active editing and autosaves\n\n"
+                    f"<b>Best practice:</b>\n"
+                    f"Store active projects locally (~/Documents, ~/Desktop), then export .vasopack "
+                    f"bundles to cloud storage for backup and sharing.\n\n"
+                    f"<b>Continue saving to {cloud_service}?</b>",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,
                 )
