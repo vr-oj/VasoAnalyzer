@@ -420,8 +420,10 @@ class PublicationStudioWindow(QMainWindow):
             QTimer.singleShot(0, self._apply_initial_canvas_fit)
 
     def _apply_initial_canvas_fit(self) -> None:
-        """No longer needed - QScrollArea handles layout automatically."""
-        pass
+        """Apply initial zoom-to-fit when window first opens."""
+        # Directly call _zoom_to_fit to ensure canvas is visible and properly sized
+        if hasattr(self, "plot_host") and hasattr(self, "canvas_frame"):
+            self._zoom_to_fit()
 
     def _center_on_parent_screen(self) -> None:
         """Center window on the same screen as parent window."""
@@ -874,8 +876,10 @@ class PublicationStudioWindow(QMainWindow):
         for zoom in self._zoom_levels:
             self.zoom_combo.addItem(f"{int(zoom * 100)}%", zoom)
         self.zoom_combo.addItem("Fit", "fit")
-        self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
         self.zoom_combo.setCurrentText("Fit")  # Default to Fit zoom
+        self.zoom_combo.currentIndexChanged.connect(
+            self._on_zoom_changed
+        )  # Connect after setting default
         toolbar.addWidget(self.zoom_combo)
 
         # Zoom in button
@@ -1947,13 +1951,32 @@ class PublicationStudioWindow(QMainWindow):
     def _on_zoom_in(self, checked: bool = False) -> None:
         """Zoom in to the next zoom level."""
         current_idx = self.zoom_combo.currentIndex()
-        # Don't go past the last regular zoom level (before "Fit")
+
+        # If on "Fit", switch to 100% first
+        if self.zoom_combo.itemData(current_idx) == "fit":
+            # Find 100% (1.0) zoom level
+            for i in range(self.zoom_combo.count()):
+                if self.zoom_combo.itemData(i) == 1.0:
+                    self.zoom_combo.setCurrentIndex(i)
+                    return
+
+        # Otherwise, go to next zoom level (don't include "Fit" in the range)
         if current_idx < len(self._zoom_levels) - 1:
             self.zoom_combo.setCurrentIndex(current_idx + 1)
 
     def _on_zoom_out(self, checked: bool = False) -> None:
         """Zoom out to the previous zoom level."""
         current_idx = self.zoom_combo.currentIndex()
+
+        # If on "Fit", switch to 100% first
+        if self.zoom_combo.itemData(current_idx) == "fit":
+            # Find 100% (1.0) zoom level
+            for i in range(self.zoom_combo.count()):
+                if self.zoom_combo.itemData(i) == 1.0:
+                    self.zoom_combo.setCurrentIndex(i)
+                    return
+
+        # Otherwise, go to previous zoom level
         if current_idx > 0:
             self.zoom_combo.setCurrentIndex(current_idx - 1)
 
@@ -2000,18 +2023,22 @@ class PublicationStudioWindow(QMainWindow):
         self._apply_zoom()
 
     def _apply_zoom(self) -> None:
-        """Apply current zoom level to canvas frame and matplotlib canvas."""
+        """Apply current zoom level using DPI scaling (keeps figure at same logical size)."""
         if not hasattr(self, "plot_host") or self.plot_host is None:
             return
         if not hasattr(self, "canvas_frame"):
             return
 
-        # Calculate zoomed canvas size in pixels
-        base_width_px = self._canvas_width_in * self._canvas_dpi
-        base_height_px = self._canvas_height_in * self._canvas_dpi
+        # Calculate effective DPI for zoom (zoom via DPI, not widget resize)
+        # This keeps figure at same logical size (inches) but renders at higher/lower resolution
+        effective_dpi = self._canvas_dpi * self._zoom_level
 
-        zoomed_width_px = int(base_width_px * self._zoom_level)
-        zoomed_height_px = int(base_height_px * self._zoom_level)
+        # Set figure DPI (this changes render resolution but not logical inch size)
+        self.plot_host.figure.set_dpi(effective_dpi)
+
+        # Calculate pixel size at effective DPI
+        zoomed_width_px = int(self._canvas_width_in * effective_dpi)
+        zoomed_height_px = int(self._canvas_height_in * effective_dpi)
 
         # Resize canvas frame (white rectangle boundary)
         self.canvas_frame.setFixedSize(zoomed_width_px, zoomed_height_px)
@@ -2019,6 +2046,16 @@ class PublicationStudioWindow(QMainWindow):
         # Resize matplotlib canvas widget to match
         self.plot_host.canvas.setFixedSize(zoomed_width_px, zoomed_height_px)
         self.plot_host.canvas.updateGeometry()
+
+        # Resize container to accommodate zoomed canvas + padding (80px total for each dimension)
+        # This is crucial for scrollbars to appear when zoomed content exceeds viewport
+        if hasattr(self, "canvas_container"):
+            container_width = zoomed_width_px + 80
+            container_height = zoomed_height_px + 80
+            self.canvas_container.setMinimumSize(container_width, container_height)
+            self.canvas_container.updateGeometry()
+
+        # Trigger redraw at new DPI
         self.plot_host.canvas.draw_idle()
 
     def _handle_nav_mode_toggled(self, checked: bool) -> None:
