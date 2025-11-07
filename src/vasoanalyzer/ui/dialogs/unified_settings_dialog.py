@@ -140,8 +140,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         main.addWidget(self.tabs, 1)
 
         # order of tabs loosely follows the more advanced GraphPad style
-        self.tabs.addTab(self._make_frame_tab(), "Canvas & Origin")
-        self.tabs.addTab(self._make_layout_tab(), "Layout")
+        self.tabs.addTab(self._make_canvas_layout_tab(), "Canvas & Layout")
         self.tabs.addTab(self._make_axis_tab(), "Axis")
         self.tabs.addTab(self._make_style_tab(), "Style")
         self.tabs.addTab(self._make_event_labels_tab(), "Event Labels")
@@ -276,6 +275,35 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     def _make_layout_tab(self, window=None):
         return self._make_layout_tab_legacy(window)
+
+    def _make_canvas_layout_tab(self):
+        """Combine canvas/origin and layout controls into a single tab."""
+        frame_tab = self._make_frame_tab()
+        layout_scroll = self._make_layout_tab(self.parent_window)
+
+        layout_content = None
+        if isinstance(layout_scroll, QScrollArea):
+            layout_content = layout_scroll.takeWidget()
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(16)
+        container_layout.addWidget(frame_tab)
+
+        if layout_content is not None:
+            layout_content.setParent(container)
+            container_layout.addWidget(layout_content)
+        else:
+            container_layout.addWidget(layout_scroll)
+
+        container_layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        return scroll
 
     def _get_initial_layout(self):
         sp = self.fig.subplotpars
@@ -1160,12 +1188,84 @@ class UnifiedPlotSettingsDialog(QDialog):
             self.ax.spines["left"].set_position(("outward", 0))
             self.ax.spines["bottom"].set_position(("outward", 0))
 
+        size_changed = False
         preset = self.size_preset.currentText()
         if preset == "Custom":
-            self.fig.set_size_inches(self.fig_w.value(), self.fig_h.value())
+            width = max(1.0, float(self.fig_w.value()))
+            height = max(1.0, float(self.fig_h.value()))
+            if (abs(width - self.fig.get_figwidth()) > 0.01) or (
+                abs(height - self.fig.get_figheight()) > 0.01
+            ):
+                self.fig.set_size_inches(width, height, forward=False)
+                size_changed = True
+            self.fig_w.setValue(round(self.fig.get_figwidth(), 1))
+            self.fig_h.setValue(round(self.fig.get_figheight(), 1))
         elif preset == "Square":
-            side = max(self.fig_w.value(), self.fig_h.value())
-            self.fig.set_size_inches(side, side)
+            # Get canvas bounds to ensure square fits within viewport
+            parent = getattr(self, "parent_window", None)
+            if parent is not None:
+                max_width = getattr(parent, "_default_frame_width_in", None)
+                max_height = getattr(parent, "_default_frame_height_in", None)
+            else:
+                # Main window: calculate from canvas widget dimensions
+                max_width = None
+                max_height = None
+                with contextlib.suppress(Exception):
+                    dpi = self.fig.get_dpi()
+                    max_width = self.fig.canvas.width() / dpi
+                    max_height = self.fig.canvas.height() / dpi
+
+            # Use min of canvas dimensions to ensure square fits
+            if max_width and max_height:
+                side = min(max_width, max_height)
+            else:
+                # Fallback to current spinbox values
+                side = max(float(self.fig_w.value()), float(self.fig_h.value()), 1.0)
+
+            if (
+                abs(side - self.fig.get_figwidth()) > 0.01
+                or abs(side - self.fig.get_figheight()) > 0.01
+            ):
+                self.fig.set_size_inches(side, side, forward=False)
+                size_changed = True
+            self.fig_w.setValue(round(self.fig.get_figwidth(), 1))
+            self.fig_h.setValue(round(self.fig.get_figheight(), 1))
+        else:
+            # Auto preset: use parent's default dimensions or calculate from canvas
+            parent = getattr(self, "parent_window", None)
+            if parent is not None:
+                default_width = getattr(parent, "_default_frame_width_in", None)
+                default_height = getattr(parent, "_default_frame_height_in", None)
+            else:
+                # Main window: calculate from canvas widget dimensions
+                default_width = None
+                default_height = None
+                with contextlib.suppress(Exception):
+                    dpi = self.fig.get_dpi()
+                    default_width = self.fig.canvas.width() / dpi
+                    default_height = self.fig.canvas.height() / dpi
+
+            # Fallback to current figure size if calculation failed
+            if default_width is None or default_height is None:
+                default_width = self.fig.get_figwidth()
+                default_height = self.fig.get_figheight()
+            if (abs(default_width - self.fig.get_figwidth()) > 0.01) or (
+                abs(default_height - self.fig.get_figheight()) > 0.01
+            ):
+                self.fig.set_size_inches(default_width, default_height, forward=False)
+                size_changed = True
+            self.fig_w.setValue(round(self.fig.get_figwidth(), 1))
+            self.fig_h.setValue(round(self.fig.get_figheight(), 1))
+
+        if size_changed:
+            parent = getattr(self, "parent_window", None)
+            if parent is not None and hasattr(parent, "_sync_plot_geometry_to_figure"):
+                # Publication Studio: custom QGraphicsView geometry management
+                parent._sync_plot_geometry_to_figure()
+            else:
+                # Main window: Canvas is fixed viewport, just redraw the figure
+                with contextlib.suppress(Exception):
+                    self.fig.canvas.draw_idle()
 
         layout_values = {n: c.value() for n, c in self.layout_controls.items()}
         layout_values["left"] = max(0.0, min(layout_values["left"], 1.0))

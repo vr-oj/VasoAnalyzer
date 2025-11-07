@@ -150,7 +150,16 @@ def populate_frame_tab(dialog: DialogT) -> None:
         dialog.origin_x.setValue(0.0)
         dialog.origin_y.setValue(0.0)
 
-        dialog.size_preset.setCurrentText("Auto (Wide)")
+        parent = getattr(dialog, "parent_window", None)
+        default_w = getattr(parent, "_default_frame_width_in", fig_w)
+        default_h = getattr(parent, "_default_frame_height_in", fig_h)
+        if abs(fig_w - default_w) < 0.05 and abs(fig_h - default_h) < 0.05:
+            preset = "Auto (Wide)"
+        elif abs(fig_w - fig_h) < 0.05:
+            preset = "Square"
+        else:
+            preset = "Custom"
+        dialog.size_preset.setCurrentText(preset)
         dialog.fig_w.setValue(round(fig_w, 1))
         dialog.fig_h.setValue(round(fig_h, 1))
 

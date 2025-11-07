@@ -54,6 +54,13 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.canvas = window.plot_host.canvas
     window.canvas.setMouseTracking(True)
     window.canvas.toolbar = None
+    window.canvas_container = QWidget()
+    window.canvas_container.setObjectName("CanvasContainer")
+    window.canvas_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    container_layout = QVBoxLayout(window.canvas_container)
+    container_layout.setContentsMargins(0, 0, 0, 0)
+    container_layout.setSpacing(0)
+    container_layout.addWidget(window.canvas, 0, Qt.AlignCenter)
     initial_specs = [
         ChannelTrackSpec(
             track_id="inner",
@@ -354,3 +361,4 @@ QLabel#MetadataDetails {{
 
     window._refresh_home_recent()
     QTimer.singleShot(0, lambda: window._update_toolbar_compact_mode(window.width()))
+    QTimer.singleShot(0, window._auto_fit_figure_to_canvas)

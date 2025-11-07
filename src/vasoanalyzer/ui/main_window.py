@@ -4303,6 +4303,31 @@ class VasoAnalyzerApp(QMainWindow):
     def _set_plot_drag_state(self, active: bool) -> None:
         self._plot_drag_in_progress = bool(active)
 
+    def _auto_fit_figure_to_canvas(self) -> None:
+        """Automatically resize figure to fill available canvas space on initialization."""
+        if not hasattr(self, "canvas") or not hasattr(self, "fig"):
+            return
+
+        # Only auto-fit if canvas has been laid out and has actual size
+        canvas_width = self.canvas.width()
+        canvas_height = self.canvas.height()
+        if canvas_width <= 1 or canvas_height <= 1:
+            return
+
+        # Calculate figure size in inches from canvas pixel size
+        dpi = self.fig.get_dpi()
+        fig_width_in = canvas_width / dpi
+        fig_height_in = canvas_height / dpi
+
+        # Only resize if significantly different from current size (avoid unnecessary updates)
+        current_width = self.fig.get_figwidth()
+        current_height = self.fig.get_figheight()
+        if abs(fig_width_in - current_width) > 0.5 or abs(fig_height_in - current_height) > 0.5:
+            # Use forward=True to make canvas and figure resize together
+            self.fig.set_size_inches(fig_width_in, fig_height_in, forward=True)
+            with contextlib.suppress(Exception):
+                self.canvas.draw_idle()
+
     def _refresh_zoom_window(self) -> None:
         if not self.zoom_dock:
             return
@@ -7615,6 +7640,8 @@ QPushButton[isGhost="true"]:hover {{
             layout_state=layout_state,
             style_dict=current_style,
         )
+        if hasattr(self.publication_studio, "maximize_figure_to_canvas"):
+            self.publication_studio.maximize_figure_to_canvas(forward=False)
 
         # Load user presets into preset library
         if hasattr(self.publication_studio, "_preset_library_dock"):
@@ -8436,7 +8463,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def rebuild_default_main_layout(self):
         for widget in (
-            self.canvas,
+            self.canvas_container,
             self.scroll_slider,
             self.snapshot_label,
             self.slider,
@@ -8455,7 +8482,7 @@ QPushButton[isGhost="true"]:hover {{
         plot_container_layout = QVBoxLayout(plot_container)
         plot_container_layout.setContentsMargins(14, 14, 14, 14)
         plot_container_layout.setSpacing(6)
-        plot_container_layout.addWidget(self.canvas)
+        plot_container_layout.addWidget(self.canvas_container, 0, Qt.AlignCenter)
         plot_container_layout.addWidget(self.scroll_slider)
         plot_panel_layout.addWidget(plot_container)
 
