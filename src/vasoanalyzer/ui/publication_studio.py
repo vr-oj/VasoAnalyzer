@@ -146,11 +146,16 @@ class PublicationStudioWindow(QMainWindow):
         self.undo_stack = QUndoStack(self)
 
         # Canvas and zoom state
-        self._canvas_width_in: float = 10.0  # inches (default layout)
+        self._canvas_width_in: float = 10.0  # Canvas viewport (white rectangle) in inches
         self._canvas_height_in: float = 7.5  # inches
         self._canvas_dpi: int = 120
         self._default_frame_width_in: float = self._canvas_width_in
         self._default_frame_height_in: float = self._canvas_height_in
+
+        # Figure size (matplotlib plot, can be smaller than canvas)
+        self._figure_width_in: float = 10.0  # Initially matches canvas
+        self._figure_height_in: float = 7.5  # inches
+
         self._zoom_level: float = 1.0  # 1.0 = 100%
         self._zoom_levels = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
 
@@ -451,7 +456,7 @@ class PublicationStudioWindow(QMainWindow):
         container_layout.setContentsMargins(40, 40, 40, 40)
         container_layout.setAlignment(Qt.AlignCenter)
 
-        # Canvas frame (white rectangle with border)
+        # Canvas frame (white rectangle with border - represents canvas boundary)
         self.canvas_frame = QFrame()
         self.canvas_frame.setObjectName("CanvasBoundary")
         self.canvas_frame.setStyleSheet(
@@ -462,7 +467,12 @@ class PublicationStudioWindow(QMainWindow):
             "}"
         )
 
-        # Frame layout to hold matplotlib canvas
+        # Set canvas frame size to canvas dimensions (at base DPI, will be scaled by zoom)
+        canvas_width_px = int(self._canvas_width_in * self._canvas_dpi)
+        canvas_height_px = int(self._canvas_height_in * self._canvas_dpi)
+        self.canvas_frame.setFixedSize(canvas_width_px, canvas_height_px)
+
+        # Frame layout to hold matplotlib canvas (will center figure if smaller than canvas)
         frame_layout = QVBoxLayout(self.canvas_frame)
         frame_layout.setContentsMargins(0, 0, 0, 0)
         frame_layout.setSpacing(0)
@@ -472,11 +482,11 @@ class PublicationStudioWindow(QMainWindow):
         self.plot_host = PlotHost(dpi=self._canvas_dpi)
         self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        # Set initial canvas and figure sizes
-        canvas_width_px = int(self._canvas_width_in * self._canvas_dpi)
-        canvas_height_px = int(self._canvas_height_in * self._canvas_dpi)
-        self.plot_host.canvas.setFixedSize(canvas_width_px, canvas_height_px)
-        self.plot_host.figure.set_size_inches(self._canvas_width_in, self._canvas_height_in)
+        # Set initial figure size (matplotlib plot)
+        fig_width_px = int(self._figure_width_in * self._canvas_dpi)
+        fig_height_px = int(self._figure_height_in * self._canvas_dpi)
+        self.plot_host.canvas.setFixedSize(fig_width_px, fig_height_px)
+        self.plot_host.figure.set_size_inches(self._figure_width_in, self._figure_height_in)
 
         # Add matplotlib canvas to frame
         frame_layout.addWidget(self.plot_host.canvas)
@@ -770,22 +780,21 @@ class PublicationStudioWindow(QMainWindow):
             self._update_status_bar()
 
     def _apply_canvas_size(self) -> None:
-        """Apply current canvas size to canvas frame and figure.
+        """Apply canvas and figure sizes independently.
 
-        Note: Currently figure size matches canvas size, but this structure
-        supports having a figure smaller than the canvas in the future.
+        Canvas = white rectangle boundary
+        Figure = matplotlib plot (can be smaller, will be centered)
         """
         if not hasattr(self, "plot_host"):
             return
 
-        # Update figure size to match canvas size (at actual size, not zoomed)
-        # In the future, figure could be smaller than canvas and would be centered
-        fig_width_in = self._canvas_width_in
-        fig_height_in = self._canvas_height_in
-
-        self.plot_host.figure.set_size_inches(fig_width_in, fig_height_in, forward=False)
+        # Update figure size (matplotlib plot - independent from canvas)
+        self.plot_host.figure.set_size_inches(
+            self._figure_width_in, self._figure_height_in, forward=False
+        )
 
         # Reapply current zoom level (this updates canvas_frame and canvas widget sizes)
+        # Both canvas boundary and figure will be scaled by zoom
         self._apply_zoom()
 
         # Update status bar
@@ -810,7 +819,7 @@ class PublicationStudioWindow(QMainWindow):
         self._sync_plot_geometry_to_figure()
 
     def _sync_plot_geometry_to_figure(self) -> None:
-        """Resize canvas widget to match current figure size (simple version for QScrollArea)."""
+        """Sync figure dimensions from matplotlib (after Plot Settings dialog changes)."""
         if not hasattr(self, "plot_host") or self.plot_host is None:
             return
 
@@ -819,12 +828,19 @@ class PublicationStudioWindow(QMainWindow):
         fig_width_in = float(fig.get_figwidth())
         fig_height_in = float(fig.get_figheight())
 
-        # Keep canvas metrics synchronized with the figure
-        self._canvas_dpi = max(1, int(round(fig_dpi)))
-        self._canvas_width_in = fig_width_in
-        self._canvas_height_in = fig_height_in
+        # Update figure size from matplotlib (may have changed in Plot Settings dialog)
+        self._figure_width_in = fig_width_in
+        self._figure_height_in = fig_height_in
 
-        # Reapply current zoom level to canvas widget
+        # Update base DPI (normalize zoom level to base DPI)
+        # If DPI changed due to zoom, extract the base DPI
+        if hasattr(self, "_zoom_level") and self._zoom_level > 0:
+            self._canvas_dpi = max(1, int(round(fig_dpi / self._zoom_level)))
+        else:
+            self._canvas_dpi = max(1, int(round(fig_dpi)))
+
+        # Canvas size stays unchanged (user sets explicitly)
+        # Reapply current zoom level to update widget sizes
         self._apply_zoom()
 
     def _create_tools_toolbar(self) -> None:
@@ -1107,13 +1123,19 @@ class PublicationStudioWindow(QMainWindow):
         fig = self.plot_host.figure
         canvas = self.plot_host.canvas
 
-        # Update figure size
+        # Update canvas and figure size
         if hasattr(self, "_status_figure_size_label"):
-            width_in = fig.get_figwidth()
-            height_in = fig.get_figheight()
+            # Get actual figure dimensions from matplotlib
+            fig_width_in = fig.get_figwidth()
+            fig_height_in = fig.get_figheight()
             dpi = int(fig.get_dpi())
+
+            # Show both canvas and figure dimensions
+            canvas_w = self._canvas_width_in
+            canvas_h = self._canvas_height_in
             self._status_figure_size_label.setText(
-                f"Figure: {width_in:.1f} × {height_in:.1f} in @ {dpi} DPI"
+                f"Canvas: {canvas_w:.1f}×{canvas_h:.1f} in | "
+                f"Figure: {fig_width_in:.1f}×{fig_height_in:.1f} in @ {dpi} DPI"
             )
 
         # Update canvas dimensions
@@ -2036,22 +2058,26 @@ class PublicationStudioWindow(QMainWindow):
         # Set figure DPI (this changes render resolution but not logical inch size)
         self.plot_host.figure.set_dpi(effective_dpi)
 
-        # Calculate pixel size at effective DPI
-        zoomed_width_px = int(self._canvas_width_in * effective_dpi)
-        zoomed_height_px = int(self._canvas_height_in * effective_dpi)
+        # Calculate canvas frame size (white rectangle boundary) at zoomed DPI
+        canvas_frame_width_px = int(self._canvas_width_in * effective_dpi)
+        canvas_frame_height_px = int(self._canvas_height_in * effective_dpi)
 
-        # Resize canvas frame (white rectangle boundary)
-        self.canvas_frame.setFixedSize(zoomed_width_px, zoomed_height_px)
+        # Calculate figure size (matplotlib widget) at zoomed DPI
+        figure_width_px = int(self._figure_width_in * effective_dpi)
+        figure_height_px = int(self._figure_height_in * effective_dpi)
 
-        # Resize matplotlib canvas widget to match
-        self.plot_host.canvas.setFixedSize(zoomed_width_px, zoomed_height_px)
+        # Resize canvas frame (white rectangle boundary - represents canvas dimensions)
+        self.canvas_frame.setFixedSize(canvas_frame_width_px, canvas_frame_height_px)
+
+        # Resize matplotlib canvas widget (figure - will be centered in frame if smaller)
+        self.plot_host.canvas.setFixedSize(figure_width_px, figure_height_px)
         self.plot_host.canvas.updateGeometry()
 
         # Resize container to accommodate zoomed canvas + padding (80px total for each dimension)
         # This is crucial for scrollbars to appear when zoomed content exceeds viewport
         if hasattr(self, "canvas_container"):
-            container_width = zoomed_width_px + 80
-            container_height = zoomed_height_px + 80
+            container_width = canvas_frame_width_px + 80
+            container_height = canvas_frame_height_px + 80
             self.canvas_container.setMinimumSize(container_width, container_height)
             self.canvas_container.updateGeometry()
 
