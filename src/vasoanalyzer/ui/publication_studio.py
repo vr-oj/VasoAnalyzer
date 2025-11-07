@@ -467,11 +467,6 @@ class PublicationStudioWindow(QMainWindow):
             "}"
         )
 
-        # Set canvas frame size to canvas dimensions (at base DPI, will be scaled by zoom)
-        canvas_width_px = int(self._canvas_width_in * self._canvas_dpi)
-        canvas_height_px = int(self._canvas_height_in * self._canvas_dpi)
-        self.canvas_frame.setFixedSize(canvas_width_px, canvas_height_px)
-
         # Frame layout to hold matplotlib canvas (will center figure if smaller than canvas)
         frame_layout = QVBoxLayout(self.canvas_frame)
         frame_layout.setContentsMargins(0, 0, 0, 0)
@@ -482,9 +477,17 @@ class PublicationStudioWindow(QMainWindow):
         self.plot_host = PlotHost(dpi=self._canvas_dpi)
         self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        # Set initial figure size (matplotlib plot)
-        fig_width_px = int(self._figure_width_in * self._canvas_dpi)
-        fig_height_px = int(self._figure_height_in * self._canvas_dpi)
+        # Get device pixel ratio for Retina display support
+        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+
+        # Set canvas frame size to canvas dimensions (at base DPI, accounting for Retina)
+        canvas_width_px = int((self._canvas_width_in * self._canvas_dpi) / device_pixel_ratio)
+        canvas_height_px = int((self._canvas_height_in * self._canvas_dpi) / device_pixel_ratio)
+        self.canvas_frame.setFixedSize(canvas_width_px, canvas_height_px)
+
+        # Set initial figure size (matplotlib plot, accounting for Retina)
+        fig_width_px = int((self._figure_width_in * self._canvas_dpi) / device_pixel_ratio)
+        fig_height_px = int((self._figure_height_in * self._canvas_dpi) / device_pixel_ratio)
         self.plot_host.canvas.setFixedSize(fig_width_px, fig_height_px)
         self.plot_host.figure.set_size_inches(self._figure_width_in, self._figure_height_in)
 
@@ -2083,19 +2086,24 @@ class PublicationStudioWindow(QMainWindow):
             f"  After set_dpi: matplotlib figure is {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
         )
 
+        # Get device pixel ratio for Retina display support
+        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+
         # Calculate canvas frame size (white rectangle boundary) at zoomed DPI
-        canvas_frame_width_px = int(self._canvas_width_in * effective_dpi)
-        canvas_frame_height_px = int(self._canvas_height_in * effective_dpi)
+        # Divide by devicePixelRatio so Qt widgets show at correct physical size
+        canvas_frame_width_px = int((self._canvas_width_in * effective_dpi) / device_pixel_ratio)
+        canvas_frame_height_px = int((self._canvas_height_in * effective_dpi) / device_pixel_ratio)
 
         # Calculate figure size (matplotlib widget) at zoomed DPI
-        # Account for Retina display devicePixelRatio to prevent doubling
-        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+        # Also divide by devicePixelRatio to prevent doubling
         figure_width_px = int((self._figure_width_in * effective_dpi) / device_pixel_ratio)
         figure_height_px = int((self._figure_height_in * effective_dpi) / device_pixel_ratio)
 
         print(f"  Calculated pixel sizes:")
         print(f"    Device pixel ratio: {device_pixel_ratio}")
-        print(f"    Canvas frame: {canvas_frame_width_px} × {canvas_frame_height_px} px")
+        print(
+            f"    Canvas frame (logical px): {canvas_frame_width_px} × {canvas_frame_height_px} px"
+        )
         print(f"    Figure widget (logical px): {figure_width_px} × {figure_height_px} px")
 
         # Resize canvas frame (white rectangle boundary - represents canvas dimensions)
