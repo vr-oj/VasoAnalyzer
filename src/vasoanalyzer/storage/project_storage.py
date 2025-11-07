@@ -38,9 +38,28 @@ __all__ = [
 # Configuration
 # =============================================================================
 
+
+def get_use_bundle_format_by_default() -> bool:
+    """
+    Get user preference for default project format.
+
+    Checks QSettings for user preference, falls back to True (bundle format).
+    Bundle format is the default because it's cloud-safe and crash-proof.
+    """
+    try:
+        from PyQt5.QtCore import QSettings
+
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        # Default to True (bundle format) if not set
+        return settings.value("project/use_bundle_format", True, type=bool)
+    except Exception:
+        # If Qt not available or settings fail, default to bundle format
+        return True
+
+
 # Global flag: if True, new projects use bundle format by default
 # Can be overridden by user preference or command-line flag
-USE_BUNDLE_FORMAT_BY_DEFAULT = True
+USE_BUNDLE_FORMAT_BY_DEFAULT = get_use_bundle_format_by_default()
 
 
 # =============================================================================
