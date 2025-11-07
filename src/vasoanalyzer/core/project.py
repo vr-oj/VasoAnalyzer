@@ -1137,20 +1137,50 @@ def _load_project_legacy_zip(path: str) -> Project:
 
 
 def save_project(project: Project, path: str, *, skip_optimize: bool = False) -> None:
-    """Persist ``project`` to ``path`` using the SQLite .vaso format.
+    """Persist ``project`` to ``path`` using SQLite format (bundle or legacy).
+
+    Automatically handles both bundle (.vasopack) and legacy (.vaso) formats.
+    New projects use cloud-safe bundle format by default.
 
     Args:
         project: The project to save
-        path: Path to save to
+        path: Path to save to (bundle dir or legacy file)
         skip_optimize: If True, skip expensive OPTIMIZE operation (useful during app close)
     """
+    from ..storage.project_storage import get_project_format
 
-    _save_project_sqlite(project, path, skip_optimize=skip_optimize)
+    # Check if path is a bundle
+    path_obj = Path(path)
+    fmt = get_project_format(path_obj) if path_obj.exists() else "unknown"
+
+    # Use bundle format for new bundles or if path ends with .vasopack
+    if fmt == "bundle-v1" or (not path_obj.exists() and path.endswith(".vasopack")):
+        _save_project_bundle(project, path, skip_optimize=skip_optimize)
+    else:
+        _save_project_sqlite(project, path, skip_optimize=skip_optimize)
 
 
 def load_project(path: str) -> Project:
-    """Open ``path`` returning a populated :class:`Project` instance."""
+    """Open ``path`` returning a populated :class:`Project` instance.
 
+    Automatically handles:
+    - Bundle format (.vasopack directories)
+    - Legacy SQLite format (.vaso files)
+    - Auto-migration from legacy to bundle
+    - Recovery from corrupted databases
+    """
+    from ..storage.project_storage import get_project_format
+
+    path_obj = Path(path)
+
+    # Detect format
+    fmt = get_project_format(path_obj)
+
+    # Handle bundle format
+    if fmt == "bundle-v1" or (path_obj.is_dir() and path.endswith(".vasopack")):
+        return _load_project_bundle(path)
+
+    # Handle SQLite formats (with corruption recovery)
     if _is_sqlite_file(path):
         try:
             return _load_project_sqlite(path)
@@ -1186,6 +1216,170 @@ def load_project(path: str) -> Project:
                 raise
 
     return _load_project_legacy_zip(path)
+
+
+# Bundle format save/load ------------------------------------------------
+
+
+def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = False) -> None:
+    """
+    Save project to bundle format (.vasopack).
+
+    Creates a snapshot in the bundle's snapshot directory. Cloud-safe by design.
+    """
+    from ..storage.project_storage import USE_BUNDLE_FORMAT_BY_DEFAULT, create_unified_project, open_unified_project
+
+    dest = Path(path)
+
+    # Ensure .vasopack extension
+    if dest.suffix != ".vasopack":
+        dest = dest.with_suffix(".vasopack")
+
+    log.info(f"Saving project to bundle format: {dest}")
+
+    # Update timestamps
+    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if not project.created_at:
+        project.created_at = now_iso
+    project.updated_at = now_iso
+
+    # Check if bundle exists
+    if not dest.exists():
+        # Create new bundle
+        log.info(f"Creating new bundle: {dest}")
+        tz_name = _project_timezone()
+        store = create_unified_project(
+            dest,
+            app_version=APP_VERSION,
+            timezone=tz_name,
+            use_bundle_format=True,
+        )
+    else:
+        # Open existing bundle
+        store = open_unified_project(dest, readonly=False, auto_migrate=False)
+
+    try:
+        # Get repository from store connection
+        from vasoanalyzer.services.project_service import ProjectRepository
+        from vasoanalyzer.storage.sqlite_store import ProjectStore
+
+        # Wrap the UnifiedProjectStore as a ProjectStore for compatibility
+        legacy_store = ProjectStore(path=store.path, conn=store.conn, dirty=store.dirty)
+
+        # Create repository wrapper
+        from vasoanalyzer.services.project_service import _create_repository_from_store
+
+        repo = _create_repository_from_store(legacy_store)
+
+        # Populate repository from project
+        base_dir = Path(project.path).resolve().parent if project.path else dest.parent
+        _populate_store_from_project(project, repo, base_dir)
+
+        # Save (creates snapshot for bundles)
+        if not skip_optimize:
+            store.save(skip_snapshot=False)
+        else:
+            # During app close, skip snapshot creation for speed
+            store.commit()
+
+        log.info(f"Bundle saved successfully: {dest}")
+
+    finally:
+        store.close()
+
+    project.path = dest.as_posix()
+
+
+def _load_project_bundle(path: str) -> Project:
+    """
+    Load project from bundle format (.vasopack).
+
+    Automatically handles snapshot recovery if current snapshot is corrupted.
+    """
+    path_obj = Path(path)
+    log.info(f"Loading project from bundle: {path_obj}")
+
+    # Use the same loading logic as SQLite, but with bundle support
+    # The open_project_ctx will handle bundle format automatically
+    ctx = open_project_ctx(path)
+    repo = ctx.repo
+
+    try:
+        meta_rows = repo.read_meta()
+        experiments_meta = _json_loads(meta_rows.get("experiments_meta"), default={})
+
+        project_name = meta_rows.get("project_name") or path_obj.stem
+        project_description = meta_rows.get("project_description")
+        project_tags = _json_loads(meta_rows.get("project_tags"), default=[])
+        project_ui = _json_loads(meta_rows.get("project_ui_state"))
+        project_created = meta_rows.get("project_created_at")
+        project_updated = meta_rows.get("project_updated_at")
+
+        base_dir = path_obj.resolve().parent
+        tmp_manager = tempfile.TemporaryDirectory()
+        tmp_root = Path(tmp_manager.name)
+
+        experiments_map: dict[str, Experiment] = {}
+        project_attachments: list[Attachment] = []
+
+        for record in repo.iter_datasets():
+            dataset_id = record["id"]
+            extra = record.get("extra") or {}
+            if extra.get("kind") == "project_attachments":
+                project_attachments.extend(
+                    _load_project_attachments(repo, dataset_id, extra, tmp_root, base_dir)
+                )
+                continue
+
+            sample, experiment_name = _dataset_to_sample(
+                repo=repo,
+                dataset=record,
+                base_dir=base_dir,
+                tmp_root=tmp_root,
+            )
+
+            exp_meta = experiments_meta.get(experiment_name, {})
+            experiment = experiments_map.get(experiment_name)
+            if experiment is None:
+                excel_meta = exp_meta.get("excel_path")
+                excel_path_value: str | None = None
+                if isinstance(excel_meta, str):
+                    absolute_excel = _absolute_path(excel_meta, base_dir)
+                    excel_path_value = absolute_excel.as_posix() if absolute_excel else excel_meta
+
+                experiment = Experiment(
+                    name=experiment_name,
+                    excel_path=excel_path_value,
+                    next_column=exp_meta.get("next_column", "B"),
+                    samples=[],
+                    style=exp_meta.get("style"),
+                    notes=exp_meta.get("notes"),
+                    tags=list(exp_meta.get("tags", []))
+                    if isinstance(exp_meta.get("tags"), list)
+                    else [],
+                )
+                experiments_map[experiment_name] = experiment
+
+            experiment.samples.append(sample)
+
+        project = Project(
+            name=project_name,
+            experiments=list(experiments_map.values()),
+            path=path,
+            ui_state=project_ui,
+            description=project_description,
+            tags=project_tags if isinstance(project_tags, list) else [],
+            created_at=project_created,
+            updated_at=project_updated,
+            attachments=project_attachments,
+        )
+
+        project.resources.register_tempdir(tmp_manager, tmp_root.as_posix())
+        log.info(f"Bundle loaded successfully: {path_obj}")
+        return project
+
+    finally:
+        close_project_ctx(ctx)
 
 
 def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = False) -> None:
