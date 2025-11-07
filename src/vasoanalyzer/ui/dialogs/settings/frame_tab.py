@@ -180,13 +180,36 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
 def populate_frame_tab(dialog: DialogT) -> None:
     """Populate Frame tab controls with the current dialog state."""
 
-    # Get figure size from matplotlib
-    fig_w, fig_h = dialog.fig.get_size_inches()
+    print(f"\n{'='*60}")
+    print(f"=== POPULATING FRAME TAB ===")
+    print(f"{'='*60}")
 
-    # Get canvas size from parent window (PublicationStudioWindow)
+    # Get parent window (PublicationStudioWindow)
     parent = getattr(dialog, "parent_window", None)
+
+    # Get figure size from parent state variables (not from matplotlib!)
+    # Reading from matplotlib gives wrong values after zoom changes DPI
+    if parent and hasattr(parent, "_figure_width_in"):
+        fig_w = parent._figure_width_in
+        fig_h = parent._figure_height_in
+        print(f"  Reading figure from parent state: {fig_w:.1f} × {fig_h:.1f} in")
+    else:
+        # Fallback for main window (no zoom system)
+        fig_w, fig_h = dialog.fig.get_size_inches()
+        print(f"  Reading figure from matplotlib: {fig_w:.1f} × {fig_h:.1f} in")
+
+    # Get canvas size from parent window
     canvas_w = getattr(parent, "_canvas_width_in", fig_w)
     canvas_h = getattr(parent, "_canvas_height_in", fig_h)
+    print(f"  Reading canvas from parent state: {canvas_w:.1f} × {canvas_h:.1f} in")
+
+    if parent and hasattr(parent, "plot_host"):
+        print(f"  Parent matplotlib currently shows:")
+        print(
+            f"    {parent.plot_host.figure.get_figwidth():.1f} × {parent.plot_host.figure.get_figheight():.1f} in @ {parent.plot_host.figure.get_dpi():.0f} DPI"
+        )
+        print(f"    Zoom: {getattr(parent, '_zoom_level', '?'):.2f}")
+    print(f"{'='*60}\n")
 
     widgets = [
         dialog.origin_mode,

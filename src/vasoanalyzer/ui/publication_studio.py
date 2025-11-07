@@ -788,9 +788,23 @@ class PublicationStudioWindow(QMainWindow):
         if not hasattr(self, "plot_host"):
             return
 
+        print(f"\n=== _apply_canvas_size CALLED ===")
+        print(f"  State variables:")
+        print(f"    Canvas: {self._canvas_width_in:.1f} × {self._canvas_height_in:.1f} in")
+        print(f"    Figure: {self._figure_width_in:.1f} × {self._figure_height_in:.1f} in")
+        print(f"    Base DPI: {self._canvas_dpi}")
+        print(f"    Zoom level: {self._zoom_level:.2f}")
+
         # Update figure size (matplotlib plot - independent from canvas)
+        print(
+            f"  Setting matplotlib figure to: {self._figure_width_in:.1f} × {self._figure_height_in:.1f} in"
+        )
         self.plot_host.figure.set_size_inches(
             self._figure_width_in, self._figure_height_in, forward=False
+        )
+
+        print(
+            f"  After set_size_inches, matplotlib reports: {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
         )
 
         # Reapply current zoom level (this updates canvas_frame and canvas widget sizes)
@@ -2040,8 +2054,8 @@ class PublicationStudioWindow(QMainWindow):
         zoom_width = available_width / base_width_px if base_width_px > 0 else 1.0
         zoom_height = available_height / base_height_px if base_height_px > 0 else 1.0
 
-        # Use smaller zoom to fit entirely (cap at 4x)
-        self._zoom_level = min(zoom_width, zoom_height, 4.0)
+        # Use smaller zoom to fit entirely (cap at 4x, minimum 0.1)
+        self._zoom_level = max(0.1, min(zoom_width, zoom_height, 4.0))
         self._apply_zoom()
 
     def _apply_zoom(self) -> None:
@@ -2051,27 +2065,56 @@ class PublicationStudioWindow(QMainWindow):
         if not hasattr(self, "canvas_frame"):
             return
 
+        print(f"\n=== _apply_zoom CALLED ===")
+        print(f"  Zoom level: {self._zoom_level:.2f}")
+        print(f"  Base DPI: {self._canvas_dpi}")
+
         # Calculate effective DPI for zoom (zoom via DPI, not widget resize)
         # This keeps figure at same logical size (inches) but renders at higher/lower resolution
         effective_dpi = self._canvas_dpi * self._zoom_level
+        print(f"  Effective DPI: {effective_dpi:.0f}")
 
         # Set figure DPI (this changes render resolution but not logical inch size)
+        print(
+            f"  Before set_dpi: matplotlib figure is {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
+        )
         self.plot_host.figure.set_dpi(effective_dpi)
+        print(
+            f"  After set_dpi: matplotlib figure is {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
+        )
 
         # Calculate canvas frame size (white rectangle boundary) at zoomed DPI
         canvas_frame_width_px = int(self._canvas_width_in * effective_dpi)
         canvas_frame_height_px = int(self._canvas_height_in * effective_dpi)
 
         # Calculate figure size (matplotlib widget) at zoomed DPI
-        figure_width_px = int(self._figure_width_in * effective_dpi)
-        figure_height_px = int(self._figure_height_in * effective_dpi)
+        # Account for Retina display devicePixelRatio to prevent doubling
+        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+        figure_width_px = int((self._figure_width_in * effective_dpi) / device_pixel_ratio)
+        figure_height_px = int((self._figure_height_in * effective_dpi) / device_pixel_ratio)
+
+        print(f"  Calculated pixel sizes:")
+        print(f"    Device pixel ratio: {device_pixel_ratio}")
+        print(f"    Canvas frame: {canvas_frame_width_px} × {canvas_frame_height_px} px")
+        print(f"    Figure widget (logical px): {figure_width_px} × {figure_height_px} px")
 
         # Resize canvas frame (white rectangle boundary - represents canvas dimensions)
         self.canvas_frame.setFixedSize(canvas_frame_width_px, canvas_frame_height_px)
 
-        # Resize matplotlib canvas widget (figure - will be centered in frame if smaller)
+        # Set figure size in inches (don't use forward=True to avoid resize events)
+        self.plot_host.figure.set_size_inches(
+            self._figure_width_in, self._figure_height_in, forward=False
+        )
+
+        # Now set widget size accounting for devicePixelRatio
         self.plot_host.canvas.setFixedSize(figure_width_px, figure_height_px)
-        self.plot_host.canvas.updateGeometry()
+
+        # Force redraw at new DPI
+        self.plot_host.canvas.draw_idle()
+
+        print(
+            f"  After zoom applied, matplotlib shows: {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
+        )
 
         # Resize container to accommodate zoomed canvas + padding (80px total for each dimension)
         # This is crucial for scrollbars to appear when zoomed content exceeds viewport
