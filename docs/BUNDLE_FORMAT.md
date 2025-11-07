@@ -214,6 +214,186 @@ Note: Bundle benefits (snapshots, cloud-safety) are lost in `.vaso` export.
 - Manual: Can reduce retention count (coming in future update)
 - Each snapshot ~= full database size (compressed)
 
+## Advanced Recovery
+
+### When Both .vaso and .vaso.backup Are Corrupted
+
+If you have a corrupted **legacy .vaso** file and the `.vaso.backup` is also corrupted, VasoAnalyzer has **three recovery methods** that run automatically:
+
+#### Method 1: CLI sqlite3 Dump (Most Robust)
+Uses the command-line `sqlite3` tool to dump the database to SQL, then reconstructs it:
+```bash
+sqlite3 corrupted.vaso .dump > dump.sql
+sqlite3 recovered.vaso < dump.sql
+```
+This works even when the database is partially corrupted.
+
+#### Method 2: Python iterdump (Fallback)
+Python's SQLite library attempts to recover row-by-row, skipping corrupted data:
+- Recovers readable tables
+- Skips corrupted rows
+- May lose some data but saves what's recoverable
+
+#### Method 3: PRAGMA Recovery (Last Resort)
+Uses SQLite's recovery mode to salvage data:
+```sql
+PRAGMA writable_schema=ON;
+-- Attempts to copy readable tables
+```
+
+### Command-Line Recovery Tool
+
+VasoAnalyzer includes a powerful command-line recovery tool for advanced scenarios:
+
+#### Automatic Recovery
+```bash
+# Try all recovery methods automatically
+python -m vasoanalyzer.cli.recover MyProject.vasopack
+```
+
+#### List Available Options
+```bash
+# See what recovery options are available
+python -m vasoanalyzer.cli.recover MyProject.vasopack --list
+```
+
+**Example output:**
+```
+Recovery options for: MyProject.vasopack
+Format: bundle-v1
+
+Available recovery methods:
+
+1. [✓] snapshot_fallback
+   Use older snapshot (15 available)
+   Snapshots: 1, 2, 3, 4, 5, 10, 15, 20, 25, 30, 35, 40, 42, 43, 44
+
+2. [✓] staging_recovery
+   Recover from staging DB (1 found)
+   Files: 1
+```
+
+#### Extract Specific Snapshot
+```bash
+# Extract snapshot #35 from bundle
+python -m vasoanalyzer.cli.recover MyProject.vasopack --extract 35 --output snapshot35.vaso
+
+# Open the extracted snapshot to verify it has your data
+```
+
+#### Find Autosave Files
+```bash
+# Search entire Documents folder for autosaves
+python -m vasoanalyzer.cli.recover --find-autosaves ~/Documents
+```
+
+**Example output:**
+```
+Found 3 autosave file(s):
+
+  /Users/me/Documents/ProjectA.vaso.autosave
+  /Users/me/Documents/ProjectB.vasopack/.staging/abc123.sqlite
+  /Users/me/Dropbox/Research/Study.vaso.autosave
+```
+
+### Bundle Format Recovery Advantages
+
+With `.vasopack` bundles, you have **many more recovery options** than legacy files:
+
+| Scenario | Legacy .vaso | Bundle .vasopack |
+|----------|--------------|------------------|
+| Current file corrupted | Try .backup or autosave | Use any of 50 snapshots |
+| Autosave exists | 1 autosave file | Multiple staging DBs possible |
+| Cloud sync conflict | Must manually resolve | Auto-resolves to newest valid |
+| Partial corruption | All-or-nothing recovery | Can extract specific snapshots |
+| Time-travel needed | Impossible | Extract any snapshot |
+
+### Recovery Workflow for Bundles
+
+If you suspect corruption in a bundle:
+
+1. **Try opening normally** - Auto-recovery runs automatically
+   ```
+   File → Open → MyProject.vasopack
+   ```
+
+2. **If that fails, list options**:
+   ```bash
+   python -m vasoanalyzer.cli.recover MyProject.vasopack --list
+   ```
+
+3. **Extract older snapshot**:
+   ```bash
+   # Try snapshot before corruption (e.g., #40 if #42 is corrupted)
+   python -m vasoanalyzer.cli.recover MyProject.vasopack --extract 40 --output recovered.vaso
+   ```
+
+4. **Open extracted snapshot**:
+   ```
+   File → Open → recovered.vaso
+   ```
+
+5. **Save as new bundle** (if recovered successfully):
+   ```
+   File → Save As → MyRecoveredProject.vasopack
+   ```
+
+### Recovery Workflow for Legacy .vaso
+
+If both `.vaso` and `.vaso.backup` are corrupted:
+
+1. **Check for autosave**:
+   ```bash
+   ls -lh MyProject.vaso.autosave
+   ```
+   If newer than main file, try opening it directly.
+
+2. **Try automatic recovery**:
+   ```bash
+   python -m vasoanalyzer.cli.recover MyProject.vaso
+   ```
+   This runs 3-stage recovery automatically.
+
+3. **Check the backup created during recovery**:
+   ```bash
+   ls -lh MyProject.vaso.backup
+   ```
+   The recovery process creates a `.backup` before attempting repair.
+
+4. **If all else fails, check for**:
+   - Exported Excel files (can manually recreate project)
+   - CSV exports (trace and event tables)
+   - Screenshots or figure exports
+   - Time Machine backups (macOS)
+   - Windows File History
+   - Cloud service version history
+
+### Prevention is Better Than Recovery
+
+To minimize risk of data loss:
+
+✅ **Use bundle format** - More recovery options
+✅ **Enable autosave** - Creates recovery points
+✅ **Back up to Time Machine/File History** - OS-level backup
+✅ **Export data periodically** - Excel templates, CSV files
+✅ **Keep project in cloud storage** - Built-in versioning (Dropbox, etc.)
+✅ **Don't force-quit during saves** - Let autosave complete
+
+### Getting Help with Recovery
+
+If you can't recover your project:
+
+1. **Preserve the corrupted files** - Don't delete anything!
+2. **Note what you tried** - List recovery methods attempted
+3. **Gather information**:
+   - Project format (.vaso or .vasopack)
+   - When corruption occurred
+   - Recent operations (cloud sync, crash, etc.)
+4. **Contact support** with:
+   - Corrupted project files (if small enough)
+   - Recovery tool output (with `--verbose`)
+   - Description of what happened
+
 ## FAQ
 
 **Q: Can I delete old snapshots manually?**
