@@ -184,7 +184,7 @@ def populate_frame_tab(dialog: DialogT) -> None:
     print(f"=== POPULATING FRAME TAB ===")
     print(f"{'='*60}")
 
-    # Get parent window (PublicationStudioWindow)
+    # Get parent window (FigureComposerWindow)
     parent = getattr(dialog, "parent_window", None)
 
     # Get figure size from parent state variables (not from matplotlib!)

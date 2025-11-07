@@ -1324,7 +1324,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         # Apply canvas and figure sizes if anything changed
         if canvas_changed or figure_changed:
             if parent is not None and hasattr(parent, "_apply_canvas_size"):
-                # Publication Studio: apply canvas and figure sizes from state variables
+                # Figure Composer: apply canvas and figure sizes from state variables
                 # This will call set_size_inches() with the correct values
                 print(f"  Calling parent._apply_canvas_size()...")
                 parent._apply_canvas_size()

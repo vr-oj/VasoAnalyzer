@@ -113,11 +113,11 @@ from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
 from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
+from vasoanalyzer.ui.figure_composer import FigureComposerWindow
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
-from vasoanalyzer.ui.publication_studio import PublicationStudioWindow
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.theme import (
     CURRENT_THEME,
@@ -457,7 +457,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.metadata_dock = None
         self.zoom_dock = None
         self.scope_dock = None
-        self.publication_studio = None
+        self.figure_composer = None
         self.current_experiment = None
         self.current_sample = None
         self.project_ctx: ProjectContext | None = None
@@ -472,8 +472,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_state = {}
         self._style_holder = _StyleHolder(DEFAULT_STYLE.copy())
         self._style_manager = PlotStyleManager(self._style_holder.get_style())
-        self.zoom_toggle_btn: QToolButton | None = None
-        self.scope_toggle_btn: QToolButton | None = None
         self.actGrid: QAction | None = None
         self.actStyle: QAction | None = None
         self._nav_mode_actions: list[QAction] = []
@@ -486,7 +484,6 @@ class VasoAnalyzerApp(QMainWindow):
         self._event_label_gap_default: int = 22
         self._event_label_action_group: QActionGroup | None = None
         self.event_label_button: QToolButton | None = None
-        self._toolbar_event_label_menu: QMenu | None = None
 
         self._deferred_autosave_timer = QTimer(self)
         self._deferred_autosave_timer.setSingleShot(True)
@@ -614,15 +611,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.zoom_dock.visibilityChanged.connect(self._on_zoom_visibility_changed)
 
-        self.zoom_toggle_btn = QToolButton()
-        self.zoom_toggle_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
-        self.zoom_toggle_btn.setCheckable(True)
-        self.zoom_toggle_btn.setChecked(False)
-        self.zoom_toggle_btn.setToolTip("Zoom window")
-        self.zoom_toggle_btn.clicked.connect(lambda checked: self.zoom_dock.setVisible(checked))
-        self.zoom_dock.visibilityChanged.connect(self.zoom_toggle_btn.setChecked)
-        self.toolbar.addWidget(self.zoom_toggle_btn)
-
     def setup_scope_dock(self):
         self.scope_dock = ScopeDock(self)
         self.scope_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
@@ -633,15 +621,6 @@ class VasoAnalyzerApp(QMainWindow):
             self.showhide_menu.addAction(self.scope_dock.toggleViewAction())
 
         self.scope_dock.visibilityChanged.connect(self._on_scope_visibility_changed)
-
-        self.scope_toggle_btn = QToolButton()
-        self.scope_toggle_btn.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
-        self.scope_toggle_btn.setCheckable(True)
-        self.scope_toggle_btn.setChecked(False)
-        self.scope_toggle_btn.setToolTip("Trigger sweeps")
-        self.scope_toggle_btn.clicked.connect(lambda checked: self.scope_dock.setVisible(checked))
-        self.scope_dock.visibilityChanged.connect(self.scope_toggle_btn.setChecked)
-        self.toolbar.addWidget(self.scope_toggle_btn)
 
     # ---------- Project Menu Actions ----------
     def _replace_current_project(self, project):
@@ -3001,10 +2980,10 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
-        self.action_publication_studio = QAction("Figure Composer…", self)
-        self.action_publication_studio.setShortcut("Ctrl+Shift+P")
-        self.action_publication_studio.triggered.connect(self.open_publication_studio)
-        tools_menu.addAction(self.action_publication_studio)
+        self.action_figure_composer = QAction("Figure Composer…", self)
+        self.action_figure_composer.setShortcut("Ctrl+Shift+P")
+        self.action_figure_composer.triggered.connect(self.open_figure_composer)
+        tools_menu.addAction(self.action_figure_composer)
 
         tools_menu.addSeparator()
 
@@ -4316,18 +4295,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.zoom_dock.show_span(start, end)
 
     def _on_zoom_visibility_changed(self, visible: bool) -> None:
-        if self.zoom_toggle_btn and self.zoom_toggle_btn.isChecked() != visible:
-            self.zoom_toggle_btn.blockSignals(True)
-            self.zoom_toggle_btn.setChecked(visible)
-            self.zoom_toggle_btn.blockSignals(False)
         if visible:
             self._refresh_zoom_window()
 
     def _on_scope_visibility_changed(self, visible: bool) -> None:
-        if self.scope_toggle_btn and self.scope_toggle_btn.isChecked() != visible:
-            self.scope_toggle_btn.blockSignals(True)
-            self.scope_toggle_btn.setChecked(visible)
-            self.scope_toggle_btn.blockSignals(False)
         if visible and self.scope_dock and self.trace_model is not None:
             self.scope_dock.set_trace_model(self.trace_model)
 
@@ -7572,7 +7543,7 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
-    def open_publication_studio(self, checked: bool = False):
+    def open_figure_composer(self, checked: bool = False):
         """Open Figure Composer window for advanced figure styling.
 
         Args:
@@ -7587,12 +7558,12 @@ QPushButton[isGhost="true"]:hover {{
             )
             return
 
-        # Create or show publication studio window
-        if self.publication_studio is None:
-            self.publication_studio = PublicationStudioWindow(self)
+        # Create or show Figure Composer window
+        if self.figure_composer is None:
+            self.figure_composer = FigureComposerWindow(self)
             # Connect signals
-            self.publication_studio.studio_closed.connect(self._on_publication_studio_closed)
-            self.publication_studio.preset_saved.connect(self._on_publication_preset_saved)
+            self.figure_composer.studio_closed.connect(self._on_figure_composer_closed)
+            self.figure_composer.preset_saved.connect(self._on_figure_composer_preset_saved)
 
         # Load user presets from project (if available)
         user_presets = []
@@ -7605,7 +7576,7 @@ QPushButton[isGhost="true"]:hover {{
         current_style = self.get_current_plot_style()
 
         # Populate with current data
-        self.publication_studio.load_from_main_window(
+        self.figure_composer.load_from_main_window(
             trace_model=self.trace_model,
             event_times=self.event_times,
             event_colors=None,  # Colors managed by PlotHost
@@ -7615,20 +7586,20 @@ QPushButton[isGhost="true"]:hover {{
             layout_state=layout_state,
             style_dict=current_style,
         )
-        if hasattr(self.publication_studio, "maximize_figure_to_canvas"):
-            self.publication_studio.maximize_figure_to_canvas(forward=False)
+        if hasattr(self.figure_composer, "maximize_figure_to_canvas"):
+            self.figure_composer.maximize_figure_to_canvas(forward=False)
 
         # Load user presets into preset library
-        if hasattr(self.publication_studio, "_preset_library_dock"):
-            built_in = self.publication_studio._preset_library_dock._built_in_presets
-            self.publication_studio._preset_library_dock.set_presets(user_presets, built_in)
+        if hasattr(self.figure_composer, "_preset_library_dock"):
+            built_in = self.figure_composer._preset_library_dock._built_in_presets
+            self.figure_composer._preset_library_dock.set_presets(user_presets, built_in)
 
         # Show window
-        self.publication_studio.show()
-        self.publication_studio.raise_()
-        self.publication_studio.activateWindow()
+        self.figure_composer.show()
+        self.figure_composer.raise_()
+        self.figure_composer.activateWindow()
 
-    def _on_publication_preset_saved(self, preset):
+    def _on_figure_composer_preset_saved(self, preset):
         """Handle preset save from Figure Composer."""
         # Store preset in current project's ui_state
         if self.current_project:
@@ -7652,12 +7623,12 @@ QPushButton[isGhost="true"]:hover {{
                 # Add new preset
                 presets.append(preset)
 
-    def _on_publication_studio_closed(self):
+    def _on_figure_composer_closed(self):
         """Handle Figure Composer window close."""
         # Clean up reference when window closes
-        if self.publication_studio is not None:
-            self.publication_studio.deleteLater()
-            self.publication_studio = None
+        if self.figure_composer is not None:
+            self.figure_composer.deleteLater()
+            self.figure_composer = None
 
     # [J] ========================= PLOT STYLE EDITOR ================================
     def apply_plot_style(self, style, persist: bool = False):

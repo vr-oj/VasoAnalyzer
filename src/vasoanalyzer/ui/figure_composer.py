@@ -56,7 +56,7 @@ from vasoanalyzer.ui.style_manager import PlotStyleManager
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
 
-__all__ = ["PublicationStudioWindow"]
+__all__ = ["FigureComposerWindow"]
 
 
 class StyleChangeCommand(QUndoCommand):
@@ -64,7 +64,7 @@ class StyleChangeCommand(QUndoCommand):
 
     def __init__(
         self,
-        studio: PublicationStudioWindow,
+        studio: FigureComposerWindow,
         old_style: dict[str, Any],
         new_style: dict[str, Any],
         description: str = "Change Style",
@@ -93,7 +93,7 @@ class StyleChangeCommand(QUndoCommand):
             self.studio.plot_host.canvas.draw_idle()
 
 
-class PublicationStudioWindow(QMainWindow):
+class FigureComposerWindow(QMainWindow):
     """
     Dedicated workspace for creating publication-ready figures.
 
@@ -130,6 +130,8 @@ class PublicationStudioWindow(QMainWindow):
         self._epoch_layer: EpochLayer | None = None
         self._epoch_theme: EpochTheme = EpochTheme()
         self._epochs_visible: bool = True
+        self._epoch_margin_px: float = 0.0
+        self._user_subplot_top: float = 0.96
 
         # Style management
         self._style_manager: PlotStyleManager | None = None
@@ -299,6 +301,7 @@ class PublicationStudioWindow(QMainWindow):
             else:
                 self._epoch_layer.attach(None)
             self.plot_host.canvas.draw_idle()
+        self._update_epoch_margin()
 
     def _get_primary_axes(self) -> Any:
         """Get the primary (top) axes for epoch overlay."""
@@ -309,6 +312,68 @@ class PublicationStudioWindow(QMainWindow):
             if hasattr(track, "ax") and track.ax is not None:
                 return track.ax
         return None
+
+    def _capture_user_subplot_top(self) -> None:
+        """Capture the desired subplot top value (before extra epoch margin)."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            return
+
+        fig = getattr(plot_host, "figure", None)
+        if fig is None:
+            return
+
+        current_top = float(getattr(fig.subplotpars, "top", 0.96))
+        bottom = float(getattr(fig.subplotpars, "bottom", 0.12))
+        margin_fraction = self._compute_margin_fraction(fig)
+        base_top = current_top + margin_fraction
+        min_top = bottom + 0.05
+        self._user_subplot_top = max(min_top, min(0.995, base_top))
+
+    def _compute_margin_fraction(self, fig: Any) -> float:
+        """Return fraction of figure height reserved for epoch overlay."""
+        if fig is None or not self._epochs_visible:
+            return 0.0
+
+        height_px = float(fig.get_figheight() * fig.get_dpi())
+        if height_px <= 0:
+            return 0.0
+
+        return self._epoch_margin_px / height_px if self._epoch_margin_px > 0 else 0.0
+
+    def _update_epoch_margin(self, *, trigger_draw: bool = True) -> None:
+        """Ensure figure top margin reserves space for epoch overlay rows."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            return
+
+        fig = getattr(plot_host, "figure", None)
+        if fig is None:
+            return
+
+        height_px = float(fig.get_figheight() * fig.get_dpi())
+        if height_px <= 0:
+            return
+
+        margin_px = self._epoch_margin_px if self._epochs_visible else 0.0
+        margin_fraction = margin_px / height_px if margin_px > 0 else 0.0
+
+        bottom = float(getattr(fig.subplotpars, "bottom", 0.12))
+        min_top = bottom + 0.05
+        target_top = self._user_subplot_top - margin_fraction
+        target_top = max(min_top, min(0.995, target_top))
+
+        if abs(getattr(fig.subplotpars, "top", target_top) - target_top) < 1e-4:
+            return
+
+        fig.subplots_adjust(top=target_top)
+        if trigger_draw:
+            plot_host.canvas.draw_idle()
+
+    def _on_epoch_layout_changed(self, row_count: int, required_margin_px: float) -> None:
+        """Handle row stack changes from the epoch layer."""
+        self._epoch_margin_px = required_margin_px
+        self._update_epoch_margin()
 
     def _x_axis_for_style(self):
         """Return the shared X axis used for applying style updates."""
@@ -1306,6 +1371,7 @@ class PublicationStudioWindow(QMainWindow):
             epochs=self._epochs,
             theme=self._epoch_theme,
         )
+        self._epoch_layer.set_layout_change_callback(self._on_epoch_layout_changed)
         if self._epochs_visible:
             primary_ax = self._get_primary_axes()
             if primary_ax is not None:
@@ -1321,6 +1387,8 @@ class PublicationStudioWindow(QMainWindow):
         # Ensure figure starts maximized to current canvas viewport
         self.maximize_figure_to_canvas(forward=False)
         self._sync_canvas_size_to_figure()
+        self._capture_user_subplot_top()
+        self._update_epoch_margin(trigger_draw=False)
 
         # Update toolbar state
         self._update_toolbar_state()
@@ -1509,6 +1577,8 @@ class PublicationStudioWindow(QMainWindow):
             )
         finally:
             plot_host.resume_updates()
+        self._capture_user_subplot_top()
+        self._update_epoch_margin(trigger_draw=False)
 
     def apply_plot_style(self, style: dict[str, Any] | None, persist: bool = False) -> None:
         """Apply a new style dictionary to the publication plot."""
@@ -1902,6 +1972,8 @@ class PublicationStudioWindow(QMainWindow):
         result = dialog.exec_()
         self._sync_plot_geometry_to_figure()
         self._sync_canvas_size_to_figure()
+        self._capture_user_subplot_top()
+        self._update_epoch_margin()
 
         if result == QDialog.Accepted:
             new_style = self.get_current_style()
@@ -2133,6 +2205,7 @@ class PublicationStudioWindow(QMainWindow):
             self.canvas_container.updateGeometry()
 
         # Trigger redraw at new DPI
+        self._update_epoch_margin(trigger_draw=False)
         self.plot_host.canvas.draw_idle()
 
     def _handle_nav_mode_toggled(self, checked: bool) -> None:
