@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QLabel,
     QLineEdit,
@@ -437,8 +438,54 @@ class PublicationStudioWindow(QMainWindow):
 
     # ------------------------------------------------------------------ UI Construction
 
+    def _create_canvas_container(self) -> QWidget:
+        """Create styled container with visual canvas boundary (white rectangle on gray background)."""
+        # Container with gray background (PowerPoint-style workspace)
+        container = QWidget()
+        container.setStyleSheet("background-color: #F3F4F6;")  # Light gray background
+
+        # Layout with padding
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(40, 40, 40, 40)
+        container_layout.setAlignment(Qt.AlignCenter)
+
+        # Canvas frame (white rectangle with border)
+        self.canvas_frame = QFrame()
+        self.canvas_frame.setObjectName("CanvasBoundary")
+        self.canvas_frame.setStyleSheet(
+            "QFrame#CanvasBoundary { "
+            "background-color: white; "
+            "border: 1px solid #cccccc; "
+            "border-radius: 4px; "
+            "}"
+        )
+
+        # Frame layout to hold matplotlib canvas
+        frame_layout = QVBoxLayout(self.canvas_frame)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.setSpacing(0)
+        frame_layout.setAlignment(Qt.AlignCenter)
+
+        # Create PlotHost with explicit DPI
+        self.plot_host = PlotHost(dpi=self._canvas_dpi)
+        self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        # Set initial canvas and figure sizes
+        canvas_width_px = int(self._canvas_width_in * self._canvas_dpi)
+        canvas_height_px = int(self._canvas_height_in * self._canvas_dpi)
+        self.plot_host.canvas.setFixedSize(canvas_width_px, canvas_height_px)
+        self.plot_host.figure.set_size_inches(self._canvas_width_in, self._canvas_height_in)
+
+        # Add matplotlib canvas to frame
+        frame_layout.addWidget(self.plot_host.canvas)
+
+        # Add frame to container
+        container_layout.addWidget(self.canvas_frame)
+
+        return container
+
     def _build_ui(self) -> None:
-        """Build UI with QGraphicsView-based canvas."""
+        """Build UI with PowerPoint-style canvas boundary."""
         # Create main splitter (3-way: left | center | right)
         main_splitter = QSplitter(Qt.Horizontal, self)
 
@@ -448,26 +495,18 @@ class PublicationStudioWindow(QMainWindow):
         self.left_panel = self._create_export_panel()
 
         # ===================================================================
-        # CENTER PANEL: Graphics scene with canvas
+        # CENTER PANEL: Canvas with visual boundary
         # ===================================================================
-        # Create scene and view
-        # Create scroll area for canvas (simple, no DPI doubling issues)
+        # Create scroll area for canvas
         self.canvas_scroll = QScrollArea(self)
-        self.canvas_scroll.setAlignment(Qt.AlignCenter)
         self.canvas_scroll.setWidgetResizable(False)  # Keep canvas fixed size
+        self.canvas_scroll.setFrameShape(QScrollArea.NoFrame)  # No border on scroll area
 
-        # Create PlotHost with explicit DPI
-        self.plot_host = PlotHost(dpi=self._canvas_dpi)
-        self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        # Create canvas container with visual boundary (white rectangle on gray background)
+        self.canvas_container = self._create_canvas_container()
 
-        # Set canvas and figure sizes
-        canvas_width_px = int(self._canvas_width_in * self._canvas_dpi)
-        canvas_height_px = int(self._canvas_height_in * self._canvas_dpi)
-        self.plot_host.canvas.setFixedSize(canvas_width_px, canvas_height_px)
-        self.plot_host.figure.set_size_inches(self._canvas_width_in, self._canvas_height_in)
-
-        # Add canvas to scroll area
-        self.canvas_scroll.setWidget(self.plot_host.canvas)
+        # Add container to scroll area
+        self.canvas_scroll.setWidget(self.canvas_container)
 
         # ===================================================================
         # Add panels to splitter
@@ -729,16 +768,22 @@ class PublicationStudioWindow(QMainWindow):
             self._update_status_bar()
 
     def _apply_canvas_size(self) -> None:
-        """Apply current canvas size to canvas widget and figure."""
+        """Apply current canvas size to canvas frame and figure.
+
+        Note: Currently figure size matches canvas size, but this structure
+        supports having a figure smaller than the canvas in the future.
+        """
         if not hasattr(self, "plot_host"):
             return
 
-        # Update figure size (at actual size, not zoomed)
-        self.plot_host.figure.set_size_inches(
-            self._canvas_width_in, self._canvas_height_in, forward=False
-        )
+        # Update figure size to match canvas size (at actual size, not zoomed)
+        # In the future, figure could be smaller than canvas and would be centered
+        fig_width_in = self._canvas_width_in
+        fig_height_in = self._canvas_height_in
 
-        # Reapply current zoom level
+        self.plot_host.figure.set_size_inches(fig_width_in, fig_height_in, forward=False)
+
+        # Reapply current zoom level (this updates canvas_frame and canvas widget sizes)
         self._apply_zoom()
 
         # Update status bar
@@ -1929,7 +1974,7 @@ class PublicationStudioWindow(QMainWindow):
 
     def _zoom_to_fit(self) -> None:
         """Calculate zoom level to fit canvas in scroll area."""
-        if not hasattr(self, "canvas_scroll") or not hasattr(self, "plot_host"):
+        if not hasattr(self, "canvas_scroll") or not hasattr(self, "canvas_frame"):
             return
 
         # Get scroll area viewport size
@@ -1937,21 +1982,28 @@ class PublicationStudioWindow(QMainWindow):
         viewport_width = viewport.width()
         viewport_height = viewport.height()
 
-        # Calculate base canvas size in pixels
+        # Calculate base canvas frame size (canvas size + no extra padding since frame has 0 margins)
         base_width_px = self._canvas_width_in * self._canvas_dpi
         base_height_px = self._canvas_height_in * self._canvas_dpi
 
-        # Calculate zoom factors to fit
-        zoom_width = viewport_width / base_width_px if base_width_px > 0 else 1.0
-        zoom_height = viewport_height / base_height_px if base_height_px > 0 else 1.0
+        # Account for container padding (40px on each side = 80px total)
+        container_padding = 80
+        available_width = viewport_width - container_padding
+        available_height = viewport_height - container_padding
 
-        # Use smaller zoom to fit entirely
-        self._zoom_level = min(zoom_width, zoom_height, 4.0)  # Cap at 4x
+        # Calculate zoom factors to fit
+        zoom_width = available_width / base_width_px if base_width_px > 0 else 1.0
+        zoom_height = available_height / base_height_px if base_height_px > 0 else 1.0
+
+        # Use smaller zoom to fit entirely (cap at 4x)
+        self._zoom_level = min(zoom_width, zoom_height, 4.0)
         self._apply_zoom()
 
     def _apply_zoom(self) -> None:
-        """Apply current zoom level to canvas widget."""
+        """Apply current zoom level to canvas frame and matplotlib canvas."""
         if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
+        if not hasattr(self, "canvas_frame"):
             return
 
         # Calculate zoomed canvas size in pixels
@@ -1961,7 +2013,10 @@ class PublicationStudioWindow(QMainWindow):
         zoomed_width_px = int(base_width_px * self._zoom_level)
         zoomed_height_px = int(base_height_px * self._zoom_level)
 
-        # Resize canvas widget (figure stays at original size)
+        # Resize canvas frame (white rectangle boundary)
+        self.canvas_frame.setFixedSize(zoomed_width_px, zoomed_height_px)
+
+        # Resize matplotlib canvas widget to match
         self.plot_host.canvas.setFixedSize(zoomed_width_px, zoomed_height_px)
         self.plot_host.canvas.updateGeometry()
         self.plot_host.canvas.draw_idle()
