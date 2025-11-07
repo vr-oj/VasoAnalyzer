@@ -1188,6 +1188,9 @@ class UnifiedPlotSettingsDialog(QDialog):
             self.ax.spines["left"].set_position(("outward", 0))
             self.ax.spines["bottom"].set_position(("outward", 0))
 
+        # Always use forward=False to prevent matplotlib from auto-resizing the canvas widget
+        # Figure Composer uses _sync_plot_geometry_to_figure() to manually sync canvas and figure
+        # Main window keeps canvas size independent of figure size
         size_changed = False
         preset = self.size_preset.currentText()
         if preset == "Custom":
