@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
@@ -57,6 +58,8 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
 
 __all__ = ["FigureComposerWindow"]
+
+log = logging.getLogger(__name__)
 
 
 class StyleChangeCommand(QUndoCommand):
@@ -160,6 +163,8 @@ class FigureComposerWindow(QMainWindow):
 
         self._zoom_level: float = 1.0  # 1.0 = 100%
         self._zoom_levels = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+        self._geometry_sync_running = False
+        self._geometry_sync_pending = False
 
         # Load built-in presets
         self._builtin_presets = get_builtin_presets()
@@ -853,34 +858,24 @@ class FigureComposerWindow(QMainWindow):
         Canvas = white rectangle boundary
         Figure = matplotlib plot (can be smaller, will be centered)
         """
-        if not hasattr(self, "plot_host"):
+        if not hasattr(self, "plot_host") or self.plot_host is None:
             return
 
-        print(f"\n=== _apply_canvas_size CALLED ===")
-        print(f"  State variables:")
-        print(f"    Canvas: {self._canvas_width_in:.1f} × {self._canvas_height_in:.1f} in")
-        print(f"    Figure: {self._figure_width_in:.1f} × {self._figure_height_in:.1f} in")
-        print(f"    Base DPI: {self._canvas_dpi}")
-        print(f"    Zoom level: {self._zoom_level:.2f}")
+        if self._geometry_sync_running:
+            if not self._geometry_sync_pending:
+                self._geometry_sync_pending = True
+                QTimer.singleShot(0, self._apply_canvas_size)
+            return
 
-        # Update figure size (matplotlib plot - independent from canvas)
-        print(
-            f"  Setting matplotlib figure to: {self._figure_width_in:.1f} × {self._figure_height_in:.1f} in"
-        )
-        self.plot_host.figure.set_size_inches(
-            self._figure_width_in, self._figure_height_in, forward=False
-        )
-
-        print(
-            f"  After set_size_inches, matplotlib reports: {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
-        )
-
-        # Reapply current zoom level (this updates canvas_frame and canvas widget sizes)
-        # Both canvas boundary and figure will be scaled by zoom
-        self._apply_zoom()
-
-        # Update status bar
-        self._sync_canvas_size_to_figure()
+        self._geometry_sync_running = True
+        self._geometry_sync_pending = False
+        try:
+            fig = self.plot_host.figure
+            fig.set_size_inches(self._figure_width_in, self._figure_height_in, forward=False)
+            self._apply_zoom()
+            self._sync_canvas_size_to_figure()
+        finally:
+            self._geometry_sync_running = False
 
     def maximize_figure_to_canvas(self, forward: bool = False) -> None:
         """Ensure the matplotlib figure fills the canvas viewport."""
@@ -2140,23 +2135,18 @@ class FigureComposerWindow(QMainWindow):
         if not hasattr(self, "canvas_frame"):
             return
 
-        print(f"\n=== _apply_zoom CALLED ===")
-        print(f"  Zoom level: {self._zoom_level:.2f}")
-        print(f"  Base DPI: {self._canvas_dpi}")
-
         # Calculate effective DPI for zoom (zoom via DPI, not widget resize)
         # This keeps figure at same logical size (inches) but renders at higher/lower resolution
         effective_dpi = self._canvas_dpi * self._zoom_level
-        print(f"  Effective DPI: {effective_dpi:.0f}")
+        log.debug(
+            "Applying zoom level %.2f (base_dpi=%s, effective_dpi=%s)",
+            self._zoom_level,
+            self._canvas_dpi,
+            effective_dpi,
+        )
 
         # Set figure DPI (this changes render resolution but not logical inch size)
-        print(
-            f"  Before set_dpi: matplotlib figure is {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
-        )
         self.plot_host.figure.set_dpi(effective_dpi)
-        print(
-            f"  After set_dpi: matplotlib figure is {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
-        )
 
         # Get device pixel ratio for Retina display support
         device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
@@ -2171,13 +2161,6 @@ class FigureComposerWindow(QMainWindow):
         figure_width_px = int((self._figure_width_in * effective_dpi) / device_pixel_ratio)
         figure_height_px = int((self._figure_height_in * effective_dpi) / device_pixel_ratio)
 
-        print(f"  Calculated pixel sizes:")
-        print(f"    Device pixel ratio: {device_pixel_ratio}")
-        print(
-            f"    Canvas frame (logical px): {canvas_frame_width_px} × {canvas_frame_height_px} px"
-        )
-        print(f"    Figure widget (logical px): {figure_width_px} × {figure_height_px} px")
-
         # Resize canvas frame (white rectangle boundary - represents canvas dimensions)
         self.canvas_frame.setFixedSize(canvas_frame_width_px, canvas_frame_height_px)
 
@@ -2188,13 +2171,6 @@ class FigureComposerWindow(QMainWindow):
 
         # Now set widget size accounting for devicePixelRatio
         self.plot_host.canvas.setFixedSize(figure_width_px, figure_height_px)
-
-        # Force redraw at new DPI
-        self.plot_host.canvas.draw_idle()
-
-        print(
-            f"  After zoom applied, matplotlib shows: {self.plot_host.figure.get_figwidth():.1f} × {self.plot_host.figure.get_figheight():.1f} in @ {self.plot_host.figure.get_dpi():.0f} DPI"
-        )
 
         # Resize container to accommodate zoomed canvas + padding (80px total for each dimension)
         # This is crucial for scrollbars to appear when zoomed content exceeds viewport

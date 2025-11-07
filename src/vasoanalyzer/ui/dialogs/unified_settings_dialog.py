@@ -6,6 +6,7 @@
 """Combined dialog for subplot layout, axis settings and style."""
 
 import contextlib
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -40,6 +41,8 @@ from PyQt5.QtWidgets import (
 from utils import resource_path
 from vasoanalyzer.ui.constants import DEFAULT_STYLE
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 
 class UnifiedPlotSettingsDialog(QDialog):
@@ -1205,24 +1208,10 @@ class UnifiedPlotSettingsDialog(QDialog):
         canvas_changed = False
         figure_changed = False
 
-        print(f"\n\n{'='*60}")
-        print(f"=== PLOT SETTINGS apply_changes CALLED ===")
-        print(f"{'='*60}")
-        if parent:
-            print(f"  Parent state BEFORE:")
-            print(
-                f"    Canvas: {getattr(parent, '_canvas_width_in', '?')} × {getattr(parent, '_canvas_height_in', '?')} in"
-            )
-            print(
-                f"    Figure: {getattr(parent, '_figure_width_in', '?')} × {getattr(parent, '_figure_height_in', '?')} in"
-            )
-            print(f"    Zoom: {getattr(parent, '_zoom_level', '?')}")
-
         # ============================================================
         # CANVAS SIZE (white rectangle boundary in Figure Composer)
         # ============================================================
         canvas_preset = self.canvas_preset.currentText()
-        print(f"\n  Canvas preset: {canvas_preset}")
         if canvas_preset == "Custom":
             canvas_w = max(1.0, float(self.canvas_w.value()))
             canvas_h = max(1.0, float(self.canvas_h.value()))
@@ -1235,8 +1224,6 @@ class UnifiedPlotSettingsDialog(QDialog):
         else:  # Auto (Wide)
             canvas_w = getattr(parent, "_default_frame_width_in", 10.0)
             canvas_h = getattr(parent, "_default_frame_height_in", 7.5)
-
-        print(f"  Calculated canvas size: {canvas_w:.1f} × {canvas_h:.1f} in")
 
         # Update canvas size in parent (Figure Composer)
         if parent is not None:
@@ -1255,7 +1242,6 @@ class UnifiedPlotSettingsDialog(QDialog):
         # FIGURE SIZE (matplotlib plot inside canvas)
         # ============================================================
         fig_preset = self.fig_preset.currentText()
-        print(f"\n  Figure preset: {fig_preset}")
         if fig_preset == "Custom":
             fig_w = max(1.0, float(self.fig_w.value()))
             fig_h = max(1.0, float(self.fig_h.value()))
@@ -1266,8 +1252,6 @@ class UnifiedPlotSettingsDialog(QDialog):
         else:  # Fill Canvas
             fig_w = canvas_w
             fig_h = canvas_h
-
-        print(f"  Calculated figure size: {fig_w:.1f} × {fig_h:.1f} in")
 
         # Validate: figure must fit inside canvas
         if fig_w > canvas_w + 0.01 or fig_h > canvas_h + 0.01:
@@ -1299,18 +1283,13 @@ class UnifiedPlotSettingsDialog(QDialog):
                 self.fig_preset.setCurrentText("Custom")
 
         # Update figure size in parent (Figure Composer)
-        print(f"\n  Updating parent state variables:")
         if parent is not None:
             old_fig_w = getattr(parent, "_figure_width_in", fig_w)
             old_fig_h = getattr(parent, "_figure_height_in", fig_h)
             if abs(fig_w - old_fig_w) > 0.01 or abs(fig_h - old_fig_h) > 0.01:
-                print(f"    Setting parent._figure_width_in = {fig_w:.1f}")
-                print(f"    Setting parent._figure_height_in = {fig_h:.1f}")
                 parent._figure_width_in = fig_w
                 parent._figure_height_in = fig_h
                 figure_changed = True
-            else:
-                print(f"    No change (already {fig_w:.1f} × {fig_h:.1f})")
         else:
             # Main window: apply figure size directly to matplotlib
             if (abs(fig_w - self.fig.get_figwidth()) > 0.01) or (
@@ -1319,18 +1298,20 @@ class UnifiedPlotSettingsDialog(QDialog):
                 self.fig.set_size_inches(fig_w, fig_h, forward=False)
                 figure_changed = True
 
-        print(f"\n  canvas_changed: {canvas_changed}, figure_changed: {figure_changed}")
+        log.debug(
+            "Plot settings applied (canvas_preset=%s, figure_preset=%s, canvas_changed=%s, figure_changed=%s)",
+            canvas_preset,
+            fig_preset,
+            canvas_changed,
+            figure_changed,
+        )
 
         # Apply canvas and figure sizes if anything changed
         if canvas_changed or figure_changed:
             if parent is not None and hasattr(parent, "_apply_canvas_size"):
                 # Figure Composer: apply canvas and figure sizes from state variables
                 # This will call set_size_inches() with the correct values
-                print(f"  Calling parent._apply_canvas_size()...")
                 parent._apply_canvas_size()
-                print(
-                    f"  After _apply_canvas_size, matplotlib reports: {self.fig.get_figwidth():.1f} × {self.fig.get_figheight():.1f} in @ {self.fig.get_dpi():.0f} DPI"
-                )
             else:
                 # Main window: just redraw
                 with contextlib.suppress(Exception):
@@ -1339,8 +1320,6 @@ class UnifiedPlotSettingsDialog(QDialog):
         # Update spinboxes with calculated values (don't read from matplotlib after DPI changes)
         self.fig_w.setValue(round(fig_w, 1))
         self.fig_h.setValue(round(fig_h, 1))
-
-        print(f"{'='*60}\n")
 
         layout_values = {n: c.value() for n, c in self.layout_controls.items()}
         layout_values["left"] = max(0.0, min(layout_values["left"], 1.0))

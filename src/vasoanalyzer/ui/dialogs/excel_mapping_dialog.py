@@ -3,6 +3,7 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
+import logging
 import os
 import subprocess
 import sys
@@ -24,6 +25,8 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
 )
+
+log = logging.getLogger(__name__)
 
 
 class ExcelMappingDialog(QDialog):
@@ -306,9 +309,9 @@ def update_excel_file(excel_path, event_table_data, start_row=3, column_letter="
             cell = f"{column_letter}{start_row + i}"
             ws[cell] = id_val
         wb.save(excel_path)
-        print(f"🔄 Excel file updated with ID values in column {column_letter}.")
+        log.info("Excel file updated with ID values in column %s", column_letter)
     except Exception as e:
-        print(f"❌ Failed to update Excel file:\n{e}")
+        log.error("Failed to update Excel file: %s", e, exc_info=True)
 
 
 # Cross-platform file reopening logic
@@ -335,4 +338,4 @@ def reopen_excel_file_crossplatform(path):
         elif sys.platform.startswith("linux"):
             subprocess.call(["xdg-open", path])
     except Exception as e:
-        print(f"\u26a0\ufe0f Could not reopen Excel file:\n{e}")
+        log.warning("Could not reopen Excel file: %s", e, exc_info=True)

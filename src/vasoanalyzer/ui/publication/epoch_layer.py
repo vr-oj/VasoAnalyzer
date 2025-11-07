@@ -7,6 +7,7 @@ row stacking and collision avoidance.
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -23,6 +24,8 @@ __all__ = [
     "EpochTheme",
     "EpochLayer",
 ]
+
+log = logging.getLogger(__name__)
 
 
 class EpochTheme:
@@ -459,7 +462,7 @@ class EpochLayer:
             )
 
         except Exception as e:
-            print(f"Warning: Could not render epoch label: {e}")
+            log.warning("Could not render epoch label: %s", e, exc_info=True)
 
     def _px_to_axes_height(self, px: float) -> float:
         """Convert pixel height to axes coordinates (fraction of axes height)."""

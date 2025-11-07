@@ -224,6 +224,91 @@ class _SampleLoadJob(QRunnable):
         self.signals.finished.emit(self._token, self._sample, trace_df, events_df, analysis_results)
 
 
+class _SnapshotLoadSignals(QObject):
+    finished = pyqtSignal(object, object, object, object)
+
+
+class _SnapshotLoadJob(QRunnable):
+    """Background job that materialises snapshot stacks for a sample."""
+
+    def __init__(
+        self,
+        sample: SampleN,
+        token: object,
+        project_path: str | None,
+        asset_id: str | int | None,
+        snapshot_path: str | None,
+        snapshot_format: str | None,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self.signals = _SnapshotLoadSignals()
+        self._sample = sample
+        self._token = token
+        self._project_path = project_path
+        self._asset_id = asset_id
+        self._snapshot_path = snapshot_path
+        self._snapshot_format = snapshot_format or ""
+
+    def run(self) -> None:  # type: ignore[override]
+        stack = None
+        error: str | None = None
+        try:
+            stack = self._load_from_asset()
+            if stack is None:
+                stack = self._load_from_path()
+            if stack is None:
+                error = "Snapshots unavailable"
+        except Exception as exc:  # pragma: no cover - defensive logging
+            error = str(exc)
+            stack = None
+
+        self.signals.finished.emit(self._token, self._sample, stack, error)
+
+    def _load_from_asset(self) -> np.ndarray | None:
+        if not self._project_path or not self._asset_id:
+            return None
+
+        ctx: ProjectContext | None = None
+        try:
+            ctx = open_project_ctx(self._project_path)
+            repo = ctx.repo
+            if repo is None:
+                return None
+            data = repo.get_asset_bytes(self._asset_id)
+            if not data:
+                return None
+            return self._stack_from_bytes(data)
+        finally:
+            if ctx is not None:
+                close_project_ctx(ctx)
+
+    def _load_from_path(self) -> np.ndarray | None:
+        if not self._snapshot_path:
+            return None
+        path = Path(self._snapshot_path).expanduser()
+        if not path.exists():
+            return None
+        frames, _ = load_tiff(path.as_posix(), metadata=False)
+        if frames:
+            return np.stack(frames)
+        return None
+
+    def _stack_from_bytes(self, data: bytes) -> np.ndarray | None:
+        buffer = io.BytesIO(data)
+        fmt = self._snapshot_format.lower()
+        if not fmt:
+            fmt = "npz" if data.startswith(b"PK") else "npy"
+        if fmt == "npz":
+            with np.load(buffer, allow_pickle=False) as npz_file:
+                stack = npz_file["stack"]
+        else:
+            stack = np.load(buffer, allow_pickle=False)
+        if isinstance(stack, np.ndarray):
+            return stack
+        return np.stack(stack)
+
+
 class _MissingAssetScanSignals(QObject):
     finished = pyqtSignal(object, object)
     error = pyqtSignal(object, str)
@@ -417,6 +502,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._sample_state_dirty = True
         self._cached_snapshot_style: dict | None = None
         self._snapshot_style_dirty = True
+        self._snapshot_load_token: object | None = None
+        self._snapshot_loading_sample: SampleN | None = None
+        self._snapshot_viewer_pending_open = False
         self.ax2 = None
         self.xlim_full = None
         self.ylim_full = None
@@ -2028,65 +2116,65 @@ class VasoAnalyzerApp(QMainWindow):
         if isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0:
             return sample.snapshots
 
+        if self._snapshot_load_token is not None and self._snapshot_loading_sample is sample:
+            return None
+
         project_path = getattr(self.current_project, "path", None)
         asset_id = None
         if sample.snapshot_role and sample.asset_roles:
             asset_id = sample.asset_roles.get(sample.snapshot_role)
 
-        ctx = getattr(self, "project_ctx", None)
-        repo = ctx.repo if isinstance(ctx, ProjectContext) else None
-        owned_ctx = None
-        data = None
+        token = object()
+        self._snapshot_load_token = token
+        self._snapshot_loading_sample = sample
 
-        if repo is None and project_path:
-            try:
-                owned_ctx = open_project_ctx(project_path)
-                repo = owned_ctx.repo
-            except Exception:
-                repo = None
-
-        if repo is not None and asset_id:
-            try:
-                data = repo.get_asset_bytes(asset_id)
-            except Exception:
-                data = None
-
-        if owned_ctx is not None:
-            close_project_ctx(owned_ctx)
-
-        if data:
-            try:
-                buffer = io.BytesIO(data)
-                fmt = (sample.snapshot_format or "").lower()
-                if not fmt:
-                    fmt = "npz" if data.startswith(b"PK") else "npy"
-                if fmt == "npz":
-                    with np.load(buffer, allow_pickle=False) as npz_file:
-                        stack = npz_file["stack"]
-                else:
-                    stack = np.load(buffer, allow_pickle=False)
-                if isinstance(stack, np.ndarray):
-                    sample.snapshots = stack
-                else:
-                    sample.snapshots = np.stack(stack)
-                return sample.snapshots
-            except Exception:
-                log.debug(
-                    "Failed to decode snapshot stack for %s",
-                    sample.name,
-                    exc_info=True,
-                )
-
-        if sample.snapshot_path and Path(sample.snapshot_path).exists():
-            try:
-                frames, _ = load_tiff(sample.snapshot_path, metadata=False)
-                if frames:
-                    sample.snapshots = np.stack(frames)
-                    return sample.snapshots
-            except Exception:
-                log.debug("Failed to load snapshot TIFF for %s", sample.name, exc_info=True)
-
+        job = _SnapshotLoadJob(
+            sample=sample,
+            token=token,
+            project_path=project_path,
+            asset_id=asset_id,
+            snapshot_path=sample.snapshot_path,
+            snapshot_format=sample.snapshot_format,
+        )
+        job.signals.finished.connect(self._on_snapshot_load_finished)
+        self.statusBar().showMessage("Loading snapshots…", 0)
+        self._thread_pool.start(job)
         return None
+
+    def _on_snapshot_load_finished(
+        self,
+        token: object,
+        sample: SampleN,
+        stack: np.ndarray | None,
+        error: str | None,
+    ) -> None:
+        if token != self._snapshot_load_token or sample is not self._snapshot_loading_sample:
+            return
+
+        self._snapshot_load_token = None
+        self._snapshot_loading_sample = None
+        if stack is not None:
+            sample.snapshots = stack
+            self.statusBar().showMessage("Snapshots ready", 2000)
+            if sample is self.current_sample:
+                should_show = bool(
+                    self._snapshot_viewer_pending_open
+                    or (self.snapshot_viewer_action and self.snapshot_viewer_action.isChecked())
+                )
+                if should_show:
+                    try:
+                        self.load_snapshots(stack)
+                        self._snapshot_viewer_pending_open = False
+                        self.toggle_snapshot_viewer(True)
+                    except Exception:
+                        log.error("Failed to initialise snapshot viewer", exc_info=True)
+                        self.snapshot_frames = []
+                        self.toggle_snapshot_viewer(False)
+        else:
+            self._snapshot_viewer_pending_open = False
+            message = error or "Snapshot load failed"
+            self.statusBar().showMessage(message, 6000)
+            self.toggle_snapshot_viewer(False)
 
     def open_samples_in_new_windows(self, samples):
         """Open each sample in its own window for side-by-side comparison."""
@@ -3777,6 +3865,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.setVisible(checked)
 
     def toggle_snapshot_viewer(self, checked: bool):
+        if not checked:
+            self._snapshot_viewer_pending_open = False
         if checked and not self.snapshot_frames and isinstance(self.current_sample, SampleN):
             stack = self._ensure_sample_snapshots_loaded(self.current_sample)
             if stack is not None:
@@ -3785,12 +3875,22 @@ class VasoAnalyzerApp(QMainWindow):
                 except Exception:
                     log.debug("Failed to initialise snapshot viewer", exc_info=True)
                     self.snapshot_frames = []
+                else:
+                    self._snapshot_viewer_pending_open = False
+            else:
+                self._snapshot_viewer_pending_open = True
         has_snapshots = bool(self.snapshot_frames)
         should_show = bool(checked) and has_snapshots
+        desired_action_state = bool(checked) and (
+            has_snapshots or self._snapshot_viewer_pending_open
+        )
 
-        if self.snapshot_viewer_action and self.snapshot_viewer_action.isChecked() != should_show:
+        if (
+            self.snapshot_viewer_action
+            and self.snapshot_viewer_action.isChecked() != desired_action_state
+        ):
             self.snapshot_viewer_action.blockSignals(True)
-            self.snapshot_viewer_action.setChecked(should_show)
+            self.snapshot_viewer_action.setChecked(desired_action_state)
             self.snapshot_viewer_action.blockSignals(False)
 
         if self.snapshot_card:
