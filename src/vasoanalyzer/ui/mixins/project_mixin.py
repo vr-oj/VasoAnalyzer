@@ -145,12 +145,33 @@ class ProjectMixin:
 
     def _open_project_file_legacy(self, path: str | None = None):
         if path is None:
+            # Support both file selection and directory selection for bundles
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 "Open Project",
                 "",
-                "Vaso Projects (*.vaso *.vasopack);;All Files (*)",
+                "Vaso Projects (*.vaso);;Vaso Bundles (*.vasopack);;All Files (*)",
             )
+            # If user didn't select a file, try directory selection for .vasopack bundles
+            if not path:
+                bundle_path = QFileDialog.getExistingDirectory(
+                    self,
+                    "Open Project Bundle (or Cancel to browse files)",
+                    "",
+                )
+                if bundle_path and Path(bundle_path).suffix == ".vasopack":
+                    path = bundle_path
+                elif not bundle_path:
+                    return
+                else:
+                    # Selected a directory that's not .vasopack
+                    QMessageBox.warning(
+                        self,
+                        "Invalid Bundle",
+                        "Please select a .vasopack bundle directory or .vaso file.",
+                    )
+                    return
+
             if not path:
                 return
 
@@ -163,10 +184,25 @@ class ProjectMixin:
         project_path = path
         restored_from_autosave = False
 
-        if path_obj.suffix.lower() == ".vasopack":
+        # Check if this is a new-style bundle directory
+        if path_obj.is_dir() and path_obj.suffix.lower() == ".vasopack":
+            # New snapshot-based bundle format - open directly
+            try:
+                project = load_project_file(path)
+                project_path = path
+                self.statusBar().showMessage(f"\u2713 Opened bundle: {path_obj.name}", 3000)
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Bundle Open Error",
+                    f"Could not open bundle:\n{exc}",
+                )
+                return
+        elif path_obj.is_file() and path_obj.suffix.lower() == ".vasopack":
+            # Old ZIP-based bundle format - needs unpacking
             base_dir = QFileDialog.getExistingDirectory(
                 self,
-                "Select Folder to Unpack Bundle",
+                "Select Folder to Unpack Legacy Bundle",
                 path_obj.parent.as_posix(),
             )
             if not base_dir:
@@ -180,12 +216,12 @@ class ProjectMixin:
             try:
                 project = import_project_bundle(path, target_dir.as_posix())
                 project_path = project.path or target_dir.joinpath(f"{stem}.vaso").as_posix()
-                self.statusBar().showMessage(f"\u2713 Bundle unpacked to {target_dir}", 5000)
+                self.statusBar().showMessage(f"\u2713 Legacy bundle unpacked to {target_dir}", 5000)
             except Exception as exc:
                 QMessageBox.critical(
                     self,
                     "Bundle Import Error",
-                    f"Could not unpack bundle:\n{exc}",
+                    f"Could not unpack legacy bundle:\n{exc}",
                 )
                 return
         else:
@@ -310,16 +346,35 @@ class ProjectMixin:
     def save_project_file_as(self):
         if not self.current_project:
             return
-        path, _ = QFileDialog.getSaveFileName(
+
+        # Determine default path and filter based on current project format
+        current_path = self.current_project.path or ""
+        if current_path.endswith(".vasopack"):
+            default_filter = "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)"
+        else:
+            default_filter = "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)"
+
+        path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
-            self.current_project.path or "",
-            "Vaso Files (*.vaso)",
+            current_path,
+            default_filter,
         )
         if path:
             path_obj = Path(path).expanduser()
-            if path_obj.suffix.lower() != ".vaso":
-                path_obj = path_obj.with_suffix(".vaso")
+
+            # Determine extension based on selected filter
+            if selected_filter and "*.vasopack" in selected_filter:
+                if path_obj.suffix.lower() != ".vasopack":
+                    path_obj = path_obj.with_suffix(".vasopack")
+            elif selected_filter and "*.vaso" in selected_filter:
+                if path_obj.suffix.lower() != ".vaso":
+                    path_obj = path_obj.with_suffix(".vaso")
+            else:
+                # No filter selected, use existing extension or default to .vasopack
+                if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
+                    path_obj = path_obj.with_suffix(".vasopack")
+
             path = str(path_obj.resolve(strict=False))
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
@@ -328,7 +383,13 @@ class ProjectMixin:
                 self.project_state[id(self.current_sample)] = state
             save_project_file(self.current_project, path)
             self.update_recent_projects(path)
-        self.statusBar().showMessage("\u2713 Project saved", 3000)
+
+            # Show appropriate status message
+            format_name = "bundle" if path_obj.suffix.lower() == ".vasopack" else "project"
+            self.statusBar().showMessage(f"\u2713 {format_name.capitalize()} saved: {path_obj.name}", 3000)
+        else:
+            return
+
         self._reset_session_dirty()
         self._update_window_title()
 
