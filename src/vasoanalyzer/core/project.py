@@ -1164,12 +1164,33 @@ def save_project(project: Project, path: str, *, skip_optimize: bool = False) ->
 
 
 def load_project(path: str) -> Project:
-    """Open ``path`` returning a populated :class:`Project` instance."""
+    """Open ``path`` returning a populated :class:`Project` instance.
+
+    Automatically handles:
+    - Bundle format (.vasopack directories)
+    - Legacy SQLite format (.vaso files)
+    - Auto-migration from legacy to bundle
+    - Recovery from corrupted databases
+    """
     import time
+    from ..storage.project_storage import get_project_format
 
     start_time = time.time()
     log.info(f"Loading project: {path}")
 
+    path_obj = Path(path)
+
+    # Detect format
+    fmt = get_project_format(path_obj)
+
+    # Handle bundle format
+    if fmt == "bundle-v1" or (path_obj.is_dir() and path.endswith(".vasopack")):
+        project = _load_project_bundle(path)
+        elapsed = time.time() - start_time
+        log.info(f"Project loaded successfully in {elapsed:.2f}s: {path}")
+        return project
+
+    # Handle SQLite formats (with corruption recovery)
     if _is_sqlite_file(path):
         try:
             project = _load_project_sqlite(path)
@@ -1192,7 +1213,10 @@ def load_project(path: str) -> Project:
                 if _attempt_database_recovery(path):
                     log.info("Database recovery successful, retrying load...")
                     try:
-                        return _load_project_sqlite(path)
+                        project = _load_project_sqlite(path)
+                        elapsed = time.time() - start_time
+                        log.info(f"Project loaded successfully in {elapsed:.2f}s (after recovery): {path}")
+                        return project
                     except Exception as retry_error:
                         raise RuntimeError(
                             f"Database was recovered but still cannot be loaded: {retry_error}"
