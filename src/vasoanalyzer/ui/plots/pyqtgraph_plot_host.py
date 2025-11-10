@@ -258,13 +258,18 @@ class PyQtGraphPlotHost:
         return None
 
     def bottom_axis(self):
-        """Get the bottom axis (last track's plot item)."""
+        """Get the bottom axis (last track's plot item).
+
+        Returns:
+            PyQtGraphAxesCompat wrapper with matplotlib-compatible interface
+        """
         if not self._channel_specs:
             return None
         last_track_id = self._channel_specs[-1].track_id
         track = self._tracks.get(last_track_id)
         if track:
-            return track.view.get_widget().getPlotItem().getAxis('bottom')
+            # Return the wrapped axes object, not the raw AxisItem
+            return track.ax
         return None
 
     def apply_style(self, style: dict[str, Any]) -> None:

@@ -137,10 +137,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         ylabel = self._explicit_ylabel or self._default_ylabel()
         self._plot_item.setLabel("left", ylabel)
 
-        # Set initial X range to full data range
+        # Set initial X range to full data range and render initial data
         if model is not None:
             x0, x1 = model.full_range
             self._plot_item.setXRange(x0, x1, padding=0.02)
+
+            # Render the initial data window
+            pixel_width = max(int(self._plot_widget.width()), 400)
+            self.update_window(x0, x1, pixel_width=pixel_width)
 
     def _default_ylabel(self) -> str:
         """Get default Y-axis label based on mode."""
