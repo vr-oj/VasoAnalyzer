@@ -85,9 +85,23 @@ class PyQtGraphAxesCompat:
         """Set X-axis label (matplotlib compatibility)."""
         self._plot_item.setLabel('bottom', label)
 
+    def get_xlabel(self) -> str:
+        """Get X-axis label (matplotlib compatibility)."""
+        axis = self._plot_item.getAxis('bottom')
+        if axis and hasattr(axis, 'labelText'):
+            return axis.labelText
+        return ""
+
     def set_ylabel(self, label: str) -> None:
         """Set Y-axis label (matplotlib compatibility)."""
         self._plot_item.setLabel('left', label)
+
+    def get_ylabel(self) -> str:
+        """Get Y-axis label (matplotlib compatibility)."""
+        axis = self._plot_item.getAxis('left')
+        if axis and hasattr(axis, 'labelText'):
+            return axis.labelText
+        return ""
 
     def grid(self, visible: bool = True, **kwargs) -> None:
         """Show/hide grid (matplotlib compatibility)."""
