@@ -208,11 +208,20 @@ class PyQtGraphPlotHost:
         times: list[float],
         colors: list[str] | None = None,
         labels: list[str] | None = None,
+        label_meta: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Set event markers for all tracks."""
+        """Set event markers for all tracks.
+
+        Args:
+            times: Event timestamps
+            colors: Event colors (optional)
+            labels: Event labels (optional)
+            label_meta: Event label metadata (matplotlib PlotHost compatibility, ignored)
+        """
         self._event_times = list(times)
         self._event_colors = None if colors is None else list(colors)
         self._event_labels = [] if labels is None else list(labels)
+        # Note: label_meta is accepted for compatibility but not used in PyQtGraph renderer
 
         for track in self._tracks.values():
             track.set_events(times, colors, labels)

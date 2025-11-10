@@ -79,6 +79,15 @@ class PyQtGraphChannelTrack:
             self._ax_compat = PyQtGraphAxesCompat(plot_item)
         return self._ax_compat
 
+    @property
+    def primary_line(self):
+        """Get the primary trace line (matplotlib ChannelTrack compatibility).
+
+        Returns:
+            PlotDataItem for inner diameter trace
+        """
+        return self.view.inner_line
+
     def set_model(self, model: TraceModel) -> None:
         """Attach the shared TraceModel to this track."""
         self._model = model
