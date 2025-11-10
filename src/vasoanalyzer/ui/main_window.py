@@ -7664,6 +7664,7 @@ QPushButton[isGhost="true"]:hover {{
             # Connect signals
             self.figure_composer.studio_closed.connect(self._on_figure_composer_closed)
             self.figure_composer.preset_saved.connect(self._on_figure_composer_preset_saved)
+            self.figure_composer.annotations_changed.connect(self._on_figure_annotations_changed)
 
         # Load user presets from project (if available)
         user_presets = []
@@ -7674,6 +7675,11 @@ QPushButton[isGhost="true"]:hover {{
         channel_specs = self.plot_host.channel_specs()
         layout_state = self.plot_host.layout_state()
         current_style = self.get_current_plot_style()
+        annotations_payload: list[dict[str, Any]] = []
+        if self.current_sample and isinstance(self.current_sample.ui_state, dict):
+            annotations_payload = copy.deepcopy(
+                self.current_sample.ui_state.get("figure_annotations", []) or []
+            )
 
         # Populate with current data
         self.figure_composer.load_from_main_window(
@@ -7685,6 +7691,7 @@ QPushButton[isGhost="true"]:hover {{
             channel_specs=channel_specs,
             layout_state=layout_state,
             style_dict=current_style,
+            annotations=annotations_payload,
         )
         if hasattr(self.figure_composer, "maximize_figure_to_canvas"):
             self.figure_composer.maximize_figure_to_canvas(forward=False)
@@ -7729,6 +7736,16 @@ QPushButton[isGhost="true"]:hover {{
         if self.figure_composer is not None:
             self.figure_composer.deleteLater()
             self.figure_composer = None
+
+    def _on_figure_annotations_changed(self, payload: list[dict[str, Any]]) -> None:
+        """Persist manual annotation edits into the active project's state."""
+        if not self.current_sample:
+            return
+        if not isinstance(self.current_sample.ui_state, dict):
+            self.current_sample.ui_state = {}
+        self.current_sample.ui_state["figure_annotations"] = copy.deepcopy(payload)
+        self.project_state[id(self.current_sample)] = self.current_sample.ui_state
+        self.request_deferred_autosave(delay_ms=2000, reason="annotations")
 
     # [J] ========================= PLOT STYLE EDITOR ================================
     def apply_plot_style(self, style, persist: bool = False):
@@ -8648,8 +8665,12 @@ QPushButton[isGhost="true"]:hover {{
 
         # preserve any previously saved style_settings
         prev = {}
+        annotations_prev: list[dict[str, Any]] = []
         if self.current_sample and isinstance(self.current_sample.ui_state, dict):
             prev = self.current_sample.ui_state.get("style_settings", {}) or {}
+            annotations_prev = copy.deepcopy(
+                self.current_sample.ui_state.get("figure_annotations", []) or []
+            )
         x_axis = self._x_axis_for_style()
         state = {
             "axis_xlim": list(self.ax.get_xlim()),
@@ -8669,6 +8690,7 @@ QPushButton[isGhost="true"]:hover {{
             state["legend_settings"] = copy.deepcopy(self.legend_settings)
         # Always record whatever is in ui_state["style_settings"], even if empty
         state["style_settings"] = prev
+        state["figure_annotations"] = annotations_prev
         if self.ax2 is not None:
             state["axis_outer_ylim"] = list(self.ax2.get_ylim())
             state["axis_settings"]["y_outer"] = {"label": self.ax2.get_ylabel()}
@@ -8702,11 +8724,19 @@ QPushButton[isGhost="true"]:hover {{
         if plot_layout:
             self._pending_plot_layout = plot_layout
         # Restore trace visibility state
-        if "inner_trace_visible" in state and hasattr(self, "id_toggle_act") and self.id_toggle_act is not None:
+        if (
+            "inner_trace_visible" in state
+            and hasattr(self, "id_toggle_act")
+            and self.id_toggle_act is not None
+        ):
             self.id_toggle_act.blockSignals(True)
             self.id_toggle_act.setChecked(state["inner_trace_visible"])
             self.id_toggle_act.blockSignals(False)
-        if "outer_trace_visible" in state and hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
+        if (
+            "outer_trace_visible" in state
+            and hasattr(self, "od_toggle_act")
+            and self.od_toggle_act is not None
+        ):
             self.od_toggle_act.blockSignals(True)
             self.od_toggle_act.setChecked(state["outer_trace_visible"])
             self.od_toggle_act.blockSignals(False)

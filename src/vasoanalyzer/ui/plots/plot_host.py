@@ -20,7 +20,11 @@ from PyQt5.QtCore import QTimer
 from vasoanalyzer.app.flags import is_enabled
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels import EventLabeler, LayoutOptions
-from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, EventLabelerV3, LayoutOptionsV3
+from vasoanalyzer.ui.event_labels_v3 import (
+    EventEntryV3,
+    EventLabelerV3,
+    LayoutOptionsV3,
+)
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack, ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import (
     AnnotationLane,
@@ -91,7 +95,12 @@ class PlotHost:
         self._density_threshold_belt: float = 0.25
         self._label_outline_enabled: bool = True
         self._label_outline_width: float = 2.0
-        self._label_outline_color: tuple[float, float, float, float] | None = (1.0, 1.0, 1.0, 0.9)
+        self._label_outline_color: tuple[float, float, float, float] | None = (
+            1.0,
+            1.0,
+            1.0,
+            0.9,
+        )
         self._label_tooltips_enabled: bool = True
         self._tooltip_proximity_px: int = 10
         self._compact_legend_enabled: bool = False
@@ -172,7 +181,7 @@ class PlotHost:
         height_ratios: list[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
         # Add vertical gap between tracks (diameter traces) when stacked
-        hspace = 0.15 if row_count > 1 else 0.0
+        hspace = 0.05 if row_count > 1 else 0.0
         gs = self.figure.add_gridspec(
             nrows=row_count,
             ncols=1,
@@ -499,6 +508,10 @@ class PlotHost:
         track = self._tracks.get(first_id)
         return None if track is None else track.ax
 
+    def top_axis(self):
+        """Alias for the top-most axes."""
+        return self.primary_axis()
+
     def bottom_axis(self):
         if not self._channel_specs:
             return None
@@ -807,7 +820,10 @@ class PlotHost:
         return bool(self._auto_event_label_mode)
 
     def label_density_thresholds(self) -> tuple[float, float]:
-        return (float(self._density_threshold_compact), float(self._density_threshold_belt))
+        return (
+            float(self._density_threshold_compact),
+            float(self._density_threshold_belt),
+        )
 
     def label_outline_settings(
         self,
@@ -1144,9 +1160,11 @@ class PlotHost:
                 self._hover_debounce_timer = QTimer(canvas)
                 self._hover_debounce_timer.setSingleShot(True)
                 self._hover_debounce_timer.timeout.connect(
-                    lambda: process_hover_event(self._pending_hover_event)
-                    if self._pending_hover_event
-                    else None
+                    lambda: (
+                        process_hover_event(self._pending_hover_event)
+                        if self._pending_hover_event
+                        else None
+                    )
                 )
             self._hover_debounce_timer.start(16)  # 16ms = ~60fps, smooth but responsive
 
