@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QWidget
+from PyQt5.QtWidgets import QWidget, QVBoxLayout
 
 
 class PyQtGraphCanvasCompat(QWidget):
@@ -28,6 +28,13 @@ class PyQtGraphCanvasCompat(QWidget):
         }
         self._connection_ids: int = 0
         self.toolbar: Any = None  # Compatibility attribute
+
+        # Create layout and add the PyQtGraph widget to it
+        # This ensures the canvas wrapper actually displays the plots
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(self._pg_widget)
 
         # Install event filter on PyQtGraph widget to intercept events
         self._pg_widget.installEventFilter(self)

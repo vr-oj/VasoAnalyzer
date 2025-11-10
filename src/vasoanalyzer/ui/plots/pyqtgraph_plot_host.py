@@ -51,11 +51,9 @@ class PyQtGraphPlotHost:
         bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
         self.widget.setStyleSheet(f"background-color: {bg_color};")
 
-        # For matplotlib PlotHost compatibility, canvas should be the widget
-        # that gets added to layouts. We use widget directly and create an
-        # event compatibility wrapper separately.
-        self.canvas = self.widget
-        self._canvas_compat = PyQtGraphCanvasCompat(self.widget)
+        # Create matplotlib-compatible canvas wrapper for event handling
+        # The wrapper contains self.widget and provides mpl_connect() for toolbar
+        self.canvas = PyQtGraphCanvasCompat(self.widget)
 
         # Channel management
         self._channel_specs: list[ChannelTrackSpec] = []
