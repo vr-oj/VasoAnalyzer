@@ -167,11 +167,13 @@ class PlotHost:
         specs = self._channel_specs
         height_ratios: list[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
+        # Add vertical gap between tracks (diameter traces) when stacked
+        hspace = 0.15 if row_count > 1 else 0.0
         gs = self.figure.add_gridspec(
             nrows=row_count,
             ncols=1,
             height_ratios=height_ratios,
-            hspace=0.0,
+            hspace=hspace,
         )
 
         shared_ax = None

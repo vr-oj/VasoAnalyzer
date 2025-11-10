@@ -8552,6 +8552,11 @@ QPushButton[isGhost="true"]:hover {{
         if hasattr(self, "data_splitter") and self.data_splitter is not None:
             with contextlib.suppress(Exception):
                 state["splitter_state"] = bytes(self.data_splitter.saveState()).hex()
+        # Save trace visibility state
+        if hasattr(self, "id_toggle_act") and self.id_toggle_act is not None:
+            state["inner_trace_visible"] = self.id_toggle_act.isChecked()
+        if hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
+            state["outer_trace_visible"] = self.od_toggle_act.isChecked()
         return state
 
     def _invalidate_sample_state_cache(self):
@@ -8623,6 +8628,20 @@ QPushButton[isGhost="true"]:hover {{
         plot_layout = state.get("plot_layout")
         if plot_layout:
             self._pending_plot_layout = plot_layout
+        # Restore trace visibility state
+        if "inner_trace_visible" in state and hasattr(self, "id_toggle_act") and self.id_toggle_act is not None:
+            self.id_toggle_act.blockSignals(True)
+            self.id_toggle_act.setChecked(state["inner_trace_visible"])
+            self.id_toggle_act.blockSignals(False)
+        if "outer_trace_visible" in state and hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
+            self.od_toggle_act.blockSignals(True)
+            self.od_toggle_act.setChecked(state["outer_trace_visible"])
+            self.od_toggle_act.blockSignals(False)
+        # Apply the visibility changes after restoring state
+        if "inner_trace_visible" in state or "outer_trace_visible" in state:
+            inner_on = state.get("inner_trace_visible", True)
+            outer_on = state.get("outer_trace_visible", False)
+            self._rebuild_channel_layout(inner_on, outer_on, redraw=False)
         self.canvas.draw_idle()
 
     def apply_sample_state(self, state):
