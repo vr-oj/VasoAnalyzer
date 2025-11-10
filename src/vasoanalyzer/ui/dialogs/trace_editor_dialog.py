@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -24,6 +25,8 @@ from PyQt5.QtWidgets import (
 )
 
 __all__ = ["TraceEditorDialog"]
+
+log = logging.getLogger(__name__)
 
 
 class TraceEditorDialog(QDialog):
@@ -207,7 +210,9 @@ class TraceEditorDialog(QDialog):
 
     # ------------------------------------------------------------------ Event Handlers
 
-    def _on_trace_selection_changed(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
+    def _on_trace_selection_changed(
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None
+    ) -> None:
         """Handle trace selection change."""
         if current is None:
             self._current_trace = None
@@ -238,7 +243,9 @@ class TraceEditorDialog(QDialog):
                 if color:
                     qcolor = QColor(color)
                     if qcolor.isValid():
-                        self._color_display.setStyleSheet(f"background-color: {qcolor.name()}; border: 1px solid black;")
+                        self._color_display.setStyleSheet(
+                            f"background-color: {qcolor.name()}; border: 1px solid black;"
+                        )
             except (AttributeError, TypeError):
                 pass
 
@@ -300,7 +307,7 @@ class TraceEditorDialog(QDialog):
                 self._zorder_spin.setValue(2.0)
 
         except Exception as e:
-            print(f"Warning: Could not load all trace properties: {e}")
+            log.warning("Could not load all trace properties: %s", e, exc_info=True)
         finally:
             self._block_signals(False)
 
@@ -336,7 +343,9 @@ class TraceEditorDialog(QDialog):
         color = QColorDialog.getColor(qcolor, self, "Choose Trace Color")
 
         if color.isValid():
-            self._color_display.setStyleSheet(f"background-color: {color.name()}; border: 1px solid black;")
+            self._color_display.setStyleSheet(
+                f"background-color: {color.name()}; border: 1px solid black;"
+            )
 
     def _on_apply(self) -> None:
         """Apply changes to current trace."""
@@ -350,7 +359,7 @@ class TraceEditorDialog(QDialog):
             try:
                 line.set_visible(self._visible_checkbox.isChecked())
             except (AttributeError, TypeError) as e:
-                print(f"Warning: Could not set visibility: {e}")
+                log.warning("Could not set visibility: %s", e, exc_info=True)
 
             # Apply color
             try:
@@ -363,7 +372,7 @@ class TraceEditorDialog(QDialog):
                         color = match.group(1).strip()
                         line.set_color(color)
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set color: {e}")
+                log.warning("Could not set color: %s", e, exc_info=True)
 
             # Apply line width
             try:
@@ -371,13 +380,13 @@ class TraceEditorDialog(QDialog):
                 if linewidth > 0:
                     line.set_linewidth(linewidth)
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set line width: {e}")
+                log.warning("Could not set line width: %s", e, exc_info=True)
 
             # Apply line style
             try:
                 line.set_linestyle(self._linestyle_combo.currentText())
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set line style: {e}")
+                log.warning("Could not set line style: %s", e, exc_info=True)
 
             # Apply alpha
             try:
@@ -385,7 +394,7 @@ class TraceEditorDialog(QDialog):
                 if 0 <= alpha <= 1:
                     line.set_alpha(alpha)
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set alpha: {e}")
+                log.warning("Could not set alpha: %s", e, exc_info=True)
 
             # Apply marker
             try:
@@ -394,7 +403,7 @@ class TraceEditorDialog(QDialog):
                     marker = ""
                 line.set_marker(marker)
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set marker: {e}")
+                log.warning("Could not set marker: %s", e, exc_info=True)
 
             # Apply marker size
             try:
@@ -402,32 +411,33 @@ class TraceEditorDialog(QDialog):
                 if markersize >= 0:
                     line.set_markersize(markersize)
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set marker size: {e}")
+                log.warning("Could not set marker size: %s", e, exc_info=True)
 
             # Apply z-order
             try:
                 line.set_zorder(self._zorder_spin.value())
             except (AttributeError, ValueError) as e:
-                print(f"Warning: Could not set z-order: {e}")
+                log.warning("Could not set z-order: %s", e, exc_info=True)
 
             # Emit signal
             self.traces_changed.emit({"line": line})
 
             # Redraw canvas
             try:
-                if hasattr(line, 'axes') and hasattr(line.axes, "figure") and hasattr(line.axes.figure, "canvas"):
+                if (
+                    hasattr(line, "axes")
+                    and hasattr(line.axes, "figure")
+                    and hasattr(line.axes.figure, "canvas")
+                ):
                     line.axes.figure.canvas.draw_idle()
             except Exception as e:
-                print(f"Warning: Could not redraw canvas: {e}")
+                log.warning("Could not redraw canvas: %s", e, exc_info=True)
 
         except Exception as e:
-            print(f"Error applying trace changes: {e}")
+            log.error("Error applying trace changes: %s", e, exc_info=True)
             from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "Error",
-                f"Could not apply all changes:\n{str(e)}"
-            )
+
+            QMessageBox.warning(self, "Error", f"Could not apply all changes:\n{str(e)}")
 
 
 if __name__ == "__main__":

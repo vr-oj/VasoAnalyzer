@@ -19,3 +19,9 @@ Replace the SQLite-centric project format with a single durable package that is 
 - Removed stray CPython 3.13 bytecode (`__pycache__`, `*.pyc`) from the repo; they confused PyInstaller 6.x when run with Python 3.10 on Windows.
 - `.gitignore` already blocks future bytecode, but run `python -m compileall --invalidation-mode=unchecked-hash src` locally if you need fresh caches.
 - Before packaging on Windows: `pyinstaller --clean --noconfirm VasoAnalyzer.spec`. The `--clean` flag guarantees PyInstaller re-imports sources and skips stale bytecode from other platforms.
+
+### 2025-11-08 — Snapshot bundle architecture
+
+- Captured an append-only `.vaso` bundle design in `docs/architecture/vaso_snapshot_bundle.md`. Each save writes a fresh `snapshots/00000N.sqlite` and atomically flips `HEAD.json`, so partial writes never corrupt the bundle.
+- Sessions edit against a local staging DB (WAL enabled) and publish snapshots via the SQLite backup API to keep synced folders free of WAL files.
+- Document highlights recovery (`HEAD` repair + quick_check), lock-handling for view-only fallbacks, retention/pruning, and migration steps from legacy single-file projects.

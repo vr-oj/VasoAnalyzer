@@ -38,7 +38,12 @@ class FrameTabRefs:
     origin_mode: QComboBox
     origin_x: QDoubleSpinBox
     origin_y: QDoubleSpinBox
-    size_preset: QComboBox
+    # Canvas size controls (white rectangle boundary)
+    canvas_preset: QComboBox
+    canvas_w: QDoubleSpinBox
+    canvas_h: QDoubleSpinBox
+    # Figure size controls (matplotlib plot)
+    fig_preset: QComboBox
     fig_w: QDoubleSpinBox
     fig_h: QDoubleSpinBox
 
@@ -84,40 +89,77 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
     origin_layout.addLayout(origin_form)
     layout.addWidget(origin_box)
 
-    size_box = QGroupBox("Figure Size", tab)
-    size_layout = QVBoxLayout(size_box)
-    size_layout.setContentsMargins(12, 12, 12, 12)
-    size_layout.setSpacing(8)
+    # Canvas Size Section (white rectangle boundary in Figure Composer)
+    canvas_box = QGroupBox("Canvas Size", tab)
+    canvas_layout = QVBoxLayout(canvas_box)
+    canvas_layout.setContentsMargins(12, 12, 12, 12)
+    canvas_layout.setSpacing(8)
 
-    size_hint = QLabel(
-        "Choose a preset or enter custom width/height (inches) for export and layout decisions.",
-        size_box,
+    canvas_hint = QLabel(
+        "Canvas defines the white rectangle boundary (Figure Composer workspace).",
+        canvas_box,
     )
-    size_hint.setWordWrap(True)
-    size_hint.setObjectName("PlotSettingsHint")
-    size_layout.addWidget(size_hint)
+    canvas_hint.setWordWrap(True)
+    canvas_hint.setObjectName("PlotSettingsHint")
+    canvas_layout.addWidget(canvas_hint)
 
-    size_form = QFormLayout()
-    size_form.setLabelAlignment(Qt.AlignRight)
-    size_form.setHorizontalSpacing(12)
-    size_form.setVerticalSpacing(6)
+    canvas_form = QFormLayout()
+    canvas_form.setLabelAlignment(Qt.AlignRight)
+    canvas_form.setHorizontalSpacing(12)
+    canvas_form.setVerticalSpacing(6)
 
-    size_preset = QComboBox(size_box)
-    size_preset.addItems(["Auto (Wide)", "Square", "Custom"])
-    size_form.addRow("Preset:", size_preset)
+    canvas_preset = QComboBox(canvas_box)
+    canvas_preset.addItems(["Auto (Wide)", "Square", "Custom"])
+    canvas_form.addRow("Preset:", canvas_preset)
 
-    fig_w = QDoubleSpinBox(size_box)
+    canvas_w = QDoubleSpinBox(canvas_box)
+    canvas_w.setRange(1, 30)
+    canvas_w.setDecimals(1)
+    canvas_form.addRow("Width (in):", canvas_w)
+
+    canvas_h = QDoubleSpinBox(canvas_box)
+    canvas_h.setRange(1, 30)
+    canvas_h.setDecimals(1)
+    canvas_form.addRow("Height (in):", canvas_h)
+
+    canvas_layout.addLayout(canvas_form)
+    layout.addWidget(canvas_box)
+
+    # Figure Size Section (matplotlib plot, can be smaller than canvas)
+    fig_box = QGroupBox("Figure Size", tab)
+    fig_layout = QVBoxLayout(fig_box)
+    fig_layout.setContentsMargins(12, 12, 12, 12)
+    fig_layout.setSpacing(8)
+
+    fig_hint = QLabel(
+        "Figure is the matplotlib plot (can be smaller than canvas, will be centered).",
+        fig_box,
+    )
+    fig_hint.setWordWrap(True)
+    fig_hint.setObjectName("PlotSettingsHint")
+    fig_layout.addWidget(fig_hint)
+
+    fig_form = QFormLayout()
+    fig_form.setLabelAlignment(Qt.AlignRight)
+    fig_form.setHorizontalSpacing(12)
+    fig_form.setVerticalSpacing(6)
+
+    fig_preset = QComboBox(fig_box)
+    fig_preset.addItems(["Fill Canvas", "Square", "Custom"])
+    fig_form.addRow("Preset:", fig_preset)
+
+    fig_w = QDoubleSpinBox(fig_box)
     fig_w.setRange(1, 30)
     fig_w.setDecimals(1)
-    size_form.addRow("Width (in):", fig_w)
+    fig_form.addRow("Width (in):", fig_w)
 
-    fig_h = QDoubleSpinBox(size_box)
+    fig_h = QDoubleSpinBox(fig_box)
     fig_h.setRange(1, 30)
     fig_h.setDecimals(1)
-    size_form.addRow("Height (in):", fig_h)
+    fig_form.addRow("Height (in):", fig_h)
 
-    size_layout.addLayout(size_form)
-    layout.addWidget(size_box)
+    fig_layout.addLayout(fig_form)
+    layout.addWidget(fig_box)
 
     layout.addStretch(1)
 
@@ -126,7 +168,10 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
         origin_mode=origin_mode,
         origin_x=origin_x,
         origin_y=origin_y,
-        size_preset=size_preset,
+        canvas_preset=canvas_preset,
+        canvas_w=canvas_w,
+        canvas_h=canvas_h,
+        fig_preset=fig_preset,
         fig_w=fig_w,
         fig_h=fig_h,
     )
@@ -134,23 +179,61 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
 
 def populate_frame_tab(dialog: DialogT) -> None:
     """Populate Frame tab controls with the current dialog state."""
+    # Get parent window (FigureComposerWindow)
+    parent = getattr(dialog, "parent_window", None)
 
-    fig_w, fig_h = dialog.fig.get_size_inches()
+    # Get figure size from parent state variables (not from matplotlib!)
+    # Reading from matplotlib gives wrong values after zoom changes DPI
+    if parent and hasattr(parent, "_figure_width_in"):
+        fig_w = parent._figure_width_in
+        fig_h = parent._figure_height_in
+    else:
+        # Fallback for main window (no zoom system)
+        fig_w, fig_h = dialog.fig.get_size_inches()
+
+    # Get canvas size from parent window
+    canvas_w = getattr(parent, "_canvas_width_in", fig_w)
+    canvas_h = getattr(parent, "_canvas_height_in", fig_h)
+
     widgets = [
         dialog.origin_mode,
         dialog.origin_x,
         dialog.origin_y,
-        dialog.size_preset,
+        dialog.canvas_preset,
+        dialog.canvas_w,
+        dialog.canvas_h,
+        dialog.fig_preset,
         dialog.fig_w,
         dialog.fig_h,
     ]
 
     with block_signals(widgets):
+        # Origin controls
         dialog.origin_mode.setCurrentText("Automatic")
         dialog.origin_x.setValue(0.0)
         dialog.origin_y.setValue(0.0)
 
-        dialog.size_preset.setCurrentText("Auto (Wide)")
+        # Canvas preset detection
+        default_w = getattr(parent, "_default_frame_width_in", 10.0)
+        default_h = getattr(parent, "_default_frame_height_in", 7.5)
+        if abs(canvas_w - default_w) < 0.05 and abs(canvas_h - default_h) < 0.05:
+            canvas_preset = "Auto (Wide)"
+        elif abs(canvas_w - canvas_h) < 0.05:
+            canvas_preset = "Square"
+        else:
+            canvas_preset = "Custom"
+        dialog.canvas_preset.setCurrentText(canvas_preset)
+        dialog.canvas_w.setValue(round(canvas_w, 1))
+        dialog.canvas_h.setValue(round(canvas_h, 1))
+
+        # Figure preset detection
+        if abs(fig_w - canvas_w) < 0.05 and abs(fig_h - canvas_h) < 0.05:
+            fig_preset = "Fill Canvas"
+        elif abs(fig_w - fig_h) < 0.05:
+            fig_preset = "Square"
+        else:
+            fig_preset = "Custom"
+        dialog.fig_preset.setCurrentText(fig_preset)
         dialog.fig_w.setValue(round(fig_w, 1))
         dialog.fig_h.setValue(round(fig_h, 1))
 
@@ -162,6 +245,7 @@ def wire_frame_tab(dialog: DialogT) -> None:
         return
 
     dialog.origin_mode.currentTextChanged.connect(dialog._toggle_origin_inputs)
-    dialog.size_preset.currentTextChanged.connect(dialog._toggle_size_inputs)
+    dialog.canvas_preset.currentTextChanged.connect(dialog._toggle_canvas_size_inputs)
+    dialog.fig_preset.currentTextChanged.connect(dialog._toggle_fig_size_inputs)
 
     dialog._frame_tab_wired = True

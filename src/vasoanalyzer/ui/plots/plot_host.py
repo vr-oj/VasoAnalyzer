@@ -53,7 +53,7 @@ class PlotHost:
             constrained_layout=False,
         )
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.figure.subplots_adjust(left=0.095, right=0.985, top=0.985, bottom=0.115)
+        self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
         self._channel_specs: list[ChannelTrackSpec] = []
         self._tracks: dict[str, ChannelTrack] = {}
         self._axes_map: dict[Axes, ChannelTrack] = {}
@@ -157,7 +157,7 @@ class PlotHost:
 
         self._destroy_event_labeler()
         self.figure.clf()
-        self.figure.subplots_adjust(left=0.095, right=0.985, top=0.985, bottom=0.115)
+        self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
         self._tracks.clear()
         self._axes_map.clear()
         if not self._channel_specs:

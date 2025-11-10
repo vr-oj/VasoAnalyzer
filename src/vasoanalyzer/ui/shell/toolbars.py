@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any
 
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QKeySequence
-from PyQt5.QtWidgets import QAction, QMenu, QToolButton
+from PyQt5.QtWidgets import QAction
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
@@ -193,18 +193,6 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     toolbar.addAction(window.actEditPoints)
 
     window._ensure_event_label_actions()
-    label_menu = QMenu(window)
-    label_menu.addAction(window.actEventLabelsVertical)
-    label_menu.addAction(window.actEventLabelsHorizontal)
-    label_menu.addAction(window.actEventLabelsOutside)
-    window._toolbar_event_label_menu = label_menu
-
-    window.event_label_button = QToolButton()
-    window.event_label_button.setToolTip("Select event label mode")
-    window.event_label_button.setPopupMode(QToolButton.InstantPopup)
-    window.event_label_button.setMenu(label_menu)
-    toolbar.addWidget(window.event_label_button)
-
     window._sync_event_controls()
     window._sync_grid_action()
     window._update_trace_controls_state()

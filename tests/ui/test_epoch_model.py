@@ -143,10 +143,55 @@ class TestEventConversion:
         assert epochs[0].channel == "Drug"
         assert epochs[0].label == "Drug A"
         assert epochs[0].t_start == 100.0
-        assert epochs[0].t_end == 160.0  # 100 + 60
+        # Next event in same channel occurs at t=200 → infer end from that
+        assert epochs[0].t_end == 200.0
 
         assert epochs[2].channel == "Pressure"
         assert epochs[2].style == "box"
+        # No subsequent pressure event → default duration applied
+        assert epochs[2].t_end == 360.0
+
+    def test_events_to_epochs_uses_next_within_channel(self):
+        """Durations should extend to the next event in the same channel."""
+        event_times = [0.0, 120.0, 240.0]
+        event_labels = ["Drug A on", "Drug A boost", "Drug B"]
+        event_label_meta = [
+            {"category": "drug"},
+            {"category": "drug"},
+            {"category": "drug"},
+        ]
+
+        epochs = events_to_epochs(
+            event_times,
+            event_labels,
+            event_label_meta,
+            default_duration=30.0,
+        )
+
+        assert len(epochs) == 3
+        assert epochs[0].t_start == 0.0
+        assert epochs[0].t_end == 120.0  # stretches to next drug event
+        assert epochs[1].t_end == 240.0  # stretches to following drug event
+        assert epochs[2].t_end == 270.0  # falls back to default duration
+
+    def test_events_to_epochs_respects_metadata_duration(self):
+        """Explicit duration/t_end metadata should override inferred values."""
+        event_times = [10.0, 50.0]
+        event_labels = ["Custom", "Custom"]
+        event_label_meta = [
+            {"category": "custom", "duration": 5},
+            {"category": "custom", "t_end": 120.0},
+        ]
+
+        epochs = events_to_epochs(
+            event_times,
+            event_labels,
+            event_label_meta,
+            default_duration=30.0,
+        )
+
+        assert epochs[0].t_end == 15.0  # uses duration field
+        assert epochs[1].t_end == 120.0  # uses explicit t_end value
 
     def test_pressure_setpoints_to_epochs(self):
         """Test pressure setpoint conversion."""
