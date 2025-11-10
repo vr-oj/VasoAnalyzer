@@ -519,10 +519,14 @@ class PyQtGraphPlotHost:
         pass
 
     def set_event_labels_visible(self, visible: bool) -> None:
-        """Set event labels visibility (compatibility stub)."""
-        # PyQtGraph uses TextItem for event labels - they're controlled per-track
-        # This is a no-op for now
-        pass
+        """Set event labels visibility.
+
+        Args:
+            visible: Whether to show event labels
+        """
+        # Propagate visibility to all tracks
+        for track in self._tracks.values():
+            track.view.set_event_labels_visible(visible)
 
     def set_event_label_mode(self, mode: str) -> None:
         """Set event label mode (compatibility stub - extended)."""
