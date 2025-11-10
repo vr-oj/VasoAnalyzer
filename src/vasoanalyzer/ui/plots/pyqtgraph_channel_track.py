@@ -10,6 +10,7 @@ import pyqtgraph as pg
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.pyqtgraph_axes_compat import PyQtGraphAxesCompat
+from vasoanalyzer.ui.plots.pyqtgraph_line_compat import PyQtGraphLineCompat
 from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
 
 __all__ = ["PyQtGraphChannelTrack"]
@@ -46,6 +47,9 @@ class PyQtGraphChannelTrack:
 
         # Create matplotlib-compatible axes wrapper
         self._ax_compat: PyQtGraphAxesCompat | None = None
+
+        # Create matplotlib-compatible line wrapper
+        self._line_compat: PyQtGraphLineCompat | None = None
 
         # Enable autoscale by default
         self.view.set_autoscale_y(True)
@@ -84,9 +88,11 @@ class PyQtGraphChannelTrack:
         """Get the primary trace line (matplotlib ChannelTrack compatibility).
 
         Returns:
-            PlotDataItem for inner diameter trace
+            Wrapped PlotDataItem with matplotlib Line2D-compatible interface
         """
-        return self.view.inner_curve
+        if self._line_compat is None:
+            self._line_compat = PyQtGraphLineCompat(self.view.inner_curve)
+        return self._line_compat
 
     def set_model(self, model: TraceModel) -> None:
         """Attach the shared TraceModel to this track."""
