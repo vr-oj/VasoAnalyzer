@@ -121,7 +121,7 @@ class PyQtGraphPlotHost:
             return
 
         # Create new tracks
-        for spec in self._channel_specs:
+        for idx, spec in enumerate(self._channel_specs):
             track = PyQtGraphChannelTrack(spec, enable_opengl=self._enable_opengl)
 
             # Add to layout with stretch factor based on height ratio
@@ -129,6 +129,17 @@ class PyQtGraphPlotHost:
             self.layout.addWidget(track.widget, stretch)
 
             self._tracks[spec.track_id] = track
+
+            # Hide x-axis labels on all tracks except the last (bottom) one
+            is_bottom_track = (idx == len(self._channel_specs) - 1)
+            plot_item = track.view.get_widget().getPlotItem()
+            if not is_bottom_track:
+                # Hide x-axis label and tick labels on non-bottom tracks
+                plot_item.getAxis('bottom').setLabel('')
+                plot_item.getAxis('bottom').setStyle(showValues=False)
+            else:
+                # Ensure bottom track shows x-axis
+                plot_item.getAxis('bottom').setStyle(showValues=True)
 
             # Apply model if already set
             if self._model is not None:

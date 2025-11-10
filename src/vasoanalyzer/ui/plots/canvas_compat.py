@@ -9,6 +9,27 @@ from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import QWidget, QVBoxLayout
 
 
+class _DummyWidgetLock:
+    """Dummy widget lock for matplotlib toolbar compatibility.
+
+    Matplotlib toolbars use widgetlock to prevent multiple tools
+    from being active simultaneously. PyQtGraph doesn't need this,
+    so we provide a dummy that always returns True for availability.
+    """
+
+    def available(self, *args, **kwargs) -> bool:
+        """Always return True - no locking needed for PyQtGraph."""
+        return True
+
+    def __call__(self, *args, **kwargs):
+        """Make it callable for compatibility."""
+        return self
+
+    def release(self, *args, **kwargs):
+        """Release lock (no-op for PyQtGraph)."""
+        pass
+
+
 class PyQtGraphCanvasCompat(QWidget):
     """Compatibility wrapper for PyQtGraph canvas to support matplotlib event connections.
 
@@ -27,7 +48,11 @@ class PyQtGraphCanvasCompat(QWidget):
             "figure_leave_event": [],
         }
         self._connection_ids: int = 0
-        self.toolbar: Any = None  # Compatibility attribute
+
+        # Matplotlib compatibility attributes
+        self.toolbar: Any = None
+        self.figure: Any = None  # PyQtGraph doesn't use matplotlib Figure
+        self.widgetlock: Any = _DummyWidgetLock()  # For toolbar pan/zoom compatibility
 
         # Create layout and add the PyQtGraph widget to it
         # This ensures the canvas wrapper actually displays the plots
