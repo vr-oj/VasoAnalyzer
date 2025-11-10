@@ -1,0 +1,435 @@
+"""PyQtGraph-based trace view with GPU-accelerated rendering."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor
+
+from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
+from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
+from vasoanalyzer.ui.theme import CURRENT_THEME
+
+
+class PyQtGraphTraceView(AbstractTraceRenderer):
+    """GPU-accelerated trace renderer using PyQtGraph.
+
+    Provides high-performance interactive rendering while maintaining
+    visual compatibility with the matplotlib-based renderer.
+    """
+
+    def __init__(
+        self,
+        *,
+        mode: str = "dual",
+        y_label: str | None = None,
+        enable_opengl: bool = True,
+    ) -> None:
+        """Initialize PyQtGraph trace view.
+
+        Args:
+            mode: Rendering mode - "inner", "outer", or "dual" (both channels)
+            y_label: Custom Y-axis label
+            enable_opengl: Enable GPU acceleration (default: True)
+        """
+        if mode not in {"inner", "outer", "dual"}:
+            raise ValueError(f"Unsupported trace view mode: {mode}")
+
+        self._mode = mode
+        self._explicit_ylabel = y_label
+        self._enable_opengl = enable_opengl
+
+        # Create plot widget with optimizations
+        self._plot_widget = pg.PlotWidget()
+        self._plot_item = self._plot_widget.getPlotItem()
+
+        # Enable OpenGL acceleration for better performance
+        if self._enable_opengl:
+            try:
+                self._plot_widget.useOpenGL(True)
+            except Exception:
+                # OpenGL not available, fall back to software rendering
+                pass
+
+        # Configure plot appearance
+        self._plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self._plot_item.setMenuEnabled(False)  # Disable right-click menu
+
+        # Data model and state
+        self.model: TraceModel | None = None
+        self._current_window: TraceWindow | None = None
+        self._autoscale_y = True
+
+        # Plot items
+        self.inner_curve: pg.PlotDataItem | None = None
+        self.outer_curve: pg.PlotDataItem | None = None
+        self.event_lines: list[pg.InfiniteLine] = []
+
+        # Create initial plot items
+        self._create_plot_items()
+
+        # Apply theme
+        self._apply_theme()
+
+    def _create_plot_items(self) -> None:
+        """Create PyQtGraph plot items for traces and events."""
+        # Inner diameter trace (primary)
+        theme_color = CURRENT_THEME.get("trace_color", "#000000")
+        self.inner_curve = self._plot_item.plot(
+            pen=pg.mkPen(color=theme_color, width=1.5),
+            antialias=True,
+            name="Inner Diameter",
+        )
+
+        # Outer diameter trace (secondary, if dual mode)
+        if self._mode == "dual":
+            outer_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
+            self.outer_curve = self._plot_item.plot(
+                pen=pg.mkPen(color=outer_color, width=1.2),
+                antialias=True,
+                name="Outer Diameter",
+            )
+
+    def _apply_theme(self) -> None:
+        """Apply color theme from CURRENT_THEME."""
+        # Background colors
+        bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        self._plot_widget.setBackground(bg_color)
+
+        # Axis colors
+        text_color = CURRENT_THEME.get("text", "#000000")
+        for axis in ["bottom", "left", "right"]:
+            ax = self._plot_item.getAxis(axis)
+            ax.setPen(text_color)
+            ax.setTextPen(text_color)
+
+        # Grid color
+        grid_color = CURRENT_THEME.get("grid_color", "#E0E0E0")
+        self._plot_item.showGrid(x=True, y=True, alpha=0.3)
+
+    def get_widget(self) -> pg.PlotWidget:
+        """Return the PyQtGraph PlotWidget for embedding."""
+        return self._plot_widget
+
+    def set_model(self, model: TraceModel) -> None:
+        """Set the trace data model."""
+        self.model = model
+        self._current_window = None
+
+        # Set axis labels
+        self._plot_item.setLabel("bottom", "Time (s)")
+        ylabel = self._explicit_ylabel or self._default_ylabel()
+        self._plot_item.setLabel("left", ylabel)
+
+        # Set initial X range to full data range
+        if model is not None:
+            x0, x1 = model.full_range
+            self._plot_item.setXRange(x0, x1, padding=0.02)
+
+    def _default_ylabel(self) -> str:
+        """Get default Y-axis label based on mode."""
+        if self._mode == "outer":
+            return "Outer Diameter (µm)"
+        return "Inner Diameter (µm)"
+
+    def set_events(
+        self,
+        times: Sequence[float],
+        colors: Sequence[str] | None = None,
+        labels: Sequence[str] | None = None,
+    ) -> None:
+        """Set event markers to display as vertical lines."""
+        # Clear existing event lines
+        for line in self.event_lines:
+            self._plot_item.removeItem(line)
+        self.event_lines.clear()
+
+        if not times:
+            return
+
+        # Default event color
+        default_color = CURRENT_THEME.get("event_line", "#8A8A8A")
+
+        # Create infinite vertical lines for each event
+        for i, time in enumerate(times):
+            # Determine color for this event
+            if colors is not None and i < len(colors):
+                color = colors[i]
+            else:
+                color = default_color
+
+            # Create dashed vertical line
+            line = pg.InfiniteLine(
+                pos=time,
+                angle=90,
+                pen=pg.mkPen(color=color, width=1.2, style=Qt.DashLine),
+                movable=False,
+            )
+            line.setZValue(5)  # Draw above traces
+
+            # Add label if provided
+            if labels is not None and i < len(labels):
+                # Store label for potential tooltip/overlay rendering
+                line.label = labels[i]
+
+            self._plot_item.addItem(line)
+            self.event_lines.append(line)
+
+    def update_window(
+        self, x0: float, x1: float, *, pixel_width: int | None = None
+    ) -> None:
+        """Update the visible time window with LOD selection."""
+        if self.model is None:
+            return
+
+        # Calculate pixel width if not provided
+        if pixel_width is None:
+            view_rect = self._plot_item.viewRect()
+            pixel_width = max(int(view_rect.width()), 1)
+
+        # Get appropriate LOD level
+        level_idx = self.model.best_level_for_window(x0, x1, pixel_width)
+        window = self.model.window(level_idx, x0, x1)
+        self._current_window = window
+
+        # Update trace data
+        self._apply_window(window)
+
+        # Update visible event markers (hide events outside window)
+        self._update_event_visibility(x0, x1)
+
+    def _apply_window(self, window: TraceWindow) -> None:
+        """Apply windowed data to plot curves."""
+        time = window.time
+        if time.size == 0:
+            if self.inner_curve is not None:
+                self.inner_curve.setData([], [])
+            if self.outer_curve is not None:
+                self.outer_curve.setData([], [])
+            return
+
+        # Update primary trace (inner or outer depending on mode)
+        primary = self._primary_series(window)
+        if primary is not None and self.inner_curve is not None:
+            mean, ymin, ymax = primary
+            # For now, just plot the mean line
+            # TODO: Add uncertainty bands using FillBetweenItem
+            self.inner_curve.setData(time, mean)
+
+            # Autoscale Y if enabled
+            if self._autoscale_y:
+                y_min = float(np.nanmin(ymin))
+                y_max = float(np.nanmax(ymax))
+
+                # Include outer diameter in autoscale if dual mode
+                if self._mode == "dual":
+                    secondary = self._secondary_series(window)
+                    if secondary is not None:
+                        _, ymin2, ymax2 = secondary
+                        y_min = min(y_min, float(np.nanmin(ymin2)))
+                        y_max = max(y_max, float(np.nanmax(ymax2)))
+
+                # Set Y range with small padding
+                if np.isfinite(y_min) and np.isfinite(y_max):
+                    padding = (y_max - y_min) * 0.05
+                    self._plot_item.setYRange(y_min - padding, y_max + padding)
+
+        # Update secondary trace (outer diameter in dual mode)
+        if self._mode == "dual" and self.outer_curve is not None:
+            secondary = self._secondary_series(window)
+            if secondary is not None:
+                mean2, _, _ = secondary
+                self.outer_curve.setData(time, mean2)
+            else:
+                self.outer_curve.setData([], [])
+
+    def _primary_series(
+        self, window: TraceWindow
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Get primary data series based on mode."""
+        if self._mode == "outer":
+            if (
+                window.outer_mean is None
+                or window.outer_min is None
+                or window.outer_max is None
+            ):
+                return None
+            return window.outer_mean, window.outer_min, window.outer_max
+        return window.inner_mean, window.inner_min, window.inner_max
+
+    def _secondary_series(
+        self, window: TraceWindow
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+        """Get secondary data series (outer in dual mode)."""
+        if self._mode == "dual":
+            if (
+                window.outer_mean is None
+                or window.outer_min is None
+                or window.outer_max is None
+            ):
+                return None
+            return window.outer_mean, window.outer_min, window.outer_max
+        return None
+
+    def _update_event_visibility(self, x0: float, x1: float) -> None:
+        """Show/hide event markers based on visible window."""
+        # PyQtGraph handles clipping automatically, but we could
+        # optimize by hiding lines far outside the viewport
+        pass
+
+    def set_xlim(self, x0: float, x1: float) -> None:
+        """Set X-axis limits."""
+        self._plot_item.setXRange(x0, x1, padding=0)
+
+    def set_ylim(self, y0: float, y1: float) -> None:
+        """Set Y-axis limits."""
+        self._plot_item.setYRange(y0, y1, padding=0)
+        self._autoscale_y = False  # Disable autoscale when manually set
+
+    def get_xlim(self) -> tuple[float, float]:
+        """Get current X-axis limits."""
+        x_range = self._plot_item.viewRange()[0]
+        return float(x_range[0]), float(x_range[1])
+
+    def get_ylim(self) -> tuple[float, float]:
+        """Get current Y-axis limits."""
+        y_range = self._plot_item.viewRange()[1]
+        return float(y_range[0]), float(y_range[1])
+
+    def autoscale_y(self) -> None:
+        """Autoscale Y-axis to fit visible data."""
+        if self._current_window is None:
+            return
+
+        # Recalculate Y limits from current window
+        self._autoscale_y = True
+        self._apply_window(self._current_window)
+
+    def set_autoscale_y(self, enabled: bool) -> None:
+        """Enable/disable Y-axis autoscaling."""
+        self._autoscale_y = enabled
+        if enabled:
+            self.autoscale_y()
+
+    def refresh(self) -> None:
+        """Force a complete redraw."""
+        if self._current_window is not None:
+            self._apply_window(self._current_window)
+
+    def current_window(self) -> TraceWindow | None:
+        """Get the currently displayed data window."""
+        return self._current_window
+
+    def data_limits(self) -> tuple[float, float] | None:
+        """Get Y-axis data limits for current window."""
+        window = self._current_window
+        if window is None:
+            return None
+
+        if self._mode == "outer":
+            series_min = window.outer_min
+            series_max = window.outer_max
+        elif self._mode == "dual":
+            parts = []
+            if (
+                window.inner_min is not None
+                and window.inner_max is not None
+            ):
+                parts.append(
+                    (
+                        np.nanmin(window.inner_min),
+                        np.nanmax(window.inner_max),
+                    )
+                )
+            if (
+                window.outer_min is not None
+                and window.outer_max is not None
+            ):
+                parts.append(
+                    (
+                        np.nanmin(window.outer_min),
+                        np.nanmax(window.outer_max),
+                    )
+                )
+            if not parts:
+                return None
+            ymin = min(p[0] for p in parts)
+            ymax = max(p[1] for p in parts)
+            if not np.isfinite(ymin) or not np.isfinite(ymax):
+                return None
+            return float(ymin), float(ymax)
+        else:
+            series_min = window.inner_min
+            series_max = window.inner_max
+
+        if series_min is None or series_max is None:
+            return None
+
+        try:
+            ymin = float(np.nanmin(series_min))
+            ymax = float(np.nanmax(series_max))
+        except ValueError:
+            return None
+
+        if not np.isfinite(ymin) or not np.isfinite(ymax):
+            return None
+        return ymin, ymax
+
+    def set_xlabel(self, label: str) -> None:
+        """Set X-axis label."""
+        self._plot_item.setLabel("bottom", label)
+
+    def set_ylabel(self, label: str) -> None:
+        """Set Y-axis label."""
+        self._plot_item.setLabel("left", label)
+
+    def set_title(self, title: str) -> None:
+        """Set plot title."""
+        self._plot_item.setTitle(title)
+
+    def apply_style(self, style: dict[str, Any]) -> None:
+        """Apply visual styling to the renderer.
+
+        Args:
+            style: Dictionary with keys like:
+                - trace_color: Inner diameter line color
+                - trace_color_secondary: Outer diameter line color
+                - event_line_color: Event marker color
+                - background_color: Plot background
+                - grid_color: Grid line color
+        """
+        # Update trace colors
+        if "trace_color" in style and self.inner_curve is not None:
+            pen = pg.mkPen(color=style["trace_color"], width=1.5)
+            self.inner_curve.setPen(pen)
+
+        if (
+            "trace_color_secondary" in style
+            and self.outer_curve is not None
+        ):
+            pen = pg.mkPen(color=style["trace_color_secondary"], width=1.2)
+            self.outer_curve.setPen(pen)
+
+        # Update background
+        if "background_color" in style:
+            self._plot_widget.setBackground(style["background_color"])
+
+        # Update grid
+        if "grid_color" in style:
+            # PyQtGraph grid styling is limited
+            pass
+
+        # Update event line colors
+        if "event_line_color" in style:
+            event_color = style["event_line_color"]
+            for line in self.event_lines:
+                pen = pg.mkPen(color=event_color, width=1.2, style=Qt.DashLine)
+                line.setPen(pen)
+
+    def get_render_backend(self) -> str:
+        """Get the rendering backend identifier."""
+        return "pyqtgraph"

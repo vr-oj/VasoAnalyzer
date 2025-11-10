@@ -198,9 +198,35 @@ class TraceModel:
         )
 
     def best_level_for_window(self, x0: float, x1: float, pixel_width: int) -> int:
-        # Always return Level 0 (raw data, no aggregation)
-        # Users should see their data exactly as loaded
-        return 0
+        """Select LOD level to ensure ~2-3 points per pixel for optimal rendering.
+
+        This balances visual quality (shows all features) with performance
+        (doesn't render invisible detail). The min/max envelope ensures no
+        data is lost even when downsampled.
+        """
+        if pixel_width <= 0 or not self._levels:
+            return 0
+
+        # Calculate approximate points in window from full dataset
+        time = self._time_full
+        mask = (time >= x0) & (time <= x1)
+        points_in_window = np.count_nonzero(mask)
+
+        # If very few points, always use raw data
+        if points_in_window < pixel_width:
+            return 0
+
+        # Target: 2.5 points per pixel for smooth rendering without overdraw
+        # This provides good visual quality while avoiding wasted GPU/CPU work
+        target_points = pixel_width * 2.5
+
+        # Select the coarsest LOD level that still meets our target
+        for i, level in enumerate(self._levels):
+            if level.time_centers.size <= target_points:
+                return i
+
+        # If all levels have too many points, use the coarsest available
+        return len(self._levels) - 1
 
     def window(self, level_index: int, x0: float, x1: float) -> TraceWindow:
         key = (level_index, float(x0), float(x1))

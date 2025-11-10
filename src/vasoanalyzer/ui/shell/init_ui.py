@@ -24,7 +24,7 @@ from vasoanalyzer.ui.event_table_controller import EventTableController
 from vasoanalyzer.ui.interactions import InteractionController
 from vasoanalyzer.ui.panels.home_page import HomePage
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
-from vasoanalyzer.ui.plots.plot_host import PlotHost
+from vasoanalyzer.ui.plots.renderer_factory import create_plot_host
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -49,7 +49,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.main_layout.setSpacing(12)
 
     dpi = int(QApplication.primaryScreen().logicalDotsPerInch())
-    window.plot_host = PlotHost(dpi=dpi)
+    window.plot_host = create_plot_host(dpi=dpi)
     window.fig = window.plot_host.figure
     window.canvas = window.plot_host.canvas
     window.canvas.setMouseTracking(True)

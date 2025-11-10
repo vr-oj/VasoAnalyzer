@@ -8,6 +8,7 @@ h5py>=3.14.0
 
 # GUI
 PyQt5>=5.15
+pyqtgraph>=0.13.0
 
 # Excel export
 openpyxl>=3.0
