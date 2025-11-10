@@ -19,13 +19,13 @@ def get_default_renderer_type() -> Literal["matplotlib", "pyqtgraph"]:
     """Get the default renderer type based on feature flags.
 
     The renderer can be controlled via the VA_FEATURES environment variable:
-    - VA_FEATURES=pyqtgraph_renderer  -> Use PyQtGraph (GPU-accelerated)
-    - VA_FEATURES=!pyqtgraph_renderer -> Use matplotlib (default)
+    - VA_FEATURES=pyqtgraph_renderer  -> Use PyQtGraph (GPU-accelerated, DEFAULT)
+    - VA_FEATURES=!pyqtgraph_renderer -> Use matplotlib (legacy)
 
     Returns:
-        "pyqtgraph" if enabled, otherwise "matplotlib"
+        "pyqtgraph" if enabled (default), otherwise "matplotlib"
     """
-    if is_enabled("pyqtgraph_renderer", default=False):
+    if is_enabled("pyqtgraph_renderer", default=True):
         return "pyqtgraph"
     return "matplotlib"
 
@@ -83,6 +83,6 @@ def supports_export(plot_host: PlotHostType) -> bool:
         True if the plot host can export high-quality figures
     """
     backend = plot_host.get_render_backend()
-    # Currently, only matplotlib supports high-quality export
-    # PyQtGraph export will be added in Phase 2
-    return backend == "matplotlib"
+    # Both backends now support high-quality export
+    # PyQtGraph uses matplotlib export bridge for publication quality
+    return backend in ("matplotlib", "pyqtgraph")

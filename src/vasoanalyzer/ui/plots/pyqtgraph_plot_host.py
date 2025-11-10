@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import QVBoxLayout, QWidget
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
+from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
 from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
     PyQtGraphEventHighlightOverlay,
@@ -309,3 +310,102 @@ class PyQtGraphPlotHost:
     def clear_event_highlight(self) -> None:
         """Clear event highlight."""
         self._event_highlight_overlay.clear()
+
+    def capture_view_state(self) -> ExportViewState:
+        """Capture current view state for export.
+
+        Returns:
+            ExportViewState with all current view parameters
+        """
+        # Get current view range from first visible track
+        xlim = (0.0, 1.0)
+        ylim = (0.0, 1.0)
+        if self._tracks:
+            first_track = next(iter(self._tracks.values()))
+            xlim = first_track.get_xlim()
+            ylim = first_track.get_ylim()
+
+        # Get height ratios
+        height_ratios = {
+            spec.track_id: spec.height_ratio
+            for spec in self._channel_specs
+        }
+
+        # Get visible tracks
+        visible_tracks = [
+            track_id
+            for track_id, track in self._tracks.items()
+            if track.is_visible()
+        ]
+
+        # Capture style (basic for now)
+        style = {
+            "show_uncertainty": False,  # Can be configured
+            "background_color": CURRENT_THEME.get("window_bg", "#FFFFFF"),
+        }
+
+        return ExportViewState(
+            trace_model=self._model,
+            xlim=xlim,
+            ylim=ylim,
+            channel_specs=self._channel_specs,
+            visible_tracks=visible_tracks,
+            event_times=self._event_times,
+            event_colors=self._event_colors,
+            event_labels=self._event_labels,
+            style=style,
+            height_ratios=height_ratios,
+            show_grid=True,
+            show_legend=False,
+        )
+
+    def export_to_file(
+        self,
+        filename: str,
+        *,
+        dpi: int = 600,
+        figsize: tuple[float, float] | None = None,
+        format: str | None = None,
+        **kwargs,
+    ) -> None:
+        """Export current view to file using matplotlib for high quality.
+
+        Args:
+            filename: Output filename
+            dpi: Export DPI (default: 600 for publication quality)
+            figsize: Figure size in inches (width, height)
+            format: File format (auto-detected from filename if None)
+            **kwargs: Additional arguments for savefig
+        """
+        # Capture current view state
+        view_state = self.capture_view_state()
+
+        # Create export renderer
+        renderer = MatplotlibExportRenderer(dpi=dpi)
+
+        # Render with matplotlib
+        renderer.render(view_state, figsize=figsize)
+
+        # Save to file
+        renderer.save(filename, format=format, **kwargs)
+
+        # Cleanup
+        renderer.close()
+
+    def create_export_figure(
+        self,
+        dpi: int = 300,
+        figsize: tuple[float, float] | None = None,
+    ):
+        """Create a matplotlib Figure for export preview or customization.
+
+        Args:
+            dpi: Export DPI
+            figsize: Figure size in inches
+
+        Returns:
+            Matplotlib Figure
+        """
+        view_state = self.capture_view_state()
+        renderer = MatplotlibExportRenderer(dpi=dpi)
+        return renderer.render(view_state, figsize=figsize)
