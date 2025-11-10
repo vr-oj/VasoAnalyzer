@@ -5,19 +5,25 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import Any, cast
 
 from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QCloseEvent, QIcon, QKeySequence
+from PyQt5.QtGui import QCloseEvent, QColor, QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
+    QActionGroup,
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QFormLayout,
     QFrame,
     QGroupBox,
+    QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -38,6 +44,7 @@ from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.builtin_presets import get_builtin_presets
 from vasoanalyzer.ui.constants import DEFAULT_STYLE
 from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedPlotSettingsDialog
+from vasoanalyzer.ui.manual_annotation_tool import ManualAnnotationController
 
 # NOTE: Old dock system imports removed - using fixed three-panel layout
 # from vasoanalyzer.ui.docks.advanced_style_dock import AdvancedStyleDock
@@ -46,13 +53,6 @@ from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedPlotSettingsD
 # from vasoanalyzer.ui.docks.preset_library_dock import PresetLibraryDock
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.plot_host import LayoutState, PlotHost
-from vasoanalyzer.ui.publication import (
-    Epoch,
-    EpochEditorDialog,
-    EpochLayer,
-    EpochTheme,
-    events_to_epochs,
-)
 from vasoanalyzer.ui.style_manager import PlotStyleManager
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
@@ -114,6 +114,9 @@ class FigureComposerWindow(QMainWindow):
     # Signal emitted when window closes
     studio_closed = pyqtSignal()
 
+    # Signal emitted when manual annotations change
+    annotations_changed = pyqtSignal(list)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Figure Composer")
@@ -128,13 +131,20 @@ class FigureComposerWindow(QMainWindow):
         self._channel_specs: list[ChannelTrackSpec] = []
         self._layout_state: LayoutState | None = None
 
-        # Epoch overlay state
-        self._epochs: list[Epoch] = []
-        self._epoch_layer: EpochLayer | None = None
-        self._epoch_theme: EpochTheme = EpochTheme()
-        self._epochs_visible: bool = True
-        self._epoch_margin_px: float = 0.0
-        self._user_subplot_top: float = 0.96
+        # Manual annotation state
+        self._annotation_controller: ManualAnnotationController | None = None
+        self._annotation_state: list[dict[str, Any]] = []
+        self._annotation_selection: dict[str, Any] | None = None
+        self._annotation_controls_block = False
+        self._annotation_style_defaults: dict[str, Any] = {
+            "stroke": "#1D5CFF",
+            "fill": "#FFFFFF",
+            "line_width": 2.0,
+            "linestyle": "solid",
+            "font_size": 14.0,
+            "arrow_style": "arrow",
+            "text_color": "#1D5CFF",
+        }
 
         # Style management
         self._style_manager: PlotStyleManager | None = None
@@ -199,6 +209,7 @@ class FigureComposerWindow(QMainWindow):
         channel_specs: list[ChannelTrackSpec],
         layout_state: LayoutState | None,
         style_dict: dict[str, Any] | None = None,
+        annotations: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         """
         Clone the current plot state from main window.
@@ -212,6 +223,7 @@ class FigureComposerWindow(QMainWindow):
             channel_specs: Channel track specifications
             layout_state: Channel layout configuration
             style_dict: Optional initial style to apply
+            annotations: Optional serialized manual annotations to restore
         """
         self._trace_model = trace_model
         self._event_times = event_times.copy()
@@ -235,6 +247,14 @@ class FigureComposerWindow(QMainWindow):
 
         # Populate plot host
         self._populate_plot_host()
+
+        # Restore manual annotations
+        incoming_annotations = [dict(entry) for entry in annotations] if annotations else []
+        self._annotation_state = incoming_annotations
+        if self._annotation_controller:
+            self._annotation_controller.load_annotations(incoming_annotations)
+        self._annotation_selection = None
+        self._apply_annotation_controls_from_payload(None)
 
         # Clear undo stack (fresh start)
         self.undo_stack.clear()
@@ -264,52 +284,181 @@ class FigureComposerWindow(QMainWindow):
         objects = self.plot_host.annotation_text_objects()
         return list(cast(Sequence[tuple[Any, float, str]], objects))
 
+    @property
+    def annotations(self) -> list[dict[str, Any]]:
+        """Return the current manual annotation payload."""
+        return [dict(entry) for entry in self._annotation_state]
+
+    # ------------------------------------------------------------------ Manual annotation handlers
+
+    def _on_annotations_payload_changed(self, payload: list[dict[str, Any]]) -> None:
+        self._annotation_state = [dict(entry) for entry in payload]
+        self.annotations_changed.emit(self.annotations)
+
+    def _on_annotation_selection_changed(self, payload: Mapping[str, Any] | None) -> None:
+        self._annotation_selection = dict(payload) if payload else None
+        if hasattr(self, "annotation_delete_btn"):
+            self.annotation_delete_btn.setEnabled(payload is not None)
+        self._apply_annotation_controls_from_payload(payload)
+
+    def _on_annotation_edit_requested(self, annotation_id: str) -> None:
+        if not self._annotation_controller:
+            return
+        annotation_list = self._annotation_controller.serialize()
+        current_text = next(
+            (
+                entry.get("text", "")
+                for entry in annotation_list
+                if entry.get("id") == annotation_id
+            ),
+            "",
+        )
+        text, accepted = QInputDialog.getText(
+            self,
+            "Edit Annotation Label",
+            "Label:",
+            QLineEdit.Normal,
+            current_text,
+        )
+        if not accepted:
+            return
+        self._annotation_controller.update_annotation_text(annotation_id, text)
+
+    def _apply_annotation_controls_from_payload(self, payload: Mapping[str, Any] | None) -> None:
+        if not hasattr(self, "annotation_stroke_btn"):
+            return
+        self._annotation_controls_block = True
+        target = payload or self._annotation_style_defaults
+        stroke = target.get("stroke", self._annotation_style_defaults.get("stroke"))
+        fill = target.get("fill", self._annotation_style_defaults.get("fill"))
+        line_width = float(
+            target.get("line_width", self._annotation_style_defaults.get("line_width", 2.0))
+        )
+        font_size = int(
+            target.get("font_size", self._annotation_style_defaults.get("font_size", 14))
+        )
+        linestyle = target.get(
+            "linestyle", self._annotation_style_defaults.get("linestyle", "solid")
+        )
+        arrow_style = target.get(
+            "arrow_style", self._annotation_style_defaults.get("arrow_style", "arrow")
+        )
+
+        self._set_color_button(self.annotation_stroke_btn, stroke)
+        self._set_color_button(self.annotation_fill_btn, fill)
+        self.annotation_linewidth_spin.setValue(line_width)
+        idx = self.annotation_linestyle_combo.findData(linestyle)
+        if idx >= 0:
+            self.annotation_linestyle_combo.setCurrentIndex(idx)
+        self.annotation_fontsize_spin.setValue(font_size)
+        arrow_idx = self.annotation_arrow_combo.findData(arrow_style)
+        if arrow_idx >= 0:
+            self.annotation_arrow_combo.setCurrentIndex(arrow_idx)
+        self._annotation_controls_block = False
+
+    def _set_color_button(self, button: QPushButton, color: str | None) -> None:
+        if not color:
+            button.setText("None")
+            button.setStyleSheet(
+                "QPushButton { border: 1px dashed #777; background: transparent; color: #555; padding: 0 8px; }"
+            )
+        else:
+            button.setText("")
+            button.setStyleSheet(
+                f"QPushButton {{ border: 1px solid #444; border-radius: 4px; background-color: {color}; }}"
+            )
+        button.setProperty("color", color)
+
+    def _pick_color(self, current: str | None) -> str | None:
+        initial = QColor(current) if current else QColor("#000000")
+        color = QColorDialog.getColor(initial, self, "Select Color")
+        if color.isValid():
+            return color.name()
+        return None
+
+    def _on_annotation_color_pick(self, target: str) -> None:
+        button = self.annotation_stroke_btn if target == "stroke" else self.annotation_fill_btn
+        current = button.property("color")
+        new_color = self._pick_color(current)
+        if not new_color:
+            return
+        self._set_color_button(button, new_color)
+        if target == "stroke":
+            self._annotation_style_defaults["stroke"] = new_color
+            self._annotation_style_defaults["text_color"] = new_color
+            if self._annotation_controller:
+                self._annotation_controller.set_style_defaults(
+                    stroke=new_color,
+                    text_color=new_color,
+                )
+        else:
+            self._annotation_style_defaults["fill"] = new_color
+            if self._annotation_controller:
+                self._annotation_controller.set_style_defaults(fill=new_color)
+
+    def _on_annotation_clear_fill(self) -> None:
+        self._set_color_button(self.annotation_fill_btn, None)
+        self._annotation_style_defaults["fill"] = None
+        if self._annotation_controller:
+            self._annotation_controller.set_style_defaults(fill=None)
+
+    def _on_annotation_linewidth_changed(self, value: float) -> None:
+        if self._annotation_controls_block:
+            return
+        self._annotation_style_defaults["line_width"] = float(value)
+        if self._annotation_controller:
+            self._annotation_controller.set_style_defaults(line_width=float(value))
+
+    def _on_annotation_linestyle_changed(self, index: int) -> None:
+        if self._annotation_controls_block:
+            return
+        style = self.annotation_linestyle_combo.itemData(index)
+        if not style:
+            return
+        self._annotation_style_defaults["linestyle"] = style
+        if self._annotation_controller:
+            self._annotation_controller.set_style_defaults(linestyle=style)
+
+    def _on_annotation_fontsize_changed(self, value: int) -> None:
+        if self._annotation_controls_block:
+            return
+        self._annotation_style_defaults["font_size"] = int(value)
+        if self._annotation_controller:
+            self._annotation_controller.set_style_defaults(font_size=int(value))
+
+    def _on_annotation_arrow_style_changed(self, index: int) -> None:
+        if self._annotation_controls_block:
+            return
+        style = self.annotation_arrow_combo.itemData(index)
+        if not style:
+            return
+        self._annotation_style_defaults["arrow_style"] = style
+        if self._annotation_controller:
+            self._annotation_controller.set_style_defaults(arrow_style=style)
+
+    def _on_annotation_delete_selected(self) -> None:
+        if self._annotation_controller:
+            self._annotation_controller.delete_selected()
+
+    def _on_annotation_clear_all(self) -> None:
+        if self._annotation_controller:
+            self._annotation_controller.clear()
+            self._annotation_state = []
+            self.annotations_changed.emit([])
+
+    def _on_annotation_tool_toggled(self, tool: str, checked: bool) -> None:
+        if not checked or not self._annotation_controller:
+            return
+        self._annotation_controller.set_tool(tool)
+
     def get_current_style(self) -> dict[str, Any]:
         """Snapshot current plot style from PlotHost artists."""
         if self._style_manager:
             return cast(dict[str, Any], self._style_manager.style())
         return self._snapshot_style()
 
-    def set_epochs(self, epochs: list[Epoch]) -> None:
-        """Set epochs for protocol timeline overlay."""
-        self._epochs = epochs
-        if self._epoch_layer is not None:
-            self._epoch_layer.set_epochs(epochs)
-            self.plot_host.canvas.draw_idle()
-
-    def get_epochs(self) -> list[Epoch]:
-        """Get current epochs."""
-        return self._epochs.copy()
-
-    def auto_generate_epochs(self) -> None:
-        """Auto-generate epochs from event data."""
-        if not self._event_times:
-            return
-
-        # Convert events to epochs
-        epochs = events_to_epochs(
-            self._event_times,
-            self._event_labels,
-            self._event_label_meta,
-            default_duration=60.0,
-            merge_consecutive=True,
-        )
-
-        self.set_epochs(epochs)
-
-    def toggle_epochs_visibility(self, visible: bool) -> None:
-        """Toggle epoch overlay visibility."""
-        self._epochs_visible = visible
-        if self._epoch_layer is not None:
-            if visible:
-                self._epoch_layer.attach(self._get_primary_axes())
-            else:
-                self._epoch_layer.attach(None)
-            self.plot_host.canvas.draw_idle()
-        self._update_epoch_margin()
-
     def _get_primary_axes(self) -> Any:
-        """Get the primary (top) axes for epoch overlay."""
+        """Return the first track axes for applying shared updates."""
         if not self.plot_host._tracks:
             return None
         # Get first visible track's axes
@@ -317,68 +466,6 @@ class FigureComposerWindow(QMainWindow):
             if hasattr(track, "ax") and track.ax is not None:
                 return track.ax
         return None
-
-    def _capture_user_subplot_top(self) -> None:
-        """Capture the desired subplot top value (before extra epoch margin)."""
-        plot_host = getattr(self, "plot_host", None)
-        if plot_host is None:
-            return
-
-        fig = getattr(plot_host, "figure", None)
-        if fig is None:
-            return
-
-        current_top = float(getattr(fig.subplotpars, "top", 0.96))
-        bottom = float(getattr(fig.subplotpars, "bottom", 0.12))
-        margin_fraction = self._compute_margin_fraction(fig)
-        base_top = current_top + margin_fraction
-        min_top = bottom + 0.05
-        self._user_subplot_top = max(min_top, min(0.995, base_top))
-
-    def _compute_margin_fraction(self, fig: Any) -> float:
-        """Return fraction of figure height reserved for epoch overlay."""
-        if fig is None or not self._epochs_visible:
-            return 0.0
-
-        height_px = float(fig.get_figheight() * fig.get_dpi())
-        if height_px <= 0:
-            return 0.0
-
-        return self._epoch_margin_px / height_px if self._epoch_margin_px > 0 else 0.0
-
-    def _update_epoch_margin(self, *, trigger_draw: bool = True) -> None:
-        """Ensure figure top margin reserves space for epoch overlay rows."""
-        plot_host = getattr(self, "plot_host", None)
-        if plot_host is None:
-            return
-
-        fig = getattr(plot_host, "figure", None)
-        if fig is None:
-            return
-
-        height_px = float(fig.get_figheight() * fig.get_dpi())
-        if height_px <= 0:
-            return
-
-        margin_px = self._epoch_margin_px if self._epochs_visible else 0.0
-        margin_fraction = margin_px / height_px if margin_px > 0 else 0.0
-
-        bottom = float(getattr(fig.subplotpars, "bottom", 0.12))
-        min_top = bottom + 0.05
-        target_top = self._user_subplot_top - margin_fraction
-        target_top = max(min_top, min(0.995, target_top))
-
-        if abs(getattr(fig.subplotpars, "top", target_top) - target_top) < 1e-4:
-            return
-
-        fig.subplots_adjust(top=target_top)
-        if trigger_draw:
-            plot_host.canvas.draw_idle()
-
-    def _on_epoch_layout_changed(self, row_count: int, required_margin_px: float) -> None:
-        """Handle row stack changes from the epoch layer."""
-        self._epoch_margin_px = required_margin_px
-        self._update_epoch_margin()
 
     def _x_axis_for_style(self):
         """Return the shared X axis used for applying style updates."""
@@ -563,6 +650,18 @@ class FigureComposerWindow(QMainWindow):
 
         # Add matplotlib canvas to frame
         frame_layout.addWidget(self.plot_host.canvas)
+
+        # Manual annotation controller overlays artists on top of the figure
+        self._annotation_controller = ManualAnnotationController(
+            self.plot_host.figure,
+            self.plot_host.canvas,
+            parent=self,
+        )
+        self._annotation_controller.annotations_changed.connect(
+            self._on_annotations_payload_changed
+        )
+        self._annotation_controller.selection_changed.connect(self._on_annotation_selection_changed)
+        self._annotation_controller.edit_requested.connect(self._on_annotation_edit_requested)
 
         # Add frame to container
         container_layout.addWidget(self.canvas_frame)
@@ -768,6 +867,11 @@ class FigureComposerWindow(QMainWindow):
         layout.addWidget(visibility_group)
 
         # ===================================================================
+        # Annotation Controls
+        # ===================================================================
+        layout.addWidget(self._create_annotation_panel())
+
+        # ===================================================================
         # Export Actions
         # ===================================================================
         export_actions = QGroupBox("Export")
@@ -832,6 +936,114 @@ class FigureComposerWindow(QMainWindow):
         panel_layout.addWidget(scroll)
 
         return panel
+
+    def _create_annotation_panel(self) -> QGroupBox:
+        """Controls for manual annotation styling."""
+
+        group = QGroupBox("Annotations")
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        # Stroke color picker
+        self.annotation_stroke_btn = self._make_color_button(
+            self._annotation_style_defaults.get("stroke")
+        )
+        self.annotation_stroke_btn.clicked.connect(lambda: self._on_annotation_color_pick("stroke"))
+        form.addRow("Stroke:", self.annotation_stroke_btn)
+
+        # Fill color picker with "no fill" helper
+        self.annotation_fill_btn = self._make_color_button(
+            self._annotation_style_defaults.get("fill")
+        )
+        self.annotation_fill_btn.clicked.connect(lambda: self._on_annotation_color_pick("fill"))
+        fill_row = QHBoxLayout()
+        fill_row.setContentsMargins(0, 0, 0, 0)
+        fill_row.setSpacing(6)
+        fill_row.addWidget(self.annotation_fill_btn)
+        self.annotation_clear_fill_btn = QPushButton("No Fill")
+        self.annotation_clear_fill_btn.clicked.connect(self._on_annotation_clear_fill)
+        fill_row.addWidget(self.annotation_clear_fill_btn)
+        fill_container = QWidget()
+        fill_container.setLayout(fill_row)
+        form.addRow("Fill:", fill_container)
+
+        # Line width
+        self.annotation_linewidth_spin = QDoubleSpinBox()
+        self.annotation_linewidth_spin.setRange(0.2, 12.0)
+        self.annotation_linewidth_spin.setSingleStep(0.2)
+        self.annotation_linewidth_spin.setValue(
+            self._annotation_style_defaults.get("line_width", 2.0)
+        )
+        self.annotation_linewidth_spin.valueChanged.connect(self._on_annotation_linewidth_changed)
+        form.addRow("Line width:", self.annotation_linewidth_spin)
+
+        # Line style
+        self.annotation_linestyle_combo = QComboBox()
+        linestyle_options = [
+            ("Solid", "solid"),
+            ("Dashed", "dashed"),
+            ("Dotted", "dotted"),
+            ("Dash-dot", "dashdot"),
+        ]
+        for label, value in linestyle_options:
+            self.annotation_linestyle_combo.addItem(label, value)
+        default_style = self._annotation_style_defaults.get("linestyle", "solid")
+        default_index = next(
+            (i for i, (_, value) in enumerate(linestyle_options) if value == default_style),
+            0,
+        )
+        self.annotation_linestyle_combo.setCurrentIndex(default_index)
+        self.annotation_linestyle_combo.currentIndexChanged.connect(
+            self._on_annotation_linestyle_changed
+        )
+        form.addRow("Line style:", self.annotation_linestyle_combo)
+
+        # Font size
+        self.annotation_fontsize_spin = QSpinBox()
+        self.annotation_fontsize_spin.setRange(6, 72)
+        self.annotation_fontsize_spin.setValue(
+            int(self._annotation_style_defaults.get("font_size", 14))
+        )
+        self.annotation_fontsize_spin.valueChanged.connect(self._on_annotation_fontsize_changed)
+        form.addRow("Font size:", self.annotation_fontsize_spin)
+
+        # Arrow style
+        self.annotation_arrow_combo = QComboBox()
+        arrow_options = [
+            ("Arrow", "arrow"),
+            ("Bar", "bar"),
+            ("Fancy", "fancy"),
+            ("None", "none"),
+        ]
+        for label, value in arrow_options:
+            self.annotation_arrow_combo.addItem(label, value)
+        default_arrow = self._annotation_style_defaults.get("arrow_style", "arrow")
+        arrow_index = next(
+            (i for i, (_, value) in enumerate(arrow_options) if value == default_arrow),
+            0,
+        )
+        self.annotation_arrow_combo.setCurrentIndex(arrow_index)
+        self.annotation_arrow_combo.currentIndexChanged.connect(
+            self._on_annotation_arrow_style_changed
+        )
+        form.addRow("Arrow head:", self.annotation_arrow_combo)
+
+        # Delete button
+        self.annotation_delete_btn = QPushButton("Delete Selected")
+        self.annotation_delete_btn.setEnabled(False)
+        self.annotation_delete_btn.clicked.connect(self._on_annotation_delete_selected)
+        form.addRow("", self.annotation_delete_btn)
+
+        group.setLayout(form)
+        return group
+
+    def _make_color_button(self, color: str | None) -> QPushButton:
+        button = QPushButton()
+        button.setFixedHeight(24)
+        button.setMinimumWidth(56)
+        button.setCursor(Qt.PointingHandCursor)
+        self._set_color_button(button, color)
+        return button
 
     def _populate_preset_combo(self) -> None:
         """Populate the preset combo box with built-in presets."""
@@ -1161,9 +1373,42 @@ class FigureComposerWindow(QMainWindow):
         self.actStyle.triggered.connect(lambda: self._open_plot_settings_dialog(tab_name="style"))
         toolbar.addAction(self.actStyle)
 
+        toolbar.addSeparator()
+        self._init_annotation_toolbar_actions(toolbar)
+
         # Add toolbar to window
         self.plot_toolbar = toolbar
         self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+    def _init_annotation_toolbar_actions(self, toolbar: QToolBar) -> None:
+        """Add annotation drawing tools to the navigation toolbar."""
+
+        action_specs = [
+            ("Select", "Select and move annotations", "tour-camera.svg", "select"),
+            ("Line", "Draw manual line annotations", "tour-pencil.svg", "line"),
+            ("Box", "Draw rectangle annotations", "empty-box.svg", "box"),
+            ("Text Box", "Draw labeled boxes", "tour-header.svg", "textbox"),
+            ("Arrow", "Draw directional arrows", "tour-rocket.svg", "arrow"),
+            ("Text", "Place text labels", "Aa.svg", "text"),
+        ]
+
+        self._annotation_tool_actions: dict[str, QAction] = {}
+        self._annotation_tool_group = QActionGroup(self)
+        self._annotation_tool_group.setExclusive(True)
+
+        for text, tooltip, icon_name, tool in action_specs:
+            icon = QIcon(self.icon_path(icon_name)) if icon_name else QIcon()
+            action = QAction(icon, text, self)
+            action.setCheckable(True)
+            action.setToolTip(tooltip)
+            action.toggled.connect(partial(self._on_annotation_tool_toggled, tool))
+            self._annotation_tool_group.addAction(action)
+            toolbar.addAction(action)
+            self._annotation_tool_actions[tool] = action
+
+        # Default to selection tool
+        if "select" in self._annotation_tool_actions:
+            self._annotation_tool_actions["select"].setChecked(True)
 
     def _create_status_bar(self) -> None:
         """Create status bar with figure info and hints."""
@@ -1280,27 +1525,17 @@ class FigureComposerWindow(QMainWindow):
         fit_data_action.triggered.connect(self._on_fit_data)
         tools_menu.addAction(fit_data_action)
 
-        # Epochs menu
-        epochs_menu = menubar.addMenu("E&pochs")
+        # Annotation menu
+        annotations_menu = menubar.addMenu("&Annotations")
 
-        auto_generate_action = QAction("&Auto-Generate from Events", self)
-        auto_generate_action.setShortcut("Ctrl+G")
-        auto_generate_action.triggered.connect(self._on_auto_generate_epochs)
-        epochs_menu.addAction(auto_generate_action)
+        delete_annotation_action = QAction("&Delete Selected", self)
+        delete_annotation_action.setShortcut(QKeySequence.Delete)
+        delete_annotation_action.triggered.connect(self._on_annotation_delete_selected)
+        annotations_menu.addAction(delete_annotation_action)
 
-        edit_epochs_action = QAction("&Edit Epochs...", self)
-        edit_epochs_action.setShortcut("Ctrl+E")
-        edit_epochs_action.triggered.connect(self._on_edit_epochs)
-        epochs_menu.addAction(edit_epochs_action)
-
-        epochs_menu.addSeparator()
-
-        toggle_epochs_action = QAction("&Show Epoch Overlays", self)
-        toggle_epochs_action.setCheckable(True)
-        toggle_epochs_action.setChecked(self._epochs_visible)
-        toggle_epochs_action.triggered.connect(self._on_toggle_epochs)
-        epochs_menu.addAction(toggle_epochs_action)
-        self._toggle_epochs_action = toggle_epochs_action
+        clear_annotations_action = QAction("&Clear All", self)
+        clear_annotations_action.triggered.connect(self._on_annotation_clear_all)
+        annotations_menu.addAction(clear_annotations_action)
 
         # Presets menu
         presets_menu = menubar.addMenu("&Presets")
@@ -1361,17 +1596,6 @@ class FigureComposerWindow(QMainWindow):
             self._event_label_meta,
         )
 
-        # Initialize epoch layer
-        self._epoch_layer = EpochLayer(
-            epochs=self._epochs,
-            theme=self._epoch_theme,
-        )
-        self._epoch_layer.set_layout_change_callback(self._on_epoch_layout_changed)
-        if self._epochs_visible:
-            primary_ax = self._get_primary_axes()
-            if primary_ax is not None:
-                self._epoch_layer.attach(primary_ax)
-
         # Apply layout state
         # Note: Layout is applied via channel specs - no dock needed
 
@@ -1382,9 +1606,6 @@ class FigureComposerWindow(QMainWindow):
         # Ensure figure starts maximized to current canvas viewport
         self.maximize_figure_to_canvas(forward=False)
         self._sync_canvas_size_to_figure()
-        self._capture_user_subplot_top()
-        self._update_epoch_margin(trigger_draw=False)
-
         # Update toolbar state
         self._update_toolbar_state()
 
@@ -1572,8 +1793,6 @@ class FigureComposerWindow(QMainWindow):
             )
         finally:
             plot_host.resume_updates()
-        self._capture_user_subplot_top()
-        self._update_epoch_margin(trigger_draw=False)
 
     def apply_plot_style(self, style: dict[str, Any] | None, persist: bool = False) -> None:
         """Apply a new style dictionary to the publication plot."""
@@ -1776,8 +1995,6 @@ class FigureComposerWindow(QMainWindow):
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        import json
-        from pathlib import Path
 
         from PyQt5.QtWidgets import QFileDialog
 
@@ -1805,18 +2022,10 @@ class FigureComposerWindow(QMainWindow):
                 pad_inches=0.1,
             )
 
-            # Save epoch metadata as sidecar JSON if epochs exist
-            if self._epochs and self._epoch_layer is not None:
-                manifest = self._epoch_layer.to_manifest()
-                metadata_path = Path(output_path).with_suffix(".epochs.json")
-                with open(metadata_path, "w") as f:
-                    json.dump(manifest, f, indent=2)
-
             QMessageBox.information(
                 self,
                 "Export Successful",
-                f"Figure exported successfully to:\n{output_path}"
-                + (f"\nEpoch metadata saved to:\n{metadata_path}" if self._epochs else ""),
+                f"Figure exported successfully to:\n{output_path}",
             )
         except Exception as e:
             QMessageBox.critical(
@@ -1869,56 +2078,10 @@ class FigureComposerWindow(QMainWindow):
             "<li>Style preset library</li>"
             "<li>Batch export queue</li>"
             "<li>Undo/redo for styling operations</li>"
-            "<li>Protocol epoch timeline overlays</li>"
+            "<li>Manual annotation tools (lines, boxes, arrows)</li>"
             "</ul>"
             "<p><b>Version:</b> 1.0.0-alpha</p>",
         )
-
-    def _on_auto_generate_epochs(self, checked: bool = False) -> None:
-        """Auto-generate epochs from event data.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        if not self._event_times:
-            QMessageBox.information(
-                self,
-                "No Events",
-                "No events found to generate epochs from.\n\n"
-                "Please load event data in the main window before generating epochs.",
-            )
-            return
-
-        self.auto_generate_epochs()
-
-        QMessageBox.information(
-            self,
-            "Epochs Generated",
-            f"Successfully generated {len(self._epochs)} epoch(s) from event data.\n\n"
-            "Use the Epochs menu to toggle visibility or edit individual epochs.",
-        )
-
-    def _on_toggle_epochs(self, checked: bool) -> None:
-        """Toggle epoch overlay visibility.
-
-        Args:
-            checked: Visibility state from checkbox
-        """
-        self.toggle_epochs_visibility(checked)
-
-    def _on_edit_epochs(self, checked: bool = False) -> None:
-        """Open epoch editor dialog.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        editor = EpochEditorDialog(self._epochs, self)
-        editor.epochs_changed.connect(self._on_epochs_edited)
-        editor.show()
-
-    def _on_epochs_edited(self, epochs: list[Epoch]) -> None:
-        """Handle epochs edited in the editor dialog."""
-        self.set_epochs(epochs)
 
     def _open_plot_settings_dialog(self, *, tab_name: str | None = None) -> None:
         """Open the unified plot settings dialog focused on an optional tab."""
@@ -1967,8 +2130,6 @@ class FigureComposerWindow(QMainWindow):
         result = dialog.exec_()
         self._sync_plot_geometry_to_figure()
         self._sync_canvas_size_to_figure()
-        self._capture_user_subplot_top()
-        self._update_epoch_margin()
 
         if result == QDialog.Accepted:
             new_style = self.get_current_style()
@@ -2181,7 +2342,6 @@ class FigureComposerWindow(QMainWindow):
             self.canvas_container.updateGeometry()
 
         # Trigger redraw at new DPI
-        self._update_epoch_margin(trigger_draw=False)
         self.plot_host.canvas.draw_idle()
 
     def _handle_nav_mode_toggled(self, checked: bool) -> None:
@@ -2284,7 +2444,6 @@ class FigureComposerWindow(QMainWindow):
 
     def _on_export_now(self, checked: bool = False) -> None:
         """Handle export button click with publication settings."""
-        from pathlib import Path
 
         from PyQt5.QtWidgets import QFileDialog
 
@@ -2341,15 +2500,6 @@ class FigureComposerWindow(QMainWindow):
 
             # Export the figure
             self.plot_host.figure.savefig(output_path, **export_params)
-
-            # Save epoch metadata if present
-            if self._epochs and self._epoch_layer is not None:
-                import json
-
-                manifest = self._epoch_layer.to_manifest()
-                metadata_path = Path(output_path).with_suffix(".epochs.json")
-                with open(metadata_path, "w") as f:
-                    json.dump(manifest, f, indent=2)
 
             QMessageBox.information(
                 self,
