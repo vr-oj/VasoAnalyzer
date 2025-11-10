@@ -11,7 +11,9 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
+from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
+from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 
@@ -67,7 +69,17 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Plot items
         self.inner_curve: pg.PlotDataItem | None = None
         self.outer_curve: pg.PlotDataItem | None = None
+        self.inner_band: pg.FillBetweenItem | None = None
+        self.outer_band: pg.FillBetweenItem | None = None
         self.event_lines: list[pg.InfiniteLine] = []
+
+        # Band visibility
+        self._show_uncertainty_bands: bool = False
+
+        # Event labeling
+        self._event_labeler: PyQtGraphEventLabeler | None = None
+        self._event_entries: list[EventEntryV3] = []
+        self._event_labels_visible: bool = False
 
         # Create initial plot items
         self._create_plot_items()
@@ -149,10 +161,17 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self.event_lines.clear()
 
         if not times:
+            # Clear event entries too
+            self._event_entries.clear()
+            if self._event_labeler:
+                self._event_labeler.clear()
             return
 
         # Default event color
         default_color = CURRENT_THEME.get("event_line", "#8A8A8A")
+
+        # Create EventEntryV3 objects for labeling system
+        self._event_entries.clear()
 
         # Create infinite vertical lines for each event
         for i, time in enumerate(times):
@@ -161,6 +180,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 color = colors[i]
             else:
                 color = default_color
+
+            # Determine label text
+            label_text = ""
+            if labels is not None and i < len(labels):
+                label_text = labels[i]
 
             # Create dashed vertical line
             line = pg.InfiniteLine(
@@ -171,13 +195,25 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             )
             line.setZValue(5)  # Draw above traces
 
-            # Add label if provided
-            if labels is not None and i < len(labels):
-                # Store label for potential tooltip/overlay rendering
-                line.label = labels[i]
+            # Store label for event labeler
+            if label_text:
+                line.label = label_text
+                # Create EventEntryV3 for label rendering
+                event_entry = EventEntryV3(
+                    t=time,
+                    text=label_text,
+                    meta={"color": color},
+                )
+                self._event_entries.append(event_entry)
 
             self._plot_item.addItem(line)
             self.event_lines.append(line)
+
+        # Update event labels if labeler exists and is visible
+        if self._event_labeler and self._event_labels_visible and self._event_entries:
+            xlim = self.get_xlim()
+            pixel_width = max(int(self._plot_widget.width()), 400)
+            self._event_labeler.render(self._event_entries, xlim, pixel_width)
 
     def update_window(
         self, x0: float, x1: float, *, pixel_width: int | None = None
@@ -208,17 +244,68 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if time.size == 0:
             if self.inner_curve is not None:
                 self.inner_curve.setData([], [])
+            if self.inner_band is not None and self.inner_band.scene() is not None:
+                self._plot_item.removeItem(self.inner_band)
+                self.inner_band = None
             if self.outer_curve is not None:
                 self.outer_curve.setData([], [])
+            if self.outer_band is not None and self.outer_band.scene() is not None:
+                self._plot_item.removeItem(self.outer_band)
+                self.outer_band = None
             return
 
         # Update primary trace (inner or outer depending on mode)
         primary = self._primary_series(window)
         if primary is not None and self.inner_curve is not None:
             mean, ymin, ymax = primary
-            # For now, just plot the mean line
-            # TODO: Add uncertainty bands using FillBetweenItem
+            # Plot the mean line
             self.inner_curve.setData(time, mean)
+
+            # Add uncertainty bands if enabled
+            if self._show_uncertainty_bands and time.size > 1:
+                # Create min/max band
+                if self.inner_band is None:
+                    # Create placeholder curves for FillBetweenItem
+                    min_curve = pg.PlotDataItem(time, ymin)
+                    max_curve = pg.PlotDataItem(time, ymax)
+
+                    # Create fill between
+                    theme_color = CURRENT_THEME.get("accent_fill", "#BBD7FF")
+                    qcolor = QColor(theme_color)
+                    qcolor.setAlpha(77)  # ~30% opacity
+
+                    self.inner_band = pg.FillBetweenItem(
+                        min_curve,
+                        max_curve,
+                        brush=qcolor,
+                    )
+                    self.inner_band.setZValue(-1)  # Behind the main trace
+                    self._plot_item.addItem(self.inner_band)
+                else:
+                    # Update existing band
+                    # Note: FillBetweenItem doesn't have a direct setData method
+                    # We need to recreate it
+                    self._plot_item.removeItem(self.inner_band)
+
+                    min_curve = pg.PlotDataItem(time, ymin)
+                    max_curve = pg.PlotDataItem(time, ymax)
+
+                    theme_color = CURRENT_THEME.get("accent_fill", "#BBD7FF")
+                    qcolor = QColor(theme_color)
+                    qcolor.setAlpha(77)
+
+                    self.inner_band = pg.FillBetweenItem(
+                        min_curve,
+                        max_curve,
+                        brush=qcolor,
+                    )
+                    self.inner_band.setZValue(-1)
+                    self._plot_item.addItem(self.inner_band)
+            elif self.inner_band is not None:
+                # Remove band if disabled
+                if self.inner_band.scene() is not None:
+                    self._plot_item.removeItem(self.inner_band)
+                self.inner_band = None
 
             # Autoscale Y if enabled
             if self._autoscale_y:
@@ -242,10 +329,53 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if self._mode == "dual" and self.outer_curve is not None:
             secondary = self._secondary_series(window)
             if secondary is not None:
-                mean2, _, _ = secondary
+                mean2, ymin2, ymax2 = secondary
                 self.outer_curve.setData(time, mean2)
+
+                # Add outer uncertainty bands if enabled
+                if self._show_uncertainty_bands and time.size > 1:
+                    if self.outer_band is None:
+                        min_curve = pg.PlotDataItem(time, ymin2)
+                        max_curve = pg.PlotDataItem(time, ymax2)
+
+                        theme_color = CURRENT_THEME.get("accent_fill_secondary", "#FFD1A9")
+                        qcolor = QColor(theme_color)
+                        qcolor.setAlpha(51)  # ~20% opacity
+
+                        self.outer_band = pg.FillBetweenItem(
+                            min_curve,
+                            max_curve,
+                            brush=qcolor,
+                        )
+                        self.outer_band.setZValue(-1)
+                        self._plot_item.addItem(self.outer_band)
+                    else:
+                        # Update existing band
+                        self._plot_item.removeItem(self.outer_band)
+
+                        min_curve = pg.PlotDataItem(time, ymin2)
+                        max_curve = pg.PlotDataItem(time, ymax2)
+
+                        theme_color = CURRENT_THEME.get("accent_fill_secondary", "#FFD1A9")
+                        qcolor = QColor(theme_color)
+                        qcolor.setAlpha(51)
+
+                        self.outer_band = pg.FillBetweenItem(
+                            min_curve,
+                            max_curve,
+                            brush=qcolor,
+                        )
+                        self.outer_band.setZValue(-1)
+                        self._plot_item.addItem(self.outer_band)
+                elif self.outer_band is not None:
+                    if self.outer_band.scene() is not None:
+                        self._plot_item.removeItem(self.outer_band)
+                    self.outer_band = None
             else:
                 self.outer_curve.setData([], [])
+                if self.outer_band is not None and self.outer_band.scene() is not None:
+                    self._plot_item.removeItem(self.outer_band)
+                    self.outer_band = None
 
     def _primary_series(
         self, window: TraceWindow
@@ -433,3 +563,59 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def get_render_backend(self) -> str:
         """Get the rendering backend identifier."""
         return "pyqtgraph"
+
+    def enable_event_labels(
+        self,
+        enabled: bool = True,
+        options: LayoutOptionsV3 | None = None,
+    ) -> None:
+        """Enable or disable event label rendering.
+
+        Args:
+            enabled: Whether to show event labels
+            options: Layout options for event labeling
+        """
+        self._event_labels_visible = enabled
+
+        if enabled:
+            # Create event labeler if not exists
+            if self._event_labeler is None:
+                self._event_labeler = PyQtGraphEventLabeler(
+                    self._plot_item,
+                    options=options,
+                )
+            elif options is not None:
+                # Update options
+                self._event_labeler.options = options
+
+            # Render labels if we have events
+            if self._event_entries:
+                xlim = self.get_xlim()
+                pixel_width = max(int(self._plot_widget.width()), 400)
+                self._event_labeler.render(self._event_entries, xlim, pixel_width)
+        else:
+            # Hide labels
+            if self._event_labeler:
+                self._event_labeler.set_visible(False)
+
+    def update_event_labels(self) -> None:
+        """Update event label positions after view change."""
+        if (
+            self._event_labeler
+            and self._event_labels_visible
+            and self._event_entries
+        ):
+            xlim = self.get_xlim()
+            self._event_labeler.update_positions(xlim)
+
+    def set_uncertainty_bands_visible(self, visible: bool) -> None:
+        """Show/hide min/max uncertainty bands.
+
+        Args:
+            visible: Whether to show uncertainty bands
+        """
+        self._show_uncertainty_bands = visible
+
+        # Trigger redraw if we have a current window
+        if self._current_window is not None:
+            self._apply_window(self._current_window)

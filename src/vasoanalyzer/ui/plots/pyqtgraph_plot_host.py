@@ -13,6 +13,10 @@ from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
+from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
+    PyQtGraphEventHighlightOverlay,
+    PyQtGraphTimeCursorOverlay,
+)
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["PyQtGraphPlotHost"]
@@ -67,6 +71,10 @@ class PyQtGraphPlotHost:
         # Performance throttling
         self._min_draw_interval: float = 1.0 / 120.0  # 120 FPS cap
         self._last_draw_ts: float = 0.0
+
+        # Overlays
+        self._time_cursor_overlay = PyQtGraphTimeCursorOverlay()
+        self._event_highlight_overlay = PyQtGraphEventHighlightOverlay()
 
     def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -131,6 +139,11 @@ class PyQtGraphPlotHost:
 
             # Connect signals for synchronized interactions
             self._connect_track_signals(track)
+
+        # Sync overlays with new tracks
+        plot_items = [track.view.get_widget().getPlotItem() for track in self._tracks.values()]
+        self._time_cursor_overlay.sync_tracks(plot_items)
+        self._event_highlight_overlay.sync_tracks(plot_items)
 
         # Update window if already set
         if self._current_window is not None:
@@ -259,9 +272,40 @@ class PyQtGraphPlotHost:
         pass
 
     def set_event_highlight_style(self, color: str | None = None, alpha: float = 0.2) -> None:
-        """Set event highlight style (compatibility stub).
+        """Set event highlight style.
 
-        TODO: Implement event highlighting for PyQtGraph renderer.
+        Args:
+            color: Highlight color
+            alpha: Transparency (0-1)
         """
-        # Stub - event highlighting will be implemented in Phase 1 Week 3
-        pass
+        self._event_highlight_overlay.set_style(color=color, alpha=alpha)
+
+    def set_time_cursor(self, time: float | None, visible: bool = True) -> None:
+        """Set time cursor position and visibility.
+
+        Args:
+            time: Time value to position cursor at (None to hide)
+            visible: Whether cursor should be visible
+        """
+        if time is None:
+            self._time_cursor_overlay.set_visible(False)
+        else:
+            self._time_cursor_overlay.set_time(time)
+            self._time_cursor_overlay.set_visible(visible)
+
+    def set_event_highlight(self, time: float | None, visible: bool = True) -> None:
+        """Set event highlight position and visibility.
+
+        Args:
+            time: Time value to highlight (None to clear)
+            visible: Whether highlight should be visible
+        """
+        if time is None:
+            self._event_highlight_overlay.clear()
+        else:
+            self._event_highlight_overlay.set_time(time)
+            self._event_highlight_overlay.set_visible(visible)
+
+    def clear_event_highlight(self) -> None:
+        """Clear event highlight."""
+        self._event_highlight_overlay.clear()
