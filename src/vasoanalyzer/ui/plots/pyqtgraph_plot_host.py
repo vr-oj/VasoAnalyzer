@@ -493,6 +493,121 @@ class PyQtGraphPlotHost:
         # Mode changes don't apply to PyQtGraph renderer
         pass
 
+    # Additional core PlotHost methods for full compatibility
+
+    def clear(self) -> None:
+        """Clear all tracks and reset to initial state."""
+        # Clear all tracks
+        for track_id, track in list(self._tracks.items()):
+            widget = track.widget
+            self.layout.removeWidget(widget)
+            widget.setParent(None)
+
+        self._tracks.clear()
+        self._channel_specs.clear()
+        self._model = None
+        self._current_window = None
+        self._event_times = []
+        self._event_colors = None
+        self._event_labels = []
+
+    def tracks(self) -> list[PyQtGraphChannelTrack]:
+        """Get all tracks as a list."""
+        return list(self._tracks.values())
+
+    def suspend_updates(self) -> None:
+        """Suspend updates for batching operations (compatibility stub)."""
+        # PyQtGraph updates automatically, so this is a no-op
+        pass
+
+    def resume_updates(self) -> None:
+        """Resume updates after batching (compatibility stub)."""
+        # PyQtGraph updates automatically, so this is a no-op
+        pass
+
+    def track_for_axes(self, axes) -> PyQtGraphChannelTrack | None:
+        """Get track for given axes (matplotlib PlotHost compatibility)."""
+        # In PyQtGraph, we can try to match by the axes object
+        for track in self._tracks.values():
+            if track.ax == axes or track.view.get_widget().getPlotItem() == axes:
+                return track
+        return None
+
+    def zoom_at(self, center: float, factor: float) -> None:
+        """Zoom around a given time coordinate."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        span = x1 - x0
+        if span <= 0:
+            return
+        new_span = max(span * factor, 1e-6)
+        half = new_span / 2.0
+        new_x0 = center - half
+        new_x1 = center + half
+        self.set_time_window(new_x0, new_x1)
+
+    def scroll_by(self, delta: float) -> None:
+        """Scroll the current time window by delta seconds."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        self.set_time_window(x0 + delta, x1 + delta)
+
+    # Event label configuration getters (return defaults for PyQtGraph)
+
+    def event_labels_v3_enabled(self) -> bool:
+        """Get whether v3 event labels are enabled."""
+        return False  # PyQtGraph uses its own labeling
+
+    def max_labels_per_cluster(self) -> int:
+        """Get max labels per cluster."""
+        return 1
+
+    def cluster_style_policy(self) -> str:
+        """Get cluster style policy."""
+        return "first"
+
+    def event_label_lanes(self) -> int:
+        """Get number of label lanes."""
+        return 3
+
+    def belt_baseline_enabled(self) -> bool:
+        """Get whether belt baseline is enabled."""
+        return True
+
+    def span_event_lines_across_siblings(self) -> bool:
+        """Get whether event lines span across siblings."""
+        return True
+
+    def auto_event_label_mode(self) -> bool:
+        """Get whether auto event label mode is enabled."""
+        return False
+
+    def label_density_thresholds(self) -> tuple[float, float]:
+        """Get label density thresholds."""
+        return (0.8, 0.25)
+
+    def label_outline_settings(self) -> tuple[bool, float, tuple[float, float, float, float] | None]:
+        """Get label outline settings."""
+        return (True, 2.0, (1.0, 1.0, 1.0, 0.9))
+
+    def label_tooltips_enabled(self) -> bool:
+        """Get whether label tooltips are enabled."""
+        return True
+
+    def tooltip_proximity(self) -> int:
+        """Get tooltip proximity in pixels."""
+        return 10
+
+    def compact_legend_enabled(self) -> bool:
+        """Get whether compact legend is enabled."""
+        return False
+
+    def compact_legend_location(self) -> str:
+        """Get compact legend location."""
+        return "upper right"
+
     def capture_view_state(self) -> ExportViewState:
         """Capture current view state for export.
 
