@@ -81,27 +81,42 @@ def open_project_ctx(path: str, repo: ProjectRepository | None = None) -> Projec
     When ``repo`` is provided it is assumed to be pre-configured; otherwise the
     default repository factory is used.
     """
+    from vasoanalyzer.core.file_lock import ProjectFileLock
 
-    if repo is not None:
-        repository = repo
-    else:
-        from vasoanalyzer.storage.sqlite_store import LegacyProjectError
+    # Acquire file lock to prevent concurrent access
+    file_lock = ProjectFileLock(path)
+    try:
+        file_lock.acquire(timeout=5)
+        log.info(f"Acquired lock for project: {path}")
+    except RuntimeError as e:
+        log.error(f"Failed to acquire lock for {path}: {e}")
+        raise ValueError(f"Cannot open project: {e}") from e
 
-        try:
-            repository = get_repo(path)
-        except LegacyProjectError as exc:
-            raise ProjectUpgradeRequired(exc.path.as_posix(), exc.version) from exc
-    open_method = getattr(repository, "open", None)
-    if repo is not None and callable(open_method):
-        open_method(path)
-    meta: dict[str, Any] = {}
-    read_meta = getattr(repository, "read_meta", None)
-    if callable(read_meta):
-        try:
-            meta = dict(read_meta())
-        except Exception:
-            meta = {}
-    return ProjectContext(path=path, repo=repository, meta=meta)
+    try:
+        if repo is not None:
+            repository = repo
+        else:
+            from vasoanalyzer.storage.sqlite_store import LegacyProjectError
+
+            try:
+                repository = get_repo(path)
+            except LegacyProjectError as exc:
+                raise ProjectUpgradeRequired(exc.path.as_posix(), exc.version) from exc
+        open_method = getattr(repository, "open", None)
+        if repo is not None and callable(open_method):
+            open_method(path)
+        meta: dict[str, Any] = {}
+        read_meta = getattr(repository, "read_meta", None)
+        if callable(read_meta):
+            try:
+                meta = dict(read_meta())
+            except Exception:
+                meta = {}
+        return ProjectContext(path=path, repo=repository, meta=meta, file_lock=file_lock)
+    except Exception:
+        # If opening fails, release the lock
+        file_lock.release()
+        raise
 
 
 def close_project_ctx(ctx: ProjectContext) -> None:
@@ -1150,10 +1165,17 @@ def save_project(project: Project, path: str, *, skip_optimize: bool = False) ->
 
 def load_project(path: str) -> Project:
     """Open ``path`` returning a populated :class:`Project` instance."""
+    import time
+
+    start_time = time.time()
+    log.info(f"Loading project: {path}")
 
     if _is_sqlite_file(path):
         try:
-            return _load_project_sqlite(path)
+            project = _load_project_sqlite(path)
+            elapsed = time.time() - start_time
+            log.info(f"Project loaded successfully in {elapsed:.2f}s: {path}")
+            return project
         except Exception as e:
             import sqlite3
 
@@ -1190,19 +1212,28 @@ def load_project(path: str) -> Project:
 
 def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = False) -> None:
     """Serialize ``project`` into a fresh SQLite database."""
+    import time
+
+    start_time = time.time()
+    log.info(f"Saving project to: {path}")
 
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    # Warn if saving to cloud storage
+    # BLOCK saves to cloud storage (data safety)
     is_cloud, cloud_service = _is_cloud_storage_path(str(dest))
     if is_cloud:
-        log.warning(
-            f"WARNING: Saving project to {cloud_service}. "
-            f"SQLite databases are INCOMPATIBLE with cloud storage and WILL become corrupted. "
-            "Please move your project to a local folder (e.g., ~/Documents, ~/Desktop) "
-            "to prevent data loss."
+        error_msg = (
+            f"Cannot save to {cloud_service}: SQLite databases are INCOMPATIBLE with cloud sync.\n\n"
+            f"Why: Cloud sync services can interrupt database writes mid-transaction, causing guaranteed corruption.\n\n"
+            f"Solution: Save to a local folder:\n"
+            f"  • Windows: C:\\Users\\YourName\\Documents\\VasoAnalyzer\\\n"
+            f"  • macOS: /Users/YourName/Documents/VasoAnalyzer/\n"
+            f"  • Linux: /home/yourname/Documents/VasoAnalyzer/\n\n"
+            f"You can export .vasopack bundles to cloud storage for backup/sharing."
         )
+        log.error(f"BLOCKED save to cloud storage: {dest} ({cloud_service})")
+        raise ValueError(error_msg)
 
     now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     if not project.created_at:
@@ -1225,6 +1256,9 @@ def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = F
     )
 
     project.path = dest.as_posix()
+
+    elapsed = time.time() - start_time
+    log.info(f"Project saved successfully in {elapsed:.2f}s (optimized={not skip_optimize}): {path}")
 
 
 def _write_sqlite_project(
