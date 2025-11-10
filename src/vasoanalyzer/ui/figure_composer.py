@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import uuid
 from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import Any, cast
@@ -117,6 +118,9 @@ class FigureComposerWindow(QMainWindow):
     # Signal emitted when manual annotations change
     annotations_changed = pyqtSignal(list)
 
+    # Signal emitted when a slide/figure state is saved
+    figure_state_saved = pyqtSignal(dict)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Figure Composer")
@@ -145,6 +149,10 @@ class FigureComposerWindow(QMainWindow):
             "arrow_style": "arrow",
             "text_color": "#1D5CFF",
         }
+        self._current_slide_id: str | None = None
+        self._current_slide_name: str | None = None
+        self._slide_dirty: bool = False
+        self._loading_state: bool = False
 
         # Style management
         self._style_manager: PlotStyleManager | None = None
@@ -210,6 +218,7 @@ class FigureComposerWindow(QMainWindow):
         layout_state: LayoutState | None,
         style_dict: dict[str, Any] | None = None,
         annotations: Sequence[Mapping[str, Any]] | None = None,
+        figure_state: Mapping[str, Any] | None = None,
     ) -> None:
         """
         Clone the current plot state from main window.
@@ -224,37 +233,70 @@ class FigureComposerWindow(QMainWindow):
             layout_state: Channel layout configuration
             style_dict: Optional initial style to apply
             annotations: Optional serialized manual annotations to restore
+            figure_state: Optional saved figure slide payload to reopen
         """
-        self._trace_model = trace_model
-        self._event_times = event_times.copy()
-        self._event_colors = event_colors.copy() if event_colors else None
-        self._event_labels = event_labels.copy()
-        self._event_label_meta = [meta.copy() for meta in event_label_meta]
-        self._channel_specs = [
-            ChannelTrackSpec(
-                track_id=spec.track_id,
-                label=spec.label,
-                component=spec.component,
-                height_ratio=spec.height_ratio,
-            )
-            for spec in channel_specs
-        ]
-        self._layout_state = layout_state
+        self._loading_state = True
+        try:
+            self._trace_model = trace_model
+            self._event_times = event_times.copy()
+            self._event_colors = event_colors.copy() if event_colors else None
+            self._event_labels = event_labels.copy()
+            self._event_label_meta = [meta.copy() for meta in event_label_meta]
+            self._channel_specs = [
+                ChannelTrackSpec(
+                    track_id=spec.track_id,
+                    label=spec.label,
+                    component=spec.component,
+                    height_ratio=spec.height_ratio,
+                )
+                for spec in channel_specs
+            ]
+            self._layout_state = layout_state
+            self._current_slide_id = None
+            self._current_slide_name = None
+            self._slide_dirty = False
 
-        # Initialize style manager
-        if style_dict:
-            self._style_manager = PlotStyleManager(style_dict)
+            # Initialize style manager
+            if style_dict:
+                self._style_manager = PlotStyleManager(style_dict)
 
-        # Populate plot host
-        self._populate_plot_host()
+            # Populate plot host
+            self._populate_plot_host()
 
-        # Restore manual annotations
-        incoming_annotations = [dict(entry) for entry in annotations] if annotations else []
-        self._annotation_state = incoming_annotations
-        if self._annotation_controller:
-            self._annotation_controller.load_annotations(incoming_annotations)
-        self._annotation_selection = None
-        self._apply_annotation_controls_from_payload(None)
+            saved_payload = figure_state.get("payload") if figure_state else None
+            if saved_payload is None:
+                saved_payload = figure_state.get("data") if figure_state else None
+            if figure_state:
+                self._current_slide_id = str(figure_state.get("id") or "") or None
+                self._current_slide_name = figure_state.get("name") or None
+
+            # Restore manual annotations
+            payload_annotations: list[dict[str, Any]] = []
+            if saved_payload and "annotations" in saved_payload:
+                payload_annotations = [
+                    dict(entry) for entry in saved_payload.get("annotations") or []
+                ]
+            elif annotations:
+                payload_annotations = [dict(entry) for entry in annotations]
+
+            self._annotation_state = payload_annotations
+            if self._annotation_controller:
+                self._annotation_controller.load_annotations(payload_annotations)
+            self._annotation_selection = None
+            self._apply_annotation_controls_from_payload(None)
+
+            # Restore figure geometry + style if provided
+            if saved_payload:
+                self._apply_saved_figure_geometry(saved_payload.get("figure"))
+                saved_style = saved_payload.get("style")
+                if saved_style:
+                    self.apply_plot_style(saved_style, persist=False)
+            # Layout state is captured for future use but reapplication requires
+            # coordination with PlotHost; defer until a dedicated API exists.
+
+        finally:
+            self._loading_state = False
+            self._slide_dirty = False
 
         # Clear undo stack (fresh start)
         self.undo_stack.clear()
@@ -289,11 +331,16 @@ class FigureComposerWindow(QMainWindow):
         """Return the current manual annotation payload."""
         return [dict(entry) for entry in self._annotation_state]
 
+    def _mark_slide_dirty(self) -> None:
+        if not self._loading_state:
+            self._slide_dirty = True
+
     # ------------------------------------------------------------------ Manual annotation handlers
 
     def _on_annotations_payload_changed(self, payload: list[dict[str, Any]]) -> None:
         self._annotation_state = [dict(entry) for entry in payload]
         self.annotations_changed.emit(self.annotations)
+        self._mark_slide_dirty()
 
     def _on_annotation_selection_changed(self, payload: Mapping[str, Any] | None) -> None:
         self._annotation_selection = dict(payload) if payload else None
@@ -1478,6 +1525,11 @@ class FigureComposerWindow(QMainWindow):
         export_action.triggered.connect(self._on_export)
         file_menu.addAction(export_action)
 
+        save_state_action = QAction("&Save Figure State...", self)
+        save_state_action.setShortcut("Ctrl+S")
+        save_state_action.triggered.connect(self._on_save_figure_state)
+        file_menu.addAction(save_state_action)
+
         file_menu.addSeparator()
 
         close_action = QAction("&Close", self)
@@ -1793,6 +1845,7 @@ class FigureComposerWindow(QMainWindow):
             )
         finally:
             plot_host.resume_updates()
+        self._mark_slide_dirty()
 
     def apply_plot_style(self, style: dict[str, Any] | None, persist: bool = False) -> None:
         """Apply a new style dictionary to the publication plot."""
@@ -2344,6 +2397,62 @@ class FigureComposerWindow(QMainWindow):
         # Trigger redraw at new DPI
         self.plot_host.canvas.draw_idle()
 
+    def _apply_saved_figure_geometry(self, payload: Mapping[str, Any] | None) -> None:
+        """Restore figure/canvas size settings from persisted state."""
+        if not payload:
+            return
+        with contextlib.suppress(Exception):
+            self._canvas_width_in = float(payload.get("canvas_width_in", self._canvas_width_in))
+            self._canvas_height_in = float(payload.get("canvas_height_in", self._canvas_height_in))
+            self._figure_width_in = float(payload.get("figure_width_in", self._figure_width_in))
+            self._figure_height_in = float(payload.get("figure_height_in", self._figure_height_in))
+            if "zoom_level" in payload:
+                self._zoom_level = float(payload.get("zoom_level", self._zoom_level))
+            if "canvas_dpi" in payload:
+                self._canvas_dpi = int(payload.get("canvas_dpi", self._canvas_dpi))
+        self._apply_canvas_size()
+
+    def _serialize_slide_payload(self) -> dict[str, Any]:
+        """Capture the current slide configuration for persistence."""
+        figure_payload = {
+            "canvas_width_in": self._canvas_width_in,
+            "canvas_height_in": self._canvas_height_in,
+            "figure_width_in": self._figure_width_in,
+            "figure_height_in": self._figure_height_in,
+            "zoom_level": self._zoom_level,
+            "canvas_dpi": self._canvas_dpi,
+        }
+        layout_payload = None
+        if hasattr(self, "plot_host") and self.plot_host is not None:
+            with contextlib.suppress(Exception):
+                layout_payload = self.plot_host.layout_state()
+        return {
+            "figure": figure_payload,
+            "style": self.get_current_style(),
+            "layout_state": layout_payload,
+            "annotations": self.annotations,
+        }
+
+    def _emit_slide_state(self, name: str | None = None, *, auto: bool) -> None:
+        """Emit the current slide state to the host window."""
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
+        slide_name = (
+            name or self._current_slide_name or "Untitled Figure"
+        ).strip() or "Untitled Figure"
+        slide_id = self._current_slide_id or str(uuid.uuid4())
+        payload = self._serialize_slide_payload()
+        self._current_slide_id = slide_id
+        self._current_slide_name = slide_name
+        state = {
+            "id": slide_id,
+            "name": slide_name,
+            "payload": payload,
+            "auto": auto,
+        }
+        self.figure_state_saved.emit(state)
+        self._slide_dirty = False
+
     def _handle_nav_mode_toggled(self, checked: bool) -> None:
         """Handle mutual exclusivity between pan and zoom modes."""
         if not checked:
@@ -2549,6 +2658,22 @@ class FigureComposerWindow(QMainWindow):
                 f"Failed to export figure:\n{str(e)}",
             )
 
+    def _on_save_figure_state(self, checked: bool = False) -> None:
+        """Persist the current slide configuration with a user-provided name."""
+        del checked
+        default_name = self._current_slide_name or "Untitled Figure"
+        name, ok = QInputDialog.getText(
+            self,
+            "Save Figure State",
+            "Figure name:",
+            QLineEdit.Normal,
+            default_name,
+        )
+        if not ok:
+            return
+        final_name = name.strip() or default_name
+        self._emit_slide_state(final_name, auto=False)
+
     def _on_validate_figure(self, checked: bool = False) -> None:
         """Validate figure against publication requirements."""
         # Get current figure properties
@@ -2694,6 +2819,7 @@ class FigureComposerWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """Handle window close event."""
-        # Check for unsaved changes (future enhancement)
+        if self._slide_dirty or self._current_slide_id is not None:
+            self._emit_slide_state(self._current_slide_name, auto=True)
         self.studio_closed.emit()
         super().closeEvent(event)
