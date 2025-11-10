@@ -8167,6 +8167,12 @@ QPushButton[isGhost="true"]:hover {{
             return style
         x_axis = self._x_axis_for_style() or ax
 
+        # Detect PyQtGraph backend - return default style since PyQtGraph styling
+        # is handled differently and doesn't use matplotlib artist properties
+        is_pyqtgraph = not hasattr(x_axis, 'xaxis')
+        if is_pyqtgraph:
+            return style
+
         x_label = x_axis.xaxis.label
         y_label = ax.yaxis.label
         style["axis_font_size"] = x_label.get_fontsize()

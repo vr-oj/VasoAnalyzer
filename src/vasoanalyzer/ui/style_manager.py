@@ -96,6 +96,14 @@ class PlotStyleManager:
 
         x_axis = x_axis or ax
 
+        # Detect PyQtGraph backend - skip matplotlib-specific styling
+        # PyQtGraph axes don't have 'xaxis' attribute (matplotlib-specific)
+        is_pyqtgraph = not hasattr(x_axis, 'xaxis')
+        if is_pyqtgraph:
+            # PyQtGraph styling is handled by the PyQtGraph renderer itself
+            # This style manager is designed for matplotlib only
+            return
+
         style = self._style
         axis_font_size = style.get("axis_font_size", DEFAULT_STYLE["axis_font_size"])
         axis_font_family = style.get("axis_font_family", DEFAULT_STYLE["axis_font_family"])

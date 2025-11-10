@@ -86,7 +86,7 @@ class PyQtGraphChannelTrack:
         Returns:
             PlotDataItem for inner diameter trace
         """
-        return self.view.inner_line
+        return self.view.inner_curve
 
     def set_model(self, model: TraceModel) -> None:
         """Attach the shared TraceModel to this track."""
