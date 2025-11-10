@@ -33,10 +33,14 @@ class PyQtGraphTimeCursorOverlay:
         Args:
             plot_items: List of PyQtGraph PlotItems to show cursor on
         """
-        # Remove old cursor lines
+        # Remove old cursor lines (safely handle deleted Qt objects)
         for line in self._cursor_lines:
-            if line.scene() is not None:
-                line.scene().removeItem(line)
+            try:
+                if line.scene() is not None:
+                    line.scene().removeItem(line)
+            except RuntimeError:
+                # Qt object already deleted
+                pass
         self._cursor_lines.clear()
 
         # Create new cursor lines for each plot item
@@ -60,7 +64,11 @@ class PyQtGraphTimeCursorOverlay:
         """
         self._time = time
         for line in self._cursor_lines:
-            line.setPos(time)
+            try:
+                line.setPos(time)
+            except RuntimeError:
+                # Qt object already deleted
+                pass
 
     def set_visible(self, visible: bool) -> None:
         """Show/hide cursor.
@@ -70,7 +78,11 @@ class PyQtGraphTimeCursorOverlay:
         """
         self._visible = visible
         for line in self._cursor_lines:
-            line.setVisible(visible)
+            try:
+                line.setVisible(visible)
+            except RuntimeError:
+                # Qt object already deleted
+                pass
 
     def set_style(self, color: str | None = None, width: float | None = None) -> None:
         """Set cursor visual style.
@@ -86,8 +98,12 @@ class PyQtGraphTimeCursorOverlay:
 
         # Update existing lines
         for line in self._cursor_lines:
-            pen = pg.mkPen(color=self._color, width=self._width)
-            line.setPen(pen)
+            try:
+                pen = pg.mkPen(color=self._color, width=self._width)
+                line.setPen(pen)
+            except RuntimeError:
+                # Qt object already deleted
+                pass
 
 
 class PyQtGraphEventHighlightOverlay:
@@ -110,10 +126,14 @@ class PyQtGraphEventHighlightOverlay:
         Args:
             plot_items: List of PyQtGraph PlotItems to show highlight on
         """
-        # Remove old highlight regions
+        # Remove old highlight regions (safely handle deleted Qt objects)
         for region in self._highlight_regions:
-            if region.scene() is not None:
-                region.scene().removeItem(region)
+            try:
+                if region.scene() is not None:
+                    region.scene().removeItem(region)
+            except RuntimeError:
+                # Qt object already deleted
+                pass
         self._highlight_regions.clear()
 
         # Create new highlight regions for each plot item
@@ -144,7 +164,11 @@ class PyQtGraphEventHighlightOverlay:
         """
         self._time = time
         for region in self._highlight_regions:
-            region.setRegion((time - self._width / 2, time + self._width / 2))
+            try:
+                region.setRegion((time - self._width / 2, time + self._width / 2))
+            except RuntimeError:
+                # Qt object already deleted
+                pass
 
     def set_visible(self, visible: bool) -> None:
         """Show/hide highlight.
@@ -154,7 +178,11 @@ class PyQtGraphEventHighlightOverlay:
         """
         self._visible = visible
         for region in self._highlight_regions:
-            region.setVisible(visible)
+            try:
+                region.setVisible(visible)
+            except RuntimeError:
+                # Qt object already deleted
+                pass
 
     def clear(self) -> None:
         """Clear highlight (hide and reset time)."""
@@ -186,9 +214,13 @@ class PyQtGraphEventHighlightOverlay:
         qcolor.setAlphaF(self._alpha)
 
         for region in self._highlight_regions:
-            region.setBrush(qcolor)
-            if self._time is not None:
-                region.setRegion((self._time - self._width / 2, self._time + self._width / 2))
+            try:
+                region.setBrush(qcolor)
+                if self._time is not None:
+                    region.setRegion((self._time - self._width / 2, self._time + self._width / 2))
+            except RuntimeError:
+                # Qt object already deleted
+                pass
 
     def alpha(self) -> float:
         """Get current alpha value.
