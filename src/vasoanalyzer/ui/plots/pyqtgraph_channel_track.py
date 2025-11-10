@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pyqtgraph as pg
 
 from vasoanalyzer.core.trace_model import TraceModel
+from vasoanalyzer.ui.plots.pyqtgraph_axes_compat import PyQtGraphAxesCompat
 from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
 
 __all__ = ["PyQtGraphChannelTrack"]
@@ -43,6 +44,9 @@ class PyQtGraphChannelTrack:
         self._sticky_ylim: tuple[float, float] | None = None
         self._last_time_span: float | None = None
 
+        # Create matplotlib-compatible axes wrapper
+        self._ax_compat: PyQtGraphAxesCompat | None = None
+
         # Enable autoscale by default
         self.view.set_autoscale_y(True)
 
@@ -67,10 +71,13 @@ class PyQtGraphChannelTrack:
     def ax(self):
         """Get the plot axes (matplotlib compatibility).
 
-        Returns the PyQtGraph PlotItem for compatibility with code
-        that expects matplotlib Axes.
+        Returns a matplotlib-compatible wrapper around PyQtGraph PlotItem
+        that provides Axes-like methods (get_xlim, get_ylim, etc.).
         """
-        return self.view.get_widget().getPlotItem()
+        if self._ax_compat is None:
+            plot_item = self.view.get_widget().getPlotItem()
+            self._ax_compat = PyQtGraphAxesCompat(plot_item)
+        return self._ax_compat
 
     def set_model(self, model: TraceModel) -> None:
         """Attach the shared TraceModel to this track."""

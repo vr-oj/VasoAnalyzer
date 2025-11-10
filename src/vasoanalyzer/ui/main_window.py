@@ -6290,6 +6290,19 @@ QPushButton[isGhost="true"]:hover {{
             with contextlib.suppress(Exception):
                 annot.remove()
 
+        # Check if we're using PyQtGraph renderer
+        plot_host = getattr(self, "plot_host", None)
+        is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+
+        # PyQtGraph doesn't support matplotlib-style annotations
+        # For now, disable hover annotations when using PyQtGraph
+        # TODO: Implement PyQtGraph-specific hover feedback using TextItem
+        if is_pyqtgraph:
+            self.hover_annotation_id = None
+            self.hover_annotation_od = None
+            return
+
+        # Matplotlib-specific hover annotations
         line_color = CURRENT_THEME.get("cursor_line", CURRENT_THEME.get("grid_color", "#6e7687"))
 
         def _make_annotation(target_ax):
@@ -6523,24 +6536,27 @@ QPushButton[isGhost="true"]:hover {{
             if self.ylim_full is None:
                 self.ylim_full = self.ax.get_ylim()
 
-            # Re-plot pinned points
+            # Re-plot pinned points (only for matplotlib renderer)
             self.pinned_points.clear()
-            for x, y in state.get("pinned_points", []):
-                marker = self.ax.plot(x, y, "ro", markersize=6)[0]
-                label = self.ax.annotate(
-                    f"{x:.2f} s\n{y:.1f} µm",
-                    xy=(x, y),
-                    xytext=(6, 6),
-                    textcoords="offset points",
-                    bbox=dict(
-                        boxstyle="round,pad=0.3",
-                        fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
-                        ec=CURRENT_THEME["hover_label_border"],
-                        lw=1,
-                    ),
-                    fontsize=8,
-                )
-                self.pinned_points.append((marker, label))
+            plot_host = getattr(self, "plot_host", None)
+            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            if not is_pyqtgraph:
+                for x, y in state.get("pinned_points", []):
+                    marker = self.ax.plot(x, y, "ro", markersize=6)[0]
+                    label = self.ax.annotate(
+                        f"{x:.2f} s\n{y:.1f} µm",
+                        xy=(x, y),
+                        xytext=(6, 6),
+                        textcoords="offset points",
+                        bbox=dict(
+                            boxstyle="round,pad=0.3",
+                            fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                            ec=CURRENT_THEME["hover_label_border"],
+                            lw=1,
+                        ),
+                        fontsize=8,
+                    )
+                    self.pinned_points.append((marker, label))
 
             # Apply saved style LAST so it overrides any plot resets
             if plot_style:
@@ -7304,6 +7320,14 @@ QPushButton[isGhost="true"]:hover {{
         if event.button == 1 and not self.toolbar.mode:
             if self.trace_data is None:
                 return
+
+            # PyQtGraph doesn't support matplotlib-style pinned points yet
+            plot_host = getattr(self, "plot_host", None)
+            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            if is_pyqtgraph:
+                # TODO: Implement PyQtGraph-compatible pinned points
+                return
+
             t_arr = self.trace_data["Time (s)"].values
             idx = np.argmin(np.abs(t_arr - x))
 
@@ -8526,6 +8550,13 @@ QPushButton[isGhost="true"]:hover {{
             self._focus_event_row(row, source="context")
 
         elif index.isValid() and action == pin_action:
+            # PyQtGraph doesn't support matplotlib-style pinned points yet
+            plot_host = getattr(self, "plot_host", None)
+            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            if is_pyqtgraph:
+                # TODO: Implement PyQtGraph-compatible pinned points
+                return
+
             t = self.event_table_data[row][1]
             id_val = self.event_table_data[row][2]
             marker = self.ax.plot(t, id_val, "ro", markersize=6)[0]
