@@ -28,6 +28,7 @@ from vasoanalyzer.ui.plots.overlays import (
     EventHighlightOverlay,
     TimeCursorOverlay,
 )
+from vasoanalyzer.ui.simple_epoch_renderer import SimpleEpoch, SimpleEpochRenderer
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["LayoutState", "PlotHost"]
@@ -107,6 +108,9 @@ class PlotHost:
         self._annotation_lane = AnnotationLane()
         self._time_cursor_overlay = TimeCursorOverlay()
         self._event_highlight_overlay = EventHighlightOverlay()
+        self._simple_epoch_renderer = SimpleEpochRenderer()
+        self._simple_epochs: list[SimpleEpoch] = []
+        self._simple_epochs_visible: bool = False
         self._annotation_entries: list[AnnotationSpec] = []
         self._event_highlight_alpha: float = self._event_highlight_overlay.alpha()
         self._event_highlight_color: str = CURRENT_THEME.get(
@@ -369,6 +373,39 @@ class PlotHost:
         for entry, artist in self._annotation_lane.entries_with_artists():
             text_objects.append((artist, entry.time_s, entry.label))
         return text_objects
+
+    def set_simple_epochs(self, epochs: list[SimpleEpoch]) -> None:
+        """Set protocol timeline epochs to render above traces.
+
+        Args:
+            epochs: List of SimpleEpoch objects to display
+        """
+        self._simple_epochs = epochs
+        if self._simple_epochs_visible:
+            self._simple_epoch_renderer.set_epochs(epochs)
+            self._schedule_draw()
+
+    def set_simple_epochs_visible(self, visible: bool) -> None:
+        """Toggle simple epoch timeline visibility.
+
+        Args:
+            visible: Whether to show epoch bars
+        """
+        self._simple_epochs_visible = visible
+        if visible:
+            self._simple_epoch_renderer.set_epochs(self._simple_epochs)
+            # Attach to top axis
+            top_ax = self.top_axis()
+            if top_ax is not None:
+                self._simple_epoch_renderer.attach(top_ax)
+        else:
+            self._simple_epoch_renderer.clear()
+            self._simple_epoch_renderer.attach(None)
+        self._schedule_draw()
+
+    def simple_epochs_visible(self) -> bool:
+        """Check if simple epochs are currently visible."""
+        return self._simple_epochs_visible
 
     def set_time_cursor(self, time_s: float | None, *, visible: bool | None = None) -> None:
         """Update the global 'now' cursor position (unused when None)."""
