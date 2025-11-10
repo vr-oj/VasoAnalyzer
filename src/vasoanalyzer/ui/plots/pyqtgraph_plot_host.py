@@ -311,6 +311,130 @@ class PyQtGraphPlotHost:
         """Clear event highlight."""
         self._event_highlight_overlay.clear()
 
+    def highlight_event(self, time_s: float | None, *, visible: bool = True) -> None:
+        """Highlight a selected event across all tracks (matplotlib PlotHost compatibility).
+
+        Args:
+            time_s: Time value to highlight (None to clear)
+            visible: Whether highlight should be visible
+        """
+        self.set_event_highlight(time_s, visible)
+
+    def primary_axis(self):
+        """Get the primary (first) axis (matplotlib PlotHost compatibility)."""
+        if not self._channel_specs:
+            return None
+        first_id = self._channel_specs[0].track_id
+        track = self._tracks.get(first_id)
+        return None if track is None else track.ax
+
+    def set_trace_model(self, model: TraceModel) -> None:
+        """Set trace model (matplotlib PlotHost compatibility - alias for set_model)."""
+        self.set_model(model)
+
+    def set_shared_xlabel(self, text: str) -> None:
+        """Set xlabel on bottom axis (matplotlib PlotHost compatibility)."""
+        if not self._channel_specs:
+            return
+        last_track_id = self._channel_specs[-1].track_id
+        track = self._tracks.get(last_track_id)
+        if track:
+            track.view.get_widget().getPlotItem().setLabel('bottom', text)
+
+    def set_event_lines_visible(self, visible: bool) -> None:
+        """Set event line visibility (matplotlib PlotHost compatibility).
+
+        Note: PyQtGraph tracks handle event visibility internally.
+        This is a no-op for compatibility.
+        """
+        # TODO: Implement event line visibility control if needed
+        pass
+
+    def set_annotation_entries(self, entries: list) -> None:
+        """Set annotation entries (matplotlib PlotHost compatibility).
+
+        Note: PyQtGraph doesn't use annotation lanes yet.
+        This is a no-op for compatibility.
+        """
+        # TODO: Implement annotation lane if needed
+        pass
+
+    def annotation_text_objects(self) -> list:
+        """Get annotation text objects (matplotlib PlotHost compatibility).
+
+        Returns:
+            Empty list (PyQtGraph uses different annotation system)
+        """
+        # TODO: Return PyQtGraph text items if needed
+        return []
+
+    # Event label configuration methods (matplotlib PlotHost compatibility)
+    # These are stubs for now - PyQtGraph uses different event labeling system
+
+    def set_event_labels_v3_enabled(self, enabled: bool) -> None:
+        """Enable/disable v3 event labels (compatibility stub)."""
+        pass
+
+    def set_event_label_mode(self, mode: str) -> None:
+        """Set event label mode (compatibility stub)."""
+        pass
+
+    def set_max_labels_per_cluster(self, max_labels: int) -> None:
+        """Set max labels per cluster (compatibility stub)."""
+        pass
+
+    def set_cluster_style_policy(self, policy: str) -> None:
+        """Set cluster style policy (compatibility stub)."""
+        pass
+
+    def set_label_lanes(self, lanes: int) -> None:
+        """Set number of label lanes (compatibility stub)."""
+        pass
+
+    def set_belt_baseline(self, baseline: str) -> None:
+        """Set belt baseline (compatibility stub)."""
+        pass
+
+    def set_event_label_span_siblings(self, span: bool) -> None:
+        """Set event label span siblings (compatibility stub)."""
+        pass
+
+    def set_auto_event_label_mode(self, auto_mode: bool) -> None:
+        """Set auto event label mode (compatibility stub)."""
+        pass
+
+    def set_label_density_thresholds(self, thresholds: dict) -> None:
+        """Set label density thresholds (compatibility stub)."""
+        pass
+
+    def set_label_outline_enabled(self, enabled: bool) -> None:
+        """Enable/disable label outline (compatibility stub)."""
+        pass
+
+    def set_label_outline(self, width: float, color: str) -> None:
+        """Set label outline (compatibility stub)."""
+        pass
+
+    def set_label_tooltips_enabled(self, enabled: bool) -> None:
+        """Enable/disable label tooltips (compatibility stub)."""
+        pass
+
+    def set_tooltip_proximity(self, proximity: float) -> None:
+        """Set tooltip proximity (compatibility stub)."""
+        pass
+
+    def set_compact_legend_enabled(self, enabled: bool) -> None:
+        """Enable/disable compact legend (compatibility stub)."""
+        pass
+
+    def set_compact_legend_location(self, location: str) -> None:
+        """Set compact legend location (compatibility stub)."""
+        pass
+
+    def set_event_base_style(self, **kwargs) -> None:
+        """Set event base style (compatibility stub)."""
+        pass
+
     def capture_view_state(self) -> ExportViewState:
         """Capture current view state for export.
 
