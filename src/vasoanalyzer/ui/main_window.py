@@ -14,8 +14,10 @@ import json
 import logging
 import os
 import sys
+import uuid
 import webbrowser
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -502,6 +504,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._sample_state_dirty = True
         self._cached_snapshot_style: dict | None = None
         self._snapshot_style_dirty = True
+        self._pending_figure_state: dict[str, Any] | None = None
+        self._pending_figure_sample: SampleN | None = None
         self._snapshot_load_token: object | None = None
         self._snapshot_loading_sample: SampleN | None = None
         self._snapshot_viewer_pending_open = False
@@ -1513,6 +1517,36 @@ class VasoAnalyzerApp(QMainWindow):
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
                 exp_item.addChild(item)
+                slides = self._get_sample_figure_slides(s, create=False)
+                if slides:
+                    figures_root = QTreeWidgetItem(["Figures"])
+                    figures_root.setData(
+                        0,
+                        Qt.UserRole,
+                        {"type": "figure_folder", "sample": s, "experiment": exp},
+                    )
+                    figures_root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    item.addChild(figures_root)
+                    for idx, slide in enumerate(slides, start=1):
+                        slide_name = slide.get("name") or f"Figure {idx}"
+                        timestamp = slide.get("updated_at") or slide.get("created_at")
+                        slide_label = f"{slide_name} ({timestamp})" if timestamp else slide_name
+                        slide_item = QTreeWidgetItem([slide_label])
+                        slide_item.setData(
+                            0,
+                            Qt.UserRole,
+                            {
+                                "type": "figure_slide",
+                                "sample": s,
+                                "experiment": exp,
+                                "slide": slide,
+                            },
+                        )
+                        slide_item.setIcon(
+                            0,
+                            self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
+                        )
+                        figures_root.addChild(slide_item)
         self.project_tree.expandAll()
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()
@@ -1602,16 +1636,16 @@ class VasoAnalyzerApp(QMainWindow):
     def on_tree_item_clicked(self, item, _):
         obj = item.data(0, Qt.UserRole)
         if isinstance(obj, SampleN):
-            if self.current_sample and self.current_sample is not obj:
-                state = self.gather_sample_state()
-                self.current_sample.ui_state = state
-                self.project_state[id(self.current_sample)] = state
-            self.current_sample = obj
+            experiment = None
             parent = item.parent()
-            self.current_experiment = parent.data(0, Qt.UserRole) if parent else None
-            # Open the sample on single-click
-            self.load_sample_into_view(obj)
-        elif isinstance(obj, Experiment):
+            if parent:
+                parent_obj = parent.data(0, Qt.UserRole)
+                if isinstance(parent_obj, Experiment):
+                    experiment = parent_obj
+            self._activate_sample(obj, experiment)
+            self._update_metadata_panel(obj)
+            return
+        if isinstance(obj, Experiment):
             self.current_experiment = obj
             self.current_sample = None
             if self.current_project is not None:
@@ -1619,10 +1653,39 @@ class VasoAnalyzerApp(QMainWindow):
                     self.current_project.ui_state = {}
                 self.current_project.ui_state["last_experiment"] = obj.name
                 self.current_project.ui_state.pop("last_sample", None)
-        else:
-            self.current_sample = None
-            self.current_experiment = None
+            self._update_metadata_panel(obj)
+            return
+        if isinstance(obj, dict):
+            kind = obj.get("type")
+            if kind == "figure_slide":
+                sample = obj.get("sample")
+                experiment = obj.get("experiment")
+                slide = obj.get("slide")
+                if isinstance(sample, SampleN) and isinstance(slide, Mapping):
+                    exp_obj = experiment if isinstance(experiment, Experiment) else None
+                    self._set_pending_figure_state(sample, slide)
+                    self._activate_sample(sample, exp_obj, ensure_loaded=True)
+                    self._maybe_launch_pending_figure()
+                return
         self._update_metadata_panel(obj)
+
+    def _activate_sample(
+        self,
+        sample: SampleN,
+        experiment: Experiment | None,
+        *,
+        ensure_loaded: bool = False,
+    ) -> None:
+        if self.current_sample and self.current_sample is not sample:
+            state = self.gather_sample_state()
+            self.current_sample.ui_state = state
+            self.project_state[id(self.current_sample)] = state
+        need_load = ensure_loaded or (self.current_sample is not sample)
+        self.current_sample = sample
+        self.current_experiment = experiment
+        if need_load or self.trace_model is None:
+            self.load_sample_into_view(sample)
+        self._maybe_launch_pending_figure()
 
     def on_tree_item_changed(self, item, _):
         obj = item.data(0, Qt.UserRole)
@@ -1973,6 +2036,8 @@ class VasoAnalyzerApp(QMainWindow):
             6000,
         )
         self._render_sample(sample)
+        if self.trace_model is None:
+            self._clear_pending_figure_state()
 
     def _render_sample(self, sample: SampleN) -> None:
         style = None
@@ -2089,6 +2154,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._update_snapshot_viewer_state(sample)
         self._update_home_resume_button()
         self._update_metadata_panel(sample)
+        self._maybe_launch_pending_figure()
 
     def _update_snapshot_viewer_state(self, sample: SampleN) -> None:
         has_stack = isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0
@@ -4070,6 +4136,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self._rebuild_channel_layout(inner_on, outer_on)
         self._refresh_zoom_window()
+        self._invalidate_sample_state_cache()
 
     def toggle_inner_diameter(self, checked: bool):
         self._apply_channel_toggle("inner", checked)
@@ -7643,11 +7710,19 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
-    def open_figure_composer(self, checked: bool = False):
+    def open_figure_composer(
+        self,
+        checked: bool = False,
+        *,
+        figure_state: Mapping[str, Any] | None = None,
+        skip_prompt: bool = False,
+    ):
         """Open Figure Composer window for advanced figure styling.
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
+            figure_state: Optional saved slide to load directly
+            skip_prompt: If True, do not prompt for slide selection
         """
         # Check if trace is loaded
         if self.trace_model is None:
@@ -7664,7 +7739,7 @@ QPushButton[isGhost="true"]:hover {{
             # Connect signals
             self.figure_composer.studio_closed.connect(self._on_figure_composer_closed)
             self.figure_composer.preset_saved.connect(self._on_figure_composer_preset_saved)
-            self.figure_composer.annotations_changed.connect(self._on_figure_annotations_changed)
+            self.figure_composer.figure_state_saved.connect(self._on_figure_state_saved)
 
         # Load user presets from project (if available)
         user_presets = []
@@ -7675,11 +7750,15 @@ QPushButton[isGhost="true"]:hover {{
         channel_specs = self.plot_host.channel_specs()
         layout_state = self.plot_host.layout_state()
         current_style = self.get_current_plot_style()
-        annotations_payload: list[dict[str, Any]] = []
-        if self.current_sample and isinstance(self.current_sample.ui_state, dict):
-            annotations_payload = copy.deepcopy(
-                self.current_sample.ui_state.get("figure_annotations", []) or []
+        figure_state_payload = None
+        if figure_state is not None:
+            figure_state_payload = figure_state
+        elif not skip_prompt and self.current_sample:
+            figure_state_payload, cancelled = self._prompt_figure_slide_selection(
+                self.current_sample
             )
+            if cancelled:
+                return
 
         # Populate with current data
         self.figure_composer.load_from_main_window(
@@ -7691,7 +7770,8 @@ QPushButton[isGhost="true"]:hover {{
             channel_specs=channel_specs,
             layout_state=layout_state,
             style_dict=current_style,
-            annotations=annotations_payload,
+            annotations=None,
+            figure_state=figure_state_payload,
         )
         if hasattr(self.figure_composer, "maximize_figure_to_canvas"):
             self.figure_composer.maximize_figure_to_canvas(forward=False)
@@ -7737,15 +7817,109 @@ QPushButton[isGhost="true"]:hover {{
             self.figure_composer.deleteLater()
             self.figure_composer = None
 
-    def _on_figure_annotations_changed(self, payload: list[dict[str, Any]]) -> None:
-        """Persist manual annotation edits into the active project's state."""
-        if not self.current_sample:
+    def _prompt_figure_slide_selection(self, sample) -> tuple[dict[str, Any] | None, bool]:
+        """Prompt user to choose an existing slide or create a new one."""
+        slides = self._get_sample_figure_slides(sample, create=False)
+        if not slides:
+            return None, False
+        options = ["Create New Figure"]
+        slide_refs: list[dict[str, Any]] = []
+        for idx, slide in enumerate(slides, start=1):
+            label = slide.get("name") or f"Figure {idx}"
+            stamp = slide.get("updated_at") or slide.get("created_at")
+            display = f"{idx}. {label}"
+            if stamp:
+                display += f" [{stamp}]"
+            options.append(display)
+            slide_refs.append(slide)
+        selection, ok = QInputDialog.getItem(
+            self,
+            "Figure Composer",
+            "Select a saved figure to open, or create a new one:",
+            options,
+            0,
+            False,
+        )
+        if not ok:
+            return None, True
+        selected_index = options.index(selection)
+        if selected_index == 0:
+            return None, False
+        return slide_refs[selected_index - 1], False
+
+    def _get_sample_figure_slides(self, sample, *, create: bool) -> list[dict[str, Any]]:
+        """Return the mutable list of figure slides stored on the sample."""
+        if sample is None:
+            return []
+        if not isinstance(sample.ui_state, dict):
+            if not create:
+                return []
+            sample.ui_state = {}
+        slides = sample.ui_state.get("figure_slides")
+        if slides is None:
+            slides = []
+            if create:
+                sample.ui_state["figure_slides"] = slides
+            else:
+                return []
+        elif not isinstance(slides, list):
+            slides = []
+            sample.ui_state["figure_slides"] = slides
+        return slides
+
+    def _on_figure_state_saved(self, state: Mapping[str, Any]) -> None:
+        """Persist a slide state emitted by Figure Composer."""
+        sample = self.current_sample
+        if sample is None:
             return
-        if not isinstance(self.current_sample.ui_state, dict):
-            self.current_sample.ui_state = {}
-        self.current_sample.ui_state["figure_annotations"] = copy.deepcopy(payload)
-        self.project_state[id(self.current_sample)] = self.current_sample.ui_state
-        self.request_deferred_autosave(delay_ms=2000, reason="annotations")
+        slides = self._get_sample_figure_slides(sample, create=True)
+        slide_id = str(state.get("id") or "") or str(uuid.uuid4())
+        payload = copy.deepcopy(state.get("payload") or {})
+        slide_name = state.get("name") or "Untitled Figure"
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        existing = next((entry for entry in slides if entry.get("id") == slide_id), None)
+        if existing:
+            existing.update(
+                {
+                    "name": slide_name,
+                    "updated_at": now,
+                    "payload": payload,
+                }
+            )
+        else:
+            slides.append(
+                {
+                    "id": slide_id,
+                    "name": slide_name,
+                    "created_at": now,
+                    "updated_at": now,
+                    "payload": payload,
+                }
+            )
+        sample.ui_state["figure_slides"] = slides
+        self.project_state[id(sample)] = sample.ui_state
+        self.request_deferred_autosave(delay_ms=2000, reason="figure_slide")
+        self.refresh_project_tree()
+        self._clear_pending_figure_state()
+
+    def _set_pending_figure_state(self, sample: SampleN, slide: Mapping[str, Any]) -> None:
+        self._pending_figure_sample = sample
+        self._pending_figure_state = copy.deepcopy(slide)
+
+    def _clear_pending_figure_state(self) -> None:
+        self._pending_figure_sample = None
+        self._pending_figure_state = None
+
+    def _maybe_launch_pending_figure(self) -> None:
+        if not self._pending_figure_state:
+            return
+        if self.trace_model is None:
+            return
+        if self.current_sample is not self._pending_figure_sample:
+            return
+        payload = self._pending_figure_state
+        self._clear_pending_figure_state()
+        self.open_figure_composer(figure_state=payload, skip_prompt=True)
 
     # [J] ========================= PLOT STYLE EDITOR ================================
     def apply_plot_style(self, style, persist: bool = False):
@@ -8665,12 +8839,8 @@ QPushButton[isGhost="true"]:hover {{
 
         # preserve any previously saved style_settings
         prev = {}
-        annotations_prev: list[dict[str, Any]] = []
         if self.current_sample and isinstance(self.current_sample.ui_state, dict):
             prev = self.current_sample.ui_state.get("style_settings", {}) or {}
-            annotations_prev = copy.deepcopy(
-                self.current_sample.ui_state.get("figure_annotations", []) or []
-            )
         x_axis = self._x_axis_for_style()
         state = {
             "axis_xlim": list(self.ax.get_xlim()),
@@ -8681,6 +8851,12 @@ QPushButton[isGhost="true"]:hover {{
             "pins": [(p.get_xdata()[0], p.get_ydata()[0]) for p, _ in self.pinned_points],
             "plot_style": self.get_current_plot_style(),
             "grid_visible": self.grid_visible,
+            "inner_trace_visible": self.id_toggle_act.isChecked()
+            if self.id_toggle_act is not None
+            else True,
+            "outer_trace_visible": self.od_toggle_act.isChecked()
+            if self.od_toggle_act is not None
+            else False,
             "axis_settings": {
                 "x": {"label": x_axis.get_xlabel() if x_axis else ""},
                 "y": {"label": self.ax.get_ylabel()},
@@ -8690,7 +8866,6 @@ QPushButton[isGhost="true"]:hover {{
             state["legend_settings"] = copy.deepcopy(self.legend_settings)
         # Always record whatever is in ui_state["style_settings"], even if empty
         state["style_settings"] = prev
-        state["figure_annotations"] = annotations_prev
         if self.ax2 is not None:
             state["axis_outer_ylim"] = list(self.ax2.get_ylim())
             state["axis_settings"]["y_outer"] = {"label": self.ax2.get_ylabel()}
@@ -8795,6 +8970,22 @@ QPushButton[isGhost="true"]:hover {{
             self.ax.grid(self.grid_visible)
             if self.grid_visible:
                 self.ax.grid(color=CURRENT_THEME["grid_color"])
+        if (
+            ("inner_trace_visible" in state or "outer_trace_visible" in state)
+            and hasattr(self, "id_toggle_act")
+            and self.id_toggle_act is not None
+        ):
+            inner_on = state.get(
+                "inner_trace_visible",
+                self.id_toggle_act.isChecked(),
+            )
+            outer_on = state.get(
+                "outer_trace_visible",
+                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False,
+            )
+            outer_supported = self._outer_channel_available()
+            self._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)
+            self._rebuild_channel_layout(inner_on, outer_on, redraw=False)
 
         legend_settings = state.get("legend_settings")
         if isinstance(legend_settings, dict):
