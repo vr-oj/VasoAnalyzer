@@ -7,7 +7,9 @@ row stacking and collision avoidance.
 from __future__ import annotations
 
 import contextlib
-from typing import Any, Callable
+import logging
+from collections.abc import Callable
+from typing import Any
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -23,6 +25,8 @@ __all__ = [
     "EpochLayer",
 ]
 
+log = logging.getLogger(__name__)
+
 
 class EpochTheme:
     """Visual styling constants for epoch rendering."""
@@ -32,6 +36,8 @@ class EpochTheme:
         *,
         row_height_px: float = 16.0,
         row_gap_px: float = 6.0,
+        axes_padding_px: float = 12.0,
+        label_padding_px: float = 4.0,
         bar_thickness: dict[str, float] | None = None,
         font_size_pt: float = 8.5,
         font_family: str = "sans-serif",
@@ -44,6 +50,8 @@ class EpochTheme:
         Args:
             row_height_px: Height of each epoch row in pixels
             row_gap_px: Vertical gap between rows in pixels
+            axes_padding_px: Padding above the axes baseline before first epoch row (px)
+            label_padding_px: Extra clearance above tallest epoch row for labels (px)
             bar_thickness: Thickness by emphasis {"light": 2, "normal": 3, "strong": 4}
             font_size_pt: Label font size in points
             font_family: Label font family
@@ -53,6 +61,8 @@ class EpochTheme:
         """
         self.row_height_px = row_height_px
         self.row_gap_px = row_gap_px
+        self.axes_padding_px = axes_padding_px
+        self.label_padding_px = label_padding_px
         self.bar_thickness = bar_thickness or {"light": 2.0, "normal": 3.0, "strong": 4.0}
         self.font_size_pt = font_size_pt
         self.font_family = font_family
@@ -103,6 +113,9 @@ class EpochLayer:
         self._artists: list[Any] = []
         self._time_range: tuple[float, float] | None = None
         self._axes: Axes | None = None
+        self._layout_change_callback: Callable[[int, float], None] | None = None
+        self._row_count: int = 0
+        self._required_margin_px: float = 0.0
 
     # ------------------------------------------------------------------ Public API
 
@@ -134,6 +147,21 @@ class EpochLayer:
 
         if axes is not None:
             self._redraw()
+        else:
+            self._update_layout_metrics(0)
+
+    def set_layout_change_callback(
+        self,
+        callback: Callable[[int, float], None] | None,
+    ) -> None:
+        """Register callback for layout (row count / margin) changes."""
+        self._layout_change_callback = callback
+        if callback is not None:
+            callback(self._row_count, self._required_margin_px)
+
+    def get_required_margin_px(self) -> float:
+        """Return the current figure margin required for rendered epochs."""
+        return self._required_margin_px
 
     def paint(
         self,
@@ -161,7 +189,8 @@ class EpochLayer:
             epoch_theme="default_v1",
             row_order=self.row_order,
         )
-        return manifest.to_dict()
+        manifest_dict: dict[str, Any] = manifest.to_dict()
+        return manifest_dict
 
     def clear(self) -> None:
         """Clear all epochs and artists."""
@@ -185,13 +214,19 @@ class EpochLayer:
         self._clear_artists()
 
         if not self.epochs:
+            self._update_layout_metrics(0)
             return
 
         # Filter epochs by time range if set
         visible_epochs = self._filter_visible_epochs()
 
+        if not visible_epochs:
+            self._update_layout_metrics(0)
+            return
+
         # Auto-assign row indices for overlapping epochs
-        epochs_with_rows = self._assign_row_indices(visible_epochs)
+        epochs_with_rows, row_count = self._assign_row_indices(visible_epochs)
+        self._update_layout_metrics(row_count)
 
         # Render each epoch
         for epoch, row_idx in epochs_with_rows:
@@ -203,18 +238,14 @@ class EpochLayer:
             return self.epochs
 
         t0, t1 = self._time_range
-        visible = [
-            epoch
-            for epoch in self.epochs
-            if not (epoch.t_end < t0 or epoch.t_start > t1)
-        ]
+        visible = [epoch for epoch in self.epochs if not (epoch.t_end < t0 or epoch.t_start > t1)]
         return visible
 
-    def _assign_row_indices(self, epochs: list[Epoch]) -> list[tuple[Epoch, int]]:
+    def _assign_row_indices(self, epochs: list[Epoch]) -> tuple[list[tuple[Epoch, int]], int]:
         """Assign row indices to epochs, handling overlaps.
 
         Epochs with the same channel that overlap are stacked in separate sub-rows.
-        Returns list of (epoch, absolute_row_index) tuples.
+        Returns (epoch,row_index) tuples and total row count.
         """
         # Group epochs by channel
         channels_to_epochs: dict[str, list[Epoch]] = {}
@@ -262,7 +293,28 @@ class EpochLayer:
             # Advance to next channel's rows
             current_row += len(rows)
 
-        return result
+        return result, current_row
+
+    def _update_layout_metrics(self, row_count: int) -> None:
+        """Update cached layout metrics and notify callbacks if needed."""
+        if row_count <= 0:
+            required_margin = 0.0
+        else:
+            required_margin = (
+                self.theme.axes_padding_px
+                + (row_count * self.theme.row_height_px)
+                + (max(row_count - 1, 0) * self.theme.row_gap_px)
+                + self.theme.label_padding_px
+            )
+
+        changed = (row_count != self._row_count) or (
+            abs(required_margin - self._required_margin_px) > 0.5
+        )
+        self._row_count = row_count
+        self._required_margin_px = required_margin
+
+        if changed and self._layout_change_callback is not None:
+            self._layout_change_callback(row_count, required_margin)
 
     def _render_epoch(self, epoch: Epoch, row_idx: int) -> None:
         """Render a single epoch at the specified row."""
@@ -274,7 +326,8 @@ class EpochLayer:
 
         # Calculate y position (axes coordinates, 0=bottom, 1=top)
         # Place epochs above the plot area (y > 1.0)
-        y_base = 1.02  # Start just above the top spine
+        padding_axes = self._px_to_axes_height(self.theme.axes_padding_px)
+        y_base = 1.0 + padding_axes
         row_height_axes = self._px_to_axes_height(self.theme.row_height_px)
         row_gap_axes = self._px_to_axes_height(self.theme.row_gap_px)
 
@@ -405,13 +458,11 @@ class EpochLayer:
                 va="center",
                 clip_on=False,
                 zorder=30,
-                path_effects=[
-                    mpatches.withStroke(linewidth=2.0, foreground="white", alpha=0.7)
-                ],
+                path_effects=[mpatches.withStroke(linewidth=2.0, foreground="white", alpha=0.7)],
             )
 
         except Exception as e:
-            print(f"Warning: Could not render epoch label: {e}")
+            log.warning("Could not render epoch label: %s", e, exc_info=True)
 
     def _px_to_axes_height(self, px: float) -> float:
         """Convert pixel height to axes coordinates (fraction of axes height)."""
@@ -421,7 +472,7 @@ class EpochLayer:
         # Get figure DPI and axes height in inches
         dpi = self._axes.figure.dpi
         bbox = self._axes.get_window_extent()
-        axes_height_px = bbox.height
+        axes_height_px = float(bbox.height)
 
         # Convert px to fraction of axes height
         if axes_height_px > 0:
@@ -434,7 +485,7 @@ class EpochLayer:
             return 0.01  # Fallback
 
         bbox = self._axes.get_window_extent()
-        axes_width_px = bbox.width
+        axes_width_px = float(bbox.width)
 
         if axes_width_px > 0:
             return px / axes_width_px

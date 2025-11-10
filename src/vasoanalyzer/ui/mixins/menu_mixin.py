@@ -391,4 +391,7 @@ class MenuMixin:
         self.recent_projects_menu.addAction(clear_action)
 
     def open_preferences_dialog(self):
-        QMessageBox.information(self, "Preferences", "Preferences will be implemented soon(ish).")
+        from ..dialogs.preferences_dialog import PreferencesDialog
+
+        dialog = PreferencesDialog(self)
+        dialog.exec_()

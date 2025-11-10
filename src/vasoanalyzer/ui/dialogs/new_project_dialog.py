@@ -76,7 +76,7 @@ class NewProjectDialog(QDialog):
         path_layout.setContentsMargins(0, 0, 0, 0)
         path_layout.setSpacing(6)
         self.project_path_edit = QLineEdit(self)
-        self.project_path_edit.setPlaceholderText("Select where the .vaso file will be saved")
+        self.project_path_edit.setPlaceholderText("Select where the project will be saved")
         browse_button = QPushButton("Browse…", self)
         browse_button.clicked.connect(self._choose_path)
         path_layout.addWidget(self.project_path_edit, stretch=1)
@@ -141,17 +141,28 @@ class NewProjectDialog(QDialog):
 
     # ------------------------------------------------------------------#
     def _choose_path(self) -> None:
-        filename, _ = QFileDialog.getSaveFileName(
+        filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Create Project",
             self.project_path_edit.text() or self._default_dir,
-            "Vaso Files (*.vaso)",
+            "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)",
         )
         if not filename:
             return
         path = Path(filename).expanduser()
-        if path.suffix.lower() != ".vaso":
-            path = path.with_suffix(".vaso")
+
+        # Apply appropriate extension based on selected filter
+        if selected_filter and "*.vasopack" in selected_filter:
+            if path.suffix.lower() != ".vasopack":
+                path = path.with_suffix(".vasopack")
+        elif selected_filter and "*.vaso" in selected_filter:
+            if path.suffix.lower() != ".vaso":
+                path = path.with_suffix(".vaso")
+        else:
+            # Default to .vasopack if no clear filter selected
+            if path.suffix.lower() not in [".vaso", ".vasopack"]:
+                path = path.with_suffix(".vasopack")
+
         self.project_path_edit.setText(str(path))
         self._path_edited_manually = True
 
@@ -183,8 +194,9 @@ class NewProjectDialog(QDialog):
                 return
 
         project_path = Path(path_text).expanduser()
-        if project_path.suffix.lower() != ".vaso":
-            project_path = project_path.with_suffix(".vaso")
+        # Ensure valid extension (default to .vasopack for new projects)
+        if project_path.suffix.lower() not in [".vaso", ".vasopack"]:
+            project_path = project_path.with_suffix(".vasopack")
 
         try:
             project_path.parent.mkdir(parents=True, exist_ok=True)

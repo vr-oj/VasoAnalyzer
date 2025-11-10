@@ -113,11 +113,11 @@ from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
 from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
+from vasoanalyzer.ui.figure_composer import FigureComposerWindow
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
-from vasoanalyzer.ui.publication_studio import PublicationStudioWindow
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.theme import (
     CURRENT_THEME,
@@ -222,6 +222,91 @@ class _SampleLoadJob(QRunnable):
                 close_project_ctx(owned_ctx)
 
         self.signals.finished.emit(self._token, self._sample, trace_df, events_df, analysis_results)
+
+
+class _SnapshotLoadSignals(QObject):
+    finished = pyqtSignal(object, object, object, object)
+
+
+class _SnapshotLoadJob(QRunnable):
+    """Background job that materialises snapshot stacks for a sample."""
+
+    def __init__(
+        self,
+        sample: SampleN,
+        token: object,
+        project_path: str | None,
+        asset_id: str | int | None,
+        snapshot_path: str | None,
+        snapshot_format: str | None,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self.signals = _SnapshotLoadSignals()
+        self._sample = sample
+        self._token = token
+        self._project_path = project_path
+        self._asset_id = asset_id
+        self._snapshot_path = snapshot_path
+        self._snapshot_format = snapshot_format or ""
+
+    def run(self) -> None:  # type: ignore[override]
+        stack = None
+        error: str | None = None
+        try:
+            stack = self._load_from_asset()
+            if stack is None:
+                stack = self._load_from_path()
+            if stack is None:
+                error = "Snapshots unavailable"
+        except Exception as exc:  # pragma: no cover - defensive logging
+            error = str(exc)
+            stack = None
+
+        self.signals.finished.emit(self._token, self._sample, stack, error)
+
+    def _load_from_asset(self) -> np.ndarray | None:
+        if not self._project_path or not self._asset_id:
+            return None
+
+        ctx: ProjectContext | None = None
+        try:
+            ctx = open_project_ctx(self._project_path)
+            repo = ctx.repo
+            if repo is None:
+                return None
+            data = repo.get_asset_bytes(self._asset_id)
+            if not data:
+                return None
+            return self._stack_from_bytes(data)
+        finally:
+            if ctx is not None:
+                close_project_ctx(ctx)
+
+    def _load_from_path(self) -> np.ndarray | None:
+        if not self._snapshot_path:
+            return None
+        path = Path(self._snapshot_path).expanduser()
+        if not path.exists():
+            return None
+        frames, _ = load_tiff(path.as_posix(), metadata=False)
+        if frames:
+            return np.stack(frames)
+        return None
+
+    def _stack_from_bytes(self, data: bytes) -> np.ndarray | None:
+        buffer = io.BytesIO(data)
+        fmt = self._snapshot_format.lower()
+        if not fmt:
+            fmt = "npz" if data.startswith(b"PK") else "npy"
+        if fmt == "npz":
+            with np.load(buffer, allow_pickle=False) as npz_file:
+                stack = npz_file["stack"]
+        else:
+            stack = np.load(buffer, allow_pickle=False)
+        if isinstance(stack, np.ndarray):
+            return stack
+        return np.stack(stack)
 
 
 class _MissingAssetScanSignals(QObject):
@@ -417,6 +502,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._sample_state_dirty = True
         self._cached_snapshot_style: dict | None = None
         self._snapshot_style_dirty = True
+        self._snapshot_load_token: object | None = None
+        self._snapshot_loading_sample: SampleN | None = None
+        self._snapshot_viewer_pending_open = False
         self.ax2 = None
         self.xlim_full = None
         self.ylim_full = None
@@ -457,7 +545,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.metadata_dock = None
         self.zoom_dock = None
         self.scope_dock = None
-        self.publication_studio = None
+        self.figure_composer = None
         self.current_experiment = None
         self.current_sample = None
         self.project_ctx: ProjectContext | None = None
@@ -472,8 +560,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_state = {}
         self._style_holder = _StyleHolder(DEFAULT_STYLE.copy())
         self._style_manager = PlotStyleManager(self._style_holder.get_style())
-        self.zoom_toggle_btn: QToolButton | None = None
-        self.scope_toggle_btn: QToolButton | None = None
         self.actGrid: QAction | None = None
         self.actStyle: QAction | None = None
         self._nav_mode_actions: list[QAction] = []
@@ -486,7 +572,6 @@ class VasoAnalyzerApp(QMainWindow):
         self._event_label_gap_default: int = 22
         self._event_label_action_group: QActionGroup | None = None
         self.event_label_button: QToolButton | None = None
-        self._toolbar_event_label_menu: QMenu | None = None
 
         self._deferred_autosave_timer = QTimer(self)
         self._deferred_autosave_timer.setSingleShot(True)
@@ -614,15 +699,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.zoom_dock.visibilityChanged.connect(self._on_zoom_visibility_changed)
 
-        self.zoom_toggle_btn = QToolButton()
-        self.zoom_toggle_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
-        self.zoom_toggle_btn.setCheckable(True)
-        self.zoom_toggle_btn.setChecked(False)
-        self.zoom_toggle_btn.setToolTip("Zoom window")
-        self.zoom_toggle_btn.clicked.connect(lambda checked: self.zoom_dock.setVisible(checked))
-        self.zoom_dock.visibilityChanged.connect(self.zoom_toggle_btn.setChecked)
-        self.toolbar.addWidget(self.zoom_toggle_btn)
-
     def setup_scope_dock(self):
         self.scope_dock = ScopeDock(self)
         self.scope_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
@@ -633,15 +709,6 @@ class VasoAnalyzerApp(QMainWindow):
             self.showhide_menu.addAction(self.scope_dock.toggleViewAction())
 
         self.scope_dock.visibilityChanged.connect(self._on_scope_visibility_changed)
-
-        self.scope_toggle_btn = QToolButton()
-        self.scope_toggle_btn.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
-        self.scope_toggle_btn.setCheckable(True)
-        self.scope_toggle_btn.setChecked(False)
-        self.scope_toggle_btn.setToolTip("Trigger sweeps")
-        self.scope_toggle_btn.clicked.connect(lambda checked: self.scope_dock.setVisible(checked))
-        self.scope_dock.visibilityChanged.connect(self.scope_toggle_btn.setChecked)
-        self.toolbar.addWidget(self.scope_toggle_btn)
 
     # ---------- Project Menu Actions ----------
     def _replace_current_project(self, project):
@@ -2049,65 +2116,65 @@ class VasoAnalyzerApp(QMainWindow):
         if isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0:
             return sample.snapshots
 
+        if self._snapshot_load_token is not None and self._snapshot_loading_sample is sample:
+            return None
+
         project_path = getattr(self.current_project, "path", None)
         asset_id = None
         if sample.snapshot_role and sample.asset_roles:
             asset_id = sample.asset_roles.get(sample.snapshot_role)
 
-        ctx = getattr(self, "project_ctx", None)
-        repo = ctx.repo if isinstance(ctx, ProjectContext) else None
-        owned_ctx = None
-        data = None
+        token = object()
+        self._snapshot_load_token = token
+        self._snapshot_loading_sample = sample
 
-        if repo is None and project_path:
-            try:
-                owned_ctx = open_project_ctx(project_path)
-                repo = owned_ctx.repo
-            except Exception:
-                repo = None
-
-        if repo is not None and asset_id:
-            try:
-                data = repo.get_asset_bytes(asset_id)
-            except Exception:
-                data = None
-
-        if owned_ctx is not None:
-            close_project_ctx(owned_ctx)
-
-        if data:
-            try:
-                buffer = io.BytesIO(data)
-                fmt = (sample.snapshot_format or "").lower()
-                if not fmt:
-                    fmt = "npz" if data.startswith(b"PK") else "npy"
-                if fmt == "npz":
-                    with np.load(buffer, allow_pickle=False) as npz_file:
-                        stack = npz_file["stack"]
-                else:
-                    stack = np.load(buffer, allow_pickle=False)
-                if isinstance(stack, np.ndarray):
-                    sample.snapshots = stack
-                else:
-                    sample.snapshots = np.stack(stack)
-                return sample.snapshots
-            except Exception:
-                log.debug(
-                    "Failed to decode snapshot stack for %s",
-                    sample.name,
-                    exc_info=True,
-                )
-
-        if sample.snapshot_path and Path(sample.snapshot_path).exists():
-            try:
-                frames, _ = load_tiff(sample.snapshot_path, metadata=False)
-                if frames:
-                    sample.snapshots = np.stack(frames)
-                    return sample.snapshots
-            except Exception:
-                log.debug("Failed to load snapshot TIFF for %s", sample.name, exc_info=True)
-
+        job = _SnapshotLoadJob(
+            sample=sample,
+            token=token,
+            project_path=project_path,
+            asset_id=asset_id,
+            snapshot_path=sample.snapshot_path,
+            snapshot_format=sample.snapshot_format,
+        )
+        job.signals.finished.connect(self._on_snapshot_load_finished)
+        self.statusBar().showMessage("Loading snapshots…", 0)
+        self._thread_pool.start(job)
         return None
+
+    def _on_snapshot_load_finished(
+        self,
+        token: object,
+        sample: SampleN,
+        stack: np.ndarray | None,
+        error: str | None,
+    ) -> None:
+        if token != self._snapshot_load_token or sample is not self._snapshot_loading_sample:
+            return
+
+        self._snapshot_load_token = None
+        self._snapshot_loading_sample = None
+        if stack is not None:
+            sample.snapshots = stack
+            self.statusBar().showMessage("Snapshots ready", 2000)
+            if sample is self.current_sample:
+                should_show = bool(
+                    self._snapshot_viewer_pending_open
+                    or (self.snapshot_viewer_action and self.snapshot_viewer_action.isChecked())
+                )
+                if should_show:
+                    try:
+                        self.load_snapshots(stack)
+                        self._snapshot_viewer_pending_open = False
+                        self.toggle_snapshot_viewer(True)
+                    except Exception:
+                        log.error("Failed to initialise snapshot viewer", exc_info=True)
+                        self.snapshot_frames = []
+                        self.toggle_snapshot_viewer(False)
+        else:
+            self._snapshot_viewer_pending_open = False
+            message = error or "Snapshot load failed"
+            self.statusBar().showMessage(message, 6000)
+            self.toggle_snapshot_viewer(False)
 
     def open_samples_in_new_windows(self, samples):
         """Open each sample in its own window for side-by-side comparison."""
@@ -3001,10 +3068,10 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
-        self.action_publication_studio = QAction("Figure Composer…", self)
-        self.action_publication_studio.setShortcut("Ctrl+Shift+P")
-        self.action_publication_studio.triggered.connect(self.open_publication_studio)
-        tools_menu.addAction(self.action_publication_studio)
+        self.action_figure_composer = QAction("Figure Composer…", self)
+        self.action_figure_composer.setShortcut("Ctrl+Shift+P")
+        self.action_figure_composer.triggered.connect(self.open_figure_composer)
+        tools_menu.addAction(self.action_figure_composer)
 
         tools_menu.addSeparator()
 
@@ -3798,6 +3865,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table.setVisible(checked)
 
     def toggle_snapshot_viewer(self, checked: bool):
+        if not checked:
+            self._snapshot_viewer_pending_open = False
         if checked and not self.snapshot_frames and isinstance(self.current_sample, SampleN):
             stack = self._ensure_sample_snapshots_loaded(self.current_sample)
             if stack is not None:
@@ -3806,12 +3875,22 @@ class VasoAnalyzerApp(QMainWindow):
                 except Exception:
                     log.debug("Failed to initialise snapshot viewer", exc_info=True)
                     self.snapshot_frames = []
+                else:
+                    self._snapshot_viewer_pending_open = False
+            else:
+                self._snapshot_viewer_pending_open = True
         has_snapshots = bool(self.snapshot_frames)
         should_show = bool(checked) and has_snapshots
+        desired_action_state = bool(checked) and (
+            has_snapshots or self._snapshot_viewer_pending_open
+        )
 
-        if self.snapshot_viewer_action and self.snapshot_viewer_action.isChecked() != should_show:
+        if (
+            self.snapshot_viewer_action
+            and self.snapshot_viewer_action.isChecked() != desired_action_state
+        ):
             self.snapshot_viewer_action.blockSignals(True)
-            self.snapshot_viewer_action.setChecked(should_show)
+            self.snapshot_viewer_action.setChecked(desired_action_state)
             self.snapshot_viewer_action.blockSignals(False)
 
         if self.snapshot_card:
@@ -4316,18 +4395,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.zoom_dock.show_span(start, end)
 
     def _on_zoom_visibility_changed(self, visible: bool) -> None:
-        if self.zoom_toggle_btn and self.zoom_toggle_btn.isChecked() != visible:
-            self.zoom_toggle_btn.blockSignals(True)
-            self.zoom_toggle_btn.setChecked(visible)
-            self.zoom_toggle_btn.blockSignals(False)
         if visible:
             self._refresh_zoom_window()
 
     def _on_scope_visibility_changed(self, visible: bool) -> None:
-        if self.scope_toggle_btn and self.scope_toggle_btn.isChecked() != visible:
-            self.scope_toggle_btn.blockSignals(True)
-            self.scope_toggle_btn.setChecked(visible)
-            self.scope_toggle_btn.blockSignals(False)
         if visible and self.scope_dock and self.trace_model is not None:
             self.scope_dock.set_trace_model(self.trace_model)
 
@@ -7572,7 +7643,7 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
-    def open_publication_studio(self, checked: bool = False):
+    def open_figure_composer(self, checked: bool = False):
         """Open Figure Composer window for advanced figure styling.
 
         Args:
@@ -7587,12 +7658,12 @@ QPushButton[isGhost="true"]:hover {{
             )
             return
 
-        # Create or show publication studio window
-        if self.publication_studio is None:
-            self.publication_studio = PublicationStudioWindow(self)
+        # Create or show Figure Composer window
+        if self.figure_composer is None:
+            self.figure_composer = FigureComposerWindow(self)
             # Connect signals
-            self.publication_studio.studio_closed.connect(self._on_publication_studio_closed)
-            self.publication_studio.preset_saved.connect(self._on_publication_preset_saved)
+            self.figure_composer.studio_closed.connect(self._on_figure_composer_closed)
+            self.figure_composer.preset_saved.connect(self._on_figure_composer_preset_saved)
 
         # Load user presets from project (if available)
         user_presets = []
@@ -7605,7 +7676,7 @@ QPushButton[isGhost="true"]:hover {{
         current_style = self.get_current_plot_style()
 
         # Populate with current data
-        self.publication_studio.load_from_main_window(
+        self.figure_composer.load_from_main_window(
             trace_model=self.trace_model,
             event_times=self.event_times,
             event_colors=None,  # Colors managed by PlotHost
@@ -7615,18 +7686,20 @@ QPushButton[isGhost="true"]:hover {{
             layout_state=layout_state,
             style_dict=current_style,
         )
+        if hasattr(self.figure_composer, "maximize_figure_to_canvas"):
+            self.figure_composer.maximize_figure_to_canvas(forward=False)
 
         # Load user presets into preset library
-        if hasattr(self.publication_studio, "_preset_library_dock"):
-            built_in = self.publication_studio._preset_library_dock._built_in_presets
-            self.publication_studio._preset_library_dock.set_presets(user_presets, built_in)
+        if hasattr(self.figure_composer, "_preset_library_dock"):
+            built_in = self.figure_composer._preset_library_dock._built_in_presets
+            self.figure_composer._preset_library_dock.set_presets(user_presets, built_in)
 
         # Show window
-        self.publication_studio.show()
-        self.publication_studio.raise_()
-        self.publication_studio.activateWindow()
+        self.figure_composer.show()
+        self.figure_composer.raise_()
+        self.figure_composer.activateWindow()
 
-    def _on_publication_preset_saved(self, preset):
+    def _on_figure_composer_preset_saved(self, preset):
         """Handle preset save from Figure Composer."""
         # Store preset in current project's ui_state
         if self.current_project:
@@ -7650,12 +7723,12 @@ QPushButton[isGhost="true"]:hover {{
                 # Add new preset
                 presets.append(preset)
 
-    def _on_publication_studio_closed(self):
+    def _on_figure_composer_closed(self):
         """Handle Figure Composer window close."""
         # Clean up reference when window closes
-        if self.publication_studio is not None:
-            self.publication_studio.deleteLater()
-            self.publication_studio = None
+        if self.figure_composer is not None:
+            self.figure_composer.deleteLater()
+            self.figure_composer = None
 
     # [J] ========================= PLOT STYLE EDITOR ================================
     def apply_plot_style(self, style, persist: bool = False):
@@ -8552,6 +8625,11 @@ QPushButton[isGhost="true"]:hover {{
         if hasattr(self, "data_splitter") and self.data_splitter is not None:
             with contextlib.suppress(Exception):
                 state["splitter_state"] = bytes(self.data_splitter.saveState()).hex()
+        # Save trace visibility state
+        if hasattr(self, "id_toggle_act") and self.id_toggle_act is not None:
+            state["inner_trace_visible"] = self.id_toggle_act.isChecked()
+        if hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
+            state["outer_trace_visible"] = self.od_toggle_act.isChecked()
         return state
 
     def _invalidate_sample_state_cache(self):
@@ -8623,6 +8701,20 @@ QPushButton[isGhost="true"]:hover {{
         plot_layout = state.get("plot_layout")
         if plot_layout:
             self._pending_plot_layout = plot_layout
+        # Restore trace visibility state
+        if "inner_trace_visible" in state and hasattr(self, "id_toggle_act") and self.id_toggle_act is not None:
+            self.id_toggle_act.blockSignals(True)
+            self.id_toggle_act.setChecked(state["inner_trace_visible"])
+            self.id_toggle_act.blockSignals(False)
+        if "outer_trace_visible" in state and hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
+            self.od_toggle_act.blockSignals(True)
+            self.od_toggle_act.setChecked(state["outer_trace_visible"])
+            self.od_toggle_act.blockSignals(False)
+        # Apply the visibility changes after restoring state
+        if "inner_trace_visible" in state or "outer_trace_visible" in state:
+            inner_on = state.get("inner_trace_visible", True)
+            outer_on = state.get("outer_trace_visible", False)
+            self._rebuild_channel_layout(inner_on, outer_on, redraw=False)
         self.canvas.draw_idle()
 
     def apply_sample_state(self, state):

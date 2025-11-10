@@ -131,12 +131,27 @@ def create_project(
 
 
 def open_project(path: str | os.PathLike[str]) -> ProjectStore:
-    """Open an existing SQLite project and return a :class:`ProjectStore`."""
+    """Open an existing SQLite project (bundle or legacy) and return a :class:`ProjectStore`.
+
+    Automatically handles both .vasopack bundle directories and legacy .vaso files.
+    """
 
     project_path = Path(path)
     if not project_path.exists():
         raise FileNotFoundError(path)
 
+    # Check if this is a bundle format
+    from .project_storage import get_project_format, open_unified_project
+
+    fmt = get_project_format(project_path)
+
+    if fmt == "bundle-v1":
+        # Open as bundle and return wrapped ProjectStore
+        unified_store = open_unified_project(project_path, readonly=False, auto_migrate=False)
+        # Return the unified store (which is already a ProjectStore-compatible object)
+        return ProjectStore(path=unified_store.path, conn=unified_store.conn, dirty=unified_store.dirty)
+
+    # Legacy format: open directly
     conn = open_db(project_path.as_posix(), apply_pragmas=False)
     _projects.apply_default_pragmas(conn)
 

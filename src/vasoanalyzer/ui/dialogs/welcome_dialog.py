@@ -52,6 +52,7 @@ class WelcomeGuideDialog(QDialog):
 
         self._page_definitions = [
             ("Welcome", self._page_intro),
+            ("Cloud-Safe", self._page_bundle_format),
             ("Workspace", self._page_anatomy),
             ("Workflow", self._page_workflow),
             ("Shortcuts", self._page_shortcuts),
@@ -368,15 +369,64 @@ class WelcomeGuideDialog(QDialog):
         for heading, body in (
             (
                 "Resume instantly",
-                "Pick up where you left off — recent sessions live on the home screen.",
+                "Pick up where you left off — recent projects appear on the home screen with quick access.",
             ),
             (
-                "Project-built",
-                "Keep experiments, samples, attachments, and notes tied together.",
+                "Cloud-safe projects",
+                "New .vasopack format works safely with Dropbox, iCloud, and Google Drive without corruption.",
             ),
             (
-                "Launch essentials",
-                "Open the trace loader, Excel mapper, or this guide directly from the toolbar.",
+                "Built for collaboration",
+                "Keep experiments, samples, attachments, and notes organized in one cloud-synced package.",
+            ),
+        ):
+            layout.addWidget(self._make_callout(heading, body))
+
+        layout.addStretch(1)
+        return page
+
+    def _page_bundle_format(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(16)
+
+        title = QLabel("Cloud-safe project format")
+        title.setProperty("va-h1", True)
+
+        intro = QLabel(
+            "VasoAnalyzer now uses .vasopack bundles—designed for cloud storage and crash protection."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("va-body", True)
+
+        layout.addWidget(title)
+        layout.addWidget(intro)
+
+        for heading, body in (
+            (
+                "No more cloud corruption",
+                "Old .vaso files corrupt in Dropbox/iCloud. New .vasopack bundles are cloud-safe by design.",
+            ),
+            (
+                "Automatic snapshots",
+                "Every save creates an immutable snapshot. Crashed? Recovered automatically from last good snapshot.",
+            ),
+            (
+                "50 recovery points",
+                "Keep 50 snapshots automatically. Extract any old version if you need to go back in time.",
+            ),
+            (
+                "Auto-migration",
+                "Opening old .vaso files automatically upgrades to .vasopack (keeps .vaso.legacy backup).",
+            ),
+            (
+                "Command-line recovery",
+                "Advanced recovery tool: python -m vasoanalyzer.cli.recover MyProject.vasopack",
+            ),
+            (
+                "Choose your format",
+                "Preferences → Project Format lets you default to .vasopack or .vaso. Bundle recommended.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -405,24 +455,24 @@ class WelcomeGuideDialog(QDialog):
 
         for heading, body in (
             (
-                "Header",
-                "Project commands, autosave, and theme tools stay within reach.",
+                "Menu & Toolbar",
+                "Quick access to projects, data loading, Excel mapping, figure composer, and preferences.",
             ),
             (
-                "Plot canvas",
-                "ID/OD traces with event markers, zoom controls, and overlays.",
+                "Plot Canvas",
+                "Interactive ID/OD traces with event markers, zoom controls, pan tools, and grid overlays.",
             ),
             (
-                "Snapshot viewer",
-                "Scrub TIFF frames, set pins, and compare context while annotating.",
+                "Snapshot Viewer",
+                "Frame-by-frame TIFF viewer with pinning, diameter measurement visualization, and contrast controls.",
             ),
             (
-                "Event table",
-                "Edit events inline, filter quickly, and export publication-ready tables.",
+                "Event Table",
+                "Edit events inline, add temperature and pressure data, filter, sort, and export to Excel.",
             ),
             (
-                "Project sidebar",
-                "Navigate experiments, manage attachments, and capture notes side-by-side.",
+                "Project Sidebar",
+                "Navigate experiments, switch samples, attach files, and take notes—all in one organized view.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -450,32 +500,36 @@ class WelcomeGuideDialog(QDialog):
 
         for heading, body in (
             (
-                "Create or open a project",
-                "Projects are single .vaso files that remember your view and metadata.",
+                "1. Create or open a project",
+                "New projects use cloud-safe .vasopack bundles with automatic snapshots. Legacy .vaso files auto-upgrade.",
             ),
             (
-                "Add trace data",
-                "CSV with Time (s) and Inner Diameter (µm); Outer Diameter optional.",
+                "2. Add trace data",
+                "Import CSV with Time (s) and Inner Diameter (µm). Outer Diameter and frame numbers are optional.",
             ),
             (
-                "Load events (optional)",
-                "CSV/TXT with Time + Label; extra columns like Temp/P1/P2 are fine.",
+                "3. Load events (optional)",
+                "Import CSV/TXT with Time + Label. Additional columns (Temperature, Pressure, etc.) are supported.",
             ),
             (
-                "Add a snapshot (optional)",
-                "Load a TIFF stack; large stacks are previewed via sub-sampling for speed.",
+                "4. Add snapshot TIFF (optional)",
+                "Load TIFF stacks for frame-by-frame viewing. Large files are intelligently sub-sampled for performance.",
             ),
             (
-                "Explore & annotate",
-                "Zoom/pan; insert or edit event pins; adjust fonts/axes in Plot Settings.",
+                "5. Analyze & annotate",
+                "Zoom, pan, add event markers, measure diameters, and customize plots via Plot Settings (⌘/Ctrl+,).",
             ),
             (
-                "Export",
-                "Event table (CSV), figure (TIFF/SVG), and session state (JSON).",
+                "6. Export to Excel",
+                "Use Excel Mapping wizard to export event data to your analysis templates with smart column matching.",
             ),
             (
-                "Save",
-                "Save updates the .vaso project so you reopen to the exact same view.",
+                "7. Create publication figures",
+                "Open Figure Composer to design multi-panel figures with custom layouts and publication-quality styling.",
+            ),
+            (
+                "8. Autosave protects your work",
+                "Bundle format saves snapshots automatically. Crashes? No problem—recover from any recent snapshot.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -502,13 +556,15 @@ class WelcomeGuideDialog(QDialog):
         layout.addWidget(
             self._make_shortcut_grid(
                 [
-                    ((("⌘", "Ctrl"), "N"), "Start a new analysis session"),
+                    ((("⌘", "Ctrl"), "N"), "Create new project (uses .vasopack format)"),
                     ((("⌘", "Ctrl"), "O"), "Open trace and event files"),
-                    ((("⌘", "Ctrl"), "Shift", "O"), "Open a saved project"),
-                    ((("⌘", "Ctrl"), "Shift", "S"), "Save the active project"),
-                    ((("⌘", "Ctrl"), "Shift", "T"), "Load a Vasotracker Result TIFF"),
-                    ((("⌘", "Ctrl"), "Shift", "H"), "Return to the home screen"),
-                    ((("⌘", "Ctrl"), "R"), "Reset the current plot view"),
+                    ((("⌘", "Ctrl"), "Shift", "O"), "Open saved project (.vasopack or .vaso)"),
+                    ((("⌘", "Ctrl"), "S"), "Save project (creates snapshot)"),
+                    ((("⌘", "Ctrl"), "Shift", "S"), "Save As (convert formats)"),
+                    ((("⌘", "Ctrl"), ","), "Open Preferences"),
+                    ((("⌘", "Ctrl"), "Shift", "T"), "Load VasoTracker TIFF stack"),
+                    ((("⌘", "Ctrl"), "Shift", "H"), "Return to home screen"),
+                    ((("⌘", "Ctrl"), "R"), "Reset plot view to fit all data"),
                     ((("⌘", "Ctrl"), "/"), "Reopen this welcome guide"),
                 ]
             )

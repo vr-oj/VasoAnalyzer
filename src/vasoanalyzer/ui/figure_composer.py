@@ -3,31 +3,20 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
-from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import (
-    QBrush,
-    QCloseEvent,
-    QColor,
-    QIcon,
-    QKeySequence,
-    QPainter,
-    QPen,
-)
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QCloseEvent, QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAction,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
-    # QDockWidget,  # Removed - no longer using dock system
     QFormLayout,
-    QGraphicsDropShadowEffect,
-    QGraphicsProxyWidget,
-    QGraphicsRectItem,
-    QGraphicsScene,
-    QGraphicsView,
+    QFrame,
     QGroupBox,
     QLabel,
     QLineEdit,
@@ -38,7 +27,6 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
-    QTabWidget,
     QToolBar,
     QUndoCommand,
     QUndoStack,
@@ -69,7 +57,9 @@ from vasoanalyzer.ui.style_manager import PlotStyleManager
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
 
-__all__ = ["PublicationStudioWindow"]
+__all__ = ["FigureComposerWindow"]
+
+log = logging.getLogger(__name__)
 
 
 class StyleChangeCommand(QUndoCommand):
@@ -77,7 +67,7 @@ class StyleChangeCommand(QUndoCommand):
 
     def __init__(
         self,
-        studio: PublicationStudioWindow,
+        studio: FigureComposerWindow,
         old_style: dict[str, Any],
         new_style: dict[str, Any],
         description: str = "Change Style",
@@ -106,116 +96,7 @@ class StyleChangeCommand(QUndoCommand):
             self.studio.plot_host.canvas.draw_idle()
 
 
-class CanvasView(QGraphicsView):
-    """Graphics view for the canvas with zoom and pan support."""
-
-    zoomChanged = pyqtSignal(float)  # Emits zoom level (1.0 = 100%)
-
-    def __init__(self, scene: QGraphicsScene, parent: QWidget | None = None) -> None:
-        super().__init__(scene, parent)
-        self.setRenderHints(
-            QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform
-        )
-        self.setBackgroundBrush(QBrush(QColor(243, 244, 246)))  # Light grey #F3F4F6
-        self.setDragMode(QGraphicsView.NoDrag)
-        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setFocusPolicy(Qt.StrongFocus)  # Enable keyboard events
-
-        self._zoom_level: float = 1.0
-        self._is_panning: bool = False
-        self._pan_start_pos: QPointF = QPointF()
-        self._space_pressed: bool = False
-
-    def wheelEvent(self, event) -> None:
-        """Handle mouse wheel for zooming."""
-        # Check for Ctrl/Cmd modifier for zoom
-        if event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier):
-            angle = event.angleDelta().y()
-            factor = 1.0015**angle
-            new_zoom = max(0.1, min(8.0, self._zoom_level * factor))
-
-            # Apply scaling
-            scale_factor = new_zoom / self._zoom_level
-            self.scale(scale_factor, scale_factor)
-
-            self._zoom_level = new_zoom
-            self.zoomChanged.emit(self._zoom_level)
-        else:
-            # Normal scroll behavior
-            super().wheelEvent(event)
-
-    def keyPressEvent(self, event) -> None:
-        """Handle key press events."""
-        if event.key() == Qt.Key_Space:
-            self._space_pressed = True
-            event.accept()
-        else:
-            super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event) -> None:
-        """Handle key release events."""
-        if event.key() == Qt.Key_Space:
-            self._space_pressed = False
-            if self._is_panning:
-                self._is_panning = False
-                self.setCursor(Qt.ArrowCursor)
-            event.accept()
-        else:
-            super().keyReleaseEvent(event)
-
-    def mousePressEvent(self, event) -> None:
-        """Handle mouse press for panning."""
-        if event.button() == Qt.MiddleButton or (
-            event.button() == Qt.LeftButton and self._space_pressed
-        ):
-            self._is_panning = True
-            self._pan_start_pos = event.pos()
-            self.setCursor(Qt.ClosedHandCursor)
-            event.accept()
-        else:
-            super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        """Handle mouse move for panning."""
-        if self._is_panning:
-            delta = event.pos() - self._pan_start_pos
-            self._pan_start_pos = event.pos()
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
-            event.accept()
-        else:
-            super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:
-        """Handle mouse release to end panning."""
-        if event.button() == Qt.MiddleButton or (
-            event.button() == Qt.LeftButton and self._is_panning
-        ):
-            self._is_panning = False
-            self.setCursor(Qt.ArrowCursor)
-            event.accept()
-        else:
-            super().mouseReleaseEvent(event)
-
-    def fit_in_view(self, rect: QRectF) -> None:
-        """Fit the given rectangle in the view."""
-        self.fitInView(rect, Qt.KeepAspectRatio)
-        # Update zoom level based on the transform
-        self._zoom_level = self.transform().m11()
-        self.zoomChanged.emit(self._zoom_level)
-
-    def zoom_to_level(self, level: float) -> None:
-        """Zoom to a specific level (1.0 = 100%)."""
-        scale_factor = level / self._zoom_level
-        self.scale(scale_factor, scale_factor)
-        self._zoom_level = level
-        self.zoomChanged.emit(self._zoom_level)
-
-
-class PublicationStudioWindow(QMainWindow):
+class FigureComposerWindow(QMainWindow):
     """
     Dedicated workspace for creating publication-ready figures.
 
@@ -252,6 +133,8 @@ class PublicationStudioWindow(QMainWindow):
         self._epoch_layer: EpochLayer | None = None
         self._epoch_theme: EpochTheme = EpochTheme()
         self._epochs_visible: bool = True
+        self._epoch_margin_px: float = 0.0
+        self._user_subplot_top: float = 0.96
 
         # Style management
         self._style_manager: PlotStyleManager | None = None
@@ -262,16 +145,26 @@ class PublicationStudioWindow(QMainWindow):
         self._event_highlight_duration_ms: int = int(
             DEFAULT_STYLE.get("event_highlight_duration_ms", 2000)
         )
+        self._initial_fit_applied: bool = False
 
         # Undo/redo stack for styling operations
         self.undo_stack = QUndoStack(self)
 
         # Canvas and zoom state
-        self._canvas_width_in: float = 10.0  # inches (PowerPoint standard)
+        self._canvas_width_in: float = 10.0  # Canvas viewport (white rectangle) in inches
         self._canvas_height_in: float = 7.5  # inches
         self._canvas_dpi: int = 120
+        self._default_frame_width_in: float = self._canvas_width_in
+        self._default_frame_height_in: float = self._canvas_height_in
+
+        # Figure size (matplotlib plot, can be smaller than canvas)
+        self._figure_width_in: float = 10.0  # Initially matches canvas
+        self._figure_height_in: float = 7.5  # inches
+
         self._zoom_level: float = 1.0  # 1.0 = 100%
         self._zoom_levels = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
+        self._geometry_sync_running = False
+        self._geometry_sync_pending = False
 
         # Load built-in presets
         self._builtin_presets = get_builtin_presets()
@@ -413,6 +306,7 @@ class PublicationStudioWindow(QMainWindow):
             else:
                 self._epoch_layer.attach(None)
             self.plot_host.canvas.draw_idle()
+        self._update_epoch_margin()
 
     def _get_primary_axes(self) -> Any:
         """Get the primary (top) axes for epoch overlay."""
@@ -423,6 +317,68 @@ class PublicationStudioWindow(QMainWindow):
             if hasattr(track, "ax") and track.ax is not None:
                 return track.ax
         return None
+
+    def _capture_user_subplot_top(self) -> None:
+        """Capture the desired subplot top value (before extra epoch margin)."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            return
+
+        fig = getattr(plot_host, "figure", None)
+        if fig is None:
+            return
+
+        current_top = float(getattr(fig.subplotpars, "top", 0.96))
+        bottom = float(getattr(fig.subplotpars, "bottom", 0.12))
+        margin_fraction = self._compute_margin_fraction(fig)
+        base_top = current_top + margin_fraction
+        min_top = bottom + 0.05
+        self._user_subplot_top = max(min_top, min(0.995, base_top))
+
+    def _compute_margin_fraction(self, fig: Any) -> float:
+        """Return fraction of figure height reserved for epoch overlay."""
+        if fig is None or not self._epochs_visible:
+            return 0.0
+
+        height_px = float(fig.get_figheight() * fig.get_dpi())
+        if height_px <= 0:
+            return 0.0
+
+        return self._epoch_margin_px / height_px if self._epoch_margin_px > 0 else 0.0
+
+    def _update_epoch_margin(self, *, trigger_draw: bool = True) -> None:
+        """Ensure figure top margin reserves space for epoch overlay rows."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            return
+
+        fig = getattr(plot_host, "figure", None)
+        if fig is None:
+            return
+
+        height_px = float(fig.get_figheight() * fig.get_dpi())
+        if height_px <= 0:
+            return
+
+        margin_px = self._epoch_margin_px if self._epochs_visible else 0.0
+        margin_fraction = margin_px / height_px if margin_px > 0 else 0.0
+
+        bottom = float(getattr(fig.subplotpars, "bottom", 0.12))
+        min_top = bottom + 0.05
+        target_top = self._user_subplot_top - margin_fraction
+        target_top = max(min_top, min(0.995, target_top))
+
+        if abs(getattr(fig.subplotpars, "top", target_top) - target_top) < 1e-4:
+            return
+
+        fig.subplots_adjust(top=target_top)
+        if trigger_draw:
+            plot_host.canvas.draw_idle()
+
+    def _on_epoch_layout_changed(self, row_count: int, required_margin_px: float) -> None:
+        """Handle row stack changes from the epoch layer."""
+        self._epoch_margin_px = required_margin_px
+        self._update_epoch_margin()
 
     def _x_axis_for_style(self):
         """Return the shared X axis used for applying style updates."""
@@ -531,10 +487,90 @@ class PublicationStudioWindow(QMainWindow):
         self.preset_saved.emit(preset)
         return preset
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._initial_fit_applied:
+            self._initial_fit_applied = True
+            self._center_on_parent_screen()
+            QTimer.singleShot(0, self._apply_initial_canvas_fit)
+
+    def _apply_initial_canvas_fit(self) -> None:
+        """Apply initial zoom-to-fit when window first opens."""
+        # Directly call _zoom_to_fit to ensure canvas is visible and properly sized
+        if hasattr(self, "plot_host") and hasattr(self, "canvas_frame"):
+            self._zoom_to_fit()
+
+    def _center_on_parent_screen(self) -> None:
+        """Center window on the same screen as parent window."""
+        parent_widget = self.parentWidget()
+        screen = parent_widget.screen() if parent_widget else QApplication.primaryScreen()
+
+        if not screen:
+            return
+
+        available = screen.availableGeometry()
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
+
     # ------------------------------------------------------------------ UI Construction
 
+    def _create_canvas_container(self) -> QWidget:
+        """Create styled container with visual canvas boundary (white rectangle on gray background)."""
+        # Container with gray background (PowerPoint-style workspace)
+        container = QWidget()
+        container.setStyleSheet("background-color: #F3F4F6;")  # Light gray background
+
+        # Layout with padding
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(40, 40, 40, 40)
+        container_layout.setAlignment(Qt.AlignCenter)
+
+        # Canvas frame (white rectangle with border - represents canvas boundary)
+        self.canvas_frame = QFrame()
+        self.canvas_frame.setObjectName("CanvasBoundary")
+        self.canvas_frame.setStyleSheet(
+            "QFrame#CanvasBoundary { "
+            "background-color: white; "
+            "border: 1px solid #cccccc; "
+            "border-radius: 4px; "
+            "}"
+        )
+
+        # Frame layout to hold matplotlib canvas (will center figure if smaller than canvas)
+        frame_layout = QVBoxLayout(self.canvas_frame)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.setSpacing(0)
+        frame_layout.setAlignment(Qt.AlignCenter)
+
+        # Create PlotHost with explicit DPI
+        self.plot_host = PlotHost(dpi=self._canvas_dpi)
+        self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+        # Get device pixel ratio for Retina display support
+        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+
+        # Set canvas frame size to canvas dimensions (at base DPI, accounting for Retina)
+        canvas_width_px = int((self._canvas_width_in * self._canvas_dpi) / device_pixel_ratio)
+        canvas_height_px = int((self._canvas_height_in * self._canvas_dpi) / device_pixel_ratio)
+        self.canvas_frame.setFixedSize(canvas_width_px, canvas_height_px)
+
+        # Set initial figure size (matplotlib plot, accounting for Retina)
+        fig_width_px = int((self._figure_width_in * self._canvas_dpi) / device_pixel_ratio)
+        fig_height_px = int((self._figure_height_in * self._canvas_dpi) / device_pixel_ratio)
+        self.plot_host.canvas.setFixedSize(fig_width_px, fig_height_px)
+        self.plot_host.figure.set_size_inches(self._figure_width_in, self._figure_height_in)
+
+        # Add matplotlib canvas to frame
+        frame_layout.addWidget(self.plot_host.canvas)
+
+        # Add frame to container
+        container_layout.addWidget(self.canvas_frame)
+
+        return container
+
     def _build_ui(self) -> None:
-        """Build UI with QGraphicsView-based canvas."""
+        """Build UI with PowerPoint-style canvas boundary."""
         # Create main splitter (3-way: left | center | right)
         main_splitter = QSplitter(Qt.Horizontal, self)
 
@@ -544,58 +580,24 @@ class PublicationStudioWindow(QMainWindow):
         self.left_panel = self._create_export_panel()
 
         # ===================================================================
-        # CENTER PANEL: Graphics scene with canvas
+        # CENTER PANEL: Canvas with visual boundary
         # ===================================================================
-        # Create scene and view
-        self.canvas_scene = QGraphicsScene(self)
-        self.canvas_view = CanvasView(self.canvas_scene, self)
+        # Create scroll area for canvas
+        self.canvas_scroll = QScrollArea(self)
+        self.canvas_scroll.setWidgetResizable(False)  # Keep canvas fixed size
+        self.canvas_scroll.setFrameShape(QScrollArea.NoFrame)  # No border on scroll area
 
-        # Connect zoom signal
-        self.canvas_view.zoomChanged.connect(self._on_view_zoom_changed)
+        # Create canvas container with visual boundary (white rectangle on gray background)
+        self.canvas_container = self._create_canvas_container()
 
-        # Create white canvas item with drop shadow
-        canvas_width_px = self._canvas_width_in * self._canvas_dpi
-        canvas_height_px = self._canvas_height_in * self._canvas_dpi
-
-        self.canvas_item = QGraphicsRectItem(0, 0, canvas_width_px, canvas_height_px)
-        self.canvas_item.setBrush(QBrush(QColor(255, 255, 255)))  # White
-        self.canvas_item.setPen(QPen(Qt.NoPen))
-
-        # Add drop shadow effect
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(30)
-        shadow.setOffset(0, 4)
-        shadow.setColor(QColor(0, 0, 0, 60))
-        self.canvas_item.setGraphicsEffect(shadow)
-
-        self.canvas_scene.addItem(self.canvas_item)
-
-        # Create PlotHost and embed in scene
-        self.plot_host = PlotHost(dpi=self._canvas_dpi)
-        self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        # Set plot host size to match canvas
-        plot_width_px = int(canvas_width_px)
-        plot_height_px = int(canvas_height_px)
-        self.plot_host.canvas.setFixedSize(plot_width_px, plot_height_px)
-        self.plot_host.figure.set_size_inches(self._canvas_width_in, self._canvas_height_in)
-
-        # Create proxy widget to embed matplotlib canvas in scene
-        self.plot_proxy = QGraphicsProxyWidget(self.canvas_item)
-        self.plot_proxy.setWidget(self.plot_host.canvas)
-        self.plot_proxy.setPos(0, 0)
-
-        # Set scene rect with padding around canvas
-        padding = 200
-        self.canvas_scene.setSceneRect(
-            -padding, -padding, canvas_width_px + 2 * padding, canvas_height_px + 2 * padding
-        )
+        # Add container to scroll area
+        self.canvas_scroll.setWidget(self.canvas_container)
 
         # ===================================================================
         # Add panels to splitter
         # ===================================================================
         main_splitter.addWidget(self.left_panel)
-        main_splitter.addWidget(self.canvas_view)
+        main_splitter.addWidget(self.canvas_scroll)
 
         # Set initial splitter sizes (left:center = 1:3)
         main_splitter.setSizes([400, 1000])
@@ -608,9 +610,6 @@ class PublicationStudioWindow(QMainWindow):
         self._create_tools_toolbar()
         self._create_plot_toolbar()
         self._create_status_bar()
-
-        # Fit canvas in view initially
-        self.canvas_view.fit_in_view(self.canvas_item.rect())
 
         # Populate preset combo with built-in presets
         self._populate_preset_combo()
@@ -844,10 +843,7 @@ class PublicationStudioWindow(QMainWindow):
         while self.preset_combo.count() > 1:
             self.preset_combo.removeItem(1)
 
-        # Add built-in presets
-        for preset in self._builtin_presets:
-            preset_name = preset.get("name", "Unnamed")
-            self.preset_combo.addItem(preset_name)
+        # Presets temporarily disabled; keeping placeholder only.
 
         self.preset_combo.blockSignals(False)
 
@@ -857,57 +853,72 @@ class PublicationStudioWindow(QMainWindow):
             self._update_status_bar()
 
     def _apply_canvas_size(self) -> None:
-        """Apply current canvas size to canvas item and figure."""
-        if not hasattr(self, "plot_host") or not hasattr(self, "canvas_item"):
+        """Apply canvas and figure sizes independently.
+
+        Canvas = white rectangle boundary
+        Figure = matplotlib plot (can be smaller, will be centered)
+        """
+        if not hasattr(self, "plot_host") or self.plot_host is None:
             return
 
-        # Calculate new canvas size in pixels
-        canvas_width_px = self._canvas_width_in * self._canvas_dpi
-        canvas_height_px = self._canvas_height_in * self._canvas_dpi
+        if self._geometry_sync_running:
+            if not self._geometry_sync_pending:
+                self._geometry_sync_pending = True
+                QTimer.singleShot(0, self._apply_canvas_size)
+            return
 
-        # Update canvas item rectangle
-        self.canvas_item.setRect(0, 0, canvas_width_px, canvas_height_px)
+        self._geometry_sync_running = True
+        self._geometry_sync_pending = False
+        try:
+            fig = self.plot_host.figure
+            fig.set_size_inches(self._figure_width_in, self._figure_height_in, forward=False)
+            self._apply_zoom()
+            self._sync_canvas_size_to_figure()
+        finally:
+            self._geometry_sync_running = False
 
-        # Update figure size
-        self.plot_host.figure.set_size_inches(self._canvas_width_in, self._canvas_height_in)
+    def maximize_figure_to_canvas(self, forward: bool = False) -> None:
+        """Ensure the matplotlib figure fills the canvas viewport."""
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
 
-        # Update plot host canvas size
-        self.plot_host.canvas.setFixedSize(int(canvas_width_px), int(canvas_height_px))
+        fig = self.plot_host.figure
+        target_width = float(self._canvas_width_in or self._default_frame_width_in or 0.0)
+        target_height = float(self._canvas_height_in or self._default_frame_height_in or 0.0)
+        if target_width <= 0 or target_height <= 0:
+            return
 
-        # Update scene rect with padding
-        padding = 200
-        self.canvas_scene.setSceneRect(
-            -padding, -padding, canvas_width_px + 2 * padding, canvas_height_px + 2 * padding
-        )
+        width_changed = abs(fig.get_figwidth() - target_width) > 0.01
+        height_changed = abs(fig.get_figheight() - target_height) > 0.01
+        if width_changed or height_changed:
+            fig.set_size_inches(target_width, target_height, forward=forward)
 
-        # Redraw
-        self.plot_host.canvas.draw_idle()
+        self._sync_plot_geometry_to_figure()
 
-        # Fit canvas in view
-        if hasattr(self, "canvas_view"):
-            self.canvas_view.fit_in_view(self.canvas_item.rect())
+    def _sync_plot_geometry_to_figure(self) -> None:
+        """Sync figure dimensions from matplotlib (after Plot Settings dialog changes)."""
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
 
-        # Update status bar
-        self._sync_canvas_size_to_figure()
+        fig = self.plot_host.figure
+        fig_dpi = float(fig.get_dpi())
+        fig_width_in = float(fig.get_figwidth())
+        fig_height_in = float(fig.get_figheight())
 
-    def _on_view_zoom_changed(self, zoom_level: float) -> None:
-        """Handle zoom level change from CanvasView."""
-        self._zoom_level = zoom_level
+        # Update figure size from matplotlib (may have changed in Plot Settings dialog)
+        self._figure_width_in = fig_width_in
+        self._figure_height_in = fig_height_in
 
-        # Update zoom combo if we have one
-        if hasattr(self, "zoom_combo"):
-            self.zoom_combo.blockSignals(True)
-            # Find closest zoom level or set custom
-            zoom_pct = int(zoom_level * 100)
-            idx = self.zoom_combo.findText(f"{zoom_pct}%")
-            if idx >= 0:
-                self.zoom_combo.setCurrentIndex(idx)
-            else:
-                self.zoom_combo.setCurrentText(f"{zoom_pct}%")
-            self.zoom_combo.blockSignals(False)
+        # Update base DPI (normalize zoom level to base DPI)
+        # If DPI changed due to zoom, extract the base DPI
+        if hasattr(self, "_zoom_level") and self._zoom_level > 0:
+            self._canvas_dpi = max(1, int(round(fig_dpi / self._zoom_level)))
+        else:
+            self._canvas_dpi = max(1, int(round(fig_dpi)))
 
-        # Update status bar
-        self._sync_canvas_size_to_figure()
+        # Canvas size stays unchanged (user sets explicitly)
+        # Reapply current zoom level to update widget sizes
+        self._apply_zoom()
 
     def _create_tools_toolbar(self) -> None:
         """Create toolbar with canvas size, presets, and zoom controls."""
@@ -919,13 +930,14 @@ class PublicationStudioWindow(QMainWindow):
         toolbar.addWidget(QLabel("Canvas:"))
         self.canvas_size_combo = QComboBox()
         self.canvas_size_combo.setMinimumWidth(160)
-        self.canvas_size_combo.addItem("PowerPoint (10×7.5 in)", (10.0, 7.5))
-        self.canvas_size_combo.addItem("Nature Single (3.5×3 in)", (3.5, 3.0))
-        self.canvas_size_combo.addItem("Nature Double (7×5 in)", (7.0, 5.0))
-        self.canvas_size_combo.addItem("Science (8×6 in)", (8.0, 6.0))
-        self.canvas_size_combo.addItem("Letter (8.5×11 in)", (8.5, 11.0))
-        self.canvas_size_combo.addItem("A4 (8.3×11.7 in)", (8.3, 11.7))
-        self.canvas_size_combo.setCurrentIndex(0)  # PowerPoint default
+        self.canvas_size_combo.addItem("Default (10×7.5 in)", (10.0, 7.5))
+        # Additional presets temporarily disabled pending redesign:
+        # self.canvas_size_combo.addItem("Nature Single (3.5×3 in)", (3.5, 3.0))
+        # self.canvas_size_combo.addItem("Nature Double (7×5 in)", (7.0, 5.0))
+        # self.canvas_size_combo.addItem("Science (8×6 in)", (8.0, 6.0))
+        # self.canvas_size_combo.addItem("Letter (8.5×11 in)", (8.5, 11.0))
+        # self.canvas_size_combo.addItem("A4 (8.3×11.7 in)", (8.3, 11.7))
+        self.canvas_size_combo.setCurrentIndex(0)  # Default selection
         self.canvas_size_combo.currentIndexChanged.connect(self._on_canvas_size_changed)
         toolbar.addWidget(self.canvas_size_combo)
 
@@ -957,8 +969,10 @@ class PublicationStudioWindow(QMainWindow):
         for zoom in self._zoom_levels:
             self.zoom_combo.addItem(f"{int(zoom * 100)}%", zoom)
         self.zoom_combo.addItem("Fit", "fit")
-        self.zoom_combo.setCurrentText("100%")
-        self.zoom_combo.currentIndexChanged.connect(self._on_zoom_changed)
+        self.zoom_combo.setCurrentText("Fit")  # Default to Fit zoom
+        self.zoom_combo.currentIndexChanged.connect(
+            self._on_zoom_changed
+        )  # Connect after setting default
         toolbar.addWidget(self.zoom_combo)
 
         # Zoom in button
@@ -968,13 +982,6 @@ class PublicationStudioWindow(QMainWindow):
         toolbar.addAction(zoom_in_btn)
 
         toolbar.addSeparator()
-
-        # === View Controls ===
-        reset_action = QAction("Reset View", self)
-        reset_action.setToolTip("Reset to full data range (Ctrl+R)")
-        reset_action.setShortcut("Ctrl+R")
-        reset_action.triggered.connect(self._on_reset_view)
-        toolbar.addAction(reset_action)
 
         fit_action = QAction("Auto Fit", self)
         fit_action.setToolTip("Auto-fit axes to data (Ctrl+F)")
@@ -1154,17 +1161,6 @@ class PublicationStudioWindow(QMainWindow):
         self.actStyle.triggered.connect(lambda: self._open_plot_settings_dialog(tab_name="style"))
         toolbar.addAction(self.actStyle)
 
-        # Add Edit Points action
-        self.actEditPoints = QAction(QIcon(self.icon_path("tour-pencil.svg")), "Edit Points", self)
-        self.actEditPoints.setToolTip(
-            "<b>Edit Points</b><br><br>"
-            "Opens the Point Editor for manual trace correction.<br>"
-            "Edit raw data points in the current view."
-        )
-        self.actEditPoints.setEnabled(self._trace_model is not None)  # Enable if trace loaded
-        self.actEditPoints.triggered.connect(self._on_edit_points_triggered)
-        toolbar.addAction(self.actEditPoints)
-
         # Add toolbar to window
         self.plot_toolbar = toolbar
         self.addToolBar(Qt.TopToolBarArea, toolbar)
@@ -1204,13 +1200,19 @@ class PublicationStudioWindow(QMainWindow):
         fig = self.plot_host.figure
         canvas = self.plot_host.canvas
 
-        # Update figure size
+        # Update canvas and figure size
         if hasattr(self, "_status_figure_size_label"):
-            width_in = fig.get_figwidth()
-            height_in = fig.get_figheight()
+            # Get actual figure dimensions from matplotlib
+            fig_width_in = fig.get_figwidth()
+            fig_height_in = fig.get_figheight()
             dpi = int(fig.get_dpi())
+
+            # Show both canvas and figure dimensions
+            canvas_w = self._canvas_width_in
+            canvas_h = self._canvas_height_in
             self._status_figure_size_label.setText(
-                f"Figure: {width_in:.1f} × {height_in:.1f} in @ {dpi} DPI"
+                f"Canvas: {canvas_w:.1f}×{canvas_h:.1f} in | "
+                f"Figure: {fig_width_in:.1f}×{fig_height_in:.1f} in @ {dpi} DPI"
             )
 
         # Update canvas dimensions
@@ -1364,6 +1366,7 @@ class PublicationStudioWindow(QMainWindow):
             epochs=self._epochs,
             theme=self._epoch_theme,
         )
+        self._epoch_layer.set_layout_change_callback(self._on_epoch_layout_changed)
         if self._epochs_visible:
             primary_ax = self._get_primary_axes()
             if primary_ax is not None:
@@ -1376,18 +1379,20 @@ class PublicationStudioWindow(QMainWindow):
         if self._style_manager:
             self._apply_style_to_plot()
 
-        # Refresh canvas
-        self.plot_host.canvas.draw_idle()
+        # Ensure figure starts maximized to current canvas viewport
+        self.maximize_figure_to_canvas(forward=False)
         self._sync_canvas_size_to_figure()
+        self._capture_user_subplot_top()
+        self._update_epoch_margin(trigger_draw=False)
 
         # Update toolbar state
         self._update_toolbar_state()
 
     def _update_toolbar_state(self) -> None:
         """Update toolbar button states based on current data."""
-        # Enable/disable Edit Points based on trace data availability
-        if hasattr(self, "actEditPoints"):
-            self.actEditPoints.setEnabled(self._trace_model is not None)
+        # Only grid toggle currently depends on trace availability
+        if hasattr(self, "actGrid"):
+            self.actGrid.setEnabled(self.plot_host is not None)
 
     def _apply_style_to_plot(self) -> None:
         """Apply current style manager settings to PlotHost."""
@@ -1567,6 +1572,8 @@ class PublicationStudioWindow(QMainWindow):
             )
         finally:
             plot_host.resume_updates()
+        self._capture_user_subplot_top()
+        self._update_epoch_margin(trigger_draw=False)
 
     def apply_plot_style(self, style: dict[str, Any] | None, persist: bool = False) -> None:
         """Apply a new style dictionary to the publication plot."""
@@ -1581,16 +1588,9 @@ class PublicationStudioWindow(QMainWindow):
         if persist:
             self._current_preset_name = None
 
-        # Check if figure size changed and update canvas accordingly
-        if hasattr(self, "plot_host") and self.plot_host is not None:
-            fig_w, fig_h = self.plot_host.figure.get_size_inches()
-            if abs(fig_w - self._canvas_width_in) > 0.01 or abs(fig_h - self._canvas_height_in) > 0.01:
-                # Figure size changed, update canvas dimensions
-                self._canvas_width_in = fig_w
-                self._canvas_height_in = fig_h
-                self._apply_canvas_size()
-
         self._apply_style_to_plot()
+        if hasattr(self, "plot_host") and self.plot_host is not None:
+            self._sync_plot_geometry_to_figure()
         self._sync_canvas_size_to_figure()
 
         if hasattr(self, "plot_host") and self.plot_host is not None:
@@ -1953,11 +1953,11 @@ class PublicationStudioWindow(QMainWindow):
             mapping = {
                 "canvas": 0,
                 "frame": 0,
-                "layout": 1,
-                "axis": 2,
-                "axes": 2,
-                "style": 3,
-                "event_labels": 4,
+                "layout": 0,
+                "axis": 1,
+                "axes": 1,
+                "style": 2,
+                "event_labels": 3,
             }
             idx = mapping.get(str(tab_name).lower(), 0)
             with contextlib.suppress(Exception):
@@ -1965,7 +1965,10 @@ class PublicationStudioWindow(QMainWindow):
 
         old_style = self.get_current_style()
         result = dialog.exec_()
+        self._sync_plot_geometry_to_figure()
         self._sync_canvas_size_to_figure()
+        self._capture_user_subplot_top()
+        self._update_epoch_margin()
 
         if result == QDialog.Accepted:
             new_style = self.get_current_style()
@@ -2030,6 +2033,8 @@ class PublicationStudioWindow(QMainWindow):
         size_data = self.canvas_size_combo.itemData(index)
         if size_data:
             self._canvas_width_in, self._canvas_height_in = size_data
+            self._default_frame_width_in = self._canvas_width_in
+            self._default_frame_height_in = self._canvas_height_in
             self._apply_canvas_size()
 
     def _on_preset_combo_changed(self, index: int) -> None:
@@ -2052,29 +2057,132 @@ class PublicationStudioWindow(QMainWindow):
     def _on_zoom_in(self, checked: bool = False) -> None:
         """Zoom in to the next zoom level."""
         current_idx = self.zoom_combo.currentIndex()
-        # Don't go past the last regular zoom level (before "Fit")
+
+        # If on "Fit", switch to 100% first
+        if self.zoom_combo.itemData(current_idx) == "fit":
+            # Find 100% (1.0) zoom level
+            for i in range(self.zoom_combo.count()):
+                if self.zoom_combo.itemData(i) == 1.0:
+                    self.zoom_combo.setCurrentIndex(i)
+                    return
+
+        # Otherwise, go to next zoom level (don't include "Fit" in the range)
         if current_idx < len(self._zoom_levels) - 1:
             self.zoom_combo.setCurrentIndex(current_idx + 1)
 
     def _on_zoom_out(self, checked: bool = False) -> None:
         """Zoom out to the previous zoom level."""
         current_idx = self.zoom_combo.currentIndex()
+
+        # If on "Fit", switch to 100% first
+        if self.zoom_combo.itemData(current_idx) == "fit":
+            # Find 100% (1.0) zoom level
+            for i in range(self.zoom_combo.count()):
+                if self.zoom_combo.itemData(i) == 1.0:
+                    self.zoom_combo.setCurrentIndex(i)
+                    return
+
+        # Otherwise, go to previous zoom level
         if current_idx > 0:
             self.zoom_combo.setCurrentIndex(current_idx - 1)
 
     def _on_zoom_changed(self, index: int) -> None:
         """Handle zoom level change from combo box."""
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
+
         zoom_value = self.zoom_combo.itemData(index)
 
         if zoom_value == "fit":
-            # Fit canvas in view
-            if hasattr(self, "canvas_view") and hasattr(self, "canvas_item"):
-                self.canvas_view.fit_in_view(self.canvas_item.rect())
+            # Fit to scroll area size
+            self._zoom_to_fit()
         else:
             # Zoom to specific level
-            zoom_level = float(zoom_value)
-            if hasattr(self, "canvas_view"):
-                self.canvas_view.zoom_to_level(zoom_level)
+            self._zoom_level = float(zoom_value)
+            self._apply_zoom()
+
+    def _zoom_to_fit(self) -> None:
+        """Calculate zoom level to fit canvas in scroll area."""
+        if not hasattr(self, "canvas_scroll") or not hasattr(self, "canvas_frame"):
+            return
+
+        # Get scroll area viewport size
+        viewport = self.canvas_scroll.viewport()
+        viewport_width = viewport.width()
+        viewport_height = viewport.height()
+
+        # Calculate base canvas frame size (canvas size + no extra padding since frame has 0 margins)
+        base_width_px = self._canvas_width_in * self._canvas_dpi
+        base_height_px = self._canvas_height_in * self._canvas_dpi
+
+        # Account for container padding (40px on each side = 80px total)
+        container_padding = 80
+        available_width = viewport_width - container_padding
+        available_height = viewport_height - container_padding
+
+        # Calculate zoom factors to fit
+        zoom_width = available_width / base_width_px if base_width_px > 0 else 1.0
+        zoom_height = available_height / base_height_px if base_height_px > 0 else 1.0
+
+        # Use smaller zoom to fit entirely (cap at 4x, minimum 0.1)
+        self._zoom_level = max(0.1, min(zoom_width, zoom_height, 4.0))
+        self._apply_zoom()
+
+    def _apply_zoom(self) -> None:
+        """Apply current zoom level using DPI scaling (keeps figure at same logical size)."""
+        if not hasattr(self, "plot_host") or self.plot_host is None:
+            return
+        if not hasattr(self, "canvas_frame"):
+            return
+
+        # Calculate effective DPI for zoom (zoom via DPI, not widget resize)
+        # This keeps figure at same logical size (inches) but renders at higher/lower resolution
+        effective_dpi = self._canvas_dpi * self._zoom_level
+        log.debug(
+            "Applying zoom level %.2f (base_dpi=%s, effective_dpi=%s)",
+            self._zoom_level,
+            self._canvas_dpi,
+            effective_dpi,
+        )
+
+        # Set figure DPI (this changes render resolution but not logical inch size)
+        self.plot_host.figure.set_dpi(effective_dpi)
+
+        # Get device pixel ratio for Retina display support
+        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+
+        # Calculate canvas frame size (white rectangle boundary) at zoomed DPI
+        # Divide by devicePixelRatio so Qt widgets show at correct physical size
+        canvas_frame_width_px = int((self._canvas_width_in * effective_dpi) / device_pixel_ratio)
+        canvas_frame_height_px = int((self._canvas_height_in * effective_dpi) / device_pixel_ratio)
+
+        # Calculate figure size (matplotlib widget) at zoomed DPI
+        # Also divide by devicePixelRatio to prevent doubling
+        figure_width_px = int((self._figure_width_in * effective_dpi) / device_pixel_ratio)
+        figure_height_px = int((self._figure_height_in * effective_dpi) / device_pixel_ratio)
+
+        # Resize canvas frame (white rectangle boundary - represents canvas dimensions)
+        self.canvas_frame.setFixedSize(canvas_frame_width_px, canvas_frame_height_px)
+
+        # Set figure size in inches (don't use forward=True to avoid resize events)
+        self.plot_host.figure.set_size_inches(
+            self._figure_width_in, self._figure_height_in, forward=False
+        )
+
+        # Now set widget size accounting for devicePixelRatio
+        self.plot_host.canvas.setFixedSize(figure_width_px, figure_height_px)
+
+        # Resize container to accommodate zoomed canvas + padding (80px total for each dimension)
+        # This is crucial for scrollbars to appear when zoomed content exceeds viewport
+        if hasattr(self, "canvas_container"):
+            container_width = canvas_frame_width_px + 80
+            container_height = canvas_frame_height_px + 80
+            self.canvas_container.setMinimumSize(container_width, container_height)
+            self.canvas_container.updateGeometry()
+
+        # Trigger redraw at new DPI
+        self._update_epoch_margin(trigger_draw=False)
+        self.plot_host.canvas.draw_idle()
 
     def _handle_nav_mode_toggled(self, checked: bool) -> None:
         """Handle mutual exclusivity between pan and zoom modes."""
@@ -2149,6 +2257,8 @@ class PublicationStudioWindow(QMainWindow):
             self._canvas_width_in = width
             self._canvas_height_in = height
             self._canvas_dpi = dpi
+            self._default_frame_width_in = width
+            self._default_frame_height_in = height
             self._apply_canvas_size()
 
             # Update export settings
@@ -2160,10 +2270,11 @@ class PublicationStudioWindow(QMainWindow):
                     self.export_format_combo.setCurrentIndex(i)
                     break
 
+            preset_name = self.journal_preset_combo.currentText()
             QMessageBox.information(
                 self,
                 "Journal Preset Applied",
-                f"Canvas dimensions and export settings updated for {self.journal_preset_combo.currentText()}",
+                ("Canvas dimensions and export settings updated for " f"{preset_name}"),
             )
 
         # Reset combo to placeholder
@@ -2246,7 +2357,8 @@ class PublicationStudioWindow(QMainWindow):
                 f"Figure exported for publication:\n{output_path}\n\n"
                 f"Format: {export_format.upper()}\n"
                 f"DPI: {export_dpi}\n"
-                f"Size: {self._canvas_width_in:.2f} × {self._canvas_height_in:.2f} in",
+                f"Size: {self.plot_host.figure.get_figwidth():.2f} × "
+                f"{self.plot_host.figure.get_figheight():.2f} in",
             )
 
             # Store last export path for quick export
@@ -2349,7 +2461,10 @@ class PublicationStudioWindow(QMainWindow):
             report += "</ul>"
 
         if not issues and not warnings:
-            report += "<p style='color: green;'><b>All checks passed!</b> Figure meets publication standards.</p>"
+            report += (
+                "<p style='color: green;'><b>All checks passed!</b> "
+                "Figure meets publication standards.</p>"
+            )
 
         # Show validation dialog
         msg = QMessageBox(self)

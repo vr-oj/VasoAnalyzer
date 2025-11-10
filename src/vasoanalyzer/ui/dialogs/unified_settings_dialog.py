@@ -6,6 +6,7 @@
 """Combined dialog for subplot layout, axis settings and style."""
 
 import contextlib
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -40,6 +41,8 @@ from PyQt5.QtWidgets import (
 from utils import resource_path
 from vasoanalyzer.ui.constants import DEFAULT_STYLE
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 
 class UnifiedPlotSettingsDialog(QDialog):
@@ -140,8 +143,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         main.addWidget(self.tabs, 1)
 
         # order of tabs loosely follows the more advanced GraphPad style
-        self.tabs.addTab(self._make_frame_tab(), "Canvas & Origin")
-        self.tabs.addTab(self._make_layout_tab(), "Layout")
+        self.tabs.addTab(self._make_canvas_layout_tab(), "Canvas & Layout")
         self.tabs.addTab(self._make_axis_tab(), "Axis")
         self.tabs.addTab(self._make_style_tab(), "Style")
         self.tabs.addTab(self._make_event_labels_tab(), "Event Labels")
@@ -226,7 +228,10 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.origin_mode = refs.origin_mode
         self.origin_x = refs.origin_x
         self.origin_y = refs.origin_y
-        self.size_preset = refs.size_preset
+        self.canvas_preset = refs.canvas_preset
+        self.canvas_w = refs.canvas_w
+        self.canvas_h = refs.canvas_h
+        self.fig_preset = refs.fig_preset
         self.fig_w = refs.fig_w
         self.fig_h = refs.fig_h
 
@@ -234,7 +239,8 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         wire_frame_tab(self)
         self._toggle_origin_inputs()
-        self._toggle_size_inputs()
+        self._toggle_canvas_size_inputs()
+        self._toggle_fig_size_inputs()
 
         return content
 
@@ -246,8 +252,15 @@ class UnifiedPlotSettingsDialog(QDialog):
         self.origin_x.setEnabled(manual)
         self.origin_y.setEnabled(manual)
 
-    def _toggle_size_inputs(self):
-        custom = self.size_preset.currentText() == "Custom"
+    def _toggle_canvas_size_inputs(self):
+        """Enable/disable canvas width/height based on preset selection."""
+        custom = self.canvas_preset.currentText() == "Custom"
+        self.canvas_w.setEnabled(custom)
+        self.canvas_h.setEnabled(custom)
+
+    def _toggle_fig_size_inputs(self):
+        """Enable/disable figure width/height based on preset selection."""
+        custom = self.fig_preset.currentText() == "Custom"
         self.fig_w.setEnabled(custom)
         self.fig_h.setEnabled(custom)
 
@@ -276,6 +289,35 @@ class UnifiedPlotSettingsDialog(QDialog):
 
     def _make_layout_tab(self, window=None):
         return self._make_layout_tab_legacy(window)
+
+    def _make_canvas_layout_tab(self):
+        """Combine canvas/origin and layout controls into a single tab."""
+        frame_tab = self._make_frame_tab()
+        layout_scroll = self._make_layout_tab(self.parent_window)
+
+        layout_content = None
+        if isinstance(layout_scroll, QScrollArea):
+            layout_content = layout_scroll.takeWidget()
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(16)
+        container_layout.addWidget(frame_tab)
+
+        if layout_content is not None:
+            layout_content.setParent(container)
+            container_layout.addWidget(layout_content)
+        else:
+            container_layout.addWidget(layout_scroll)
+
+        container_layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(container)
+        return scroll
 
     def _get_initial_layout(self):
         sp = self.fig.subplotpars
@@ -1160,12 +1202,124 @@ class UnifiedPlotSettingsDialog(QDialog):
             self.ax.spines["left"].set_position(("outward", 0))
             self.ax.spines["bottom"].set_position(("outward", 0))
 
-        preset = self.size_preset.currentText()
-        if preset == "Custom":
-            self.fig.set_size_inches(self.fig_w.value(), self.fig_h.value())
-        elif preset == "Square":
-            side = max(self.fig_w.value(), self.fig_h.value())
-            self.fig.set_size_inches(side, side)
+        # Handle canvas and figure sizes independently
+        # Always use forward=False to prevent matplotlib from auto-resizing widgets
+        parent = getattr(self, "parent_window", None)
+        canvas_changed = False
+        figure_changed = False
+
+        # ============================================================
+        # CANVAS SIZE (white rectangle boundary in Figure Composer)
+        # ============================================================
+        canvas_preset = self.canvas_preset.currentText()
+        if canvas_preset == "Custom":
+            canvas_w = max(1.0, float(self.canvas_w.value()))
+            canvas_h = max(1.0, float(self.canvas_h.value()))
+        elif canvas_preset == "Square":
+            # Square canvas: use min of default dimensions
+            default_w = getattr(parent, "_default_frame_width_in", 10.0)
+            default_h = getattr(parent, "_default_frame_height_in", 7.5)
+            side = min(default_w, default_h)
+            canvas_w = canvas_h = side
+        else:  # Auto (Wide)
+            canvas_w = getattr(parent, "_default_frame_width_in", 10.0)
+            canvas_h = getattr(parent, "_default_frame_height_in", 7.5)
+
+        # Update canvas size in parent (Figure Composer)
+        if parent is not None:
+            old_canvas_w = getattr(parent, "_canvas_width_in", canvas_w)
+            old_canvas_h = getattr(parent, "_canvas_height_in", canvas_h)
+            if abs(canvas_w - old_canvas_w) > 0.01 or abs(canvas_h - old_canvas_h) > 0.01:
+                parent._canvas_width_in = canvas_w
+                parent._canvas_height_in = canvas_h
+                canvas_changed = True
+
+        # Update canvas spinboxes
+        self.canvas_w.setValue(round(canvas_w, 1))
+        self.canvas_h.setValue(round(canvas_h, 1))
+
+        # ============================================================
+        # FIGURE SIZE (matplotlib plot inside canvas)
+        # ============================================================
+        fig_preset = self.fig_preset.currentText()
+        if fig_preset == "Custom":
+            fig_w = max(1.0, float(self.fig_w.value()))
+            fig_h = max(1.0, float(self.fig_h.value()))
+        elif fig_preset == "Square":
+            # Square figure: largest square that fits in canvas
+            side = min(canvas_w, canvas_h)
+            fig_w = fig_h = side
+        else:  # Fill Canvas
+            fig_w = canvas_w
+            fig_h = canvas_h
+
+        # Validate: figure must fit inside canvas
+        if fig_w > canvas_w + 0.01 or fig_h > canvas_h + 0.01:
+            from PyQt5.QtWidgets import QMessageBox
+
+            reply = QMessageBox.question(
+                self,
+                "Figure Exceeds Canvas",
+                f"Figure size ({fig_w:.1f}×{fig_h:.1f} in) exceeds canvas ({canvas_w:.1f}×{canvas_h:.1f} in).\n\n"
+                f"Resize canvas to fit figure?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if reply == QMessageBox.Yes:
+                # Enlarge canvas to fit figure
+                canvas_w = max(canvas_w, fig_w)
+                canvas_h = max(canvas_h, fig_h)
+                if parent is not None:
+                    parent._canvas_width_in = canvas_w
+                    parent._canvas_height_in = canvas_h
+                self.canvas_w.setValue(round(canvas_w, 1))
+                self.canvas_h.setValue(round(canvas_h, 1))
+                self.canvas_preset.setCurrentText("Custom")
+                canvas_changed = True
+            else:
+                # Shrink figure to fit canvas
+                fig_w = min(fig_w, canvas_w)
+                fig_h = min(fig_h, canvas_h)
+                self.fig_preset.setCurrentText("Custom")
+
+        # Update figure size in parent (Figure Composer)
+        if parent is not None:
+            old_fig_w = getattr(parent, "_figure_width_in", fig_w)
+            old_fig_h = getattr(parent, "_figure_height_in", fig_h)
+            if abs(fig_w - old_fig_w) > 0.01 or abs(fig_h - old_fig_h) > 0.01:
+                parent._figure_width_in = fig_w
+                parent._figure_height_in = fig_h
+                figure_changed = True
+        else:
+            # Main window: apply figure size directly to matplotlib
+            if (abs(fig_w - self.fig.get_figwidth()) > 0.01) or (
+                abs(fig_h - self.fig.get_figheight()) > 0.01
+            ):
+                self.fig.set_size_inches(fig_w, fig_h, forward=False)
+                figure_changed = True
+
+        log.debug(
+            "Plot settings applied (canvas_preset=%s, figure_preset=%s, canvas_changed=%s, figure_changed=%s)",
+            canvas_preset,
+            fig_preset,
+            canvas_changed,
+            figure_changed,
+        )
+
+        # Apply canvas and figure sizes if anything changed
+        if canvas_changed or figure_changed:
+            if parent is not None and hasattr(parent, "_apply_canvas_size"):
+                # Figure Composer: apply canvas and figure sizes from state variables
+                # This will call set_size_inches() with the correct values
+                parent._apply_canvas_size()
+            else:
+                # Main window: just redraw
+                with contextlib.suppress(Exception):
+                    self.fig.canvas.draw_idle()
+
+        # Update spinboxes with calculated values (don't read from matplotlib after DPI changes)
+        self.fig_w.setValue(round(fig_w, 1))
+        self.fig_h.setValue(round(fig_h, 1))
 
         layout_values = {n: c.value() for n, c in self.layout_controls.items()}
         layout_values["left"] = max(0.0, min(layout_values["left"], 1.0))

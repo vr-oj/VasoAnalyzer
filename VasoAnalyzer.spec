@@ -68,7 +68,7 @@ a = Analysis(
         'tkinter.messagebox',
         'PIL._tkinter_finder',
         # VasoAnalyzer modules
-        'vasoanalyzer.ui.publication_studio',
+        'vasoanalyzer.ui.figure_composer',
         'vasoanalyzer.ui.dialogs.unified_settings_dialog',
         'vasoanalyzer.ui.dialogs.settings.frame_tab',
         'vasoanalyzer.ui.dialogs.settings.layout_tab',

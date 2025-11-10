@@ -101,7 +101,9 @@ class EpochManifest:
 
     epochs: list[Epoch]
     epoch_theme: str = "default_v1"
-    row_order: list[str] = field(default_factory=lambda: ["Pressure", "Drug", "Blocker", "Perfusate", "Custom"])
+    row_order: list[str] = field(
+        default_factory=lambda: ["Pressure", "Drug", "Blocker", "Perfusate", "Custom"]
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary for JSON/PDF metadata."""
@@ -122,6 +124,7 @@ class EpochManifest:
 
 
 # --------------------------------------------------------------------------- Event Adapters
+
 
 def events_to_epochs(
     event_times: list[float],
@@ -150,17 +153,27 @@ def events_to_epochs(
     Returns:
         List of Epoch objects sorted by start time
     """
-    if not event_times:
+    if not event_times or not event_labels or not event_label_meta:
         return []
 
-    epochs: list[Epoch] = []
-    epoch_id_counter = 0
+    def _coerce_float(value: Any) -> float | None:
+        """Best-effort conversion to float (ignores invalid values)."""
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
-    # Map events to epochs
-    for i, (t, label, meta) in enumerate(zip(event_times, event_labels, event_label_meta, strict=False)):
-        category = meta.get("category", "").lower()
+    # Build a staging list so we can infer durations per channel
+    staged_events: list[dict[str, Any]] = []
+    event_iter = zip(event_times, event_labels, event_label_meta, strict=False)
+    for idx, (t_raw, label, meta_raw) in enumerate(event_iter):
+        meta = dict(meta_raw or {})
+        category = meta.get("category", "") or ""
+        category = str(category).lower()
 
-        # Determine channel and style
+        # Determine channel + visual style from metadata category
         if category in {"setpoint", "pressure"}:
             channel = "Pressure"
             style = "box"
@@ -169,45 +182,92 @@ def events_to_epochs(
         elif category == "drug":
             channel = "Drug"
             style = "bar"
-            color = "#1f77b4"  # blue
+            color = "#1f77b4"
             emphasis = "strong"
         elif category == "blocker":
             channel = "Blocker"
             style = "bar"
-            color = "#d62728"  # red
+            color = "#d62728"
             emphasis = "normal"
         elif category in {"bath", "perfusate"}:
             channel = "Perfusate"
             style = "shade"
-            color = "#2ca02c"  # green
+            color = "#2ca02c"
             emphasis = "light"
         else:
             channel = "Custom"
             style = "bar"
-            color = "#7f7f7f"  # gray
+            color = "#7f7f7f"
             emphasis = "normal"
 
-        # Extract duration from metadata or use default
-        duration = meta.get("duration", default_duration)
-        t_end = meta.get("t_end", t + duration)
-
-        # Allow color override from metadata
-        if "color" in meta:
+        # Allow explicit color override
+        if "color" in meta and meta["color"]:
             color = meta["color"]
 
+        staged_events.append(
+            {
+                "idx": idx,
+                "t": float(t_raw),
+                "label": label,
+                "meta": meta,
+                "channel": channel,
+                "style": style,
+                "color": color,
+                "emphasis": emphasis,
+            }
+        )
+
+    if not staged_events:
+        return []
+
+    # Annotate each staged event with the next timestamp within the same channel
+    channel_map: dict[str, list[dict[str, Any]]] = {}
+    for payload in staged_events:
+        channel_map.setdefault(payload["channel"], []).append(payload)
+
+    for same_channel_events in channel_map.values():
+        same_channel_events.sort(key=lambda payload: payload["t"])
+        for i, event_payload in enumerate(same_channel_events):
+            next_time = (
+                same_channel_events[i + 1]["t"] if i + 1 < len(same_channel_events) else None
+            )
+            event_payload["_next_in_channel"] = next_time
+
+    epochs: list[Epoch] = []
+    for payload in staged_events:
+        t_start = payload["t"]
+        meta = payload["meta"]
+
+        explicit_end = _coerce_float(meta.get("t_end"))
+        duration = _coerce_float(meta.get("duration"))
+
+        if explicit_end is not None and explicit_end > t_start:
+            t_end = explicit_end
+        elif duration is not None and duration > 0:
+            t_end = t_start + duration
+        else:
+            next_time = _coerce_float(payload.get("_next_in_channel"))
+            if next_time is not None and next_time > t_start:
+                t_end = next_time
+            else:
+                t_end = t_start + default_duration
+
+        # Guard against zero/negative durations by falling back to default
+        if t_end <= t_start:
+            t_end = t_start + max(default_duration, 1.0)
+
         epoch = Epoch(
-            id=f"epoch_{epoch_id_counter}",
-            channel=channel,
-            label=label,
-            t_start=t,
+            id=f"epoch_{payload['idx']}",
+            channel=payload["channel"],
+            label=payload["label"],
+            t_start=t_start,
             t_end=t_end,
-            style=style,
-            color=color,
-            emphasis=emphasis,
+            style=payload["style"],
+            color=payload["color"],
+            emphasis=payload["emphasis"],
             meta=meta.copy(),
         )
         epochs.append(epoch)
-        epoch_id_counter += 1
 
     # Sort by start time
     epochs.sort(key=lambda e: e.t_start)
@@ -329,7 +389,7 @@ def drug_events_to_epochs(
     epochs: list[Epoch] = []
 
     color = "#1f77b4" if channel == "Drug" else "#d62728"
-    emphasis = "strong" if channel == "Drug" else "normal"
+    emphasis: Literal["normal", "strong", "light"] = "strong" if channel == "Drug" else "normal"
 
     for i, (t_start, t_end, name, conc) in enumerate(
         zip(drug_start_times, drug_end_times, drug_names, drug_concentrations, strict=False)

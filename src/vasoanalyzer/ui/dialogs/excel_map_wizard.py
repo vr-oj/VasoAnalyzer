@@ -49,6 +49,12 @@ from PyQt5.QtWidgets import (
     QWizardPage,
 )
 
+from vasoanalyzer.excel import (
+    TemplateMetadata,
+    has_vaso_metadata,
+    read_template_metadata,
+)
+
 __all__ = ["ExcelMapWizard"]
 
 DEFAULT_QMODEL_INDEX = QModelIndex()
@@ -190,7 +196,10 @@ class TemplatePage(WizardPageBase):
 
     # ------------------------------------------------------
     def load_template(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select .xlsx", "", "Excel Files (*.xlsx)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Excel Template", "",
+            "Excel Files (*.xlsx *.xlsm);;Macro-Enabled (*.xlsm);;Standard (*.xlsx)"
+        )
         if not path:
             return
         try:
@@ -205,7 +214,32 @@ class TemplatePage(WizardPageBase):
         wiz.wb = wb
         wiz.ws = ws
         wiz.reset_mapping_state()
-        self.lbl_excel.setText(f"Loaded: {Path(path).name}")
+
+        # Check for VasoAnalyzer metadata
+        metadata_detected = has_vaso_metadata(wb)
+        if metadata_detected:
+            try:
+                metadata = read_template_metadata(path, wb)
+                if metadata:
+                    wiz.template_metadata = metadata
+                    status_msg = f"✓ Loaded: {Path(path).name} (metadata detected)"
+                    self.lbl_excel.setText(status_msg)
+                    self.lbl_excel.setStyleSheet("color: #3c763d;")  # Green
+                else:
+                    self.lbl_excel.setText(f"Loaded: {Path(path).name}")
+                    self.lbl_excel.setStyleSheet("")
+            except Exception as exc:
+                QMessageBox.warning(
+                    self, "Metadata Error",
+                    f"Template loaded but metadata is invalid:\n{exc}\n\n"
+                    "Will use manual configuration."
+                )
+                self.lbl_excel.setText(f"Loaded: {Path(path).name} (metadata error)")
+                self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
+        else:
+            self.lbl_excel.setText(f"Loaded: {Path(path).name}")
+            self.lbl_excel.setStyleSheet("")
+
         self.completeChanged.emit()
 
     # ------------------------------------------------------
@@ -812,6 +846,9 @@ class ExcelMapWizard(QWizard):
         self.eventsDF: pd.DataFrame | None = None
         self.events_source: str | None = None
 
+        # Template metadata (from VBA macros or auto-detection)
+        self.template_metadata: TemplateMetadata | None = None
+
         # Derived session data
         self.session_events: list[SessionEventInfo] = []
         self.measurement_columns: list[str] = []
@@ -937,9 +974,51 @@ class ExcelMapWizard(QWizard):
 
     # --------------------------------------------------
     def _resolve_ranges(self) -> None:
+        """
+        Resolve template ranges from metadata or named ranges.
+
+        Priority:
+        1. Template metadata (from VBA macros)
+        2. Named ranges (VASO_DATES_ROW, VASO_VALUES_BLOCK)
+        3. Raise error if neither found
+        """
+        # Try metadata first
+        if self.template_metadata:
+            self.date_row_index = self.template_metadata.date_row
+
+            # Build values block from metadata event rows
+            if self.template_metadata.event_rows:
+                min_row = min(row.row for row in self.template_metadata.event_rows)
+                max_row = max(row.row for row in self.template_metadata.event_rows)
+            elif self.template_metadata.event_rows_start and self.template_metadata.event_rows_end:
+                min_row = self.template_metadata.event_rows_start
+                max_row = self.template_metadata.event_rows_end
+            else:
+                raise ValueError("Template metadata has no event row information")
+
+            # Date column bounds
+            if self.template_metadata.date_columns:
+                min_col = min(col.column for col in self.template_metadata.date_columns)
+                max_col = max(col.column for col in self.template_metadata.date_columns)
+            elif self.template_metadata.date_columns_start and self.template_metadata.date_columns_end:
+                min_col = self.template_metadata.date_columns_start
+                max_col = self.template_metadata.date_columns_end
+            else:
+                # Default to B:Z
+                min_col, max_col = 2, 26
+
+            self.values_block = (min_row, max_row, min_col, max_col)
+            self.date_columns_bounds = (min_col, max_col)
+            return
+
+        # Fallback to named ranges
         date_range = self._get_defined_range("VASO_DATES_ROW")
         if not date_range:
-            raise ValueError("Workbook is missing defined name 'VASO_DATES_ROW'.")
+            raise ValueError(
+                "Workbook is missing defined name 'VASO_DATES_ROW'.\n\n"
+                "Either add VasoAnalyzer metadata (see Excel Template Setup guide)\n"
+                "or define named ranges VASO_DATES_ROW and VASO_VALUES_BLOCK."
+            )
         d_min_col, d_min_row, d_max_col, d_max_row = range_boundaries(date_range)
         if d_min_row != d_max_row:
             raise ValueError("VASO_DATES_ROW must refer to a single row.")
@@ -947,7 +1026,11 @@ class ExcelMapWizard(QWizard):
 
         values_range = self._get_defined_range("VASO_VALUES_BLOCK")
         if not values_range:
-            raise ValueError("Workbook is missing defined name 'VASO_VALUES_BLOCK'.")
+            raise ValueError(
+                "Workbook is missing defined name 'VASO_VALUES_BLOCK'.\n\n"
+                "Either add VasoAnalyzer metadata (see Excel Template Setup guide)\n"
+                "or define named ranges VASO_DATES_ROW and VASO_VALUES_BLOCK."
+            )
         v_min_col, v_min_row, v_max_col, v_max_row = range_boundaries(values_range)
         self.values_block = (v_min_row, v_max_row, v_min_col, v_max_col)
         self.date_columns_bounds = (d_min_col, d_max_col)
@@ -963,28 +1046,49 @@ class ExcelMapWizard(QWizard):
 
     # --------------------------------------------------
     def _extract_event_rows(self) -> None:
+        """
+        Extract event rows from template.
+
+        Uses metadata if available, otherwise scans the values block.
+        """
         if self.ws is None or self.values_block is None:
             self.event_rows = []
             return
 
-        min_row, max_row, _, _ = self.values_block
-        rows: list[EventRowInfo] = []
-        for row_idx in range(min_row, max_row + 1):
-            cell = self.ws.cell(row=row_idx, column=1)
-            value = cell.value
-            label = str(value).strip() if value not in (None, "") else ""
-            if not label:
-                continue
-            is_header = bool(
-                getattr(cell, "font", None) and getattr(cell.font, "bold", False)
-            ) and self._has_fill(cell)
-            rows.append(
-                EventRowInfo(
-                    row_index=row_idx, label=label, is_header=is_header, label_cell=cell.coordinate
+        # Use metadata if available
+        if self.template_metadata and self.template_metadata.event_rows:
+            rows: list[EventRowInfo] = []
+            for meta_row in self.template_metadata.event_rows:
+                cell = self.ws.cell(row=meta_row.row, column=self.template_metadata.label_column)
+                rows.append(
+                    EventRowInfo(
+                        row_index=meta_row.row,
+                        label=meta_row.label,
+                        is_header=meta_row.is_header,
+                        label_cell=cell.coordinate,
+                    )
                 )
-            )
+            self.event_rows = rows
+        else:
+            # Fallback: scan values block
+            min_row, max_row, _, _ = self.values_block
+            rows: list[EventRowInfo] = []
+            for row_idx in range(min_row, max_row + 1):
+                cell = self.ws.cell(row=row_idx, column=1)
+                value = cell.value
+                label = str(value).strip() if value not in (None, "") else ""
+                if not label:
+                    continue
+                is_header = bool(
+                    getattr(cell, "font", None) and getattr(cell.font, "bold", False)
+                ) and self._has_fill(cell)
+                rows.append(
+                    EventRowInfo(
+                        row_index=row_idx, label=label, is_header=is_header, label_cell=cell.coordinate
+                    )
+                )
+            self.event_rows = rows
 
-        self.event_rows = rows
         valid_rows = {row.row_index for row in self.event_rows if not row.is_header}
         self.row_assignments = {
             row_idx: self.row_assignments.get(row_idx) for row_idx in valid_rows
@@ -992,32 +1096,58 @@ class ExcelMapWizard(QWizard):
 
     # --------------------------------------------------
     def _build_date_options(self) -> None:
+        """
+        Build date column options.
+
+        Uses metadata if available, otherwise scans date row.
+        """
         self.date_columns = []
         if self.ws is None or self.values_block is None or self.date_row_index is None:
             return
 
-        min_row, max_row, min_col, max_col = self.values_block
-        d_min_col, d_max_col = self.date_columns_bounds
+        # Use metadata if available
+        if self.template_metadata and self.template_metadata.date_columns:
+            for meta_col in self.template_metadata.date_columns:
+                cell = self.ws.cell(row=self.date_row_index, column=meta_col.column)
+                # Re-count empty slots (metadata might be stale)
+                empty_slots = 0
+                for event_row in self.event_rows:
+                    if event_row.is_header:
+                        continue
+                    target_cell = self.ws.cell(row=event_row.row_index, column=meta_col.column)
+                    if target_cell.value in (None, ""):
+                        empty_slots += 1
+                option = DateColumnOption(
+                    column_index=meta_col.column,
+                    cell_address=cell.coordinate,
+                    value=cell.value,  # Use current value, not cached
+                    empty_slots=empty_slots,
+                )
+                self.date_columns.append(option)
+        else:
+            # Fallback: scan date row
+            min_row, max_row, min_col, max_col = self.values_block
+            d_min_col, d_max_col = self.date_columns_bounds
 
-        for col_idx in range(d_min_col, d_max_col + 1):
-            cell = self.ws.cell(row=self.date_row_index, column=col_idx)
-            value = cell.value
-            empty_slots = 0
-            for event_row in self.event_rows:
-                if event_row.is_header:
-                    continue
-                if not (min_col <= col_idx <= max_col):
-                    continue
-                target_cell = self.ws.cell(row=event_row.row_index, column=col_idx)
-                if target_cell.value in (None, ""):
-                    empty_slots += 1
-            option = DateColumnOption(
-                column_index=col_idx,
-                cell_address=cell.coordinate,
-                value=value,
-                empty_slots=empty_slots,
-            )
-            self.date_columns.append(option)
+            for col_idx in range(d_min_col, d_max_col + 1):
+                cell = self.ws.cell(row=self.date_row_index, column=col_idx)
+                value = cell.value
+                empty_slots = 0
+                for event_row in self.event_rows:
+                    if event_row.is_header:
+                        continue
+                    if not (min_col <= col_idx <= max_col):
+                        continue
+                    target_cell = self.ws.cell(row=event_row.row_index, column=col_idx)
+                    if target_cell.value in (None, ""):
+                        empty_slots += 1
+                option = DateColumnOption(
+                    column_index=col_idx,
+                    cell_address=cell.coordinate,
+                    value=value,
+                    empty_slots=empty_slots,
+                )
+                self.date_columns.append(option)
 
     # --------------------------------------------------
     @staticmethod
