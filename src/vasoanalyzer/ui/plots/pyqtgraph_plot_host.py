@@ -13,6 +13,7 @@ from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
+from vasoanalyzer.ui.plots.plot_host import LayoutState
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
 from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
     PyQtGraphEventHighlightOverlay,
@@ -433,6 +434,63 @@ class PyQtGraphPlotHost:
 
     def set_event_base_style(self, **kwargs) -> None:
         """Set event base style (compatibility stub)."""
+        pass
+
+    def set_event_highlight_alpha(self, alpha: float) -> None:
+        """Set event highlight alpha transparency."""
+        alpha = max(0.0, min(float(alpha), 1.0))
+        self._event_highlight_overlay.set_style(alpha=alpha)
+
+    def event_highlight_alpha(self) -> float:
+        """Get current event highlight alpha."""
+        return self._event_highlight_overlay.alpha()
+
+    def current_window(self) -> tuple[float, float] | None:
+        """Get current time window."""
+        return self._current_window
+
+    def full_range(self) -> tuple[float, float] | None:
+        """Get full time range from model."""
+        if self._model is None:
+            return None
+        return self._model.full_range
+
+    def axes(self) -> list:
+        """Get all axes (matplotlib PlotHost compatibility)."""
+        return [track.ax for track in self._tracks.values()]
+
+    def layout_state(self) -> LayoutState:
+        """Get layout state snapshot."""
+        return LayoutState(
+            order=[spec.track_id for spec in self._channel_specs],
+            height_ratios={spec.track_id: spec.height_ratio for spec in self._channel_specs},
+            visibility={track.id: track.is_visible() for track in self._tracks.values()},
+        )
+
+    def channel_specs(self) -> list[ChannelTrackSpec]:
+        """Get channel specifications."""
+        from copy import copy
+        return [copy(spec) for spec in self._channel_specs]
+
+    def autoscale_all(self, *, margin: float = 0.05) -> None:
+        """Autoscale all tracks."""
+        self.autoscale_all_tracks(margin=margin)
+
+    def use_track_event_lines(self, flag: bool) -> None:
+        """Control whether tracks draw their own event lines (compatibility stub)."""
+        # PyQtGraph tracks always handle their own event rendering
+        pass
+
+    def set_event_labels_visible(self, visible: bool) -> None:
+        """Set event labels visibility (compatibility stub)."""
+        # PyQtGraph uses TextItem for event labels - they're controlled per-track
+        # This is a no-op for now
+        pass
+
+    def set_event_label_mode(self, mode: str) -> None:
+        """Set event label mode (compatibility stub - extended)."""
+        # PyQtGraph uses its own event labeling system
+        # Mode changes don't apply to PyQtGraph renderer
         pass
 
     def capture_view_state(self) -> ExportViewState:
