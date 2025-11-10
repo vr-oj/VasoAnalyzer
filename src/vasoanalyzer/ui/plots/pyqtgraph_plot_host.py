@@ -413,8 +413,19 @@ class PyQtGraphPlotHost:
         """Set auto event label mode (compatibility stub)."""
         pass
 
-    def set_label_density_thresholds(self, thresholds: dict) -> None:
-        """Set label density thresholds (compatibility stub)."""
+    def set_label_density_thresholds(
+        self, *, compact: float | None = None, belt: float | None = None
+    ) -> None:
+        """Set label density thresholds (matplotlib PlotHost compatibility).
+
+        Args:
+            compact: Compact threshold (0.0-1.0)
+            belt: Belt threshold (0.0-1.0)
+
+        Note:
+            PyQtGraph uses its own event labeling system. This method
+            accepts parameters for compatibility but does not apply them.
+        """
         pass
 
     def set_label_outline_enabled(self, enabled: bool) -> None:
