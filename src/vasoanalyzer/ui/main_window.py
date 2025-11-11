@@ -6045,12 +6045,9 @@ QPushButton[isGhost="true"]:hover {{
         self.event_label_meta = [dict() for _ in self.event_labels]
         self.event_table_data = []
         has_od = od_before is not None
-        if not has_od:
-            for lbl, diam in zip(labels, diam_before, strict=False):
-                self.event_table_data.append((lbl, 0.0, diam, 0))
-        else:
-            for lbl, diam_i, diam_o in zip(labels, diam_before, od_before, strict=False):
-                self.event_table_data.append((lbl, 0.0, diam_i, diam_o, 0))
+        # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+        for lbl, diam, od in zip(labels, diam_before, od_before if has_od else [None] * len(labels), strict=False):
+            self.event_table_data.append((lbl, 0.0, diam, od, None, None, 0))
         self.populate_table()
 
     def load_project_events(self, labels, times, frames, diam_before, od_before=None):
@@ -7078,6 +7075,16 @@ QPushButton[isGhost="true"]:hover {{
                 if "Outer Diameter" in self.trace_data.columns
                 else None
             )
+            avg_p_trace = (
+                self.trace_data["Avg Pressure (mmHg)"]
+                if "Avg Pressure (mmHg)" in self.trace_data.columns
+                else None
+            )
+            set_p_trace = (
+                self.trace_data["Set Pressure (mmHg)"]
+                if "Set Pressure (mmHg)" in self.trace_data.columns
+                else None
+            )
             annotation_entries: list[AnnotationSpec] = []
             self.event_text_objects = []
 
@@ -7092,6 +7099,8 @@ QPushButton[isGhost="true"]:hover {{
                 idx_pre = np.argmin(np.abs(time_trace - t_sample))
                 diam_val = diam_trace.iloc[idx_pre]
                 od_val = od_trace.iloc[idx_pre] if od_trace is not None else None
+                avg_p_val = avg_p_trace.iloc[idx_pre] if avg_p_trace is not None else None
+                set_p_val = set_p_trace.iloc[idx_pre] if set_p_trace is not None else None
                 if self.event_frames and i < len(self.event_frames):
                     frame_number = self.event_frames[i]
                 else:
@@ -7111,25 +7120,18 @@ QPushButton[isGhost="true"]:hover {{
                     }
                 )
 
-                if od_val is not None:
-                    self.event_table_data.append(
-                        (
-                            self.event_labels[i],
-                            round(evt_time, 2),
-                            round(diam_val, 2),
-                            round(od_val, 2),
-                            frame_number,
-                        )
+                # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+                self.event_table_data.append(
+                    (
+                        self.event_labels[i],
+                        round(evt_time, 2),
+                        round(diam_val, 2),
+                        round(od_val, 2) if od_val is not None else None,
+                        round(avg_p_val, 2) if avg_p_val is not None else None,
+                        round(set_p_val, 2) if set_p_val is not None else None,
+                        frame_number,
                     )
-                else:
-                    self.event_table_data.append(
-                        (
-                            self.event_labels[i],
-                            round(evt_time, 2),
-                            round(diam_val, 2),
-                            frame_number,
-                        )
-                    )
+                )
                 annotation_entries.append(
                     AnnotationSpec(
                         time_s=float(evt_time),
@@ -7903,32 +7905,31 @@ QPushButton[isGhost="true"]:hover {{
         frame_number = int(x / self.recording_interval)
 
         has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        has_avg_p = self.trace_data is not None and "Avg Pressure (mmHg)" in self.trace_data.columns
+        has_set_p = self.trace_data is not None and "Set Pressure (mmHg)" in self.trace_data.columns
 
         arr_t = self.trace_data["Time (s)"].values
         idx = int(np.argmin(np.abs(arr_t - x)))
         id_val = self.trace_data["Inner Diameter"].values[idx]
         od_val = self.trace_data["Outer Diameter"].values[idx] if has_od else None
+        avg_p_val = self.trace_data["Avg Pressure (mmHg)"].values[idx] if has_avg_p else None
+        set_p_val = self.trace_data["Set Pressure (mmHg)"].values[idx] if has_set_p else None
 
         if trace_type == "outer" and has_od:
             od_val = y
         else:
             id_val = y
 
-        if has_od:
-            new_entry = (
-                new_label.strip(),
-                round(x, 2),
-                round(id_val, 2),
-                round(od_val, 2),
-                frame_number,
-            )
-        else:
-            new_entry = (
-                new_label.strip(),
-                round(x, 2),
-                round(id_val, 2),
-                frame_number,
-            )
+        # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+        new_entry = (
+            new_label.strip(),
+            round(x, 2),
+            round(id_val, 2),
+            round(od_val, 2) if od_val is not None else None,
+            round(avg_p_val, 2) if avg_p_val is not None else None,
+            round(set_p_val, 2) if set_p_val is not None else None,
+            frame_number,
+        )
 
         # Insert into data
         if insert_idx == len(self.event_table_data):  # Add to end
@@ -7985,19 +7986,23 @@ QPushButton[isGhost="true"]:hover {{
 
         insert_idx = insert_labels.index(selected)
         frame_number = int(t_val / self.recording_interval)
+        od_val = None
         if has_od:
             od_val, ok = QInputDialog.getDouble(self, "Outer Diameter", "OD (µm):", 0.0, 0, 1e6, 2)
             if not ok:
                 return
-            new_entry = (
-                label.strip(),
-                round(t_val, 2),
-                round(id_val, 2),
-                round(od_val, 2),
-                frame_number,
-            )
-        else:
-            new_entry = (label.strip(), round(t_val, 2), round(id_val, 2), frame_number)
+
+        # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+        # Pressure values set to None for manually entered events
+        new_entry = (
+            label.strip(),
+            round(t_val, 2),
+            round(id_val, 2),
+            round(od_val, 2) if od_val is not None else None,
+            None,  # avg_p - not available for manual entry
+            None,  # set_p - not available for manual entry
+            frame_number,
+        )
 
         if insert_idx == len(self.event_table_data):
             self.event_labels.append(label.strip())
