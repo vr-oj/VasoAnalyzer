@@ -168,8 +168,6 @@ class PlotHost:
     def _rebuild_tracks(self) -> None:
         """Recreate axes and channel wrappers to match specs."""
 
-        for spec in self._channel_specs:
-
         self._destroy_event_labeler()
         self.figure.clf()
         self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
