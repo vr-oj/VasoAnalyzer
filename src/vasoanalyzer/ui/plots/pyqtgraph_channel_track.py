@@ -159,6 +159,15 @@ class PyQtGraphChannelTrack:
         """Check if track is visible."""
         return self._visible
 
+    def set_line_width(self, width: float) -> None:
+        """Set the line width for the primary trace.
+
+        Args:
+            width: Line width in pixels
+        """
+        if self.primary_line:
+            self.primary_line.set_linewidth(width)
+
     def data_limits(self) -> tuple[float, float] | None:
         """Get Y-axis data limits for current window."""
         return self.view.data_limits()

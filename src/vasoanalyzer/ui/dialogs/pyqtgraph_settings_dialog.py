@@ -165,7 +165,14 @@ class PyQtGraphSettingsDialog(QDialog):
         line_width_spin.setRange(0.5, 10.0)
         line_width_spin.setSingleStep(0.5)
         line_width_spin.setDecimals(1)
-        line_width_spin.setValue(1.5)  # Default
+
+        # Get current line width
+        try:
+            current_width = track.primary_line.get_linewidth()
+            line_width_spin.setValue(current_width)
+        except:
+            line_width_spin.setValue(1.5)  # Default
+
         widgets['line_width'] = line_width_spin
         form.addRow("Line Width:", line_width_spin)
 
@@ -271,9 +278,45 @@ class PyQtGraphSettingsDialog(QDialog):
 
     def _load_current_settings(self):
         """Load current settings from plot host."""
-        # This would load actual settings from the plot host
-        # For now, we use defaults
-        pass
+        try:
+            # Load event label settings from first track that has a labeler
+            for track in self.plot_host._tracks.values():
+                if track.view._event_labeler is not None:
+                    labeler = track.view._event_labeler
+                    options = labeler.options
+
+                    # Load enabled state
+                    self.event_labels_enabled_cb.setChecked(track.view._event_labels_visible)
+
+                    # Load mode
+                    mode_map = {
+                        "vertical": 0,
+                        "h_inside": 1,
+                        "h_belt": 2,
+                    }
+                    mode_idx = mode_map.get(options.mode, 0)
+                    self.event_mode_combo.setCurrentIndex(mode_idx)
+
+                    # Load clustering threshold
+                    self.event_cluster_spin.setValue(options.min_px)
+
+                    # Load lanes
+                    self.event_lanes_spin.setValue(options.lanes)
+
+                    # Font size would be in the renderer's font configuration
+                    # For now, keep the default
+
+                    break
+
+            # Load grid visibility from first track
+            if self.plot_host._tracks:
+                first_track = next(iter(self.plot_host._tracks.values()))
+                plot_item = first_track.view.get_widget().getPlotItem()
+                grid_visible = plot_item.ctrl.xGridCheck.isChecked()
+                self.grid_visible_cb.setChecked(grid_visible)
+
+        except Exception as e:
+            log.error(f"Failed to load PyQtGraph settings: {e}", exc_info=True)
 
     def _choose_background_color(self):
         """Open color picker for background color."""
@@ -310,11 +353,34 @@ class PyQtGraphSettingsDialog(QDialog):
                 # Visibility
                 track.set_visible(widgets['visible'].isChecked())
 
-                # Line width (would need to add method to track)
-                # track.set_line_width(widgets['line_width'].value())
+                # Line width
+                track.set_line_width(widgets['line_width'].value())
 
             # Apply event label settings
+            from vasoanalyzer.ui.event_labels_v3 import LayoutOptionsV3
+
             enabled = self.event_labels_enabled_cb.isChecked()
+
+            # Create options from dialog values
+            mode_map = {
+                0: "vertical",
+                1: "h_inside",
+                2: "h_belt",
+            }
+            mode = mode_map.get(self.event_mode_combo.currentIndex(), "vertical")
+
+            options = LayoutOptionsV3(
+                mode=mode,
+                min_px=self.event_cluster_spin.value(),
+                lanes=self.event_lanes_spin.value(),
+                # Keep other options at defaults for now
+            )
+
+            # Apply to all tracks
+            for track in self.plot_host._tracks.values():
+                track.view.enable_event_labels(enabled, options=options if enabled else None)
+
+            # Also update visibility flag
             self.plot_host.set_event_labels_visible(enabled)
 
             # Apply general settings
