@@ -526,7 +526,7 @@ class PyQtGraphPlotHost:
         """
         # Propagate visibility to all tracks
         for track in self._tracks.values():
-            track.view.set_event_labels_visible(visible)
+            track.view.enable_event_labels(visible)
 
     def set_event_label_mode(self, mode: str) -> None:
         """Set event label mode (compatibility stub - extended)."""
