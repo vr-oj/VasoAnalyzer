@@ -3166,14 +3166,26 @@ class VasoAnalyzerApp(QMainWindow):
         self.od_toggle_act = QAction("Outer", self, checkable=True, checked=True)
         self.od_toggle_act.setStatusTip("Show outer diameter trace")
         self.od_toggle_act.setToolTip("Toggle outer diameter trace")
+        self.avg_pressure_toggle_act = QAction("Avg Pressure", self, checkable=True, checked=True)
+        self.avg_pressure_toggle_act.setStatusTip("Show average pressure trace")
+        self.avg_pressure_toggle_act.setToolTip("Toggle average pressure trace")
+        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=True)
+        self.set_pressure_toggle_act.setStatusTip("Show set pressure trace")
+        self.set_pressure_toggle_act.setToolTip("Toggle set pressure trace")
         self.id_toggle_act.setShortcut("I")
         self.od_toggle_act.setShortcut("O")
+        self.avg_pressure_toggle_act.setShortcut("A")
+        self.set_pressure_toggle_act.setShortcut("S")
         self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
         self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
         self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
         self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
+        self.avg_pressure_toggle_act.toggled.connect(self.toggle_avg_pressure)
+        self.set_pressure_toggle_act.toggled.connect(self.toggle_set_pressure)
         self.showhide_menu.addAction(self.id_toggle_act)
         self.showhide_menu.addAction(self.od_toggle_act)
+        self.showhide_menu.addAction(self.avg_pressure_toggle_act)
+        self.showhide_menu.addAction(self.set_pressure_toggle_act)
 
         view_menu.addSeparator()
 
@@ -4186,8 +4198,19 @@ class VasoAnalyzerApp(QMainWindow):
                 )
             )
 
-        # Add pressure tracks if available
-        if self._avg_pressure_channel_available():
+        # Add pressure tracks if available and toggled on
+        avg_pressure_on = (
+            self.avg_pressure_toggle_act.isChecked()
+            if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act is not None
+            else True
+        )
+        set_pressure_on = (
+            self.set_pressure_toggle_act.isChecked()
+            if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act is not None
+            else True
+        )
+
+        if self._avg_pressure_channel_available() and avg_pressure_on:
             print("DEBUG: Adding avg_pressure track spec")
             specs.append(
                 ChannelTrackSpec(
@@ -4197,7 +4220,7 @@ class VasoAnalyzerApp(QMainWindow):
                     height_ratio=1.0,
                 )
             )
-        if self._set_pressure_channel_available():
+        if self._set_pressure_channel_available() and set_pressure_on:
             print("DEBUG: Adding set_pressure track spec")
             specs.append(
                 ChannelTrackSpec(
@@ -4262,6 +4285,19 @@ class VasoAnalyzerApp(QMainWindow):
             self.canvas.draw_idle()
 
     def _apply_channel_toggle(self, channel: str, checked: bool) -> None:
+        # For pressure channels, simply rebuild the layout
+        if channel in ("avg_pressure", "set_pressure"):
+            # Get current inner/outer state
+            previous_inner, previous_outer = self._current_channel_presence()
+            inner_on = self.id_toggle_act.isChecked() if self.id_toggle_act is not None else previous_inner
+            outer_on = self.od_toggle_act.isChecked() if self.od_toggle_act is not None else previous_outer
+
+            self._rebuild_channel_layout(inner_on, outer_on)
+            self._refresh_zoom_window()
+            self._invalidate_sample_state_cache()
+            return
+
+        # Original logic for inner/outer channels
         outer_supported = self._outer_channel_available()
         previous_inner, previous_outer = self._current_channel_presence()
         inner_on = (
@@ -4303,6 +4339,12 @@ class VasoAnalyzerApp(QMainWindow):
 
     def toggle_outer_diameter(self, checked: bool):
         self._apply_channel_toggle("outer", checked)
+
+    def toggle_avg_pressure(self, checked: bool):
+        self._apply_channel_toggle("avg_pressure", checked)
+
+    def toggle_set_pressure(self, checked: bool):
+        self._apply_channel_toggle("set_pressure", checked)
 
     def toggle_fullscreen(self, checked: bool = False):
         """Toggle fullscreen mode.
