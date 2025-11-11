@@ -4174,9 +4174,6 @@ class VasoAnalyzerApp(QMainWindow):
     def _rebuild_channel_layout(
         self, inner_on: bool, outer_on: bool, *, redraw: bool = True
     ) -> None:
-        print(f"DEBUG: _rebuild_channel_layout called, trace_data columns: {list(self.trace_data.columns) if self.trace_data is not None else 'None'}")
-        print(f"DEBUG: _avg_pressure_channel_available() = {self._avg_pressure_channel_available()}")
-        print(f"DEBUG: _set_pressure_channel_available() = {self._set_pressure_channel_available()}")
 
         specs: list[ChannelTrackSpec] = []
         if inner_on:
@@ -4241,15 +4238,8 @@ class VasoAnalyzerApp(QMainWindow):
                 )
             )
 
-        print(f"DEBUG: Final specs list has {len(specs)} tracks:")
-        for spec in specs:
-            print(f"  - {spec.track_id}: component={spec.component}, label={spec.label}")
-
         self._unbind_primary_axis_callbacks()
-        print(f"DEBUG: plot_host type = {type(self.plot_host).__name__}")
-        print(f"DEBUG: About to call plot_host.ensure_channels() with {len(specs)} specs")
         self.plot_host.ensure_channels(specs)
-        print(f"DEBUG: Returned from plot_host.ensure_channels()")
 
         inner_track = self.plot_host.track("inner") if inner_on else None
         outer_track = self.plot_host.track("outer") if outer_on else None

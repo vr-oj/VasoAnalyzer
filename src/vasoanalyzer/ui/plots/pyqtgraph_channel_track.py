@@ -32,7 +32,6 @@ class PyQtGraphChannelTrack:
     ) -> None:
         self.spec: ChannelTrackSpec = spec
         mode = spec.component if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"} else "inner"
-        print(f"DEBUG: PyQtGraphChannelTrack: spec.component={spec.component}, mode={mode}, track_id={spec.track_id}")
         self.view: PyQtGraphTraceView = PyQtGraphTraceView(
             mode=mode,
             y_label=spec.label,
