@@ -180,8 +180,8 @@ class PlotHost:
         specs = self._channel_specs
         height_ratios: list[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
-        # Add vertical gap between tracks (diameter traces) when stacked
-        hspace = 0.05 if row_count > 1 else 0.0
+        # Eliminate gap between tracks for cleaner appearance - dividers provide separation
+        hspace = 0.0
         gs = self.figure.add_gridspec(
             nrows=row_count,
             ncols=1,
@@ -197,6 +197,7 @@ class PlotHost:
                 shared_ax = ax
             else:
                 ax.tick_params(labelbottom=False)
+                ax.set_xlabel("")  # Clear xlabel for non-bottom tracks
             ax.tick_params(colors=CURRENT_THEME["text"])
             ax.yaxis.label.set_color(CURRENT_THEME["text"])
             ax.xaxis.label.set_color(CURRENT_THEME["text"])

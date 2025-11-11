@@ -132,7 +132,7 @@ class MenuMixin:
         self.action_export_bundle.triggered.connect(self.export_project_bundle_action)
         export_menu.addAction(self.action_export_bundle)
 
-        self.action_export_shareable = QAction("Shareable Single File (.vaso)…", self)
+        self.action_export_shareable = QAction("Shareable Single File…", self)
         self.action_export_shareable.triggered.connect(self.export_shareable_project)
         export_menu.addAction(self.action_export_shareable)
 

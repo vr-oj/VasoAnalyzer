@@ -2929,12 +2929,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         project_menu.addSeparator()
 
-        self.action_save_project = QAction("Save Project (.vaso)", self)
+        self.action_save_project = QAction("Save Project", self)
         self.action_save_project.setShortcut("Ctrl+Shift+S")
         self.action_save_project.triggered.connect(self.save_project_file)
         project_menu.addAction(self.action_save_project)
 
-        self.action_save_project_as = QAction("Save Project As (.vaso)…", self)
+        self.action_save_project_as = QAction("Save Project As…", self)
         self.action_save_project_as.triggered.connect(self.save_project_file_as)
         project_menu.addAction(self.action_save_project_as)
 
@@ -2985,7 +2985,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_export_bundle.triggered.connect(self.export_project_bundle_action)
         export_menu.addAction(self.action_export_bundle)
 
-        self.action_export_shareable = QAction("Shareable Single File (.vaso)…", self)
+        self.action_export_shareable = QAction("Shareable Single File…", self)
         self.action_export_shareable.triggered.connect(self.export_shareable_project)
         export_menu.addAction(self.action_export_shareable)
 
@@ -4669,7 +4669,7 @@ class VasoAnalyzerApp(QMainWindow):
         toolbar.addAction(self.excel_action)
 
         self.save_session_action = QAction(
-            QIcon(self.icon_path("Save.svg")), "Save Project (.vaso)", self
+            QIcon(self.icon_path("Save.svg")), "Save Project", self
         )
         self.save_session_action.setToolTip("Save the current project")
         self.save_session_action.setShortcut(QKeySequence.Save)
