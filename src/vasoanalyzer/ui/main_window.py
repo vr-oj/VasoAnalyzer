@@ -3566,6 +3566,21 @@ class VasoAnalyzerApp(QMainWindow):
             self._update_check_in_progress = True
 
     def check_for_updates_at_startup(self) -> None:
+        """Check for updates at startup if user hasn't disabled it or is not in snooze period."""
+        import time
+
+        # Check if user disabled update notifications
+        if self.settings.value("updates/dont_show_again", False, type=bool):
+            return
+
+        # Check if we're in the snooze period
+        remind_later_timestamp = self.settings.value("updates/remind_later_until", 0, type=int)
+        if remind_later_timestamp > 0:
+            current_time = int(time.time())
+            if current_time < remind_later_timestamp:
+                # Still in snooze period
+                return
+
         self._start_update_check(silent=True)
 
     def check_for_updates(self, checked: bool = False) -> None:
@@ -3577,6 +3592,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._start_update_check(silent=False)
 
     def _on_update_check_completed(self, silent: bool, latest: object, error: object) -> None:
+        import time
+
         self._update_check_in_progress = False
 
         if error:
@@ -3595,15 +3612,24 @@ class VasoAnalyzerApp(QMainWindow):
 
         latest_str = latest if isinstance(latest, str) and latest else None
         if latest_str:
-            QMessageBox.information(
-                self,
-                "Update Available",
-                (
-                    f"A new version ({latest_str}) of VasoAnalyzer is available!\n"
-                    "Visit GitHub to download the latest release."
-                ),
-            )
-            self.statusBar().showMessage("Update available", 3000)
+            from .dialogs.update_dialog import UpdateDialog
+
+            # Show custom update dialog with remind later and don't show options
+            dlg = UpdateDialog(f"v{APP_VERSION}", latest_str, self)
+            user_choice = dlg.exec_()
+
+            if user_choice == UpdateDialog.DONT_SHOW:
+                # User chose to never see update notifications again
+                self.settings.setValue("updates/dont_show_again", True)
+                self.statusBar().showMessage("Update notifications disabled", 3000)
+            elif user_choice == UpdateDialog.REMIND_LATER:
+                # User chose to be reminded in 7 days
+                snooze_until = int(time.time()) + (7 * 24 * 60 * 60)  # 7 days in seconds
+                self.settings.setValue("updates/remind_later_until", snooze_until)
+                self.statusBar().showMessage("Will remind you in 7 days", 3000)
+            else:
+                # User clicked OK
+                self.statusBar().showMessage("Update available", 3000)
         elif not silent:
             QMessageBox.information(
                 self,
