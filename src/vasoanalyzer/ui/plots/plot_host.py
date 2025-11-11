@@ -202,6 +202,18 @@ class PlotHost:
             ax.xaxis.label.set_color(CURRENT_THEME["text"])
             ax.title.set_color(CURRENT_THEME["text"])
             ax.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
+
+            # Adjust y-axis label font size based on number of tracks
+            if row_count == 1:
+                ylabel_fontsize = 10
+            elif row_count == 2:
+                ylabel_fontsize = 9
+            elif row_count == 3:
+                ylabel_fontsize = 8
+            else:  # 4 or more tracks
+                ylabel_fontsize = 7
+            ax.yaxis.label.set_fontsize(ylabel_fontsize)
+
             spine_color = CURRENT_THEME.get(
                 "border_soft", CURRENT_THEME.get("grid_color", "#CCCCCC")
             )

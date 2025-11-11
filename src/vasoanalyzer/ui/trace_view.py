@@ -55,9 +55,23 @@ class TraceView:
         self._ensure_base_artists()
 
     def _ensure_base_artists(self) -> None:
+        # Set different colors for different modes
+        if self._mode == "avg_pressure":
+            line_color = "tab:blue"
+        elif self._mode == "set_pressure":
+            line_color = "tab:purple"
+        elif self._mode == "outer":
+            line_color = "tab:orange"
+        else:
+            line_color = "k"  # black for inner
+
         if self.inner_line is None:
-            self.inner_line = Line2D([], [], color="k", linewidth=1.5, animated=True)
+            self.inner_line = Line2D([], [], color=line_color, linewidth=1.5, animated=True)
             self.ax.add_line(self.inner_line)
+        else:
+            # Update color if mode changed
+            self.inner_line.set_color(line_color)
+
         if self.inner_band is None:
             band = PolyCollection(
                 [],
