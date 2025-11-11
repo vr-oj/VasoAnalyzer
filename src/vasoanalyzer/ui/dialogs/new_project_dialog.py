@@ -132,7 +132,7 @@ class NewProjectDialog(QDialog):
         if not clean_name:
             self.project_path_edit.clear()
             return
-        suggested = Path(self._default_dir) / f"{clean_name}.vaso"
+        suggested = Path(self._default_dir) / f"{clean_name}.vasopack"
         self.project_path_edit.setText(str(suggested))
 
     # ------------------------------------------------------------------#

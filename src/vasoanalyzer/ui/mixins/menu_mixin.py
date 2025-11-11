@@ -75,12 +75,12 @@ class MenuMixin:
 
         project_menu.addSeparator()
 
-        self.action_save_project = QAction("Save Project (.vaso)", self)
+        self.action_save_project = QAction("Save Project", self)
         self.action_save_project.setShortcut("Ctrl+Shift+S")
         self.action_save_project.triggered.connect(self.save_project_file)
         project_menu.addAction(self.action_save_project)
 
-        self.action_save_project_as = QAction("Save Project As (.vaso)…", self)
+        self.action_save_project_as = QAction("Save Project As…", self)
         self.action_save_project_as.triggered.connect(self.save_project_file_as)
         project_menu.addAction(self.action_save_project_as)
 
