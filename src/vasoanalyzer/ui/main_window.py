@@ -4213,7 +4213,7 @@ class VasoAnalyzerApp(QMainWindow):
                 ChannelTrackSpec(
                     track_id="avg_pressure",
                     component="avg_pressure",
-                    label="Avg Pressure (mmHg)",
+                    label="Pressure (mmHg)",
                     height_ratio=1.0,
                 )
             )

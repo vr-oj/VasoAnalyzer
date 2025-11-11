@@ -211,7 +211,7 @@ class PlotHost:
             elif row_count == 3:
                 ylabel_fontsize = 8
             else:  # 4 or more tracks
-                ylabel_fontsize = 7
+                ylabel_fontsize = 6.5
             ax.yaxis.label.set_fontsize(ylabel_fontsize)
 
             spine_color = CURRENT_THEME.get(
