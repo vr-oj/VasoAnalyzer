@@ -21,7 +21,8 @@ from PyQt5.QtWidgets import (
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
-EventRow = tuple[str, float, float, float | None, int | None]
+# EventRow: (label, time, inner_diameter, outer_diameter | None, avg_pressure | None, set_pressure | None, frame | None)
+EventRow = tuple[str, float, float, float | None, float | None, float | None, int | None]
 DEFAULT_QMODEL_INDEX = QModelIndex()
 
 
@@ -99,13 +100,26 @@ class EventTableModel(QAbstractTableModel):
         return True
 
     # Public helpers ---------------------------------------------------
-    def set_events(self, rows: Sequence[tuple], *, has_outer_diameter: bool) -> None:
+    def set_events(
+        self,
+        rows: Sequence[tuple],
+        *,
+        has_outer_diameter: bool,
+        has_avg_pressure: bool = False,
+        has_set_pressure: bool = False,
+    ) -> None:
         self.beginResetModel()
         self._rows = [tuple(row) for row in rows]
         self._has_outer = has_outer_diameter
+        self._has_avg_pressure = has_avg_pressure
+        self._has_set_pressure = has_set_pressure
         headers = ["Event", "Time (s)", "ID (µm)"]
         if has_outer_diameter:
             headers.append("OD (µm)")
+        if has_avg_pressure:
+            headers.append("Avg P (mmHg)")
+        if has_set_pressure:
+            headers.append("Set P (mmHg)")
         headers.append("Frame")
         self._headers = headers
         self.endResetModel()
@@ -147,20 +161,56 @@ class EventTableModel(QAbstractTableModel):
 
     # Internal helpers -------------------------------------------------
     def _value_at(self, row_idx: int, column: int):
+        """Map display column to row tuple index."""
         row = self._rows[row_idx]
+        if len(row) < 3:
+            return None
+
+        # Columns: Event(0), Time(1), ID(2), [OD(3)], [AvgP(?)]  [SetP(?)], Frame(last)
+        # Row tuple: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+
+        if column == 0:  # Event label
+            return row[0]
+        if column == 1:  # Time
+            return row[1]
+        if column == 2:  # ID
+            return row[2]
+
+        # Build column mapping dynamically
+        col_idx = 3
+        row_idx_map = {3: 3, 4: 4, 5: 5, 6: 6}  # Start with row indices for od, avg_p, set_p, frame
+
         if self._has_outer:
-            return row[column]
-        if column <= 2:
-            return row[column]
-        # Frame when no outer diameter present
-        return row[3] if len(row) > 3 else None
+            if column == col_idx:
+                return row[3] if len(row) > 3 else None
+            col_idx += 1
+
+        if self._has_avg_pressure:
+            if column == col_idx:
+                return row[4] if len(row) > 4 else None
+            col_idx += 1
+
+        if self._has_set_pressure:
+            if column == col_idx:
+                return row[5] if len(row) > 5 else None
+            col_idx += 1
+
+        # Last column is always Frame
+        if column == col_idx:
+            return row[6] if len(row) > 6 else None
+
+        return None
 
     def _format_display(self, column: int, value):
         if column == 0:  # Event label
             return value
         if value is None:
             return "—"
-        is_frame_column = (column == 4 and self._has_outer) or (column == 3 and not self._has_outer)
+
+        # Determine if this is the frame column (always last)
+        last_col_idx = len(self._headers) - 1
+        is_frame_column = column == last_col_idx
+
         if is_frame_column:
             try:
                 return f"{int(round(float(value))):,}"
@@ -172,7 +222,8 @@ class EventTableModel(QAbstractTableModel):
         except (TypeError, ValueError):
             return value
 
-        if column in (1, 2) or (self._has_outer and column == 3):
+        # Time, diameter, and pressure columns get 2 decimal places
+        if column >= 1:  # All numeric columns except frame
             return f"{num:,.2f}"
 
         return f"{num:,}"

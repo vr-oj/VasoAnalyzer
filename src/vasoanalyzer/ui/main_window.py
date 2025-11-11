@@ -5845,7 +5845,14 @@ QPushButton[isGhost="true"]:hover {{
 
     def populate_table(self):
         has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
-        self.event_table_controller.set_events(self.event_table_data, has_outer_diameter=has_od)
+        has_avg_p = self.trace_data is not None and "Avg Pressure (mmHg)" in self.trace_data.columns
+        has_set_p = self.trace_data is not None and "Set Pressure (mmHg)" in self.trace_data.columns
+        self.event_table_controller.set_events(
+            self.event_table_data,
+            has_outer_diameter=has_od,
+            has_avg_pressure=has_avg_p,
+            has_set_pressure=has_set_p,
+        )
         self._update_excel_controls()
 
     def _update_excel_controls(self):
@@ -6030,6 +6037,8 @@ QPushButton[isGhost="true"]:hover {{
             self.event_frames = [0] * len(self.event_times)
         self.event_table_data = []
         has_od = od_before is not None or "Outer Diameter" in self.trace_data.columns
+        has_avg_pressure = "Avg Pressure (mmHg)" in self.trace_data.columns
+        has_set_pressure = "Set Pressure (mmHg)" in self.trace_data.columns
 
         if self.trace_data is not None and self.event_times:
             arr_t = self.trace_data["Time (s)"].values
@@ -6039,6 +6048,17 @@ QPushButton[isGhost="true"]:hover {{
                 if "Outer Diameter" in self.trace_data.columns
                 else None
             )
+            arr_avg_p = (
+                self.trace_data["Avg Pressure (mmHg)"].values
+                if has_avg_pressure
+                else None
+            )
+            arr_set_p = (
+                self.trace_data["Set Pressure (mmHg)"].values
+                if has_set_pressure
+                else None
+            )
+
             for lbl, t, fr in zip(
                 self.event_labels,
                 self.event_times,
@@ -6049,37 +6069,27 @@ QPushButton[isGhost="true"]:hover {{
                     continue
                 idx = int(np.argmin(np.abs(arr_t - t)))
                 diam = float(arr_d[idx])
-                if has_od and arr_od is not None:
-                    od_val = float(arr_od[idx])
-                    self.event_table_data.append((lbl, float(t), diam, od_val, int(fr)))
-                else:
-                    self.event_table_data.append((lbl, float(t), diam, int(fr)))
+                od_val = float(arr_od[idx]) if has_od and arr_od is not None else None
+                avg_p_val = float(arr_avg_p[idx]) if arr_avg_p is not None else None
+                set_p_val = float(arr_set_p[idx]) if arr_set_p is not None else None
+
+                # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+                self.event_table_data.append((lbl, float(t), diam, od_val, avg_p_val, set_p_val, int(fr)))
         else:
-            if has_od:
-                for lbl, t, fr, diam_i, diam_o in zip(
-                    self.event_labels,
-                    self.event_times,
-                    self.event_frames,
-                    diam_before,
-                    od_before,
-                    strict=False,
-                ):
-                    if pd.isna(t):
-                        continue
-                    self.event_table_data.append(
-                        (lbl, float(t), float(diam_i), float(diam_o), int(fr))
-                    )
-            else:
-                for lbl, t, fr, diam in zip(
-                    self.event_labels,
-                    self.event_times,
-                    self.event_frames,
-                    diam_before,
-                    strict=False,
-                ):
-                    if pd.isna(t):
-                        continue
-                    self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
+            # When loading from saved data (diam_before, od_before exist)
+            # Pressure data would come from trace_data, not saved event data
+            for lbl, t, fr, diam_i in zip(
+                self.event_labels,
+                self.event_times,
+                self.event_frames,
+                diam_before,
+                strict=False,
+            ):
+                if pd.isna(t):
+                    continue
+                od_val = float(od_before[self.event_labels.index(lbl)]) if has_od and od_before else None
+                # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+                self.event_table_data.append((lbl, float(t), float(diam_i), od_val, None, None, int(fr)))
 
         self.populate_table()
         self.xlim_full = None
@@ -6515,6 +6525,8 @@ QPushButton[isGhost="true"]:hover {{
     def populate_event_table_from_df(self, df):
         rows = []
         has_od = any(col.lower().startswith("od") or "outer" in col.lower() for col in df.columns)
+        has_avg_p = any("avg" in col.lower() and "pressure" in col.lower() for col in df.columns)
+        has_set_p = any("set" in col.lower() and "pressure" in col.lower() for col in df.columns)
 
         for _, item in df.iterrows():
             label = item.get("EventLabel", item.get("Event", ""))
@@ -6532,26 +6544,45 @@ QPushButton[isGhost="true"]:hover {{
             except (TypeError, ValueError):
                 id_val = 0.0
 
+            od_val = None
             if has_od:
                 od_val = item.get("OD (µm)", item.get("Outer Diameter", None))
                 try:
                     od_val = float(od_val) if od_val is not None else None
                 except (TypeError, ValueError):
                     od_val = None
+
+            avg_p_val = None
+            if has_avg_p:
+                avg_p_val = item.get("Avg P (mmHg)", item.get("Avg Pressure (mmHg)", None))
                 try:
-                    frame_val = int(frame_val)
+                    avg_p_val = float(avg_p_val) if avg_p_val is not None else None
                 except (TypeError, ValueError):
-                    frame_val = 0
-                rows.append((str(label), time_val, id_val, od_val, frame_val))
-            else:
+                    avg_p_val = None
+
+            set_p_val = None
+            if has_set_p:
+                set_p_val = item.get("Set P (mmHg)", item.get("Set Pressure (mmHg)", None))
                 try:
-                    frame_val = int(frame_val)
+                    set_p_val = float(set_p_val) if set_p_val is not None else None
                 except (TypeError, ValueError):
-                    frame_val = 0
-                rows.append((str(label), time_val, id_val, frame_val))
+                    set_p_val = None
+
+            try:
+                frame_val = int(frame_val)
+            except (TypeError, ValueError):
+                frame_val = 0
+
+            # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+            rows.append((str(label), time_val, id_val, od_val, avg_p_val, set_p_val, frame_val))
 
         self.event_table_data = rows
-        self.event_table_controller.set_events(rows, has_outer_diameter=has_od)
+        self.event_table_controller.set_events(
+            rows,
+            has_outer_diameter=has_od,
+            has_avg_pressure=has_avg_p,
+            has_set_pressure=has_set_p,
+        )
         self._update_excel_controls()
 
     def update_event_label_positions(self, event=None):

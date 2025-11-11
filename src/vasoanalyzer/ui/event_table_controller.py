@@ -45,11 +45,18 @@ class EventTableController(QObject):
     # ------------------------------------------------------------------
     def set_events(
         self,
-        data: Iterable[tuple[str, float, float, float | None, int | None]],
+        data: Iterable[tuple],
         *,
         has_outer_diameter: bool,
+        has_avg_pressure: bool = False,
+        has_set_pressure: bool = False,
     ) -> None:
-        self._model.set_events(list(data), has_outer_diameter=has_outer_diameter)
+        self._model.set_events(
+            list(data),
+            has_outer_diameter=has_outer_diameter,
+            has_avg_pressure=has_avg_pressure,
+            has_set_pressure=has_set_pressure,
+        )
         self._table.apply_theme()
         self.rows_changed.emit()
 
