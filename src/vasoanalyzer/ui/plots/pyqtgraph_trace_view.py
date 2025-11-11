@@ -36,11 +36,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Initialize PyQtGraph trace view.
 
         Args:
-            mode: Rendering mode - "inner", "outer", or "dual" (both channels)
+            mode: Rendering mode - "inner", "outer", "dual", "avg_pressure", or "set_pressure"
             y_label: Custom Y-axis label
             enable_opengl: Enable GPU acceleration (default: True)
         """
-        if mode not in {"inner", "outer", "dual"}:
+        if mode not in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}:
             raise ValueError(f"Unsupported trace view mode: {mode}")
 
         self._mode = mode
@@ -95,12 +95,24 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def _create_plot_items(self) -> None:
         """Create PyQtGraph plot items for traces and events."""
-        # Inner diameter trace (primary)
-        theme_color = CURRENT_THEME.get("trace_color", "#000000")
+        # Determine color and name based on mode
+        if self._mode == "avg_pressure":
+            theme_color = "#1f77b4"  # Blue for avg pressure
+            trace_name = "Avg Pressure"
+        elif self._mode == "set_pressure":
+            theme_color = "#9467bd"  # Purple for set pressure
+            trace_name = "Set Pressure"
+        elif self._mode == "outer":
+            theme_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
+            trace_name = "Outer Diameter"
+        else:
+            theme_color = CURRENT_THEME.get("trace_color", "#000000")
+            trace_name = "Inner Diameter"
+
         self.inner_curve = self._plot_item.plot(
             pen=pg.mkPen(color=theme_color, width=1.5),
             antialias=True,
-            name="Inner Diameter",
+            name=trace_name,
         )
 
         # Outer diameter trace (secondary, if dual mode)
@@ -155,6 +167,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Get default Y-axis label based on mode."""
         if self._mode == "outer":
             return "Outer Diameter (µm)"
+        elif self._mode == "avg_pressure":
+            return "Avg Pressure (mmHg)"
+        elif self._mode == "set_pressure":
+            return "Set Pressure (mmHg)"
         return "Inner Diameter (µm)"
 
     def set_events(
@@ -402,6 +418,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
+        elif self._mode == "avg_pressure":
+            if window.avg_pressure_mean is None or window.avg_pressure_min is None or window.avg_pressure_max is None:
+                return None
+            return window.avg_pressure_mean, window.avg_pressure_min, window.avg_pressure_max
+        elif self._mode == "set_pressure":
+            if window.set_pressure_mean is None or window.set_pressure_min is None or window.set_pressure_max is None:
+                return None
+            return window.set_pressure_mean, window.set_pressure_min, window.set_pressure_max
         return window.inner_mean, window.inner_min, window.inner_max
 
     def _secondary_series(
@@ -476,6 +500,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if self._mode == "outer":
             series_min = window.outer_min
             series_max = window.outer_max
+        elif self._mode == "avg_pressure":
+            series_min = window.avg_pressure_min
+            series_max = window.avg_pressure_max
+        elif self._mode == "set_pressure":
+            series_min = window.set_pressure_min
+            series_max = window.set_pressure_max
         elif self._mode == "dual":
             parts = []
             if window.inner_min is not None and window.inner_max is not None:

@@ -31,7 +31,8 @@ class PyQtGraphChannelTrack:
         enable_opengl: bool = True,
     ) -> None:
         self.spec: ChannelTrackSpec = spec
-        mode = spec.component if spec.component in {"inner", "outer", "dual"} else "inner"
+        mode = spec.component if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"} else "inner"
+        print(f"DEBUG: PyQtGraphChannelTrack: spec.component={spec.component}, mode={mode}, track_id={spec.track_id}")
         self.view: PyQtGraphTraceView = PyQtGraphTraceView(
             mode=mode,
             y_label=spec.label,
@@ -104,7 +105,14 @@ class PyQtGraphChannelTrack:
         self._last_time_span = None
         self.view.set_autoscale_y(True)
 
+        # Check if component data is available, hide if not
         if self.spec.component == "outer" and model.outer_full is None:
+            self.set_visible(False)
+            return
+        if self.spec.component == "avg_pressure" and model.avg_pressure_full is None:
+            self.set_visible(False)
+            return
+        if self.spec.component == "set_pressure" and model.set_pressure_full is None:
             self.set_visible(False)
             return
 
@@ -116,6 +124,12 @@ class PyQtGraphChannelTrack:
             self.view.set_ylabel(label)
         elif self.spec.component == "inner":
             label = self.spec.label or "Inner Diameter (µm)"
+            self.view.set_ylabel(label)
+        elif self.spec.component == "avg_pressure":
+            label = self.spec.label or "Avg Pressure (mmHg)"
+            self.view.set_ylabel(label)
+        elif self.spec.component == "set_pressure":
+            label = self.spec.label or "Set Pressure (mmHg)"
             self.view.set_ylabel(label)
 
         # Apply events if already set
