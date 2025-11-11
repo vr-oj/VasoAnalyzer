@@ -1215,7 +1215,7 @@ def load_project(path: str) -> Project:
 
             # Check if this is a database corruption error
             error_msg = str(e).lower()
-            corruption_keywords = ["malformed", "corrupt", "damaged", "disk image"]
+            corruption_keywords = ["malformed", "corrupt", "damaged", "disk image", "could not decode", "utf-8"]
             is_corruption_error = isinstance(e, sqlite3.DatabaseError) or any(
                 keyword in error_msg for keyword in corruption_keywords
             )

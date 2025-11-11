@@ -599,6 +599,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._plot_drag_in_progress = False
         self._last_hover_time: float | None = None
         self._pending_plot_layout: dict | None = None
+        self._pending_pyqtgraph_track_state: dict | None = None
+        self._plot_host_window_listener = None
 
         # ===== Build UI =====
         self.create_menubar()
@@ -2494,8 +2496,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_dual_view(selected_samples)
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
-            save_n = menu.addAction("Save N As…")
-            del_n = menu.addAction("Delete N")
+            save_n = menu.addAction("Save Data As…")
+            del_n = menu.addAction("Delete Data")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == load_data:
                 self.load_data_into_sample(obj)
@@ -2903,6 +2905,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._build_edit_menu(menubar)
         self._build_view_menu(menubar)
         self._build_tools_menu(menubar)
+        self._build_window_menu(menubar)
         self._build_help_menu(menubar)
 
     def _build_file_menu(self, menubar):
@@ -3022,6 +3025,41 @@ class VasoAnalyzerApp(QMainWindow):
 
         edit_menu.addSeparator()
 
+        # Event manipulation
+        self.action_copy_events = QAction("Copy Event(s)", self)
+        self.action_copy_events.setShortcut(QKeySequence.Copy)
+        self.action_copy_events.triggered.connect(self.copy_selected_events)
+        edit_menu.addAction(self.action_copy_events)
+
+        self.action_paste_events = QAction("Paste Event(s)", self)
+        self.action_paste_events.setShortcut(QKeySequence.Paste)
+        self.action_paste_events.triggered.connect(self.paste_events)
+        edit_menu.addAction(self.action_paste_events)
+
+        self.action_duplicate_event = QAction("Duplicate Event", self)
+        self.action_duplicate_event.setShortcut("Ctrl+D")
+        self.action_duplicate_event.triggered.connect(self.duplicate_selected_event)
+        edit_menu.addAction(self.action_duplicate_event)
+
+        self.action_delete_event = QAction("Delete Event", self)
+        self.action_delete_event.setShortcut(QKeySequence.Delete)
+        self.action_delete_event.triggered.connect(self.delete_selected_events)
+        edit_menu.addAction(self.action_delete_event)
+
+        edit_menu.addSeparator()
+
+        self.action_select_all_events = QAction("Select All Events", self)
+        self.action_select_all_events.setShortcut(QKeySequence.SelectAll)
+        self.action_select_all_events.triggered.connect(self.select_all_events)
+        edit_menu.addAction(self.action_select_all_events)
+
+        self.action_find_event = QAction("Find Event…", self)
+        self.action_find_event.setShortcut(QKeySequence.Find)
+        self.action_find_event.triggered.connect(self.find_event_dialog)
+        edit_menu.addAction(self.action_find_event)
+
+        edit_menu.addSeparator()
+
         clear_pins = QAction("Clear All Pins", self)
         clear_pins.triggered.connect(self.clear_all_pins)
         edit_menu.addAction(clear_pins)
@@ -3037,6 +3075,31 @@ class VasoAnalyzerApp(QMainWindow):
         home_act.setShortcut("Ctrl+Shift+H")
         home_act.triggered.connect(self.show_home_screen)
         view_menu.addAction(home_act)
+
+        view_menu.addSeparator()
+
+        # Renderer selection
+        renderer_menu = view_menu.addMenu("Renderer")
+        self.action_use_matplotlib = QAction("Matplotlib", self, checkable=True)
+        self.action_use_pyqtgraph = QAction("PyQtGraph", self, checkable=True)
+        self.action_use_matplotlib.triggered.connect(lambda: self.set_renderer("matplotlib"))
+        self.action_use_pyqtgraph.triggered.connect(lambda: self.set_renderer("pyqtgraph"))
+        renderer_menu.addAction(self.action_use_matplotlib)
+        renderer_menu.addAction(self.action_use_pyqtgraph)
+        # Set default checked state
+        self.action_use_matplotlib.setChecked(True)
+
+        # Color scheme selection
+        theme_menu = view_menu.addMenu("Color Scheme")
+        self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
+        self.action_theme_dark = QAction("Dark", self, checkable=True)
+        self.action_theme_auto = QAction("Auto (System)", self, checkable=True)
+        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
+        self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
+        self.action_theme_auto.triggered.connect(lambda: self.set_color_scheme("auto"))
+        theme_menu.addAction(self.action_theme_light)
+        theme_menu.addAction(self.action_theme_dark)
+        theme_menu.addAction(self.action_theme_auto)
 
         view_menu.addSeparator()
 
@@ -3122,10 +3185,24 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_tools_menu(self, menubar):
         tools_menu = menubar.addMenu("&Tools")
 
-        self.action_map_excel = QAction("Map Events to Excel…", self)
-        self.action_map_excel.triggered.connect(self.open_excel_mapping_dialog)
-        tools_menu.addAction(self.action_map_excel)
+        # Analysis tools
+        analysis_menu = tools_menu.addMenu("Analysis")
 
+        self.action_calculate_statistics = QAction("Calculate Statistics…", self)
+        self.action_calculate_statistics.triggered.connect(self.show_statistics_dialog)
+        analysis_menu.addAction(self.action_calculate_statistics)
+
+        self.action_batch_analysis = QAction("Batch Analysis…", self)
+        self.action_batch_analysis.triggered.connect(self.show_batch_analysis_dialog)
+        analysis_menu.addAction(self.action_batch_analysis)
+
+        self.action_validate_data = QAction("Data Validation…", self)
+        self.action_validate_data.triggered.connect(self.show_data_validation_dialog)
+        analysis_menu.addAction(self.action_validate_data)
+
+        tools_menu.addSeparator()
+
+        # Visualization tools
         self.action_plot_settings = QAction("Plot Settings…", self)
         self.action_plot_settings.triggered.connect(self.open_unified_plot_settings_dialog)
         tools_menu.addAction(self.action_plot_settings)
@@ -3141,10 +3218,34 @@ class VasoAnalyzerApp(QMainWindow):
 
         tools_menu.addSeparator()
 
+        # Data management tools
+        self.action_map_excel = QAction("Map Events to Excel…", self)
+        self.action_map_excel.triggered.connect(self.open_excel_mapping_dialog)
+        tools_menu.addAction(self.action_map_excel)
+
         self.action_relink_assets = QAction("Relink Missing Files…", self)
         self.action_relink_assets.setEnabled(False)
         self.action_relink_assets.triggered.connect(self.show_relink_dialog)
         tools_menu.addAction(self.action_relink_assets)
+
+    def _build_window_menu(self, menubar):
+        window_menu = menubar.addMenu("&Window")
+
+        minimize_act = QAction("Minimize", self)
+        minimize_act.setShortcut("Ctrl+M" if sys.platform != "darwin" else "Meta+M")
+        minimize_act.triggered.connect(self.showMinimized)
+        window_menu.addAction(minimize_act)
+
+        zoom_act = QAction("Zoom", self)
+        zoom_act.triggered.connect(self.toggle_maximize)
+        window_menu.addAction(zoom_act)
+
+        window_menu.addSeparator()
+
+        if sys.platform == "darwin":
+            bring_all_act = QAction("Bring All to Front", self)
+            bring_all_act.triggered.connect(self.raise_all_windows)
+            window_menu.addAction(bring_all_act)
 
     def _build_help_menu(self, menubar):
         help_menu = menubar.addMenu("&Help")
@@ -3253,7 +3354,10 @@ class VasoAnalyzerApp(QMainWindow):
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        QMessageBox.information(self, "Preferences", "Preferences will be implemented soon(ish).")
+        from vasoanalyzer.ui.dialogs.preferences_dialog import PreferencesDialog
+
+        dialog = PreferencesDialog(self)
+        dialog.exec_()
 
     def _safe_remove_artist(self, artist):
         """Remove the Matplotlib artist if it is still attached to a canvas."""
@@ -4347,6 +4451,128 @@ class VasoAnalyzerApp(QMainWindow):
         if getattr(self, "_welcome_dialog", None) is dialog:
             self._welcome_dialog = None
 
+    # ========================= NEW MENU ACTIONS ======================================
+
+    # Edit Menu Actions
+    def copy_selected_events(self, checked: bool = False):
+        """Copy selected events to clipboard."""
+        QMessageBox.information(self, "Copy Events", "Copying selected events to clipboard.\n\nThis feature will copy event data in a format that can be pasted into other samples or projects.")
+
+    def paste_events(self, checked: bool = False):
+        """Paste events from clipboard."""
+        QMessageBox.information(self, "Paste Events", "Pasting events from clipboard.\n\nThis feature will insert copied events at the current time position or selection.")
+
+    def duplicate_selected_event(self, checked: bool = False):
+        """Duplicate the currently selected event."""
+        QMessageBox.information(self, "Duplicate Event", "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.")
+
+    def delete_selected_events(self, checked: bool = False):
+        """Delete selected events."""
+        QMessageBox.information(self, "Delete Events", "Deleting selected events.\n\nThis feature will remove the selected events from the current sample.")
+
+    def select_all_events(self, checked: bool = False):
+        """Select all events in the event table."""
+        QMessageBox.information(self, "Select All", "Selecting all events.\n\nThis feature will select all events in the event table for bulk operations.")
+
+    def find_event_dialog(self, checked: bool = False):
+        """Open find event dialog."""
+        QMessageBox.information(self, "Find Event", "Find events by label, time, or other criteria.\n\nThis feature will help you quickly locate specific events in large datasets.")
+
+    # View Menu Actions
+    def set_renderer(self, renderer: str):
+        """Switch between Matplotlib and PyQtGraph renderers."""
+        # Update checked state
+        is_matplotlib = renderer == "matplotlib"
+        self.action_use_matplotlib.setChecked(is_matplotlib)
+        self.action_use_pyqtgraph.setChecked(not is_matplotlib)
+
+        QMessageBox.information(
+            self,
+            "Renderer Selection",
+            f"Switching to {renderer.capitalize()} renderer.\n\n"
+            f"{'Matplotlib: Traditional renderer with extensive customization options.' if is_matplotlib else 'PyQtGraph: GPU-accelerated renderer for smooth interaction with large datasets.'}\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    def set_color_scheme(self, scheme: str):
+        """Set application color scheme."""
+        # Update checked state
+        self.action_theme_light.setChecked(scheme == "light")
+        self.action_theme_dark.setChecked(scheme == "dark")
+        self.action_theme_auto.setChecked(scheme == "auto")
+
+        QMessageBox.information(
+            self,
+            "Color Scheme",
+            f"Setting color scheme to {scheme.capitalize()}.\n\n"
+            "This will change the application's visual appearance to match your preference.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    # Tools Menu Actions
+    def show_statistics_dialog(self, checked: bool = False):
+        """Show statistical analysis dialog."""
+        QMessageBox.information(
+            self,
+            "Calculate Statistics",
+            "Statistical Analysis\n\n"
+            "This tool will calculate:\n"
+            "• Mean, median, std dev of diameter values\n"
+            "• Event frequency and duration statistics\n"
+            "• Baseline vs. response comparisons\n"
+            "• Custom time window analysis\n\n"
+            "Results can be exported to CSV or Excel.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    def show_batch_analysis_dialog(self, checked: bool = False):
+        """Show batch analysis dialog for processing multiple files."""
+        QMessageBox.information(
+            self,
+            "Batch Analysis",
+            "Batch Processing\n\n"
+            "This tool will allow you to:\n"
+            "• Process multiple .vaso or .vasopack projects at once\n"
+            "• Apply consistent analysis parameters across datasets\n"
+            "• Generate summary statistics for all samples\n"
+            "• Export combined results to Excel\n\n"
+            "Ideal for analyzing entire experiments with many samples.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    def show_data_validation_dialog(self, checked: bool = False):
+        """Show data validation dialog."""
+        QMessageBox.information(
+            self,
+            "Data Validation",
+            "Quality Control\n\n"
+            "This tool will check for:\n"
+            "• Missing or corrupted data points\n"
+            "• Unusual gaps in time series\n"
+            "• Statistical outliers\n"
+            "• Inconsistent sampling rates\n"
+            "• Frame synchronization issues\n\n"
+            "Helps ensure data quality before analysis.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    # Window Menu Actions
+    def toggle_maximize(self, checked: bool = False):
+        """Toggle window maximized state."""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def raise_all_windows(self, checked: bool = False):
+        """Bring all VasoAnalyzer windows to front (macOS)."""
+        app = QApplication.instance()
+        if app:
+            for window in app.topLevelWidgets():
+                if window.isWindow() and not window.isHidden():
+                    window.raise_()
+                    window.activateWindow()
+
     # [C] ========================= UI SETUP (initUI) ======================================
     def _initUI_legacy(self):
         from vasoanalyzer.ui.shell.init_ui import init_ui as _init_ui
@@ -5240,6 +5466,8 @@ QPushButton[isGhost="true"]:hover {{
         normalized = alias.get(normalized, normalized)
         if normalized not in {"vertical", "horizontal", "horizontal_outside"}:
             normalized = "vertical"
+        if self._plot_host_is_pyqtgraph():
+            normalized = "vertical"
         if normalized == self._event_label_mode:
             return
         self._apply_event_label_mode(normalized)
@@ -5274,6 +5502,11 @@ QPushButton[isGhost="true"]:hover {{
         self._sync_event_controls()
 
     def _sync_event_controls(self) -> None:
+        is_pyqtgraph = self._plot_host_is_pyqtgraph()
+        for action in (self.actEventLabelsHorizontal, self.actEventLabelsOutside):
+            if action is not None:
+                action.setEnabled(not is_pyqtgraph)
+
         if (
             self.actEventLines is not None
             and self.actEventLines.isChecked() != self._event_lines_visible
@@ -6333,6 +6566,19 @@ QPushButton[isGhost="true"]:hover {{
             with contextlib.suppress(Exception):
                 annot.remove()
 
+        # Check if we're using PyQtGraph renderer
+        plot_host = getattr(self, "plot_host", None)
+        is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+
+        # PyQtGraph doesn't support matplotlib-style annotations
+        # For now, disable hover annotations when using PyQtGraph
+        # TODO: Implement PyQtGraph-specific hover feedback using TextItem
+        if is_pyqtgraph:
+            self.hover_annotation_id = None
+            self.hover_annotation_od = None
+            return
+
+        # Matplotlib-specific hover annotations
         line_color = CURRENT_THEME.get("cursor_line", CURRENT_THEME.get("grid_color", "#6e7687"))
 
         def _make_annotation(target_ax):
@@ -6566,24 +6812,27 @@ QPushButton[isGhost="true"]:hover {{
             if self.ylim_full is None:
                 self.ylim_full = self.ax.get_ylim()
 
-            # Re-plot pinned points
+            # Re-plot pinned points (only for matplotlib renderer)
             self.pinned_points.clear()
-            for x, y in state.get("pinned_points", []):
-                marker = self.ax.plot(x, y, "ro", markersize=6)[0]
-                label = self.ax.annotate(
-                    f"{x:.2f} s\n{y:.1f} µm",
-                    xy=(x, y),
-                    xytext=(6, 6),
-                    textcoords="offset points",
-                    bbox=dict(
-                        boxstyle="round,pad=0.3",
-                        fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
-                        ec=CURRENT_THEME["hover_label_border"],
-                        lw=1,
-                    ),
-                    fontsize=8,
-                )
-                self.pinned_points.append((marker, label))
+            plot_host = getattr(self, "plot_host", None)
+            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            if not is_pyqtgraph:
+                for x, y in state.get("pinned_points", []):
+                    marker = self.ax.plot(x, y, "ro", markersize=6)[0]
+                    label = self.ax.annotate(
+                        f"{x:.2f} s\n{y:.1f} µm",
+                        xy=(x, y),
+                        xytext=(6, 6),
+                        textcoords="offset points",
+                        bbox=dict(
+                            boxstyle="round,pad=0.3",
+                            fc=css_rgba_to_mpl(CURRENT_THEME["hover_label_bg"]),
+                            ec=CURRENT_THEME["hover_label_border"],
+                            lw=1,
+                        ),
+                        fontsize=8,
+                    )
+                    self.pinned_points.append((marker, label))
 
             # Apply saved style LAST so it overrides any plot resets
             if plot_style:
@@ -6836,6 +7085,7 @@ QPushButton[isGhost="true"]:hover {{
 
         # Apply plot style (defaults on first load)
         self.apply_plot_style(self.get_current_plot_style(), persist=False)
+        self._apply_pending_pyqtgraph_track_state()
         self.canvas.draw_idle()
 
     def _refresh_plot_legend(self):
@@ -6919,6 +7169,97 @@ QPushButton[isGhost="true"]:hover {{
         finally:
             self._syncing_time_window = False
 
+    def _plot_host_is_pyqtgraph(self) -> bool:
+        plot_host = getattr(self, "plot_host", None)
+        return bool(plot_host is not None and plot_host.get_render_backend() == "pyqtgraph")
+
+    def _attach_plot_host_window_listener(self) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "add_time_window_listener"):
+            return
+        listener = getattr(self, "_plot_host_window_listener", None)
+        if listener is not None and hasattr(plot_host, "remove_time_window_listener"):
+            plot_host.remove_time_window_listener(listener)
+        self._plot_host_window_listener = self._on_plot_host_time_window_changed
+        plot_host.add_time_window_listener(self._plot_host_window_listener)
+
+    def _on_plot_host_time_window_changed(self, x0: float, x1: float) -> None:
+        if getattr(self, "_syncing_time_window", False):
+            return
+        self.update_scroll_slider()
+        self._invalidate_sample_state_cache()
+
+    def _collect_plot_view_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {}
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and plot_host.get_render_backend() == "pyqtgraph":
+            window = plot_host.current_window()
+            if window is not None:
+                state["axis_xlim"] = [float(window[0]), float(window[1])]
+            track_state: dict[str, Any] = {}
+            tracks = []
+            with contextlib.suppress(Exception):
+                tracks = plot_host.tracks()
+            for track in tracks or []:
+                view = getattr(track, "view", None)
+                if view is None:
+                    continue
+                try:
+                    ymin, ymax = view.get_ylim()
+                except Exception:
+                    continue
+                track_state[track.id] = {
+                    "ylim": [float(ymin), float(ymax)],
+                    "autoscale": view.is_autoscale_enabled(),
+                }
+            if track_state:
+                state["pyqtgraph_track_state"] = track_state
+            return state
+
+        if self.ax is not None:
+            state["axis_xlim"] = list(self.ax.get_xlim())
+            state["axis_ylim"] = list(self.ax.get_ylim())
+        if self.ax2 is not None:
+            state["axis_outer_ylim"] = list(self.ax2.get_ylim())
+        return state
+
+    def _apply_pyqtgraph_track_state(self, track_state: dict | None) -> None:
+        if not track_state:
+            self._pending_pyqtgraph_track_state = None
+            return
+        plot_host = getattr(self, "plot_host", None)
+        if (
+            plot_host is None
+            or plot_host.get_render_backend() != "pyqtgraph"
+            or not hasattr(plot_host, "track")
+        ):
+            self._pending_pyqtgraph_track_state = track_state
+            return
+
+        for track_id, payload in track_state.items():
+            track = plot_host.track(track_id)
+            if track is None:
+                continue
+            autoscale = bool(payload.get("autoscale"))
+            if autoscale:
+                track.view.set_autoscale_y(True)
+                with contextlib.suppress(Exception):
+                    track.autoscale()
+                continue
+            ylim = payload.get("ylim")
+            if isinstance(ylim, list | tuple) and len(ylim) == 2:
+                try:
+                    y0 = float(ylim[0])
+                    y1 = float(ylim[1])
+                except (TypeError, ValueError):
+                    continue
+                track.set_ylim(y0, y1)
+        self._pending_pyqtgraph_track_state = None
+
+    def _apply_pending_pyqtgraph_track_state(self) -> None:
+        if self._pending_pyqtgraph_track_state:
+            self._apply_pyqtgraph_track_state(self._pending_pyqtgraph_track_state)
+
     def _sync_time_window_from_axes(self) -> None:
         """Pull the current Matplotlib limits back into PlotHost."""
 
@@ -6975,6 +7316,7 @@ QPushButton[isGhost="true"]:hover {{
         xlim = ax.get_xlim()
         self._apply_time_window(xlim)
         self.update_scroll_slider()
+        self._invalidate_sample_state_cache()
 
     def scroll_plot(self):
         if self.trace_data is None:
@@ -7347,6 +7689,14 @@ QPushButton[isGhost="true"]:hover {{
         if event.button == 1 and not self.toolbar.mode:
             if self.trace_data is None:
                 return
+
+            # PyQtGraph doesn't support matplotlib-style pinned points yet
+            plot_host = getattr(self, "plot_host", None)
+            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            if is_pyqtgraph:
+                # TODO: Implement PyQtGraph-compatible pinned points
+                return
+
             t_arr = self.trace_data["Time (s)"].values
             idx = np.argmin(np.abs(t_arr - x))
 
@@ -7753,6 +8103,27 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
+    def open_pyqtgraph_settings_dialog(self):
+        """Open PyQtGraph plot settings dialog.
+
+        This dialog provides settings for PyQtGraph renderer without depending on
+        matplotlib Figure objects. It focuses on commonly used settings like:
+        - Track/channel appearance (colors, line width, y-axis)
+        - Event labels (mode, clustering, font)
+        - General plot settings (grid, background)
+        """
+        from vasoanalyzer.ui.dialogs.pyqtgraph_settings_dialog import (
+            PyQtGraphSettingsDialog,
+        )
+
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            QMessageBox.warning(self, "No Plot Available", "No PyQtGraph plot is currently loaded.")
+            return
+
+        dialog = PyQtGraphSettingsDialog(self, plot_host)
+        dialog.exec_()
+
     def open_figure_composer(
         self,
         checked: bool = False,
@@ -8088,6 +8459,29 @@ QPushButton[isGhost="true"]:hover {{
                         defaults.get("event_label_legend_loc", "upper right"),
                     )
                 )
+                if hasattr(plot_host, "set_axis_font"):
+                    plot_host.set_axis_font(
+                        family=effective_style.get(
+                            "axis_font_family",
+                            defaults.get("axis_font_family", "Arial"),
+                        ),
+                        size=effective_style.get(
+                            "axis_font_size",
+                            defaults.get("axis_font_size", 12),
+                        ),
+                    )
+                    plot_host.set_tick_font_size(
+                        effective_style.get(
+                            "tick_font_size",
+                            defaults.get("tick_font_size", 12),
+                        )
+                    )
+                    plot_host.set_default_line_width(
+                        effective_style.get(
+                            "line_width",
+                            defaults.get("line_width", 2.0),
+                        )
+                    )
                 plot_host.set_event_base_style(
                     font_family=effective_style.get(
                         "event_font_family",
@@ -8185,6 +8579,12 @@ QPushButton[isGhost="true"]:hover {{
         if ax is None:
             return style
         x_axis = self._x_axis_for_style() or ax
+
+        # Detect PyQtGraph backend - return default style since PyQtGraph styling
+        # is handled differently and doesn't use matplotlib artist properties
+        is_pyqtgraph = not hasattr(x_axis, "xaxis")
+        if is_pyqtgraph:
+            return style
 
         x_label = x_axis.xaxis.label
         y_label = ax.yaxis.label
@@ -8569,6 +8969,13 @@ QPushButton[isGhost="true"]:hover {{
             self._focus_event_row(row, source="context")
 
         elif index.isValid() and action == pin_action:
+            # PyQtGraph doesn't support matplotlib-style pinned points yet
+            plot_host = getattr(self, "plot_host", None)
+            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            if is_pyqtgraph:
+                # TODO: Implement PyQtGraph-compatible pinned points
+                return
+
             t = self.event_table_data[row][1]
             id_val = self.event_table_data[row][2]
             marker = self.ax.plot(t, id_val, "ro", markersize=6)[0]
@@ -8846,9 +9253,8 @@ QPushButton[isGhost="true"]:hover {{
         state = {
             "geometry": self.saveGeometry().data().hex(),
             "window_state": self.saveState().data().hex(),
-            "axis_xlim": list(self.ax.get_xlim()),
-            "axis_ylim": list(self.ax.get_ylim()),
         }
+        state.update(self._collect_plot_view_state())
         layout_state = self._serialize_plot_layout()
         if layout_state:
             state["plot_layout"] = layout_state
@@ -8886,20 +9292,18 @@ QPushButton[isGhost="true"]:hover {{
             prev = self.current_sample.ui_state.get("style_settings", {}) or {}
         x_axis = self._x_axis_for_style()
         state = {
-            "axis_xlim": list(self.ax.get_xlim()),
-            "axis_ylim": list(self.ax.get_ylim()),
             "table_fontsize": self.event_table.font().pointSize(),
             "event_table_data": list(self.event_table_data),
             "event_label_meta": copy.deepcopy(self.event_label_meta),
             "pins": [(p.get_xdata()[0], p.get_ydata()[0]) for p, _ in self.pinned_points],
             "plot_style": self.get_current_plot_style(),
             "grid_visible": self.grid_visible,
-            "inner_trace_visible": self.id_toggle_act.isChecked()
-            if self.id_toggle_act is not None
-            else True,
-            "outer_trace_visible": self.od_toggle_act.isChecked()
-            if self.od_toggle_act is not None
-            else False,
+            "inner_trace_visible": (
+                self.id_toggle_act.isChecked() if self.id_toggle_act is not None else True
+            ),
+            "outer_trace_visible": (
+                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False
+            ),
             "axis_settings": {
                 "x": {"label": x_axis.get_xlabel() if x_axis else ""},
                 "y": {"label": self.ax.get_ylabel()},
@@ -8910,11 +9314,11 @@ QPushButton[isGhost="true"]:hover {{
         # Always record whatever is in ui_state["style_settings"], even if empty
         state["style_settings"] = prev
         if self.ax2 is not None:
-            state["axis_outer_ylim"] = list(self.ax2.get_ylim())
             state["axis_settings"]["y_outer"] = {"label": self.ax2.get_ylabel()}
         layout_state = self._serialize_plot_layout()
         if layout_state:
             state["plot_layout"] = layout_state
+        state.update(self._collect_plot_view_state())
 
         # Cache the result
         self._cached_sample_state = state
@@ -8941,6 +9345,9 @@ QPushButton[isGhost="true"]:hover {{
         plot_layout = state.get("plot_layout")
         if plot_layout:
             self._pending_plot_layout = plot_layout
+        pyqtgraph_tracks = state.get("pyqtgraph_track_state")
+        if pyqtgraph_tracks:
+            self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
         # Restore trace visibility state
         if (
             "inner_trace_visible" in state
@@ -8971,6 +9378,9 @@ QPushButton[isGhost="true"]:hover {{
         layout = state.get("plot_layout")
         if layout:
             self._pending_plot_layout = layout
+        pyqtgraph_tracks = state.get("pyqtgraph_track_state")
+        if pyqtgraph_tracks:
+            self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
         if "event_table_data" in state:
             self.event_table_data = state["event_table_data"]
             meta_payload = state.get("event_label_meta")
@@ -9024,7 +9434,7 @@ QPushButton[isGhost="true"]:hover {{
             )
             outer_on = state.get(
                 "outer_trace_visible",
-                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False,
+                (self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False),
             )
             outer_supported = self._outer_channel_available()
             self._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)

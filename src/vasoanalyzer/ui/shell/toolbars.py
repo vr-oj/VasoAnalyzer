@@ -17,6 +17,10 @@ if TYPE_CHECKING:  # pragma: no cover
 def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     """Construct the Matplotlib navigation toolbar with VasoAnalyzer styling."""
 
+    # Detect backend type
+    plot_host = getattr(window, "plot_host", None)
+    is_pyqtgraph = plot_host is not None and hasattr(plot_host, 'get_render_backend') and plot_host.get_render_backend() == "pyqtgraph"
+
     toolbar = CustomToolbar(canvas, window, reset_callback=window.reset_to_full_view)
     toolbar.setIconSize(QSize(22, 22))
     toolbar.setContentsMargins(0, 0, 0, 0)
@@ -140,18 +144,20 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
 
     toolbar.addSeparator()
 
-    if window.actPan:
-        toolbar.addAction(window.actPan)
-    if window.actZoom:
-        toolbar.addAction(window.actZoom)
+    # PyQtGraph has built-in mouse interaction - pan/zoom buttons not needed
+    if not is_pyqtgraph:
+        if window.actPan:
+            toolbar.addAction(window.actPan)
+        if window.actZoom:
+            toolbar.addAction(window.actZoom)
 
-    window._nav_mode_actions = [act for act in (window.actPan, window.actZoom) if act is not None]
-    for action in window._nav_mode_actions:
-        with contextlib.suppress(Exception):
-            action.toggled.disconnect(window._handle_nav_mode_toggled)
-        action.toggled.connect(window._handle_nav_mode_toggled)
+        window._nav_mode_actions = [act for act in (window.actPan, window.actZoom) if act is not None]
+        for action in window._nav_mode_actions:
+            with contextlib.suppress(Exception):
+                action.toggled.disconnect(window._handle_nav_mode_toggled)
+            action.toggled.connect(window._handle_nav_mode_toggled)
 
-    toolbar.addSeparator()
+        toolbar.addSeparator()
 
     window.actGrid = QAction(QIcon(window.icon_path("Grid.svg")), "Grid", window)
     window.actGrid.setCheckable(True)
@@ -168,14 +174,24 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     toolbar.addAction(window.actGrid)
 
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
-    window.actStyle.setToolTip(
-        "<b>Plot Settings</b><br><br>"
-        "Open unified plot settings dialog.<br>"
-        "Customize canvas, layout, axes, style, and event labels."
-    )
-    with contextlib.suppress(Exception):
-        window.actStyle.triggered.disconnect()
-    window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
+    if is_pyqtgraph:
+        window.actStyle.setToolTip(
+            "<b>Plot Settings</b><br><br>"
+            "Open PyQtGraph plot settings dialog.<br>"
+            "Customize tracks, event labels, and appearance."
+        )
+        with contextlib.suppress(Exception):
+            window.actStyle.triggered.disconnect()
+        window.actStyle.triggered.connect(lambda: window.open_pyqtgraph_settings_dialog())
+    else:
+        window.actStyle.setToolTip(
+            "<b>Plot Settings</b><br><br>"
+            "Open unified plot settings dialog.<br>"
+            "Customize canvas, layout, axes, style, and event labels."
+        )
+        with contextlib.suppress(Exception):
+            window.actStyle.triggered.disconnect()
+        window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
     toolbar.addAction(window.actStyle)
 
     window.actEditPoints = QAction(
