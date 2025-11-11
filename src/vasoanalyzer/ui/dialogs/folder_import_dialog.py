@@ -174,6 +174,9 @@ class FolderImportDialog(QDialog):
 
     def _on_mode_changed(self) -> None:
         """Handle mode radio button changes."""
+        # Block signals during mode change to prevent triggering custom mode
+        self.table.blockSignals(True)
+
         if self.mode_new.isChecked():
             # Select only NEW and MODIFIED files
             for row, candidate in enumerate(self.candidates):
@@ -182,7 +185,7 @@ class FolderImportDialog(QDialog):
                 if item is None:
                     continue
                 item.setCheckState(Qt.Checked if should_check else Qt.Unchecked)
-                # Disable checkboxes when not in custom mode
+                # Keep checkbox visible but non-editable in preset modes
                 item.setFlags(Qt.ItemIsEnabled)
 
         elif self.mode_all.isChecked():
@@ -193,6 +196,7 @@ class FolderImportDialog(QDialog):
                 if item is None:
                     continue
                 item.setCheckState(Qt.Checked if should_check else Qt.Unchecked)
+                # Keep checkbox visible but non-editable in preset modes
                 item.setFlags(Qt.ItemIsEnabled)
 
         elif self.mode_custom.isChecked():
@@ -202,6 +206,9 @@ class FolderImportDialog(QDialog):
                 if item is None:
                     continue
                 item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+
+        # Unblock signals after mode change is complete
+        self.table.blockSignals(False)
 
         self._update_summary()
         self._update_button_states()
