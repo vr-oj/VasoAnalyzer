@@ -966,8 +966,8 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         path_obj = Path(path).expanduser()
-        if path_obj.suffix.lower() != ".vaso":
-            path_obj = path_obj.with_suffix(".vaso")
+        if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
+            path_obj = path_obj.with_suffix(".vasopack")
         normalised_path = str(path_obj.resolve(strict=False))
 
         # Check if user is trying to save to cloud storage
@@ -980,7 +980,7 @@ class VasoAnalyzerApp(QMainWindow):
                 "Cloud Storage - Known Limitation",
                 f"<b>You are creating a project in {cloud_service}</b>\n\n"
                 f"<b>Technical Limitation:</b>\n"
-                f"SQLite databases (like .vaso files) can become corrupted when cloud sync services "
+                f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
                 f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
                 f"database writes, breaking integrity.\n\n"
                 f"<b>Mitigations in place:</b>\n"
@@ -988,8 +988,8 @@ class VasoAnalyzerApp(QMainWindow):
                 f"• Automatic recovery attempts if corruption occurs\n"
                 f"• Risk is highest during active editing and autosaves\n\n"
                 f"<b>Best practice:</b>\n"
-                f"Store active projects locally (~/Documents, ~/Desktop), then export .vasopack "
-                f"bundles to cloud storage for backup and sharing.\n\n"
+                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue creating project in {cloud_service}?</b>",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
@@ -1275,12 +1275,12 @@ class VasoAnalyzerApp(QMainWindow):
             self,
             "Save Project As",
             self.current_project.path or "",
-            "Vaso Files (*.vaso)",
+            "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)",
         )
         if path:
             path_obj = Path(path).expanduser()
-            if path_obj.suffix.lower() != ".vaso":
-                path_obj = path_obj.with_suffix(".vaso")
+            if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
+                path_obj = path_obj.with_suffix(".vasopack")
             path = str(path_obj.resolve(strict=False))
 
             # Check if user is trying to save to cloud storage
@@ -1293,7 +1293,7 @@ class VasoAnalyzerApp(QMainWindow):
                     "Cloud Storage - Known Limitation",
                     f"<b>You are saving to {cloud_service}</b>\n\n"
                     f"<b>Technical Limitation:</b>\n"
-                    f"SQLite databases (like .vaso files) can become corrupted when cloud sync services "
+                    f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
                     f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
                     f"database writes, breaking integrity.\n\n"
                     f"<b>Mitigations in place:</b>\n"
@@ -1301,8 +1301,8 @@ class VasoAnalyzerApp(QMainWindow):
                     f"• Automatic recovery attempts if corruption occurs\n"
                     f"• Risk is highest during active editing and autosaves\n\n"
                     f"<b>Best practice:</b>\n"
-                    f"Store active projects locally (~/Documents, ~/Desktop), then export .vasopack "
-                    f"bundles to cloud storage for backup and sharing.\n\n"
+                    f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                    f"files to cloud storage for backup and sharing.\n\n"
                     f"<b>Continue saving to {cloud_service}?</b>",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No,
