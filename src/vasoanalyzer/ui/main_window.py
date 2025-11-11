@@ -3255,7 +3255,10 @@ class VasoAnalyzerApp(QMainWindow):
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        QMessageBox.information(self, "Preferences", "Preferences will be implemented soon(ish).")
+        from vasoanalyzer.ui.dialogs.preferences_dialog import PreferencesDialog
+
+        dialog = PreferencesDialog(self)
+        dialog.exec_()
 
     def _safe_remove_artist(self, artist):
         """Remove the Matplotlib artist if it is still attached to a canvas."""
