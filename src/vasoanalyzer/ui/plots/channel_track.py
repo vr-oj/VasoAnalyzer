@@ -21,7 +21,7 @@ class ChannelTrackSpec:
     """Description of a plotted channel."""
 
     track_id: str
-    component: str  # "inner", "outer", or "dual"
+    component: str  # "inner", "outer", "dual", "avg_pressure", or "set_pressure"
     label: str | None = None
     height_ratio: float = 1.0
 
@@ -38,7 +38,7 @@ class ChannelTrack:
         self.spec = spec
         self.ax = ax
         self.canvas = canvas
-        mode = spec.component if spec.component in {"inner", "outer", "dual"} else "inner"
+        mode = spec.component if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"} else "inner"
         self.view = TraceView(ax, canvas, mode=mode, y_label=spec.label)
         self._model: TraceModel | None = None
         self._height_ratio = max(spec.height_ratio, 0.05)
@@ -74,16 +74,34 @@ class ChannelTrack:
         self._sticky_ylim = None
         self._last_time_span = None
         self.ax.set_autoscaley_on(True)
+
+        # Check if component data is available, hide if not
         if self.spec.component == "outer" and model.outer_full is None:
             self.set_visible(False)
             return
+        if self.spec.component == "avg_pressure" and model.avg_pressure_full is None:
+            self.set_visible(False)
+            return
+        if self.spec.component == "set_pressure" and model.set_pressure_full is None:
+            self.set_visible(False)
+            return
+
         self.view.set_model(model)
+
+        # Set appropriate label based on component
         if self.spec.component == "outer":
             label = self.spec.label or "Outer Diameter (µm)"
             self.ax.set_ylabel(label)
         elif self.spec.component == "inner":
             label = self.spec.label or "Inner Diameter (µm)"
             self.ax.set_ylabel(label)
+        elif self.spec.component == "avg_pressure":
+            label = self.spec.label or "Avg Pressure (mmHg)"
+            self.ax.set_ylabel(label)
+        elif self.spec.component == "set_pressure":
+            label = self.spec.label or "Set Pressure (mmHg)"
+            self.ax.set_ylabel(label)
+
         if self._events is not None:
             self.view.set_events(self._events, self._event_colors, self._event_labels)
 

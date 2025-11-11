@@ -291,6 +291,12 @@ class TraceView:
         if self._mode == "outer":
             series_min = window.outer_min
             series_max = window.outer_max
+        elif self._mode == "avg_pressure":
+            series_min = window.avg_pressure_min
+            series_max = window.avg_pressure_max
+        elif self._mode == "set_pressure":
+            series_min = window.set_pressure_min
+            series_max = window.set_pressure_max
         elif self._mode == "dual":
             parts = []
             if window.inner_min is not None and window.inner_max is not None:
