@@ -56,13 +56,19 @@ class PyQtGraphLineCompat:
             return 1.0
         return pen.widthF()
 
-    def set_color(self, color: str | tuple) -> None:
-        """Set line color (matplotlib compatibility)."""
+    def set_color(self, color: str | tuple | QColor) -> None:
+        """Set line color (matplotlib compatibility).
+
+        Args:
+            color: Color as hex string, RGB/RGBA tuple, or QColor object
+        """
         if self._item is not None:
             pen = self._item.opts.get('pen', pg.mkPen())
             if pen is not None:
                 pen = pg.mkPen(pen)
-                if isinstance(color, str):
+                if isinstance(color, QColor):
+                    pen.setColor(color)
+                elif isinstance(color, str):
                     pen.setColor(QColor(color))
                 else:
                     # Assume RGB or RGBA tuple
@@ -82,29 +88,35 @@ class PyQtGraphLineCompat:
         color = pen.color()
         return color.name()
 
-    def set_linestyle(self, style: str) -> None:
+    def set_linestyle(self, style: str | int) -> None:
         """Set line style (matplotlib compatibility).
 
         Args:
-            style: Line style ('-', '--', '-.', ':', 'solid', 'dashed', 'dashdot', 'dotted')
+            style: Line style as string ('-', '--', '-.', ':', 'solid', 'dashed',
+                   'dashdot', 'dotted') or Qt.PenStyle enum value
         """
         if self._item is not None:
             pen = self._item.opts.get('pen', pg.mkPen())
             if pen is not None:
                 pen = pg.mkPen(pen)
-                # Map matplotlib styles to Qt styles
-                style_map = {
-                    '-': pg.QtCore.Qt.SolidLine,
-                    'solid': pg.QtCore.Qt.SolidLine,
-                    '--': pg.QtCore.Qt.DashLine,
-                    'dashed': pg.QtCore.Qt.DashLine,
-                    '-.': pg.QtCore.Qt.DashDotLine,
-                    'dashdot': pg.QtCore.Qt.DashDotLine,
-                    ':': pg.QtCore.Qt.DotLine,
-                    'dotted': pg.QtCore.Qt.DotLine,
-                }
-                qt_style = style_map.get(style, pg.QtCore.Qt.SolidLine)
-                pen.setStyle(qt_style)
+
+                # If already a Qt enum value, use it directly
+                if isinstance(style, int):
+                    pen.setStyle(style)
+                else:
+                    # Map matplotlib styles to Qt styles
+                    style_map = {
+                        '-': pg.QtCore.Qt.SolidLine,
+                        'solid': pg.QtCore.Qt.SolidLine,
+                        '--': pg.QtCore.Qt.DashLine,
+                        'dashed': pg.QtCore.Qt.DashLine,
+                        '-.': pg.QtCore.Qt.DashDotLine,
+                        'dashdot': pg.QtCore.Qt.DashDotLine,
+                        ':': pg.QtCore.Qt.DotLine,
+                        'dotted': pg.QtCore.Qt.DotLine,
+                    }
+                    qt_style = style_map.get(style, pg.QtCore.Qt.SolidLine)
+                    pen.setStyle(qt_style)
                 self._item.setPen(pen)
 
     def get_linestyle(self) -> str:

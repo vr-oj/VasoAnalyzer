@@ -623,3 +623,29 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Trigger redraw if we have a current window
         if self._current_window is not None:
             self._apply_window(self._current_window)
+
+    def enable_hover_tooltip(self, enabled: bool, precision: int = 3) -> None:
+        """Enable/disable hover tooltips showing data point values.
+
+        Args:
+            enabled: Whether to show tooltips on hover
+            precision: Number of decimal places to show in values
+        """
+        # This is a placeholder for hover tooltip functionality
+        # Full implementation would involve:
+        # 1. Creating a pg.TextItem for the tooltip
+        # 2. Connecting to plot's sigMouseMoved signal
+        # 3. Finding nearest data point to cursor
+        # 4. Displaying formatted value in tooltip
+        # 5. Positioning tooltip near cursor
+        #
+        # For now, we'll store the settings for future implementation
+        self._hover_tooltip_enabled = enabled
+        self._hover_tooltip_precision = precision
+
+        # TODO: Implement actual hover tooltip rendering
+        # This would require:
+        # - Mouse tracking
+        # - Data point lookup (efficient nearest-neighbor search)
+        # - Tooltip positioning and styling
+        pass
