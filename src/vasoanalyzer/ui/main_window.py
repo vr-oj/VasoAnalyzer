@@ -4223,7 +4223,10 @@ class VasoAnalyzerApp(QMainWindow):
             print(f"  - {spec.track_id}: component={spec.component}, label={spec.label}")
 
         self._unbind_primary_axis_callbacks()
+        print(f"DEBUG: plot_host type = {type(self.plot_host).__name__}")
+        print(f"DEBUG: About to call plot_host.ensure_channels() with {len(specs)} specs")
         self.plot_host.ensure_channels(specs)
+        print(f"DEBUG: Returned from plot_host.ensure_channels()")
 
         inner_track = self.plot_host.track("inner") if inner_on else None
         outer_track = self.plot_host.track("outer") if outer_on else None
