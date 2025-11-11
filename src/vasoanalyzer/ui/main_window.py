@@ -8192,6 +8192,29 @@ QPushButton[isGhost="true"]:hover {{
                         defaults.get("event_label_legend_loc", "upper right"),
                     )
                 )
+                if hasattr(plot_host, "set_axis_font"):
+                    plot_host.set_axis_font(
+                        family=effective_style.get(
+                            "axis_font_family",
+                            defaults.get("axis_font_family", "Arial"),
+                        ),
+                        size=effective_style.get(
+                            "axis_font_size",
+                            defaults.get("axis_font_size", 12),
+                        ),
+                    )
+                    plot_host.set_tick_font_size(
+                        effective_style.get(
+                            "tick_font_size",
+                            defaults.get("tick_font_size", 12),
+                        )
+                    )
+                    plot_host.set_default_line_width(
+                        effective_style.get(
+                            "line_width",
+                            defaults.get("line_width", 2.0),
+                        )
+                    )
                 plot_host.set_event_base_style(
                     font_family=effective_style.get(
                         "event_font_family",

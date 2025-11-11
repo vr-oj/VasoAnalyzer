@@ -9,7 +9,8 @@ from typing import Any
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QCursor
+from PyQt5.QtWidgets import QToolTip
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -85,6 +86,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Apply theme
         self._apply_theme()
 
+        # Hover tooltip state
+        self._hover_tooltip_enabled: bool = False
+        self._hover_tooltip_precision: int = 3
+        self._hover_connection_active: bool = False
+        self._hover_last_text: str = ""
+        self.enable_hover_tooltip(True, precision=3)
+
     def _create_plot_items(self) -> None:
         """Create PyQtGraph plot items for traces and events."""
         # Inner diameter trace (primary)
@@ -117,8 +125,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             ax.setPen(text_color)
             ax.setTextPen(text_color)
 
-        # Grid color
-        grid_color = CURRENT_THEME.get("grid_color", "#E0E0E0")
+        # Grid visibility
         self._plot_item.showGrid(x=True, y=True, alpha=0.3)
 
     def get_widget(self) -> pg.PlotWidget:
@@ -229,6 +236,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if pixel_width is None:
             view_rect = self._plot_item.viewRect()
             pixel_width = max(int(view_rect.width()), 1)
+        else:
+            pixel_width = max(int(pixel_width), 1)
 
         # Get appropriate LOD level
         level_idx = self.model.best_level_for_window(x0, x1, pixel_width)
@@ -241,10 +250,15 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Update visible event markers (hide events outside window)
         self._update_event_visibility(x0, x1)
 
+        if self._event_labeler and self._event_labels_visible and self._event_entries:
+            xlim = (x0, x1)
+            self._event_labeler.render(self._event_entries, xlim, pixel_width)
+
     def _apply_window(self, window: TraceWindow) -> None:
         """Apply windowed data to plot curves."""
         time = window.time
         if time.size == 0:
+            self._hide_hover_tooltip()
             if self.inner_curve is not None:
                 self.inner_curve.setData([], [])
             if self.inner_band is not None and self.inner_band.scene() is not None:
@@ -581,7 +595,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             # Render labels if we have events
             if self._event_entries:
                 xlim = self.get_xlim()
-                pixel_width = max(int(self._plot_widget.width()), 400)
+                pixel_width = max(int(self._plot_widget.width()), 1)
                 self._event_labeler.render(self._event_entries, xlim, pixel_width)
         else:
             # Hide labels
@@ -592,7 +606,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Update event label positions after view change."""
         if self._event_labeler and self._event_labels_visible and self._event_entries:
             xlim = self.get_xlim()
-            self._event_labeler.update_positions(xlim)
+            pixel_width = max(int(self._plot_widget.width()), 1)
+            self._event_labeler.render(self._event_entries, xlim, pixel_width)
 
     def set_uncertainty_bands_visible(self, visible: bool) -> None:
         """Show/hide min/max uncertainty bands.
@@ -613,21 +628,104 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             enabled: Whether to show tooltips on hover
             precision: Number of decimal places to show in values
         """
-        # This is a placeholder for hover tooltip functionality
-        # Full implementation would involve:
-        # 1. Creating a pg.TextItem for the tooltip
-        # 2. Connecting to plot's sigMouseMoved signal
-        # 3. Finding nearest data point to cursor
-        # 4. Displaying formatted value in tooltip
-        # 5. Positioning tooltip near cursor
-        #
-        # For now, we'll store the settings for future implementation
-        self._hover_tooltip_enabled = enabled
-        self._hover_tooltip_precision = precision
+        self._hover_tooltip_enabled = bool(enabled)
+        self._hover_tooltip_precision = max(0, int(precision))
+        self._ensure_hover_tracking()
 
-        # TODO: Implement actual hover tooltip rendering
-        # This would require:
-        # - Mouse tracking
-        # - Data point lookup (efficient nearest-neighbor search)
-        # - Tooltip positioning and styling
-        pass
+    def hover_tooltip_enabled(self) -> bool:
+        return self._hover_tooltip_enabled
+
+    def hover_tooltip_precision(self) -> int:
+        return self._hover_tooltip_precision
+
+    def _ensure_hover_tracking(self) -> None:
+        scene = self._plot_widget.scene()
+        if scene is None:
+            return
+        if self._hover_tooltip_enabled and not self._hover_connection_active:
+            scene.sigMouseMoved.connect(self._handle_mouse_moved)
+            self._hover_connection_active = True
+        elif not self._hover_tooltip_enabled and self._hover_connection_active:
+            with contextlib.suppress(TypeError):
+                scene.sigMouseMoved.disconnect(self._handle_mouse_moved)
+            self._hover_connection_active = False
+            self._hide_hover_tooltip()
+
+    def _handle_mouse_moved(self, point) -> None:
+        if not self._hover_tooltip_enabled:
+            return
+        if self._plot_item.scene() is None:
+            return
+        if not self._plot_item.sceneBoundingRect().contains(point):
+            self._hide_hover_tooltip()
+            return
+        view_box = self._plot_item.vb
+        if view_box is None:
+            return
+        mouse_point = view_box.mapSceneToView(point)
+        x_value = float(mouse_point.x())
+        window = self._current_window
+        if window is None or window.time.size == 0:
+            self._hide_hover_tooltip()
+            return
+        idx = self._index_at_time(window.time, x_value)
+        if idx is None:
+            self._hide_hover_tooltip()
+            return
+        text = self._build_hover_text(window, idx)
+        if text:
+            self._show_hover_tooltip(text)
+        else:
+            self._hide_hover_tooltip()
+
+    def _index_at_time(self, samples: np.ndarray, target: float) -> int | None:
+        sample_count = int(samples.size)
+        if sample_count == 0 or np.isnan(target):
+            return None
+        idx = int(np.searchsorted(samples, target))
+        if idx <= 0:
+            return 0
+        if idx >= sample_count:
+            return sample_count - 1
+        left = idx - 1
+        if abs(target - samples[left]) <= abs(samples[idx] - target):
+            return left
+        return idx
+
+    def _build_hover_text(self, window: TraceWindow, idx: int) -> str:
+        precision = max(0, int(self._hover_tooltip_precision))
+        fmt = f"{{:.{precision}f}}"
+        try:
+            time_val = fmt.format(float(window.time[idx]))
+        except Exception:
+            return ""
+        lines = [f"t: {time_val} s"]
+        try:
+            inner_val = fmt.format(float(window.inner_mean[idx]))
+            lines.append(f"Inner: {inner_val} µm")
+        except Exception:
+            pass
+
+        if (
+            self._mode in {"outer", "dual"}
+            and window.outer_mean is not None
+            and window.outer_mean.size > idx
+        ):
+            with contextlib.suppress(Exception):
+                outer_val = fmt.format(float(window.outer_mean[idx]))
+                label = "Outer" if self._mode != "inner" else "Outer"
+                lines.append(f"{label}: {outer_val} µm")
+        return "\n".join(lines)
+
+    def _show_hover_tooltip(self, text: str) -> None:
+        if not text:
+            self._hide_hover_tooltip()
+            return
+        if text == self._hover_last_text:
+            return
+        self._hover_last_text = text
+        QToolTip.showText(QCursor.pos(), text)
+
+    def _hide_hover_tooltip(self) -> None:
+        self._hover_last_text = ""
+        QToolTip.hideText()

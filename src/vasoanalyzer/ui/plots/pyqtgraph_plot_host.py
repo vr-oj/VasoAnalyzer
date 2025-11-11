@@ -5,13 +5,13 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, cast
 
-import pyqtgraph as pg
-from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
+from vasoanalyzer.ui.event_labels_v3 import LayoutOptionsV3
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
@@ -69,6 +69,7 @@ class PyQtGraphPlotHost:
         self._event_times: list[float] = []
         self._event_colors: list[str] | None = None
         self._event_labels: list[str] = []
+        self._event_label_meta: list[dict[str, Any]] | None = None
 
         # Interaction state
         self._pan_active: bool = False
@@ -82,6 +83,19 @@ class PyQtGraphPlotHost:
         # Overlays
         self._time_cursor_overlay = PyQtGraphTimeCursorOverlay()
         self._event_highlight_overlay = PyQtGraphEventHighlightOverlay()
+        self._event_label_options = LayoutOptionsV3()
+        self._event_labels_enabled = True
+        self._auto_event_label_mode = True
+        self._label_density_thresholds: dict[str, float | None] = {"compact": None, "belt": None}
+        self._hover_tooltip_enabled = True
+        self._hover_tooltip_precision = 3
+        self._tooltip_proximity = 10.0
+        self._axis_font_family: str = "Arial"
+        self._axis_font_size: float = 20.0
+        self._tick_font_size: float = 16.0
+        self._default_line_width: float = 4.0
+        self._compact_legend_enabled: bool = False
+        self._compact_legend_location: str = "upper right"
         self._time_window_listeners: list[Callable[[float, float], None]] = []
 
     def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
@@ -152,10 +166,16 @@ class PyQtGraphPlotHost:
 
             # Apply events if already set
             if self._event_times:
-                track.set_events(self._event_times, self._event_colors, self._event_labels)
+                track.set_events(
+                    self._event_times,
+                    self._event_colors,
+                    self._event_labels,
+                    label_meta=self._event_label_meta,
+                )
 
             # Connect signals for synchronized interactions
             self._connect_track_signals(track)
+            self._configure_track_defaults(track)
 
         # Sync overlays with new tracks
         plot_items = [track.view.get_widget().getPlotItem() for track in self._tracks.values()]
@@ -173,6 +193,123 @@ class PyQtGraphPlotHost:
 
         # Connect view range changed signal
         plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+
+    def _configure_track_defaults(self, track: PyQtGraphChannelTrack) -> None:
+        track.view.enable_hover_tooltip(
+            self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
+        )
+        track.view.enable_event_labels(
+            self._event_labels_enabled,
+            options=self._event_label_options if self._event_labels_enabled else None,
+        )
+        if track.primary_line:
+            track.set_line_width(self._default_line_width)
+        self._apply_axis_font_to_track(track)
+        self._apply_axis_font_to_track(track)
+
+    def _apply_event_label_options(self) -> None:
+        if not self._tracks:
+            return
+        ordered_tracks = [
+            self._tracks[spec.track_id]
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks
+        ] or list(self._tracks.values())
+        for idx, track in enumerate(ordered_tracks):
+            enable = self._event_labels_enabled and idx == 0
+            track.view.enable_event_labels(
+                enable,
+                options=self._event_label_options if enable else None,
+            )
+
+    def _apply_tooltip_settings(self) -> None:
+        for track in self._tracks.values():
+            track.view.enable_hover_tooltip(
+                self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
+            )
+
+    def set_axis_font(self, *, family: str | None = None, size: float | None = None) -> None:
+        changed = False
+        if family and family != self._axis_font_family:
+            self._axis_font_family = str(family)
+            changed = True
+        if size is not None and float(size) != self._axis_font_size:
+            self._axis_font_size = float(size)
+            changed = True
+        if changed:
+            for track in self._tracks.values():
+                self._apply_axis_font_to_track(track)
+
+    def axis_font(self) -> tuple[str, float]:
+        return self._axis_font_family, self._axis_font_size
+
+    def set_tick_font_size(self, size: float) -> None:
+        value = float(size)
+        if value == self._tick_font_size:
+            return
+        self._tick_font_size = value
+        for track in self._tracks.values():
+            self._apply_axis_font_to_track(track)
+
+    def tick_font_size(self) -> float:
+        return self._tick_font_size
+
+    def set_default_line_width(self, width: float) -> None:
+        value = float(width)
+        if value == self._default_line_width:
+            return
+        self._default_line_width = value
+        for track in self._tracks.values():
+            track.set_line_width(self._default_line_width)
+
+    def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
+        plot_item = track.view.get_widget().getPlotItem()
+        label_font = QFont(self._axis_font_family, int(round(self._axis_font_size)))
+        tick_font = QFont(self._axis_font_family, int(round(self._tick_font_size)))
+
+        left_axis = plot_item.getAxis("left")
+        left_axis.label.setFont(label_font)
+        with contextlib.suppress(AttributeError):
+            left_axis.setTickFont(tick_font)
+
+        is_bottom = not self._channel_specs or track.id == self._channel_specs[-1].track_id
+        if is_bottom:
+            bottom_axis = plot_item.getAxis("bottom")
+            bottom_axis.label.setFont(label_font)
+            with contextlib.suppress(AttributeError):
+                bottom_axis.setTickFont(tick_font)
+
+    def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:
+        if color is None:
+            return None
+        if (
+            isinstance(color, tuple)
+            and 3 <= len(color) <= 4
+            or isinstance(color, list)
+            and 3 <= len(color) <= 4
+        ):
+            comps = list(color)
+        elif isinstance(color, str):
+            qcolor = QColor(color)
+            if not qcolor.isValid():
+                return None
+            comps = [qcolor.redF(), qcolor.greenF(), qcolor.blueF(), qcolor.alphaF()]
+        else:
+            return None
+        if len(comps) == 3:
+            comps.append(1.0)
+        try:
+            normalized: list[float] = []
+            for value in comps[:4]:
+                val = float(value)
+                normalized_val = (
+                    max(0.0, min(255.0, val)) / 255.0 if val > 1.0 else max(0.0, min(1.0, val))
+                )
+                normalized.append(normalized_val)
+            normalized_tuple = cast(tuple[float, float, float, float], tuple(normalized))
+            return normalized_tuple
+        except Exception:
+            return None
 
     def add_time_window_listener(self, callback: Callable[[float, float], None]) -> None:
         """Register a callback for time window changes."""
@@ -263,10 +400,11 @@ class PyQtGraphPlotHost:
         self._event_times = list(times)
         self._event_colors = None if colors is None else list(colors)
         self._event_labels = [] if labels is None else list(labels)
-        # Note: label_meta is accepted for compatibility but not used in PyQtGraph renderer
+        self._event_label_meta = None if label_meta is None else list(label_meta)
 
         for track in self._tracks.values():
-            track.set_events(times, colors, labels, label_meta=label_meta)
+            track.set_events(times, colors, labels, label_meta=self._event_label_meta)
+        self._apply_event_label_options()
 
     def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:
         """Get track by ID."""
@@ -432,81 +570,6 @@ class PyQtGraphPlotHost:
     # Event label configuration methods (matplotlib PlotHost compatibility)
     # These are stubs for now - PyQtGraph uses different event labeling system
 
-    def set_event_labels_v3_enabled(self, enabled: bool) -> None:
-        """Enable/disable v3 event labels (compatibility stub)."""
-        pass
-
-    def set_event_label_mode(self, mode: str) -> None:
-        """Set event label mode (compatibility stub)."""
-        pass
-
-    def set_max_labels_per_cluster(self, max_labels: int) -> None:
-        """Set max labels per cluster (compatibility stub)."""
-        pass
-
-    def set_cluster_style_policy(self, policy: str) -> None:
-        """Set cluster style policy (compatibility stub)."""
-        pass
-
-    def set_label_lanes(self, lanes: int) -> None:
-        """Set number of label lanes (compatibility stub)."""
-        pass
-
-    def set_belt_baseline(self, baseline: str) -> None:
-        """Set belt baseline (compatibility stub)."""
-        pass
-
-    def set_event_label_span_siblings(self, span: bool) -> None:
-        """Set event label span siblings (compatibility stub)."""
-        pass
-
-    def set_auto_event_label_mode(self, auto_mode: bool) -> None:
-        """Set auto event label mode (compatibility stub)."""
-        pass
-
-    def set_label_density_thresholds(
-        self, *, compact: float | None = None, belt: float | None = None
-    ) -> None:
-        """Set label density thresholds (matplotlib PlotHost compatibility).
-
-        Args:
-            compact: Compact threshold (0.0-1.0)
-            belt: Belt threshold (0.0-1.0)
-
-        Note:
-            PyQtGraph uses its own event labeling system. This method
-            accepts parameters for compatibility but does not apply them.
-        """
-        pass
-
-    def set_label_outline_enabled(self, enabled: bool) -> None:
-        """Enable/disable label outline (compatibility stub)."""
-        pass
-
-    def set_label_outline(self, width: float, color: str) -> None:
-        """Set label outline (compatibility stub)."""
-        pass
-
-    def set_label_tooltips_enabled(self, enabled: bool) -> None:
-        """Enable/disable label tooltips (compatibility stub)."""
-        pass
-
-    def set_tooltip_proximity(self, proximity: float) -> None:
-        """Set tooltip proximity (compatibility stub)."""
-        pass
-
-    def set_compact_legend_enabled(self, enabled: bool) -> None:
-        """Enable/disable compact legend (compatibility stub)."""
-        pass
-
-    def set_compact_legend_location(self, location: str) -> None:
-        """Set compact legend location (compatibility stub)."""
-        pass
-
-    def set_event_base_style(self, **kwargs) -> None:
-        """Set event base style (compatibility stub)."""
-        pass
-
     def set_event_highlight_alpha(self, alpha: float) -> None:
         """Set event highlight alpha transparency."""
         alpha = max(0.0, min(float(alpha), 1.0))
@@ -555,14 +618,104 @@ class PyQtGraphPlotHost:
         pass
 
     def set_event_labels_visible(self, visible: bool) -> None:
-        """Set event labels visibility.
+        """Set event labels visibility."""
+        self._event_labels_enabled = bool(visible)
+        self._apply_event_label_options()
 
-        Args:
-            visible: Whether to show event labels
-        """
-        # Propagate visibility to all tracks
-        for track in self._tracks.values():
-            track.view.enable_event_labels(visible)
+    def set_event_labels_v3_enabled(self, enabled: bool) -> None:
+        self.set_event_labels_visible(enabled)
+
+    def set_event_label_mode(self, mode: str) -> None:
+        normalized = str(mode or "").lower()
+        mapping = {
+            "vertical": "vertical",
+            "horizontal": "h_inside",
+            "horizontal_outside": "h_belt",
+            "h_inside": "h_inside",
+            "h_belt": "h_belt",
+        }
+        self._event_label_options.mode = mapping.get(normalized, "vertical")
+        self._apply_event_label_options()
+
+    def set_max_labels_per_cluster(self, max_labels: int) -> None:
+        self._event_label_options.max_labels_per_cluster = max(1, int(max_labels))
+        self._apply_event_label_options()
+
+    def set_cluster_style_policy(self, policy: str) -> None:
+        normalized = str(policy or "").lower()
+        valid = {"first", "most_common", "priority", "blend_color"}
+        if normalized not in valid:
+            normalized = "first"
+        self._event_label_options.style_policy = normalized
+        self._apply_event_label_options()
+
+    def set_label_lanes(self, lanes: int) -> None:
+        self._event_label_options.lanes = max(1, int(lanes))
+        self._apply_event_label_options()
+
+    def set_belt_baseline(self, baseline: bool) -> None:
+        self._event_label_options.belt_baseline = bool(baseline)
+        self._apply_event_label_options()
+
+    def set_event_label_span_siblings(self, span: bool) -> None:
+        self._event_label_options.span_siblings = bool(span)
+        self._apply_event_label_options()
+
+    def set_event_label_gap(self, pixels: int) -> None:
+        self._event_label_options.min_px = max(1, int(pixels))
+        self._apply_event_label_options()
+
+    def set_auto_event_label_mode(self, auto_mode: bool) -> None:
+        self._auto_event_label_mode = bool(auto_mode)
+
+    def set_label_density_thresholds(
+        self, *, compact: float | None = None, belt: float | None = None
+    ) -> None:
+        self._label_density_thresholds = {"compact": compact, "belt": belt}
+
+    def set_label_outline_enabled(self, enabled: bool) -> None:
+        self._event_label_options.outline_enabled = bool(enabled)
+        self._apply_event_label_options()
+
+    def set_label_outline(self, width: float, color: Any) -> None:
+        self._event_label_options.outline_width = max(0.0, float(width))
+        self._event_label_options.outline_color = self._normalize_color_tuple(color)
+        self._apply_event_label_options()
+
+    def set_label_tooltips_enabled(self, enabled: bool) -> None:
+        self._hover_tooltip_enabled = bool(enabled)
+        self._apply_tooltip_settings()
+
+    def set_tooltip_proximity(self, proximity: float) -> None:
+        self._tooltip_proximity = float(proximity)
+        # Placeholder - PyQtGraph tooltips currently ignore proximity
+
+    def set_tooltip_precision(self, precision: int) -> None:
+        self._hover_tooltip_precision = max(0, int(precision))
+        self._apply_tooltip_settings()
+
+    def set_compact_legend_enabled(self, enabled: bool) -> None:
+        self._compact_legend_enabled = bool(enabled)
+
+    def set_compact_legend_location(self, location: str) -> None:
+        self._compact_legend_location = str(location)
+
+    def set_event_base_style(self, **kwargs) -> None:
+        """Set event base style from keyword arguments."""
+        font_family = kwargs.get("font_family")
+        if font_family:
+            self._event_label_options.font_family = str(font_family)
+        font_size = kwargs.get("font_size")
+        if font_size is not None:
+            self._event_label_options.font_size = float(font_size)
+        if "bold" in kwargs:
+            self._event_label_options.font_bold = bool(kwargs["bold"])
+        if "italic" in kwargs:
+            self._event_label_options.font_italic = bool(kwargs["italic"])
+        color = kwargs.get("color")
+        if color:
+            self._event_label_options.font_color = str(color)
+        self._apply_event_label_options()
 
     # Additional core PlotHost methods for full compatibility
 
@@ -581,6 +734,7 @@ class PyQtGraphPlotHost:
         self._event_times = []
         self._event_colors = None
         self._event_labels = []
+        self._event_label_meta = None
 
     def tracks(self) -> list[PyQtGraphChannelTrack]:
         """Get all tracks as a list."""

@@ -6,6 +6,7 @@ and exceeding the capabilities of the matplotlib-based settings dialog.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, TypedDict
 
@@ -279,7 +280,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
         self.x_axis_font_size = QSpinBox()
         self.x_axis_font_size.setRange(6, 48)
-        self.x_axis_font_size.setValue(18)
+        self.x_axis_font_size.setValue(20)
         x_form.addRow("Font Size:", self.x_axis_font_size)
 
         x_color_widget = self._create_color_picker_widget()
@@ -309,7 +310,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
             font_size = QSpinBox()
             font_size.setRange(6, 48)
-            font_size.setValue(18)
+            font_size.setValue(20)
             track_form.addRow("Font Size:", font_size)
 
             color_widget = self._create_color_picker_widget()
@@ -335,7 +336,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
         self.tick_font_size = QSpinBox()
         self.tick_font_size.setRange(6, 32)
-        self.tick_font_size.setValue(12)
+        self.tick_font_size.setValue(16)
         tick_form.addRow("Tick Label Font Size:", self.tick_font_size)
 
         self.x_tick_length = QSpinBox()
@@ -396,8 +397,8 @@ class PyQtGraphSettingsDialog(QDialog):
             try:
                 current_width = track.primary_line.get_linewidth()
                 line_width_spin.setValue(current_width)
-            except:
-                line_width_spin.setValue(1.5)
+            except Exception:
+                line_width_spin.setValue(4.0)
             track_form.addRow("Line Width:", line_width_spin)
 
             line_style_combo = QComboBox()
@@ -717,6 +718,47 @@ class PyQtGraphSettingsDialog(QDialog):
             color = "#000000"
         label.setStyleSheet(f"background-color: {color}; border: 1px solid #999;")
 
+    def _color_tuple_to_hex(self, color) -> str:
+        if not color:
+            return "#000000"
+        try:
+            r, g, b, *_ = list(color) + [1.0]
+
+            def _component(value):
+                value = float(value)
+                if value <= 1.0:
+                    value *= 255.0
+                return max(0, min(255, int(round(value))))
+
+            return f"#{_component(r):02X}{_component(g):02X}{_component(b):02X}"
+        except Exception:
+            return "#000000"
+
+    def _set_event_label_controls(self, options, enabled: bool) -> None:
+        self.event_labels_enabled_cb.setChecked(bool(enabled))
+        mode_map = {"vertical": 0, "h_inside": 1, "h_belt": 2}
+        mode_idx = mode_map.get(getattr(options, "mode", "vertical"), 0)
+        self.event_mode_combo.setCurrentIndex(mode_idx)
+        self.event_cluster_spin.setValue(int(getattr(options, "min_px", 24)))
+        self.event_max_per_cluster.setValue(int(getattr(options, "max_labels_per_cluster", 1)))
+        self.event_lanes_spin.setValue(int(getattr(options, "lanes", 3)))
+        self.event_span_siblings_cb.setChecked(bool(getattr(options, "span_siblings", True)))
+        self.event_outline_enabled_cb.setChecked(bool(getattr(options, "outline_enabled", False)))
+        self.event_outline_width.setValue(float(getattr(options, "outline_width", 1.0)))
+        outline_color = getattr(options, "outline_color", None)
+        if outline_color:
+            self._set_label_color(
+                self.event_outline_color_label, self._color_tuple_to_hex(outline_color)
+            )
+        font_family = getattr(options, "font_family", None)
+        if font_family:
+            self.event_font_family.setCurrentText(font_family)
+        self.event_font_size_spin.setValue(int(getattr(options, "font_size", 10)))
+        self.event_font_bold.setChecked(bool(getattr(options, "font_bold", False)))
+        self.event_font_italic.setChecked(bool(getattr(options, "font_italic", False)))
+        font_color = getattr(options, "font_color", "#000000") or "#000000"
+        self._set_label_color(self.event_label_color_label, font_color)
+
     # ========================================================================
     # LOAD/SAVE SETTINGS
     # ========================================================================
@@ -730,6 +772,17 @@ class PyQtGraphSettingsDialog(QDialog):
                 x_label = plot_item.getAxis("bottom").label.toPlainText()
                 if x_label:
                     self.x_axis_title_edit.setText(x_label)
+            axis_font_family = None
+            axis_font_size = None
+            with contextlib.suppress(Exception):
+                axis_font_family, axis_font_size = self.plot_host.axis_font()
+            if axis_font_family:
+                self.x_axis_font_family.setCurrentText(axis_font_family)
+            if axis_font_size:
+                self.x_axis_font_size.setValue(int(axis_font_size))
+            with contextlib.suppress(Exception):
+                tick_size = self.plot_host.tick_font_size()
+                self.tick_font_size.setValue(int(tick_size))
 
             # Load Y axis titles
             for _track_id, (track, widgets) in self.y_axis_widgets.items():
@@ -739,43 +792,18 @@ class PyQtGraphSettingsDialog(QDialog):
                     widgets["title"].setText(y_label)
 
             # Load event label settings from first track that has a labeler
+            label_options_loaded = False
             for track in self.plot_host._tracks.values():
                 if track.view._event_labeler is not None:
-                    labeler = track.view._event_labeler
-                    options = labeler.options
-
-                    # Load enabled state
-                    self.event_labels_enabled_cb.setChecked(track.view._event_labels_visible)
-
-                    # Load mode
-                    self.event_mode_combo.setCurrentIndex(0)
-
-                    # Load clustering threshold
-                    self.event_cluster_spin.setValue(options.min_px)
-
-                    # Load max per cluster
-                    self.event_max_per_cluster.setValue(options.max_labels_per_cluster)
-
-                    # Load lanes
-                    self.event_lanes_spin.setValue(options.lanes)
-
-                    # Load span siblings
-                    self.event_span_siblings_cb.setChecked(options.span_siblings)
-
-                    # Load outline settings
-                    self.event_outline_enabled_cb.setChecked(options.outline_enabled)
-                    self.event_outline_width.setValue(options.outline_width)
-
-                    # Load font settings
-                    if getattr(options, "font_family", None):
-                        self.event_font_family.setCurrentText(options.font_family)
-                    self.event_font_size_spin.setValue(int(getattr(options, "font_size", 10)))
-                    self.event_font_bold.setChecked(bool(getattr(options, "font_bold", False)))
-                    self.event_font_italic.setChecked(bool(getattr(options, "font_italic", False)))
-                    color_value = getattr(options, "font_color", "#000000")
-                    self._set_label_color(self.event_label_color_label, color_value)
-
+                    options = track.view._event_labeler.options
+                    self._set_event_label_controls(options, track.view._event_labels_visible)
+                    label_options_loaded = True
                     break
+            if not label_options_loaded:
+                options = getattr(self.plot_host, "_event_label_options", None)
+                if options is not None:
+                    enabled_flag = getattr(self.plot_host, "_event_labels_enabled", True)
+                    self._set_event_label_controls(options, enabled_flag)
 
             # Load grid visibility
             if self.plot_host._tracks:
@@ -783,6 +811,11 @@ class PyQtGraphSettingsDialog(QDialog):
                 plot_item = first_track.view.get_widget().getPlotItem()
                 grid_visible = plot_item.ctrl.xGridCheck.isChecked()
                 self.grid_visible_cb.setChecked(grid_visible)
+                try:
+                    self.tooltip_enabled_cb.setChecked(first_track.view.hover_tooltip_enabled())
+                    self.tooltip_precision.setValue(first_track.view.hover_tooltip_precision())
+                except Exception:
+                    pass
 
         except Exception as e:
             log.error(f"Failed to load PyQtGraph settings: {e}", exc_info=True)
@@ -851,7 +884,6 @@ class PyQtGraphSettingsDialog(QDialog):
                 # PyQtGraph axis styling is more limited - font size can be set via CSS
                 axis.label.setFont(QFont(x_font_family, x_font_size))
                 # Color would need custom CSS or stylesheet
-
             # Y axis titles (per track)
             for _track_id, (track, widgets) in self.y_axis_widgets.items():
                 y_title = widgets["title"].text()
@@ -866,11 +898,15 @@ class PyQtGraphSettingsDialog(QDialog):
 
             # Tick styling
             tick_font_size = self.tick_font_size.value()
+            tick_font = QFont("Arial", tick_font_size)
             for track in self.plot_host._tracks.values():
                 plot_item = track.view.get_widget().getPlotItem()
-                font = QFont("Arial", tick_font_size)
-                plot_item.getAxis("bottom").setTickFont(font)
-                plot_item.getAxis("left").setTickFont(font)
+                plot_item.getAxis("bottom").setTickFont(tick_font)
+                plot_item.getAxis("left").setTickFont(tick_font)
+
+            with contextlib.suppress(Exception):
+                self.plot_host.set_axis_font(family=x_font_family, size=x_font_size)
+                self.plot_host.set_tick_font_size(tick_font_size)
 
         except Exception as e:
             log.error(f"Failed to apply axis titles: {e}", exc_info=True)
@@ -878,6 +914,7 @@ class PyQtGraphSettingsDialog(QDialog):
     def _apply_line_styling(self):
         """Apply line styling settings."""
         try:
+            default_width = None
             for _track_id, (track, widgets) in self.line_widgets.items():
                 line_width = widgets["line_width"].value()
                 line_style = widgets["line_style"].currentText()
@@ -901,6 +938,12 @@ class PyQtGraphSettingsDialog(QDialog):
                 }
                 qt_style = style_map.get(line_style, Qt.SolidLine)
                 track.primary_line.set_linestyle(qt_style)
+                if default_width is None:
+                    default_width = line_width
+
+            if default_width is not None:
+                with contextlib.suppress(Exception):
+                    self.plot_host.set_default_line_width(default_width)
 
         except Exception as e:
             log.error(f"Failed to apply line styling: {e}", exc_info=True)
@@ -908,12 +951,15 @@ class PyQtGraphSettingsDialog(QDialog):
     def _apply_event_label_settings(self):
         """Apply event label settings."""
         try:
-            from vasoanalyzer.ui.event_labels_v3 import LayoutOptionsV3
-
             enabled = self.event_labels_enabled_cb.isChecked()
 
             # Create options from dialog values
-            mode = "vertical"
+            mode_map = {
+                0: "vertical",
+                1: "h_inside",
+                2: "h_belt",
+            }
+            mode = mode_map.get(self.event_mode_combo.currentIndex(), "vertical")
 
             # Get outline color
             outline_color = None
@@ -922,28 +968,22 @@ class PyQtGraphSettingsDialog(QDialog):
                 color = QColor(color_hex)
                 outline_color = (color.redF(), color.greenF(), color.blueF(), 1.0)
 
-            options = LayoutOptionsV3(
-                mode=mode,
-                min_px=self.event_cluster_spin.value(),
-                max_labels_per_cluster=self.event_max_per_cluster.value(),
-                lanes=self.event_lanes_spin.value(),
-                span_siblings=self.event_span_siblings_cb.isChecked(),
-                outline_enabled=self.event_outline_enabled_cb.isChecked(),
-                outline_width=self.event_outline_width.value(),
-                outline_color=outline_color,
+            host = self.plot_host
+            host.set_event_labels_visible(enabled)
+            host.set_event_label_mode(mode)
+            host.set_event_label_gap(self.event_cluster_spin.value())
+            host.set_max_labels_per_cluster(self.event_max_per_cluster.value())
+            host.set_label_lanes(self.event_lanes_spin.value())
+            host.set_event_label_span_siblings(self.event_span_siblings_cb.isChecked())
+            host.set_label_outline_enabled(self.event_outline_enabled_cb.isChecked())
+            host.set_label_outline(self.event_outline_width.value(), outline_color)
+            host.set_event_base_style(
                 font_family=self.event_font_family.currentText(),
                 font_size=float(self.event_font_size_spin.value()),
-                font_bold=self.event_font_bold.isChecked(),
-                font_italic=self.event_font_italic.isChecked(),
-                font_color=self._get_label_color(self.event_label_color_label),
+                bold=self.event_font_bold.isChecked(),
+                italic=self.event_font_italic.isChecked(),
+                color=self._get_label_color(self.event_label_color_label),
             )
-
-            # Apply to all tracks
-            for track in self.plot_host._tracks.values():
-                track.view.enable_event_labels(enabled, options=options if enabled else None)
-
-            # Also update visibility flag
-            self.plot_host.set_event_labels_visible(enabled)
 
         except Exception as e:
             log.error(f"Failed to apply event label settings: {e}", exc_info=True)
@@ -978,9 +1018,8 @@ class PyQtGraphSettingsDialog(QDialog):
             enabled = self.tooltip_enabled_cb.isChecked()
             precision = self.tooltip_precision.value()
 
-            # Enable/disable tooltips on all tracks
-            for track in self.plot_host._tracks.values():
-                track.view.enable_hover_tooltip(enabled, precision=precision)
+            self.plot_host.set_label_tooltips_enabled(enabled)
+            self.plot_host.set_tooltip_precision(precision)
 
         except Exception as e:
             log.error(f"Failed to apply hover tooltip settings: {e}", exc_info=True)
