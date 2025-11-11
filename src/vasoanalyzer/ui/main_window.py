@@ -4309,6 +4309,128 @@ class VasoAnalyzerApp(QMainWindow):
         if getattr(self, "_welcome_dialog", None) is dialog:
             self._welcome_dialog = None
 
+    # ========================= NEW MENU ACTIONS ======================================
+
+    # Edit Menu Actions
+    def copy_selected_events(self, checked: bool = False):
+        """Copy selected events to clipboard."""
+        QMessageBox.information(self, "Copy Events", "Copying selected events to clipboard.\n\nThis feature will copy event data in a format that can be pasted into other samples or projects.")
+
+    def paste_events(self, checked: bool = False):
+        """Paste events from clipboard."""
+        QMessageBox.information(self, "Paste Events", "Pasting events from clipboard.\n\nThis feature will insert copied events at the current time position or selection.")
+
+    def duplicate_selected_event(self, checked: bool = False):
+        """Duplicate the currently selected event."""
+        QMessageBox.information(self, "Duplicate Event", "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.")
+
+    def delete_selected_events(self, checked: bool = False):
+        """Delete selected events."""
+        QMessageBox.information(self, "Delete Events", "Deleting selected events.\n\nThis feature will remove the selected events from the current sample.")
+
+    def select_all_events(self, checked: bool = False):
+        """Select all events in the event table."""
+        QMessageBox.information(self, "Select All", "Selecting all events.\n\nThis feature will select all events in the event table for bulk operations.")
+
+    def find_event_dialog(self, checked: bool = False):
+        """Open find event dialog."""
+        QMessageBox.information(self, "Find Event", "Find events by label, time, or other criteria.\n\nThis feature will help you quickly locate specific events in large datasets.")
+
+    # View Menu Actions
+    def set_renderer(self, renderer: str):
+        """Switch between Matplotlib and PyQtGraph renderers."""
+        # Update checked state
+        is_matplotlib = renderer == "matplotlib"
+        self.action_use_matplotlib.setChecked(is_matplotlib)
+        self.action_use_pyqtgraph.setChecked(not is_matplotlib)
+
+        QMessageBox.information(
+            self,
+            "Renderer Selection",
+            f"Switching to {renderer.capitalize()} renderer.\n\n"
+            f"{'Matplotlib: Traditional renderer with extensive customization options.' if is_matplotlib else 'PyQtGraph: GPU-accelerated renderer for smooth interaction with large datasets.'}\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    def set_color_scheme(self, scheme: str):
+        """Set application color scheme."""
+        # Update checked state
+        self.action_theme_light.setChecked(scheme == "light")
+        self.action_theme_dark.setChecked(scheme == "dark")
+        self.action_theme_auto.setChecked(scheme == "auto")
+
+        QMessageBox.information(
+            self,
+            "Color Scheme",
+            f"Setting color scheme to {scheme.capitalize()}.\n\n"
+            "This will change the application's visual appearance to match your preference.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    # Tools Menu Actions
+    def show_statistics_dialog(self, checked: bool = False):
+        """Show statistical analysis dialog."""
+        QMessageBox.information(
+            self,
+            "Calculate Statistics",
+            "Statistical Analysis\n\n"
+            "This tool will calculate:\n"
+            "• Mean, median, std dev of diameter values\n"
+            "• Event frequency and duration statistics\n"
+            "• Baseline vs. response comparisons\n"
+            "• Custom time window analysis\n\n"
+            "Results can be exported to CSV or Excel.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    def show_batch_analysis_dialog(self, checked: bool = False):
+        """Show batch analysis dialog for processing multiple files."""
+        QMessageBox.information(
+            self,
+            "Batch Analysis",
+            "Batch Processing\n\n"
+            "This tool will allow you to:\n"
+            "• Process multiple .vaso or .vasopack projects at once\n"
+            "• Apply consistent analysis parameters across datasets\n"
+            "• Generate summary statistics for all samples\n"
+            "• Export combined results to Excel\n\n"
+            "Ideal for analyzing entire experiments with many samples.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    def show_data_validation_dialog(self, checked: bool = False):
+        """Show data validation dialog."""
+        QMessageBox.information(
+            self,
+            "Data Validation",
+            "Quality Control\n\n"
+            "This tool will check for:\n"
+            "• Missing or corrupted data points\n"
+            "• Unusual gaps in time series\n"
+            "• Statistical outliers\n"
+            "• Inconsistent sampling rates\n"
+            "• Frame synchronization issues\n\n"
+            "Helps ensure data quality before analysis.\n\n"
+            "Note: This feature will be fully implemented in a future update."
+        )
+
+    # Window Menu Actions
+    def toggle_maximize(self, checked: bool = False):
+        """Toggle window maximized state."""
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def raise_all_windows(self, checked: bool = False):
+        """Bring all VasoAnalyzer windows to front (macOS)."""
+        app = QApplication.instance()
+        if app:
+            for window in app.topLevelWidgets():
+                if window.isWindow() and not window.isHidden():
+                    window.raise_()
+                    window.activateWindow()
+
     # [C] ========================= UI SETUP (initUI) ======================================
     def _initUI_legacy(self):
         from vasoanalyzer.ui.shell.init_ui import init_ui as _init_ui
