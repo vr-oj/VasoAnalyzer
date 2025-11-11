@@ -113,12 +113,17 @@ class InteractionController:
         return (x_coord < left + margin_px) or (x_coord > right - margin_px)
 
     def _scroll_factor(self, event) -> float:
+        """Calculate zoom factor for scroll events.
+
+        Uses gentler zoom factors (0.9/1.11 vs 0.8/1.25) for better
+        trackpad control and less sensitive zooming.
+        """
         step = getattr(event, "step", None)
         if step is not None:
             direction = 1 if step > 0 else -1
         else:
             direction = 1 if getattr(event, "button", "") == "up" else -1
-        return 0.8 if direction > 0 else 1.25
+        return 0.9 if direction > 0 else 1.11
 
     def _active_track(self) -> ChannelTrack | None:
         if self._hover_track is not None:
