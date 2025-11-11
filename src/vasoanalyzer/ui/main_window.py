@@ -4162,6 +4162,10 @@ class VasoAnalyzerApp(QMainWindow):
     def _rebuild_channel_layout(
         self, inner_on: bool, outer_on: bool, *, redraw: bool = True
     ) -> None:
+        print(f"DEBUG: _rebuild_channel_layout called, trace_data columns: {list(self.trace_data.columns) if self.trace_data is not None else 'None'}")
+        print(f"DEBUG: _avg_pressure_channel_available() = {self._avg_pressure_channel_available()}")
+        print(f"DEBUG: _set_pressure_channel_available() = {self._set_pressure_channel_available()}")
+
         specs: list[ChannelTrackSpec] = []
         if inner_on:
             specs.append(
@@ -4184,6 +4188,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Add pressure tracks if available
         if self._avg_pressure_channel_available():
+            print("DEBUG: Adding avg_pressure track spec")
             specs.append(
                 ChannelTrackSpec(
                     track_id="avg_pressure",
@@ -4193,6 +4198,7 @@ class VasoAnalyzerApp(QMainWindow):
                 )
             )
         if self._set_pressure_channel_available():
+            print("DEBUG: Adding set_pressure track spec")
             specs.append(
                 ChannelTrackSpec(
                     track_id="set_pressure",
@@ -4211,6 +4217,10 @@ class VasoAnalyzerApp(QMainWindow):
                     height_ratio=1.0,
                 )
             )
+
+        print(f"DEBUG: Final specs list has {len(specs)} tracks:")
+        for spec in specs:
+            print(f"  - {spec.track_id}: component={spec.component}, label={spec.label}")
 
         self._unbind_primary_axis_callbacks()
         self.plot_host.ensure_channels(specs)
