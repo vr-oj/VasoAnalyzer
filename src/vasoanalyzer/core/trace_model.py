@@ -462,11 +462,13 @@ class TraceModel:
         avg_pressure_col = _prefer_column(df, ("Avg Pressure (mmHg)",))
         if avg_pressure_col is not None:
             avg_pressure = df[avg_pressure_col].to_numpy(dtype=float)
+            print(f"DEBUG: Loaded avg_pressure: min={np.nanmin(avg_pressure)}, max={np.nanmax(avg_pressure)}, size={avg_pressure.size}")
 
         set_pressure = None
         set_pressure_col = _prefer_column(df, ("Set Pressure (mmHg)",))
         if set_pressure_col is not None:
             set_pressure = df[set_pressure_col].to_numpy(dtype=float)
+            print(f"DEBUG: Loaded set_pressure: min={np.nanmin(set_pressure)}, max={np.nanmax(set_pressure)}, size={set_pressure.size}")
 
         if edit_actions is None:
             attrs = getattr(df, "attrs", None)
