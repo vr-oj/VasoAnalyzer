@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+import contextlib
+import logging
+from collections.abc import Callable, Iterable
 from typing import Any
 
 import pyqtgraph as pg
@@ -22,6 +24,8 @@ from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["PyQtGraphPlotHost"]
+
+log = logging.getLogger(__name__)
 
 
 class PyQtGraphPlotHost:
@@ -78,6 +82,7 @@ class PyQtGraphPlotHost:
         # Overlays
         self._time_cursor_overlay = PyQtGraphTimeCursorOverlay()
         self._event_highlight_overlay = PyQtGraphEventHighlightOverlay()
+        self._time_window_listeners: list[Callable[[float, float], None]] = []
 
     def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -110,7 +115,7 @@ class PyQtGraphPlotHost:
     def _rebuild_tracks(self) -> None:
         """Recreate tracks to match specs."""
         # Clear existing tracks
-        for track_id, track in self._tracks.items():
+        for _track_id, track in self._tracks.items():
             widget = track.widget
             self.layout.removeWidget(widget)
             widget.setParent(None)
@@ -131,15 +136,15 @@ class PyQtGraphPlotHost:
             self._tracks[spec.track_id] = track
 
             # Hide x-axis labels on all tracks except the last (bottom) one
-            is_bottom_track = (idx == len(self._channel_specs) - 1)
+            is_bottom_track = idx == len(self._channel_specs) - 1
             plot_item = track.view.get_widget().getPlotItem()
             if not is_bottom_track:
                 # Hide x-axis label and tick labels on non-bottom tracks
-                plot_item.getAxis('bottom').setLabel('')
-                plot_item.getAxis('bottom').setStyle(showValues=False)
+                plot_item.getAxis("bottom").setLabel("")
+                plot_item.getAxis("bottom").setStyle(showValues=False)
             else:
                 # Ensure bottom track shows x-axis
-                plot_item.getAxis('bottom').setStyle(showValues=True)
+                plot_item.getAxis("bottom").setStyle(showValues=True)
 
             # Apply model if already set
             if self._model is not None:
@@ -147,9 +152,7 @@ class PyQtGraphPlotHost:
 
             # Apply events if already set
             if self._event_times:
-                track.set_events(
-                    self._event_times, self._event_colors, self._event_labels
-                )
+                track.set_events(self._event_times, self._event_colors, self._event_labels)
 
             # Connect signals for synchronized interactions
             self._connect_track_signals(track)
@@ -171,6 +174,27 @@ class PyQtGraphPlotHost:
         # Connect view range changed signal
         plot_item.sigRangeChanged.connect(self._on_track_range_changed)
 
+    def add_time_window_listener(self, callback: Callable[[float, float], None]) -> None:
+        """Register a callback for time window changes."""
+        if callback in self._time_window_listeners:
+            return
+        self._time_window_listeners.append(callback)
+
+    def remove_time_window_listener(self, callback: Callable[[float, float], None]) -> None:
+        """Unregister a previously added time window listener."""
+        with contextlib.suppress(ValueError):
+            self._time_window_listeners.remove(callback)
+
+    def _notify_time_window_changed(self) -> None:
+        if self._current_window is None:
+            return
+        listeners = list(self._time_window_listeners)
+        for listener in listeners:
+            try:
+                listener(*self._current_window)
+            except Exception:
+                log.exception("Time window listener failed")
+
     def _on_track_range_changed(self, view_box) -> None:
         """Handle range change from any track (synchronize all tracks)."""
         # Get the new X range
@@ -183,10 +207,13 @@ class PyQtGraphPlotHost:
         # Synchronize all other tracks (block signals to avoid recursion)
         for track in self._tracks.values():
             plot_item = track.view.get_widget().getPlotItem()
-            plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
+            with contextlib.suppress(Exception):
+                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
             track.update_window(x0, x1)
             plot_item.setXRange(x0, x1, padding=0)
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+
+        self._notify_time_window_changed()
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
@@ -207,13 +234,16 @@ class PyQtGraphPlotHost:
         for track in self._tracks.values():
             # Block signals temporarily
             plot_item = track.view.get_widget().getPlotItem()
-            plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
+            with contextlib.suppress(Exception):
+                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
 
             track.update_window(x0, x1)
             plot_item.setXRange(x0, x1, padding=0)
 
             # Reconnect signals
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+
+        self._notify_time_window_changed()
 
     def set_events(
         self,
@@ -236,7 +266,7 @@ class PyQtGraphPlotHost:
         # Note: label_meta is accepted for compatibility but not used in PyQtGraph renderer
 
         for track in self._tracks.values():
-            track.set_events(times, colors, labels)
+            track.set_events(times, colors, labels, label_meta=label_meta)
 
     def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:
         """Get track by ID."""
@@ -248,7 +278,11 @@ class PyQtGraphPlotHost:
 
     def all_tracks(self) -> list[PyQtGraphChannelTrack]:
         """Get all tracks in order."""
-        return [self._tracks[spec.track_id] for spec in self._channel_specs if spec.track_id in self._tracks]
+        return [
+            self._tracks[spec.track_id]
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks
+        ]
 
     def autoscale_all_tracks(self, margin: float = 0.05) -> None:
         """Autoscale Y-axis for all tracks."""
@@ -366,7 +400,7 @@ class PyQtGraphPlotHost:
         last_track_id = self._channel_specs[-1].track_id
         track = self._tracks.get(last_track_id)
         if track:
-            track.view.get_widget().getPlotItem().setLabel('bottom', text)
+            track.view.get_widget().getPlotItem().setLabel("bottom", text)
 
     def set_event_lines_visible(self, visible: bool) -> None:
         """Set event line visibility (matplotlib PlotHost compatibility).
@@ -480,7 +514,7 @@ class PyQtGraphPlotHost:
 
     def event_highlight_alpha(self) -> float:
         """Get current event highlight alpha."""
-        return self._event_highlight_overlay.alpha()
+        return float(self._event_highlight_overlay.alpha())
 
     def current_window(self) -> tuple[float, float] | None:
         """Get current time window."""
@@ -490,7 +524,8 @@ class PyQtGraphPlotHost:
         """Get full time range from model."""
         if self._model is None:
             return None
-        return self._model.full_range
+        start, end = self._model.full_range
+        return float(start), float(end)
 
     def axes(self) -> list:
         """Get all axes (matplotlib PlotHost compatibility)."""
@@ -507,6 +542,7 @@ class PyQtGraphPlotHost:
     def channel_specs(self) -> list[ChannelTrackSpec]:
         """Get channel specifications."""
         from copy import copy
+
         return [copy(spec) for spec in self._channel_specs]
 
     def autoscale_all(self, *, margin: float = 0.05) -> None:
@@ -528,18 +564,12 @@ class PyQtGraphPlotHost:
         for track in self._tracks.values():
             track.view.enable_event_labels(visible)
 
-    def set_event_label_mode(self, mode: str) -> None:
-        """Set event label mode (compatibility stub - extended)."""
-        # PyQtGraph uses its own event labeling system
-        # Mode changes don't apply to PyQtGraph renderer
-        pass
-
     # Additional core PlotHost methods for full compatibility
 
     def clear(self) -> None:
         """Clear all tracks and reset to initial state."""
         # Clear all tracks
-        for track_id, track in list(self._tracks.items()):
+        for _track_id, track in list(self._tracks.items()):
             widget = track.widget
             self.layout.removeWidget(widget)
             widget.setParent(None)
@@ -629,7 +659,9 @@ class PyQtGraphPlotHost:
         """Get label density thresholds."""
         return (0.8, 0.25)
 
-    def label_outline_settings(self) -> tuple[bool, float, tuple[float, float, float, float] | None]:
+    def label_outline_settings(
+        self,
+    ) -> tuple[bool, float, tuple[float, float, float, float] | None]:
         """Get label outline settings."""
         return (True, 2.0, (1.0, 1.0, 1.0, 0.9))
 
@@ -664,16 +696,11 @@ class PyQtGraphPlotHost:
             ylim = first_track.get_ylim()
 
         # Get height ratios
-        height_ratios = {
-            spec.track_id: spec.height_ratio
-            for spec in self._channel_specs
-        }
+        height_ratios = {spec.track_id: spec.height_ratio for spec in self._channel_specs}
 
         # Get visible tracks
         visible_tracks = [
-            track_id
-            for track_id, track in self._tracks.items()
-            if track.is_visible()
+            track_id for track_id, track in self._tracks.items() if track.is_visible()
         ]
 
         # Capture style (basic for now)

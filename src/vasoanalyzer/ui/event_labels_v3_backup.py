@@ -80,6 +80,11 @@ class LayoutOptionsV3:
     outline_width: float = 0.0
     outline_color: tuple[float, float, float, float] | None = None
     compact_counts: bool = False
+    font_family: str = "Arial"
+    font_size: float = 10.0
+    font_bold: bool = False
+    font_italic: bool = False
+    font_color: str | None = None
 
 
 # --------------------------------------------------------------------------- cache helpers

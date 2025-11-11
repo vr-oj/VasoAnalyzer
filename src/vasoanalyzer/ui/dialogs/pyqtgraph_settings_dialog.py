@@ -7,9 +7,8 @@ and exceeding the capabilities of the matplotlib-based settings dialog.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, TypedDict
 
-import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import (
@@ -35,9 +34,39 @@ from PyQt5.QtWidgets import (
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:
+    from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
     from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
 
 log = logging.getLogger(__name__)
+
+
+class ColorPickerWidget(TypedDict):
+    widget: QWidget
+    label: QLabel
+    button: QPushButton
+
+
+class TrackWidgetControls(TypedDict):
+    y_min: QDoubleSpinBox
+    y_max: QDoubleSpinBox
+    autoscale: QCheckBox
+    visible: QCheckBox
+
+
+class AxisTitleWidgets(TypedDict):
+    title: QLineEdit
+    font_family: QComboBox
+    font_size: QSpinBox
+    color_btn: QPushButton
+    color_label: QLabel
+
+
+class LineStyleWidgets(TypedDict):
+    line_width: QDoubleSpinBox
+    line_style: QComboBox
+    color_btn: QPushButton
+    color_label: QLabel
+    alpha: QDoubleSpinBox
 
 
 class PyQtGraphSettingsDialog(QDialog):
@@ -52,7 +81,7 @@ class PyQtGraphSettingsDialog(QDialog):
     - Grid, background, and overall appearance
     """
 
-    def __init__(self, parent, plot_host: "PyQtGraphPlotHost"):
+    def __init__(self, parent, plot_host: PyQtGraphPlotHost):
         super().__init__(parent)
         self.plot_host = plot_host
         self.parent_window = parent
@@ -63,7 +92,19 @@ class PyQtGraphSettingsDialog(QDialog):
         self.setSizeGripEnabled(True)
 
         # Font choices
-        self._font_choices = ["Arial", "Helvetica", "Times New Roman", "Courier New", "Courier", "Verdana", "Georgia"]
+        self._font_choices = [
+            "Arial",
+            "Helvetica",
+            "Times New Roman",
+            "Courier New",
+            "Courier",
+            "Verdana",
+            "Georgia",
+        ]
+
+        self.track_widgets: dict[str, tuple[PyQtGraphChannelTrack, TrackWidgetControls]] = {}
+        self.y_axis_widgets: dict[str, tuple[PyQtGraphChannelTrack, AxisTitleWidgets]] = {}
+        self.line_widgets: dict[str, tuple[PyQtGraphChannelTrack, LineStyleWidgets]] = {}
 
         self._setup_ui()
         self._load_current_settings()
@@ -157,9 +198,6 @@ class PyQtGraphSettingsDialog(QDialog):
         form = QFormLayout(group)
         form.setLabelAlignment(Qt.AlignRight)
 
-        # Store widgets for this track
-        widgets = {}
-
         # Y-axis limits
         y_limits_widget = QWidget()
         y_limits_layout = QHBoxLayout(y_limits_widget)
@@ -187,22 +225,24 @@ class PyQtGraphSettingsDialog(QDialog):
         y_limits_layout.addWidget(y_min_spin)
         y_limits_layout.addWidget(y_max_spin)
 
-        widgets['y_min'] = y_min_spin
-        widgets['y_max'] = y_max_spin
-
         form.addRow("Y-Axis Range:", y_limits_widget)
 
         # Auto-scale checkbox
         auto_scale_cb = QCheckBox("Auto-scale Y-axis")
         auto_scale_cb.setChecked(track.view._autoscale_y)
-        widgets['autoscale'] = auto_scale_cb
         form.addRow("", auto_scale_cb)
 
         # Visibility
         visible_cb = QCheckBox("Show Track")
         visible_cb.setChecked(track.is_visible())
-        widgets['visible'] = visible_cb
         form.addRow("", visible_cb)
+
+        widgets: TrackWidgetControls = {
+            "y_min": y_min_spin,
+            "y_max": y_max_spin,
+            "autoscale": auto_scale_cb,
+            "visible": visible_cb,
+        }
 
         self.track_widgets[spec.track_id] = (track, widgets)
 
@@ -239,13 +279,13 @@ class PyQtGraphSettingsDialog(QDialog):
 
         self.x_axis_font_size = QSpinBox()
         self.x_axis_font_size.setRange(6, 48)
-        self.x_axis_font_size.setValue(11)
+        self.x_axis_font_size.setValue(18)
         x_form.addRow("Font Size:", self.x_axis_font_size)
 
         x_color_widget = self._create_color_picker_widget()
-        self.x_axis_color_btn = x_color_widget['button']
-        self.x_axis_color_label = x_color_widget['label']
-        x_form.addRow("Label Color:", x_color_widget['widget'])
+        self.x_axis_color_btn = x_color_widget["button"]
+        self.x_axis_color_label = x_color_widget["label"]
+        x_form.addRow("Label Color:", x_color_widget["widget"])
 
         layout.addWidget(x_axis_group)
 
@@ -259,28 +299,29 @@ class PyQtGraphSettingsDialog(QDialog):
             track_form = QFormLayout(track_group)
             track_form.setLabelAlignment(Qt.AlignRight)
 
-            track_widgets = {}
-
             title_edit = QLineEdit()
             title_edit.setPlaceholderText(track.spec.label)
             track_form.addRow("Label:", title_edit)
-            track_widgets['title'] = title_edit
 
             font_family = QComboBox()
             font_family.addItems(self._font_choices)
             track_form.addRow("Font Family:", font_family)
-            track_widgets['font_family'] = font_family
 
             font_size = QSpinBox()
             font_size.setRange(6, 48)
-            font_size.setValue(11)
+            font_size.setValue(18)
             track_form.addRow("Font Size:", font_size)
-            track_widgets['font_size'] = font_size
 
             color_widget = self._create_color_picker_widget()
-            track_form.addRow("Label Color:", color_widget['widget'])
-            track_widgets['color_btn'] = color_widget['button']
-            track_widgets['color_label'] = color_widget['label']
+            track_form.addRow("Label Color:", color_widget["widget"])
+
+            track_widgets: AxisTitleWidgets = {
+                "title": title_edit,
+                "font_family": font_family,
+                "font_size": font_size,
+                "color_btn": color_widget["button"],
+                "color_label": color_widget["label"],
+            }
 
             y_layout.addWidget(track_group)
             self.y_axis_widgets[track_id] = (track, track_widgets)
@@ -294,7 +335,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
         self.tick_font_size = QSpinBox()
         self.tick_font_size.setRange(6, 32)
-        self.tick_font_size.setValue(9)
+        self.tick_font_size.setValue(12)
         tick_form.addRow("Tick Label Font Size:", self.tick_font_size)
 
         self.x_tick_length = QSpinBox()
@@ -310,9 +351,9 @@ class PyQtGraphSettingsDialog(QDialog):
         tick_form.addRow("Y Tick Length:", self.y_tick_length)
 
         tick_color_widget = self._create_color_picker_widget()
-        self.tick_color_btn = tick_color_widget['button']
-        self.tick_color_label = tick_color_widget['label']
-        tick_form.addRow("Tick Color:", tick_color_widget['widget'])
+        self.tick_color_btn = tick_color_widget["button"]
+        self.tick_color_label = tick_color_widget["label"]
+        tick_form.addRow("Tick Color:", tick_color_widget["widget"])
 
         layout.addWidget(tick_group)
 
@@ -348,8 +389,6 @@ class PyQtGraphSettingsDialog(QDialog):
             track_form = QFormLayout(track_group)
             track_form.setLabelAlignment(Qt.AlignRight)
 
-            track_widgets = {}
-
             line_width_spin = QDoubleSpinBox()
             line_width_spin.setRange(0.5, 10.0)
             line_width_spin.setSingleStep(0.5)
@@ -360,17 +399,13 @@ class PyQtGraphSettingsDialog(QDialog):
             except:
                 line_width_spin.setValue(1.5)
             track_form.addRow("Line Width:", line_width_spin)
-            track_widgets['line_width'] = line_width_spin
 
             line_style_combo = QComboBox()
             line_style_combo.addItems(["Solid", "Dashed", "Dotted", "DashDot"])
             track_form.addRow("Line Style:", line_style_combo)
-            track_widgets['line_style'] = line_style_combo
 
             color_widget = self._create_color_picker_widget()
-            track_form.addRow("Line Color:", color_widget['widget'])
-            track_widgets['color_btn'] = color_widget['button']
-            track_widgets['color_label'] = color_widget['label']
+            track_form.addRow("Line Color:", color_widget["widget"])
 
             line_alpha_spin = QDoubleSpinBox()
             line_alpha_spin.setRange(0.0, 1.0)
@@ -378,7 +413,14 @@ class PyQtGraphSettingsDialog(QDialog):
             line_alpha_spin.setDecimals(2)
             line_alpha_spin.setValue(1.0)
             track_form.addRow("Line Alpha (Opacity):", line_alpha_spin)
-            track_widgets['alpha'] = line_alpha_spin
+
+            track_widgets: LineStyleWidgets = {
+                "line_width": line_width_spin,
+                "line_style": line_style_combo,
+                "color_btn": color_widget["button"],
+                "color_label": color_widget["label"],
+                "alpha": line_alpha_spin,
+            }
 
             lines_layout.addWidget(track_group)
             self.line_widgets[track_id] = (track, track_widgets)
@@ -401,13 +443,15 @@ class PyQtGraphSettingsDialog(QDialog):
         markers_form.addRow("Marker Size:", self.event_marker_size)
 
         self.event_marker_shape = QComboBox()
-        self.event_marker_shape.addItems(["Circle", "Square", "Triangle", "Diamond", "Cross", "Plus"])
+        self.event_marker_shape.addItems(
+            ["Circle", "Square", "Triangle", "Diamond", "Cross", "Plus"]
+        )
         markers_form.addRow("Marker Shape:", self.event_marker_shape)
 
         marker_color_widget = self._create_color_picker_widget("#FF0000")
-        self.event_marker_color_btn = marker_color_widget['button']
-        self.event_marker_color_label = marker_color_widget['label']
-        markers_form.addRow("Marker Color:", marker_color_widget['widget'])
+        self.event_marker_color_btn = marker_color_widget["button"]
+        self.event_marker_color_label = marker_color_widget["label"]
+        markers_form.addRow("Marker Color:", marker_color_widget["widget"])
 
         self.event_marker_edge_width = QDoubleSpinBox()
         self.event_marker_edge_width.setRange(0.0, 5.0)
@@ -417,9 +461,9 @@ class PyQtGraphSettingsDialog(QDialog):
         markers_form.addRow("Edge Width:", self.event_marker_edge_width)
 
         marker_edge_color_widget = self._create_color_picker_widget("#000000")
-        self.event_marker_edge_color_btn = marker_edge_color_widget['button']
-        self.event_marker_edge_color_label = marker_edge_color_widget['label']
-        markers_form.addRow("Edge Color:", marker_edge_color_widget['widget'])
+        self.event_marker_edge_color_btn = marker_edge_color_widget["button"]
+        self.event_marker_edge_color_label = marker_edge_color_widget["label"]
+        markers_form.addRow("Edge Color:", marker_edge_color_widget["widget"])
 
         layout.addWidget(markers_group)
 
@@ -481,9 +525,9 @@ class PyQtGraphSettingsDialog(QDialog):
         font_form.addRow("Font Style:", event_font_style_widget)
 
         event_color_widget = self._create_color_picker_widget("#000000")
-        self.event_label_color_btn = event_color_widget['button']
-        self.event_label_color_label = event_color_widget['label']
-        font_form.addRow("Label Color:", event_color_widget['widget'])
+        self.event_label_color_btn = event_color_widget["button"]
+        self.event_label_color_label = event_color_widget["label"]
+        font_form.addRow("Label Color:", event_color_widget["widget"])
 
         layout.addWidget(font_group)
 
@@ -493,8 +537,13 @@ class PyQtGraphSettingsDialog(QDialog):
         layout_form.setLabelAlignment(Qt.AlignRight)
 
         self.event_mode_combo = QComboBox()
-        self.event_mode_combo.addItems(["Vertical", "Horizontal Inside", "Horizontal Belt"])
+        self.event_mode_combo.addItem("Vertical")
+        self.event_mode_combo.setEnabled(False)
         layout_form.addRow("Label Mode:", self.event_mode_combo)
+
+        mode_hint = QLabel("PyQtGraph currently renders event labels vertically.")
+        mode_hint.setStyleSheet("color: gray; font-style: italic;")
+        layout_form.addRow("", mode_hint)
 
         self.event_cluster_spin = QSpinBox()
         self.event_cluster_spin.setRange(10, 100)
@@ -535,9 +584,9 @@ class PyQtGraphSettingsDialog(QDialog):
         outline_form.addRow("Outline Width:", self.event_outline_width)
 
         outline_color_widget = self._create_color_picker_widget("#FFFFFF")
-        self.event_outline_color_btn = outline_color_widget['button']
-        self.event_outline_color_label = outline_color_widget['label']
-        outline_form.addRow("Outline Color:", outline_color_widget['widget'])
+        self.event_outline_color_btn = outline_color_widget["button"]
+        self.event_outline_color_label = outline_color_widget["label"]
+        outline_form.addRow("Outline Color:", outline_color_widget["widget"])
 
         layout.addWidget(outline_group)
 
@@ -572,9 +621,9 @@ class PyQtGraphSettingsDialog(QDialog):
         grid_form.addRow("Grid Alpha (Opacity):", self.grid_alpha)
 
         grid_color_widget = self._create_color_picker_widget("#CCCCCC")
-        self.grid_color_btn = grid_color_widget['button']
-        self.grid_color_label = grid_color_widget['label']
-        grid_form.addRow("Grid Color:", grid_color_widget['widget'])
+        self.grid_color_btn = grid_color_widget["button"]
+        self.grid_color_label = grid_color_widget["label"]
+        grid_form.addRow("Grid Color:", grid_color_widget["widget"])
 
         layout.addWidget(grid_group)
 
@@ -583,15 +632,15 @@ class PyQtGraphSettingsDialog(QDialog):
         bg_form = QFormLayout(bg_group)
         bg_form.setLabelAlignment(Qt.AlignRight)
 
-        bg_color_widget = self._create_color_picker_widget(CURRENT_THEME['window_bg'])
-        self.bg_color_btn = bg_color_widget['button']
-        self.bg_color_label = bg_color_widget['label']
-        bg_form.addRow("Background Color:", bg_color_widget['widget'])
+        bg_color_widget = self._create_color_picker_widget(CURRENT_THEME["window_bg"])
+        self.bg_color_btn = bg_color_widget["button"]
+        self.bg_color_label = bg_color_widget["label"]
+        bg_form.addRow("Background Color:", bg_color_widget["widget"])
 
         plot_bg_color_widget = self._create_color_picker_widget("#FFFFFF")
-        self.plot_bg_color_btn = plot_bg_color_widget['button']
-        self.plot_bg_color_label = plot_bg_color_widget['label']
-        bg_form.addRow("Plot Area Color:", plot_bg_color_widget['widget'])
+        self.plot_bg_color_btn = plot_bg_color_widget["button"]
+        self.plot_bg_color_label = plot_bg_color_widget["label"]
+        bg_form.addRow("Plot Area Color:", plot_bg_color_widget["widget"])
 
         layout.addWidget(bg_group)
 
@@ -620,7 +669,7 @@ class PyQtGraphSettingsDialog(QDialog):
     # ========================================================================
     # HELPER METHODS
     # ========================================================================
-    def _create_color_picker_widget(self, default_color: str = "#000000") -> dict:
+    def _create_color_picker_widget(self, default_color: str = "#000000") -> ColorPickerWidget:
         """Create a color picker widget with label and button.
 
         Returns:
@@ -642,9 +691,9 @@ class PyQtGraphSettingsDialog(QDialog):
         layout.addStretch()
 
         return {
-            'widget': widget,
-            'label': color_label,
-            'button': color_btn,
+            "widget": widget,
+            "label": color_label,
+            "button": color_btn,
         }
 
     def _pick_color(self, label: QLabel):
@@ -662,6 +711,12 @@ class PyQtGraphSettingsDialog(QDialog):
         style = label.styleSheet()
         return style.split("background-color: ")[1].split(";")[0]
 
+    def _set_label_color(self, label: QLabel, color: str) -> None:
+        """Apply a hex color to a preview swatch label."""
+        if not color:
+            color = "#000000"
+        label.setStyleSheet(f"background-color: {color}; border: 1px solid #999;")
+
     # ========================================================================
     # LOAD/SAVE SETTINGS
     # ========================================================================
@@ -672,16 +727,16 @@ class PyQtGraphSettingsDialog(QDialog):
             if self.plot_host._tracks:
                 first_track = next(iter(self.plot_host._tracks.values()))
                 plot_item = first_track.view.get_widget().getPlotItem()
-                x_label = plot_item.getAxis('bottom').label.toPlainText()
+                x_label = plot_item.getAxis("bottom").label.toPlainText()
                 if x_label:
                     self.x_axis_title_edit.setText(x_label)
 
             # Load Y axis titles
-            for track_id, (track, widgets) in self.y_axis_widgets.items():
+            for _track_id, (track, widgets) in self.y_axis_widgets.items():
                 plot_item = track.view.get_widget().getPlotItem()
-                y_label = plot_item.getAxis('left').label.toPlainText()
+                y_label = plot_item.getAxis("left").label.toPlainText()
                 if y_label:
-                    widgets['title'].setText(y_label)
+                    widgets["title"].setText(y_label)
 
             # Load event label settings from first track that has a labeler
             for track in self.plot_host._tracks.values():
@@ -693,13 +748,7 @@ class PyQtGraphSettingsDialog(QDialog):
                     self.event_labels_enabled_cb.setChecked(track.view._event_labels_visible)
 
                     # Load mode
-                    mode_map = {
-                        "vertical": 0,
-                        "h_inside": 1,
-                        "h_belt": 2,
-                    }
-                    mode_idx = mode_map.get(options.mode, 0)
-                    self.event_mode_combo.setCurrentIndex(mode_idx)
+                    self.event_mode_combo.setCurrentIndex(0)
 
                     # Load clustering threshold
                     self.event_cluster_spin.setValue(options.min_px)
@@ -716,6 +765,15 @@ class PyQtGraphSettingsDialog(QDialog):
                     # Load outline settings
                     self.event_outline_enabled_cb.setChecked(options.outline_enabled)
                     self.event_outline_width.setValue(options.outline_width)
+
+                    # Load font settings
+                    if getattr(options, "font_family", None):
+                        self.event_font_family.setCurrentText(options.font_family)
+                    self.event_font_size_spin.setValue(int(getattr(options, "font_size", 10)))
+                    self.event_font_bold.setChecked(bool(getattr(options, "font_bold", False)))
+                    self.event_font_italic.setChecked(bool(getattr(options, "font_italic", False)))
+                    color_value = getattr(options, "font_color", "#000000")
+                    self._set_label_color(self.event_label_color_label, color_value)
 
                     break
 
@@ -742,17 +800,17 @@ class PyQtGraphSettingsDialog(QDialog):
         """Save settings to plot host."""
         try:
             # Apply track settings
-            for track_id, (track, widgets) in self.track_widgets.items():
+            for _track_id, (track, widgets) in self.track_widgets.items():
                 # Y-axis limits
-                if not widgets['autoscale'].isChecked():
-                    y_min = widgets['y_min'].value()
-                    y_max = widgets['y_max'].value()
+                if not widgets["autoscale"].isChecked():
+                    y_min = widgets["y_min"].value()
+                    y_max = widgets["y_max"].value()
                     track.set_ylim(y_min, y_max)
                 else:
                     track.view.set_autoscale_y(True)
 
                 # Visibility
-                track.set_visible(widgets['visible'].isChecked())
+                track.set_visible(widgets["visible"].isChecked())
 
             # Apply axis titles
             self._apply_axis_titles()
@@ -770,7 +828,7 @@ class PyQtGraphSettingsDialog(QDialog):
             self._apply_hover_tooltips()
 
             # Notify parent window
-            if hasattr(self.parent_window, 'on_plot_settings_changed'):
+            if hasattr(self.parent_window, "on_plot_settings_changed"):
                 self.parent_window.on_plot_settings_changed()
 
         except Exception as e:
@@ -787,7 +845,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
             for track in self.plot_host._tracks.values():
                 plot_item = track.view.get_widget().getPlotItem()
-                axis = plot_item.getAxis('bottom')
+                axis = plot_item.getAxis("bottom")
                 if x_title:
                     axis.setLabel(x_title)
                 # PyQtGraph axis styling is more limited - font size can be set via CSS
@@ -795,13 +853,13 @@ class PyQtGraphSettingsDialog(QDialog):
                 # Color would need custom CSS or stylesheet
 
             # Y axis titles (per track)
-            for track_id, (track, widgets) in self.y_axis_widgets.items():
-                y_title = widgets['title'].text()
-                y_font_family = widgets['font_family'].currentText()
-                y_font_size = widgets['font_size'].value()
+            for _track_id, (track, widgets) in self.y_axis_widgets.items():
+                y_title = widgets["title"].text()
+                y_font_family = widgets["font_family"].currentText()
+                y_font_size = widgets["font_size"].value()
 
                 plot_item = track.view.get_widget().getPlotItem()
-                axis = plot_item.getAxis('left')
+                axis = plot_item.getAxis("left")
                 if y_title:
                     axis.setLabel(y_title)
                 axis.label.setFont(QFont(y_font_family, y_font_size))
@@ -811,8 +869,8 @@ class PyQtGraphSettingsDialog(QDialog):
             for track in self.plot_host._tracks.values():
                 plot_item = track.view.get_widget().getPlotItem()
                 font = QFont("Arial", tick_font_size)
-                plot_item.getAxis('bottom').setTickFont(font)
-                plot_item.getAxis('left').setTickFont(font)
+                plot_item.getAxis("bottom").setTickFont(font)
+                plot_item.getAxis("left").setTickFont(font)
 
         except Exception as e:
             log.error(f"Failed to apply axis titles: {e}", exc_info=True)
@@ -820,11 +878,11 @@ class PyQtGraphSettingsDialog(QDialog):
     def _apply_line_styling(self):
         """Apply line styling settings."""
         try:
-            for track_id, (track, widgets) in self.line_widgets.items():
-                line_width = widgets['line_width'].value()
-                line_style = widgets['line_style'].currentText()
-                line_color = self._get_label_color(widgets['color_label'])
-                line_alpha = widgets['alpha'].value()
+            for _track_id, (track, widgets) in self.line_widgets.items():
+                line_width = widgets["line_width"].value()
+                line_style = widgets["line_style"].currentText()
+                line_color = self._get_label_color(widgets["color_label"])
+                line_alpha = widgets["alpha"].value()
 
                 # Set line width
                 track.set_line_width(line_width)
@@ -855,12 +913,7 @@ class PyQtGraphSettingsDialog(QDialog):
             enabled = self.event_labels_enabled_cb.isChecked()
 
             # Create options from dialog values
-            mode_map = {
-                0: "vertical",
-                1: "h_inside",
-                2: "h_belt",
-            }
-            mode = mode_map.get(self.event_mode_combo.currentIndex(), "vertical")
+            mode = "vertical"
 
             # Get outline color
             outline_color = None
@@ -878,6 +931,11 @@ class PyQtGraphSettingsDialog(QDialog):
                 outline_enabled=self.event_outline_enabled_cb.isChecked(),
                 outline_width=self.event_outline_width.value(),
                 outline_color=outline_color,
+                font_family=self.event_font_family.currentText(),
+                font_size=float(self.event_font_size_spin.value()),
+                font_bold=self.event_font_bold.isChecked(),
+                font_italic=self.event_font_italic.isChecked(),
+                font_color=self._get_label_color(self.event_label_color_label),
             )
 
             # Apply to all tracks
@@ -895,7 +953,7 @@ class PyQtGraphSettingsDialog(QDialog):
         try:
             # Grid visibility and styling
             grid_visible = self.grid_visible_cb.isChecked()
-            grid_alpha = int(self.grid_alpha.value() * 255)
+            grid_alpha = float(self.grid_alpha.value())
 
             for track in self.plot_host._tracks.values():
                 plot_item = track.view.get_widget().getPlotItem()
@@ -908,8 +966,8 @@ class PyQtGraphSettingsDialog(QDialog):
             self.plot_host.widget.setStyleSheet(f"background-color: {bg_color};")
 
             for track in self.plot_host._tracks.values():
-                plot_item = track.view.get_widget().getPlotItem()
-                plot_item.setBackground(plot_bg_color)
+                plot_widget = track.view.get_widget()
+                plot_widget.setBackground(plot_bg_color)
 
         except Exception as e:
             log.error(f"Failed to apply grid/appearance settings: {e}", exc_info=True)

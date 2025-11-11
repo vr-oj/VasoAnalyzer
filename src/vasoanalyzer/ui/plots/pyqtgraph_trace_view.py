@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import contextlib
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -51,11 +52,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         # Enable OpenGL acceleration for better performance
         if self._enable_opengl:
-            try:
+            with contextlib.suppress(Exception):
                 self._plot_widget.useOpenGL(True)
-            except Exception:
-                # OpenGL not available, fall back to software rendering
-                pass
 
         # Configure plot appearance
         self._plot_item.showGrid(x=True, y=True, alpha=0.3)
@@ -157,6 +155,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         times: Sequence[float],
         colors: Sequence[str] | None = None,
         labels: Sequence[str] | None = None,
+        meta: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         """Set event markers to display as vertical lines."""
         # Clear existing event lines
@@ -180,10 +179,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Create infinite vertical lines for each event
         for i, time in enumerate(times):
             # Determine color for this event
-            if colors is not None and i < len(colors):
-                color = colors[i]
-            else:
-                color = default_color
+            color = colors[i] if colors is not None and i < len(colors) else default_color
 
             # Determine label text
             label_text = ""
@@ -202,11 +198,16 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             # Store label for event labeler
             if label_text:
                 line.label = label_text
-                # Create EventEntryV3 for label rendering
+                meta_payload: dict[str, Any] = {}
+                if meta is not None and i < len(meta):
+                    candidate = meta[i]
+                    if isinstance(candidate, Mapping):
+                        meta_payload.update(dict(candidate))
+                meta_payload.setdefault("event_color", color)
                 event_entry = EventEntryV3(
                     t=time,
                     text=label_text,
-                    meta={"color": color},
+                    meta=meta_payload,
                 )
                 self._event_entries.append(event_entry)
 
@@ -219,9 +220,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             pixel_width = max(int(self._plot_widget.width()), 400)
             self._event_labeler.render(self._event_entries, xlim, pixel_width)
 
-    def update_window(
-        self, x0: float, x1: float, *, pixel_width: int | None = None
-    ) -> None:
+    def update_window(self, x0: float, x1: float, *, pixel_width: int | None = None) -> None:
         """Update the visible time window with LOD selection."""
         if self.model is None:
             return
@@ -386,11 +385,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         """Get primary data series based on mode."""
         if self._mode == "outer":
-            if (
-                window.outer_mean is None
-                or window.outer_min is None
-                or window.outer_max is None
-            ):
+            if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
         return window.inner_mean, window.inner_min, window.inner_max
@@ -400,11 +395,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
         """Get secondary data series (outer in dual mode)."""
         if self._mode == "dual":
-            if (
-                window.outer_mean is None
-                or window.outer_min is None
-                or window.outer_max is None
-            ):
+            if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
         return None
@@ -449,6 +440,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if enabled:
             self.autoscale_y()
 
+    def is_autoscale_enabled(self) -> bool:
+        """Return whether Y-axis autoscaling is active."""
+        return bool(self._autoscale_y)
+
     def refresh(self) -> None:
         """Force a complete redraw."""
         if self._current_window is not None:
@@ -469,20 +464,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             series_max = window.outer_max
         elif self._mode == "dual":
             parts = []
-            if (
-                window.inner_min is not None
-                and window.inner_max is not None
-            ):
+            if window.inner_min is not None and window.inner_max is not None:
                 parts.append(
                     (
                         np.nanmin(window.inner_min),
                         np.nanmax(window.inner_max),
                     )
                 )
-            if (
-                window.outer_min is not None
-                and window.outer_max is not None
-            ):
+            if window.outer_min is not None and window.outer_max is not None:
                 parts.append(
                     (
                         np.nanmin(window.outer_min),
@@ -541,10 +530,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             pen = pg.mkPen(color=style["trace_color"], width=1.5)
             self.inner_curve.setPen(pen)
 
-        if (
-            "trace_color_secondary" in style
-            and self.outer_curve is not None
-        ):
+        if "trace_color_secondary" in style and self.outer_curve is not None:
             pen = pg.mkPen(color=style["trace_color_secondary"], width=1.2)
             self.outer_curve.setPen(pen)
 
@@ -604,11 +590,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def update_event_labels(self) -> None:
         """Update event label positions after view change."""
-        if (
-            self._event_labeler
-            and self._event_labels_visible
-            and self._event_entries
-        ):
+        if self._event_labeler and self._event_labels_visible and self._event_entries:
             xlim = self.get_xlim()
             self._event_labeler.update_positions(xlim)
 

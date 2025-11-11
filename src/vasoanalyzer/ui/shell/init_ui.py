@@ -63,6 +63,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         )
     ]
     window.plot_host.ensure_channels(initial_specs)
+    if hasattr(window, "_attach_plot_host_window_listener"):
+        window._attach_plot_host_window_listener()
     window.plot_host.set_event_highlight_style(
         color=window._event_highlight_color,
         alpha=window._event_highlight_base_alpha,

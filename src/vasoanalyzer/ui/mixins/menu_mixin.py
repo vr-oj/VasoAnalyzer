@@ -90,7 +90,7 @@ class MenuMixin:
         self.action_add_experiment.triggered.connect(self.add_experiment)
         project_menu.addAction(self.action_add_experiment)
 
-        self.action_add_sample = QAction("Add N", self)
+        self.action_add_sample = QAction("Add Data", self)
         self.action_add_sample.triggered.connect(self.add_sample_to_current_experiment)
         project_menu.addAction(self.action_add_sample)
 

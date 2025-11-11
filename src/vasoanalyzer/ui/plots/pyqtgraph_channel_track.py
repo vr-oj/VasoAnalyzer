@@ -5,10 +5,12 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import pyqtgraph as pg
 
 from vasoanalyzer.core.trace_model import TraceModel
+from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_axes_compat import PyQtGraphAxesCompat
 from vasoanalyzer.ui.plots.pyqtgraph_line_compat import PyQtGraphLineCompat
 from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
@@ -25,22 +27,23 @@ class PyQtGraphChannelTrack:
 
     def __init__(
         self,
-        spec,  # ChannelTrackSpec
+        spec: ChannelTrackSpec,
         enable_opengl: bool = True,
     ) -> None:
-        self.spec = spec
+        self.spec: ChannelTrackSpec = spec
         mode = spec.component if spec.component in {"inner", "outer", "dual"} else "inner"
-        self.view = PyQtGraphTraceView(
+        self.view: PyQtGraphTraceView = PyQtGraphTraceView(
             mode=mode,
             y_label=spec.label,
             enable_opengl=enable_opengl,
         )
         self._model: TraceModel | None = None
-        self._height_ratio = max(spec.height_ratio, 0.05)
+        self._height_ratio: float = max(float(spec.height_ratio), 0.05)
         self._visible = True
         self._events: Sequence[float] | None = None
         self._event_colors: Sequence[str] | None = None
         self._event_labels: Sequence[str] | None = None
+        self._event_label_meta: Sequence[dict[str, Any]] | None = None
         self._auto_margin: float = 0.05
         self._sticky_ylim: tuple[float, float] | None = None
         self._last_time_span: float | None = None
@@ -56,7 +59,7 @@ class PyQtGraphChannelTrack:
 
     @property
     def id(self) -> str:
-        return self.spec.track_id
+        return str(self.spec.track_id)
 
     @property
     def height_ratio(self) -> float:
@@ -117,7 +120,12 @@ class PyQtGraphChannelTrack:
 
         # Apply events if already set
         if self._events is not None:
-            self.view.set_events(self._events, self._event_colors, self._event_labels)
+            self.view.set_events(
+                self._events,
+                self._event_colors,
+                self._event_labels,
+                self._event_label_meta,
+            )
 
     def update_window(self, x0: float, x1: float) -> None:
         """Update the visible time window."""
@@ -142,12 +150,14 @@ class PyQtGraphChannelTrack:
         times: Sequence[float],
         colors: Sequence[str] | None = None,
         labels: Sequence[str] | None = None,
+        label_meta: Sequence[dict[str, Any]] | None = None,
     ) -> None:
         """Set event markers."""
         self._events = list(times)
         self._event_colors = None if colors is None else list(colors)
         self._event_labels = None if labels is None else list(labels)
-        self.view.set_events(times, colors, labels)
+        self._event_label_meta = None if label_meta is None else list(label_meta)
+        self.view.set_events(times, colors, labels, self._event_label_meta)
 
     def set_visible(self, visible: bool) -> None:
         """Show/hide this track."""
@@ -170,7 +180,11 @@ class PyQtGraphChannelTrack:
 
     def data_limits(self) -> tuple[float, float] | None:
         """Get Y-axis data limits for current window."""
-        return self.view.data_limits()
+        limits = self.view.data_limits()
+        if limits is None:
+            return None
+        ymin, ymax = limits
+        return float(ymin), float(ymax)
 
     def autoscale(self, margin: float = 0.05) -> tuple[float, float] | None:
         """Autoscale the Y axis using the current data window."""
@@ -223,16 +237,16 @@ class PyQtGraphChannelTrack:
 
     def get_xlim(self) -> tuple[float, float]:
         """Get current X-axis limits."""
-        return self.view.get_xlim()
+        x_min, x_max = self.view.get_xlim()
+        return float(x_min), float(x_max)
 
     def get_ylim(self) -> tuple[float, float]:
         """Get current Y-axis limits."""
-        return self.view.get_ylim()
+        y_min, y_max = self.view.get_ylim()
+        return float(y_min), float(y_max)
 
     # ------------------------------------------------------------------ helpers
-    def _compute_padded_limits(
-        self, *, margin: float | None = None
-    ) -> tuple[float, float] | None:
+    def _compute_padded_limits(self, *, margin: float | None = None) -> tuple[float, float] | None:
         """Compute Y limits with padding."""
         limits = self.data_limits()
         if limits is None:

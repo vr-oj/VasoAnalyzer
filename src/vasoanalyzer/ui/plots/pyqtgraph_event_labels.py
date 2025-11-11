@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor, QFont, QFontMetricsF
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 
@@ -25,6 +25,7 @@ class PyQtGraphLabelItem:
     x_pos: float
     y_pos: float
     lane: int = 0
+    pixel_length: float = 0.0
 
 
 class PyQtGraphEventLabeler:
@@ -93,7 +94,7 @@ class PyQtGraphEventLabeler:
 
         # Render labels for each cluster
         for cluster in clusters:
-            self._render_cluster(cluster, xlim)
+            self._render_cluster(cluster)
 
     def _cluster_events(
         self,
@@ -154,151 +155,201 @@ class PyQtGraphEventLabeler:
     def _render_cluster(
         self,
         cluster: list[EventEntryV3],
-        xlim: tuple[float, float],
     ) -> None:
-        """Render a single cluster of events.
-
-        Args:
-            cluster: Events in this cluster
-            xlim: Visible X range for positioning
-        """
+        """Render a single cluster of events."""
         if not cluster:
             return
 
-        # Determine cluster position (average of all events in cluster)
         cluster_x = sum(e.t for e in cluster) / len(cluster)
+        representative = self._select_representative(cluster)
+        label_text = self._compose_cluster_label(cluster, representative)
 
-        # Select representative event(s) based on style policy
-        if self.options.style_policy == "priority":
-            # Show highest priority event
-            representative = max(cluster, key=lambda e: e.priority)
-        elif self.options.style_policy == "first":
-            # Show first event
-            representative = cluster[0]
-        else:
-            # Default to first
-            representative = cluster[0]
+        mode = (self.options.mode or "vertical").lower()
 
-        # Determine label text
-        if len(cluster) > self.options.max_labels_per_cluster:
-            # Show count if cluster is large
-            if self.options.compact_counts:
-                label_text = f"{len(cluster)}"
-            else:
-                label_text = f"{representative.text} (+{len(cluster)-1})"
-        elif len(cluster) > 1:
-            # Show representative with count
-            label_text = f"{representative.text} ({len(cluster)})"
-        else:
-            # Single event
-            label_text = representative.text
-
-        # Create text item
         text_item = pg.TextItem(
             text=label_text,
-            anchor=(0.5, 1.0),  # Center bottom anchor for vertical mode
             color=self._get_label_color(representative),
         )
 
-        # Set font
         font = self._create_label_font(representative)
         text_item.setFont(font)
+        text_extent_px = self._text_pixel_length(font, label_text)
 
-        # Position based on layout mode
-        if self.options.mode == "vertical":
-            # Vertical labels above the plot
-            view_range = self.plot_item.viewRange()
-            y_max = view_range[1][1]
-            y_pos = y_max  # Top of visible area
-
-            # Rotate text 90 degrees for vertical mode
-            text_item.setRotation(self.options.rotation_deg)
-            text_item.setAnchor((0.5, 0.0))  # Center top anchor when rotated
-
-        elif self.options.mode == "h_inside":
-            # Horizontal labels inside the plot
-            view_range = self.plot_item.viewRange()
-            y_max = view_range[1][1]
-            y_pos = y_max * 0.95  # 95% of the way up
-
-        elif self.options.mode == "h_belt":
-            # Horizontal labels in belt above plot
-            view_range = self.plot_item.viewRange()
-            y_max = view_range[1][1]
-            y_pos = y_max * 1.05  # 5% above plot
-
+        if mode == "vertical":
+            rotation = self.options.rotation_deg or -90.0
+            text_item.setRotation(rotation)
+            text_item.setAnchor((0.5, 0.0))
+            x_pos = cluster_x
+        elif mode == "h_belt":
+            text_item.setAnchor((0.5, 0.0))
+            x_pos = cluster_x
+            rotation = self.options.rotation_deg or 0.0
+            if rotation:
+                text_item.setRotation(rotation)
         else:
-            # Default vertical
-            view_range = self.plot_item.viewRange()
-            y_max = view_range[1][1]
-            y_pos = y_max
+            text_item.setAnchor((0.5, 1.0))
+            x_pos = cluster_x
+            rotation = self.options.rotation_deg or 0.0
+            if rotation:
+                text_item.setRotation(rotation)
 
-        # Set position
-        text_item.setPos(cluster_x, y_pos)
-
-        # Set Z value for layering
+        y_pos = self._mode_y_position(mode, text_extent_px)
+        text_item.setPos(x_pos, y_pos)
         text_item.setZValue(self.options.z_label)
 
-        # Add to plot
         self.plot_item.addItem(text_item)
 
-        # Store reference
         label_item = PyQtGraphLabelItem(
             text_item=text_item,
             event_entry=representative,
             x_pos=cluster_x,
             y_pos=y_pos,
+            pixel_length=text_extent_px,
         )
         self._label_items.append(label_item)
-
-        # Set visibility
         text_item.setVisible(self._visible)
 
+    def _select_representative(self, cluster: list[EventEntryV3]) -> EventEntryV3:
+        policy = (self.options.style_policy or "first").lower()
+        if policy == "priority":
+            return max(cluster, key=lambda entry: entry.priority)
+        if policy == "first":
+            return cluster[0]
+        return cluster[0]
+
+    def _compose_cluster_label(
+        self,
+        cluster: list[EventEntryV3],
+        representative: EventEntryV3,
+    ) -> str:
+        if len(cluster) > self.options.max_labels_per_cluster:
+            if self.options.compact_counts:
+                return str(len(cluster))
+            return f"{representative.text} (+{len(cluster) - 1})"
+        if len(cluster) > 1:
+            return f"{representative.text} ({len(cluster)})"
+        return str(representative.text)
+
+    def _text_pixel_length(self, font: QFont, text: str) -> float:
+        metrics = QFontMetricsF(font)
+        try:
+            advance = float(metrics.horizontalAdvance(text))
+        except AttributeError:
+            advance = float(metrics.width(text))
+        return max(advance, 0.0)
+
+    def _mode_y_position(self, mode: str, text_size_px: float) -> float:
+        view_range = self.plot_item.viewRange()
+        if not view_range or len(view_range) < 2:
+            return 0.0
+        y_min_raw, y_max_raw = view_range[1]
+        y_min = float(y_min_raw)
+        y_max = float(y_max_raw)
+        span = max(y_max - y_min, 1e-9)
+        if mode == "vertical":
+            return self._vertical_label_position(text_size_px, y_min, y_max)
+        if mode == "h_inside":
+            return y_max - (span * 0.05)
+        if mode == "h_belt":
+            return y_max + (span * 0.05)
+        return self._vertical_label_position(text_size_px, y_min, y_max)
+
+    def _vertical_label_position(
+        self,
+        text_size_px: float,
+        y_min: float,
+        y_max: float,
+    ) -> float:
+        vb = getattr(self.plot_item, "vb", None)
+        if vb is None:
+            return y_max
+        try:
+            pixel_height = float(vb.height())
+        except Exception:
+            return y_max
+        if pixel_height <= 0.0:
+            return y_max
+        span = max(y_max - y_min, 1e-9)
+        pad_px = (text_size_px / 2.0) + 4.0
+        pad_data = (pad_px / pixel_height) * span
+        pad_data = min(pad_data, span)
+        return y_max - pad_data
+
     def _get_label_color(self, event: EventEntryV3) -> tuple[int, int, int]:
-        """Get RGB color for event label from metadata.
+        """Resolve RGB color for event label."""
+        color = self._coerce_color(event.meta.get("color"))
+        if color is None:
+            color = self._coerce_color(self.options.font_color)
+        if color is None:
+            color = self._coerce_color(event.meta.get("event_color"))
+        if color is None:
+            color = QColor("#000000")
+        return (color.red(), color.green(), color.blue())
 
-        Args:
-            event: Event entry
-
-        Returns:
-            RGB tuple (0-255)
-        """
-        # Check metadata for color
-        if "color" in event.meta:
-            color_str = event.meta["color"]
-            qcolor = QColor(color_str)
-            return (qcolor.red(), qcolor.green(), qcolor.blue())
-
-        # Default black
-        return (0, 0, 0)
+    def _coerce_color(self, value: Any) -> QColor | None:
+        if value is None:
+            return None
+        if isinstance(value, QColor):
+            candidate = QColor(value)
+            return candidate if candidate.isValid() else None
+        if isinstance(value, str):
+            candidate = QColor(value)
+            return candidate if candidate.isValid() else None
+        if isinstance(value, Sequence):
+            comps = list(value)[:3]
+            if len(comps) < 3:
+                return None
+            scaled = []
+            use_unit = all(
+                isinstance(comp, int | float) and 0.0 <= float(comp) <= 1.0 for comp in comps
+            )
+            for comp in comps:
+                number = float(comp)
+                if use_unit:
+                    number = max(0.0, min(number, 1.0)) * 255.0
+                scaled.append(int(max(0.0, min(number, 255.0))))
+            try:
+                candidate = QColor(*scaled)
+            except Exception:
+                return None
+            return candidate if candidate.isValid() else None
+        return None
 
     def _create_label_font(self, event: EventEntryV3) -> QFont:
-        """Create QFont for event label from metadata.
+        """Create QFont for event label from metadata."""
+        family = (
+            event.meta.get("font")
+            or event.meta.get("fontfamily")
+            or self.options.font_family
+            or "Arial"
+        )
+        font = QFont(family)
 
-        Args:
-            event: Event entry
+        size_value = (
+            event.meta.get("fontsize") or event.meta.get("font_size") or self.options.font_size
+        )
+        try:
+            font.setPointSizeF(float(size_value))
+        except (TypeError, ValueError):
+            font.setPointSizeF(float(self.options.font_size or 10.0))
 
-        Returns:
-            QFont instance
-        """
-        font = QFont()
-
-        # Check metadata for font settings
-        if "font_family" in event.meta:
-            font.setFamily(event.meta["font_family"])
+        bold_override = event.meta.get("fontweight")
+        if isinstance(bold_override, str):
+            bold_flag = bold_override.lower() in {"bold", "semibold", "demi", "black"}
+        elif "font_bold" in event.meta:
+            bold_flag = bool(event.meta.get("font_bold"))
         else:
-            font.setFamily("Arial")
+            bold_flag = bool(self.options.font_bold)
+        font.setBold(bold_flag)
 
-        if "font_size" in event.meta:
-            font.setPointSize(int(event.meta["font_size"]))
+        italic_override = event.meta.get("fontstyle")
+        if isinstance(italic_override, str):
+            italic_flag = italic_override.lower() == "italic"
+        elif "font_italic" in event.meta:
+            italic_flag = bool(event.meta.get("font_italic"))
         else:
-            font.setPointSize(10)
-
-        if "font_bold" in event.meta:
-            font.setBold(bool(event.meta["font_bold"]))
-
-        if "font_italic" in event.meta:
-            font.setItalic(bool(event.meta["font_italic"]))
+            italic_flag = bool(self.options.font_italic)
+        font.setItalic(italic_flag)
 
         return font
 
@@ -308,19 +359,8 @@ class PyQtGraphEventLabeler:
         Args:
             xlim: New visible X range
         """
-        # Update Y positions based on new view range
-        view_range = self.plot_item.viewRange()
-        y_max = view_range[1][1]
-
+        mode = (self.options.mode or "vertical").lower()
         for item in self._label_items:
-            if self.options.mode == "vertical":
-                y_pos = y_max
-            elif self.options.mode == "h_inside":
-                y_pos = y_max * 0.95
-            elif self.options.mode == "h_belt":
-                y_pos = y_max * 1.05
-            else:
-                y_pos = y_max
-
+            y_pos = self._mode_y_position(mode, item.pixel_length)
             item.text_item.setPos(item.x_pos, y_pos)
             item.y_pos = y_pos

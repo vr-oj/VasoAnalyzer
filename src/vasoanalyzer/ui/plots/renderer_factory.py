@@ -10,8 +10,6 @@ if TYPE_CHECKING:
     from vasoanalyzer.ui.plots.plot_host import PlotHost
     from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
 
-    PlotHostType = PlotHost | PyQtGraphPlotHost
-
 __all__ = ["create_plot_host", "get_default_renderer_type"]
 
 
@@ -34,7 +32,7 @@ def create_plot_host(
     *,
     dpi: int = 100,
     renderer: Literal["matplotlib", "pyqtgraph"] | None = None,
-) -> PlotHostType:
+) -> PlotHost | PyQtGraphPlotHost:
     """Create a plot host with the specified or default renderer.
 
     Args:
@@ -61,19 +59,19 @@ def create_plot_host(
     if renderer == "pyqtgraph":
         from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
 
-        return PyQtGraphPlotHost(dpi=dpi, enable_opengl=True)
+        use_opengl = is_enabled("pyqtgraph_opengl", default=False)
+        return PyQtGraphPlotHost(dpi=dpi, enable_opengl=use_opengl)
     elif renderer == "matplotlib":
         from vasoanalyzer.ui.plots.plot_host import PlotHost
 
         return PlotHost(dpi=dpi)
     else:
         raise ValueError(
-            f"Invalid renderer type: {renderer}. "
-            f"Must be 'matplotlib' or 'pyqtgraph'"
+            f"Invalid renderer type: {renderer}. " f"Must be 'matplotlib' or 'pyqtgraph'"
         )
 
 
-def supports_export(plot_host: PlotHostType) -> bool:
+def supports_export(plot_host: PlotHost | PyQtGraphPlotHost) -> bool:
     """Check if the plot host supports high-quality export.
 
     Args:

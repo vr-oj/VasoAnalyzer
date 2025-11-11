@@ -599,6 +599,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._plot_drag_in_progress = False
         self._last_hover_time: float | None = None
         self._pending_plot_layout: dict | None = None
+        self._pending_pyqtgraph_track_state: dict | None = None
+        self._plot_host_window_listener = None
 
         # ===== Build UI =====
         self.create_menubar()
@@ -2494,8 +2496,8 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_dual_view(selected_samples)
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
-            save_n = menu.addAction("Save N As…")
-            del_n = menu.addAction("Delete N")
+            save_n = menu.addAction("Save Data As…")
+            del_n = menu.addAction("Delete Data")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == load_data:
                 self.load_data_into_sample(obj)
@@ -5197,6 +5199,8 @@ QPushButton[isGhost="true"]:hover {{
         normalized = alias.get(normalized, normalized)
         if normalized not in {"vertical", "horizontal", "horizontal_outside"}:
             normalized = "vertical"
+        if self._plot_host_is_pyqtgraph():
+            normalized = "vertical"
         if normalized == self._event_label_mode:
             return
         self._apply_event_label_mode(normalized)
@@ -5231,6 +5235,11 @@ QPushButton[isGhost="true"]:hover {{
         self._sync_event_controls()
 
     def _sync_event_controls(self) -> None:
+        is_pyqtgraph = self._plot_host_is_pyqtgraph()
+        for action in (self.actEventLabelsHorizontal, self.actEventLabelsOutside):
+            if action is not None:
+                action.setEnabled(not is_pyqtgraph)
+
         if (
             self.actEventLines is not None
             and self.actEventLines.isChecked() != self._event_lines_visible
@@ -6809,6 +6818,7 @@ QPushButton[isGhost="true"]:hover {{
 
         # Apply plot style (defaults on first load)
         self.apply_plot_style(self.get_current_plot_style(), persist=False)
+        self._apply_pending_pyqtgraph_track_state()
         self.canvas.draw_idle()
 
     def _refresh_plot_legend(self):
@@ -6892,6 +6902,97 @@ QPushButton[isGhost="true"]:hover {{
         finally:
             self._syncing_time_window = False
 
+    def _plot_host_is_pyqtgraph(self) -> bool:
+        plot_host = getattr(self, "plot_host", None)
+        return bool(plot_host is not None and plot_host.get_render_backend() == "pyqtgraph")
+
+    def _attach_plot_host_window_listener(self) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "add_time_window_listener"):
+            return
+        listener = getattr(self, "_plot_host_window_listener", None)
+        if listener is not None and hasattr(plot_host, "remove_time_window_listener"):
+            plot_host.remove_time_window_listener(listener)
+        self._plot_host_window_listener = self._on_plot_host_time_window_changed
+        plot_host.add_time_window_listener(self._plot_host_window_listener)
+
+    def _on_plot_host_time_window_changed(self, x0: float, x1: float) -> None:
+        if getattr(self, "_syncing_time_window", False):
+            return
+        self.update_scroll_slider()
+        self._invalidate_sample_state_cache()
+
+    def _collect_plot_view_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {}
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and plot_host.get_render_backend() == "pyqtgraph":
+            window = plot_host.current_window()
+            if window is not None:
+                state["axis_xlim"] = [float(window[0]), float(window[1])]
+            track_state: dict[str, Any] = {}
+            tracks = []
+            with contextlib.suppress(Exception):
+                tracks = plot_host.tracks()
+            for track in tracks or []:
+                view = getattr(track, "view", None)
+                if view is None:
+                    continue
+                try:
+                    ymin, ymax = view.get_ylim()
+                except Exception:
+                    continue
+                track_state[track.id] = {
+                    "ylim": [float(ymin), float(ymax)],
+                    "autoscale": view.is_autoscale_enabled(),
+                }
+            if track_state:
+                state["pyqtgraph_track_state"] = track_state
+            return state
+
+        if self.ax is not None:
+            state["axis_xlim"] = list(self.ax.get_xlim())
+            state["axis_ylim"] = list(self.ax.get_ylim())
+        if self.ax2 is not None:
+            state["axis_outer_ylim"] = list(self.ax2.get_ylim())
+        return state
+
+    def _apply_pyqtgraph_track_state(self, track_state: dict | None) -> None:
+        if not track_state:
+            self._pending_pyqtgraph_track_state = None
+            return
+        plot_host = getattr(self, "plot_host", None)
+        if (
+            plot_host is None
+            or plot_host.get_render_backend() != "pyqtgraph"
+            or not hasattr(plot_host, "track")
+        ):
+            self._pending_pyqtgraph_track_state = track_state
+            return
+
+        for track_id, payload in track_state.items():
+            track = plot_host.track(track_id)
+            if track is None:
+                continue
+            autoscale = bool(payload.get("autoscale"))
+            if autoscale:
+                track.view.set_autoscale_y(True)
+                with contextlib.suppress(Exception):
+                    track.autoscale()
+                continue
+            ylim = payload.get("ylim")
+            if isinstance(ylim, list | tuple) and len(ylim) == 2:
+                try:
+                    y0 = float(ylim[0])
+                    y1 = float(ylim[1])
+                except (TypeError, ValueError):
+                    continue
+                track.set_ylim(y0, y1)
+        self._pending_pyqtgraph_track_state = None
+
+    def _apply_pending_pyqtgraph_track_state(self) -> None:
+        if self._pending_pyqtgraph_track_state:
+            self._apply_pyqtgraph_track_state(self._pending_pyqtgraph_track_state)
+
     def _sync_time_window_from_axes(self) -> None:
         """Pull the current Matplotlib limits back into PlotHost."""
 
@@ -6948,6 +7049,7 @@ QPushButton[isGhost="true"]:hover {{
         xlim = ax.get_xlim()
         self._apply_time_window(xlim)
         self.update_scroll_slider()
+        self._invalidate_sample_state_cache()
 
     def scroll_plot(self):
         if self.trace_data is None:
@@ -7743,15 +7845,13 @@ QPushButton[isGhost="true"]:hover {{
         - Event labels (mode, clustering, font)
         - General plot settings (grid, background)
         """
-        from vasoanalyzer.ui.dialogs.pyqtgraph_settings_dialog import PyQtGraphSettingsDialog
+        from vasoanalyzer.ui.dialogs.pyqtgraph_settings_dialog import (
+            PyQtGraphSettingsDialog,
+        )
 
         plot_host = getattr(self, "plot_host", None)
         if plot_host is None:
-            QMessageBox.warning(
-                self,
-                "No Plot Available",
-                "No PyQtGraph plot is currently loaded."
-            )
+            QMessageBox.warning(self, "No Plot Available", "No PyQtGraph plot is currently loaded.")
             return
 
         dialog = PyQtGraphSettingsDialog(self, plot_host)
@@ -8192,7 +8292,7 @@ QPushButton[isGhost="true"]:hover {{
 
         # Detect PyQtGraph backend - return default style since PyQtGraph styling
         # is handled differently and doesn't use matplotlib artist properties
-        is_pyqtgraph = not hasattr(x_axis, 'xaxis')
+        is_pyqtgraph = not hasattr(x_axis, "xaxis")
         if is_pyqtgraph:
             return style
 
@@ -8863,9 +8963,8 @@ QPushButton[isGhost="true"]:hover {{
         state = {
             "geometry": self.saveGeometry().data().hex(),
             "window_state": self.saveState().data().hex(),
-            "axis_xlim": list(self.ax.get_xlim()),
-            "axis_ylim": list(self.ax.get_ylim()),
         }
+        state.update(self._collect_plot_view_state())
         layout_state = self._serialize_plot_layout()
         if layout_state:
             state["plot_layout"] = layout_state
@@ -8903,20 +9002,18 @@ QPushButton[isGhost="true"]:hover {{
             prev = self.current_sample.ui_state.get("style_settings", {}) or {}
         x_axis = self._x_axis_for_style()
         state = {
-            "axis_xlim": list(self.ax.get_xlim()),
-            "axis_ylim": list(self.ax.get_ylim()),
             "table_fontsize": self.event_table.font().pointSize(),
             "event_table_data": list(self.event_table_data),
             "event_label_meta": copy.deepcopy(self.event_label_meta),
             "pins": [(p.get_xdata()[0], p.get_ydata()[0]) for p, _ in self.pinned_points],
             "plot_style": self.get_current_plot_style(),
             "grid_visible": self.grid_visible,
-            "inner_trace_visible": self.id_toggle_act.isChecked()
-            if self.id_toggle_act is not None
-            else True,
-            "outer_trace_visible": self.od_toggle_act.isChecked()
-            if self.od_toggle_act is not None
-            else False,
+            "inner_trace_visible": (
+                self.id_toggle_act.isChecked() if self.id_toggle_act is not None else True
+            ),
+            "outer_trace_visible": (
+                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False
+            ),
             "axis_settings": {
                 "x": {"label": x_axis.get_xlabel() if x_axis else ""},
                 "y": {"label": self.ax.get_ylabel()},
@@ -8927,11 +9024,11 @@ QPushButton[isGhost="true"]:hover {{
         # Always record whatever is in ui_state["style_settings"], even if empty
         state["style_settings"] = prev
         if self.ax2 is not None:
-            state["axis_outer_ylim"] = list(self.ax2.get_ylim())
             state["axis_settings"]["y_outer"] = {"label": self.ax2.get_ylabel()}
         layout_state = self._serialize_plot_layout()
         if layout_state:
             state["plot_layout"] = layout_state
+        state.update(self._collect_plot_view_state())
 
         # Cache the result
         self._cached_sample_state = state
@@ -8958,6 +9055,9 @@ QPushButton[isGhost="true"]:hover {{
         plot_layout = state.get("plot_layout")
         if plot_layout:
             self._pending_plot_layout = plot_layout
+        pyqtgraph_tracks = state.get("pyqtgraph_track_state")
+        if pyqtgraph_tracks:
+            self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
         # Restore trace visibility state
         if (
             "inner_trace_visible" in state
@@ -8988,6 +9088,9 @@ QPushButton[isGhost="true"]:hover {{
         layout = state.get("plot_layout")
         if layout:
             self._pending_plot_layout = layout
+        pyqtgraph_tracks = state.get("pyqtgraph_track_state")
+        if pyqtgraph_tracks:
+            self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
         if "event_table_data" in state:
             self.event_table_data = state["event_table_data"]
             meta_payload = state.get("event_label_meta")
@@ -9041,7 +9144,7 @@ QPushButton[isGhost="true"]:hover {{
             )
             outer_on = state.get(
                 "outer_trace_visible",
-                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False,
+                (self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False),
             )
             outer_supported = self._outer_channel_available()
             self._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)
