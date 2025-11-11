@@ -153,8 +153,13 @@ class PlotHost:
         desired = list(specs)
         current_ids = [spec.track_id for spec in self._channel_specs]
         desired_ids = [spec.track_id for spec in desired]
+        print(f"DEBUG: ensure_channels called")
+        print(f"DEBUG:   current_ids = {current_ids}")
+        print(f"DEBUG:   desired_ids = {desired_ids}")
+        print(f"DEBUG:   current_ids == desired_ids: {current_ids == desired_ids}")
         if current_ids == desired_ids:
             # Update stored specs (e.g., new height ratios) without rebuilding axes.
+            print(f"DEBUG: Early return - not rebuilding tracks")
             self._channel_specs = desired
             for spec in desired:
                 track = self._tracks.get(spec.track_id)
@@ -162,11 +167,16 @@ class PlotHost:
                     track.height_ratio = spec.height_ratio
             return
 
+        print(f"DEBUG: Calling _rebuild_tracks() because IDs don't match")
         self._channel_specs = desired
         self._rebuild_tracks()
 
     def _rebuild_tracks(self) -> None:
         """Recreate axes and channel wrappers to match specs."""
+
+        print(f"DEBUG: _rebuild_tracks() called with {len(self._channel_specs)} specs")
+        for spec in self._channel_specs:
+            print(f"DEBUG:   - {spec.track_id}: component={spec.component}, label={spec.label}")
 
         self._destroy_event_labeler()
         self.figure.clf()
