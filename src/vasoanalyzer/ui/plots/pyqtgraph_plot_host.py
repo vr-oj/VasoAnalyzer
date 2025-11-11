@@ -264,7 +264,20 @@ class PyQtGraphPlotHost:
 
     def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
         plot_item = track.view.get_widget().getPlotItem()
-        label_font = QFont(self._axis_font_family, int(round(self._axis_font_size)))
+
+        # Dynamically scale font size based on number of tracks
+        track_count = len(self._channel_specs)
+        if track_count == 1:
+            label_size_scale = 1.0
+        elif track_count == 2:
+            label_size_scale = 0.9
+        elif track_count == 3:
+            label_size_scale = 0.8
+        else:  # 4 or more tracks
+            label_size_scale = 0.7
+
+        scaled_label_size = int(round(self._axis_font_size * label_size_scale))
+        label_font = QFont(self._axis_font_family, scaled_label_size)
         tick_font = QFont(self._axis_font_family, int(round(self._tick_font_size)))
 
         left_axis = plot_item.getAxis("left")
