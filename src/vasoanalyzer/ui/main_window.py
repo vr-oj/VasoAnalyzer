@@ -7734,6 +7734,29 @@ QPushButton[isGhost="true"]:hover {{
                 dialog.tabs.setCurrentIndex(idx)
         dialog.exec_()
 
+    def open_pyqtgraph_settings_dialog(self):
+        """Open PyQtGraph plot settings dialog.
+
+        This dialog provides settings for PyQtGraph renderer without depending on
+        matplotlib Figure objects. It focuses on commonly used settings like:
+        - Track/channel appearance (colors, line width, y-axis)
+        - Event labels (mode, clustering, font)
+        - General plot settings (grid, background)
+        """
+        from vasoanalyzer.ui.dialogs.pyqtgraph_settings_dialog import PyQtGraphSettingsDialog
+
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            QMessageBox.warning(
+                self,
+                "No Plot Available",
+                "No PyQtGraph plot is currently loaded."
+            )
+            return
+
+        dialog = PyQtGraphSettingsDialog(self, plot_host)
+        dialog.exec_()
+
     def open_figure_composer(
         self,
         checked: bool = False,

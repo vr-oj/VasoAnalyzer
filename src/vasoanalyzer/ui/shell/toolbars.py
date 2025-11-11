@@ -177,11 +177,12 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     if is_pyqtgraph:
         window.actStyle.setToolTip(
             "<b>Plot Settings</b><br><br>"
-            "Plot settings dialog is currently not available<br>"
-            "for PyQtGraph renderer. Use matplotlib renderer<br>"
-            "if you need to customize plot appearance."
+            "Open PyQtGraph plot settings dialog.<br>"
+            "Customize tracks, event labels, and appearance."
         )
-        window.actStyle.setEnabled(False)
+        with contextlib.suppress(Exception):
+            window.actStyle.triggered.disconnect()
+        window.actStyle.triggered.connect(lambda: window.open_pyqtgraph_settings_dialog())
     else:
         window.actStyle.setToolTip(
             "<b>Plot Settings</b><br><br>"
