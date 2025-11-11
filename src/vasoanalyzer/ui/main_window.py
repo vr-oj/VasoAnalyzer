@@ -2905,6 +2905,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._build_edit_menu(menubar)
         self._build_view_menu(menubar)
         self._build_tools_menu(menubar)
+        self._build_window_menu(menubar)
         self._build_help_menu(menubar)
 
     def _build_file_menu(self, menubar):
@@ -3024,6 +3025,41 @@ class VasoAnalyzerApp(QMainWindow):
 
         edit_menu.addSeparator()
 
+        # Event manipulation
+        self.action_copy_events = QAction("Copy Event(s)", self)
+        self.action_copy_events.setShortcut(QKeySequence.Copy)
+        self.action_copy_events.triggered.connect(self.copy_selected_events)
+        edit_menu.addAction(self.action_copy_events)
+
+        self.action_paste_events = QAction("Paste Event(s)", self)
+        self.action_paste_events.setShortcut(QKeySequence.Paste)
+        self.action_paste_events.triggered.connect(self.paste_events)
+        edit_menu.addAction(self.action_paste_events)
+
+        self.action_duplicate_event = QAction("Duplicate Event", self)
+        self.action_duplicate_event.setShortcut("Ctrl+D")
+        self.action_duplicate_event.triggered.connect(self.duplicate_selected_event)
+        edit_menu.addAction(self.action_duplicate_event)
+
+        self.action_delete_event = QAction("Delete Event", self)
+        self.action_delete_event.setShortcut(QKeySequence.Delete)
+        self.action_delete_event.triggered.connect(self.delete_selected_events)
+        edit_menu.addAction(self.action_delete_event)
+
+        edit_menu.addSeparator()
+
+        self.action_select_all_events = QAction("Select All Events", self)
+        self.action_select_all_events.setShortcut(QKeySequence.SelectAll)
+        self.action_select_all_events.triggered.connect(self.select_all_events)
+        edit_menu.addAction(self.action_select_all_events)
+
+        self.action_find_event = QAction("Find Event…", self)
+        self.action_find_event.setShortcut(QKeySequence.Find)
+        self.action_find_event.triggered.connect(self.find_event_dialog)
+        edit_menu.addAction(self.action_find_event)
+
+        edit_menu.addSeparator()
+
         clear_pins = QAction("Clear All Pins", self)
         clear_pins.triggered.connect(self.clear_all_pins)
         edit_menu.addAction(clear_pins)
@@ -3039,6 +3075,31 @@ class VasoAnalyzerApp(QMainWindow):
         home_act.setShortcut("Ctrl+Shift+H")
         home_act.triggered.connect(self.show_home_screen)
         view_menu.addAction(home_act)
+
+        view_menu.addSeparator()
+
+        # Renderer selection
+        renderer_menu = view_menu.addMenu("Renderer")
+        self.action_use_matplotlib = QAction("Matplotlib", self, checkable=True)
+        self.action_use_pyqtgraph = QAction("PyQtGraph", self, checkable=True)
+        self.action_use_matplotlib.triggered.connect(lambda: self.set_renderer("matplotlib"))
+        self.action_use_pyqtgraph.triggered.connect(lambda: self.set_renderer("pyqtgraph"))
+        renderer_menu.addAction(self.action_use_matplotlib)
+        renderer_menu.addAction(self.action_use_pyqtgraph)
+        # Set default checked state
+        self.action_use_matplotlib.setChecked(True)
+
+        # Color scheme selection
+        theme_menu = view_menu.addMenu("Color Scheme")
+        self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
+        self.action_theme_dark = QAction("Dark", self, checkable=True)
+        self.action_theme_auto = QAction("Auto (System)", self, checkable=True)
+        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
+        self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
+        self.action_theme_auto.triggered.connect(lambda: self.set_color_scheme("auto"))
+        theme_menu.addAction(self.action_theme_light)
+        theme_menu.addAction(self.action_theme_dark)
+        theme_menu.addAction(self.action_theme_auto)
 
         view_menu.addSeparator()
 
@@ -3124,10 +3185,24 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_tools_menu(self, menubar):
         tools_menu = menubar.addMenu("&Tools")
 
-        self.action_map_excel = QAction("Map Events to Excel…", self)
-        self.action_map_excel.triggered.connect(self.open_excel_mapping_dialog)
-        tools_menu.addAction(self.action_map_excel)
+        # Analysis tools
+        analysis_menu = tools_menu.addMenu("Analysis")
 
+        self.action_calculate_statistics = QAction("Calculate Statistics…", self)
+        self.action_calculate_statistics.triggered.connect(self.show_statistics_dialog)
+        analysis_menu.addAction(self.action_calculate_statistics)
+
+        self.action_batch_analysis = QAction("Batch Analysis…", self)
+        self.action_batch_analysis.triggered.connect(self.show_batch_analysis_dialog)
+        analysis_menu.addAction(self.action_batch_analysis)
+
+        self.action_validate_data = QAction("Data Validation…", self)
+        self.action_validate_data.triggered.connect(self.show_data_validation_dialog)
+        analysis_menu.addAction(self.action_validate_data)
+
+        tools_menu.addSeparator()
+
+        # Visualization tools
         self.action_plot_settings = QAction("Plot Settings…", self)
         self.action_plot_settings.triggered.connect(self.open_unified_plot_settings_dialog)
         tools_menu.addAction(self.action_plot_settings)
@@ -3143,10 +3218,34 @@ class VasoAnalyzerApp(QMainWindow):
 
         tools_menu.addSeparator()
 
+        # Data management tools
+        self.action_map_excel = QAction("Map Events to Excel…", self)
+        self.action_map_excel.triggered.connect(self.open_excel_mapping_dialog)
+        tools_menu.addAction(self.action_map_excel)
+
         self.action_relink_assets = QAction("Relink Missing Files…", self)
         self.action_relink_assets.setEnabled(False)
         self.action_relink_assets.triggered.connect(self.show_relink_dialog)
         tools_menu.addAction(self.action_relink_assets)
+
+    def _build_window_menu(self, menubar):
+        window_menu = menubar.addMenu("&Window")
+
+        minimize_act = QAction("Minimize", self)
+        minimize_act.setShortcut("Ctrl+M" if sys.platform != "darwin" else "Meta+M")
+        minimize_act.triggered.connect(self.showMinimized)
+        window_menu.addAction(minimize_act)
+
+        zoom_act = QAction("Zoom", self)
+        zoom_act.triggered.connect(self.toggle_maximize)
+        window_menu.addAction(zoom_act)
+
+        window_menu.addSeparator()
+
+        if sys.platform == "darwin":
+            bring_all_act = QAction("Bring All to Front", self)
+            bring_all_act.triggered.connect(self.raise_all_windows)
+            window_menu.addAction(bring_all_act)
 
     def _build_help_menu(self, menubar):
         help_menu = menubar.addMenu("&Help")
