@@ -18,6 +18,12 @@ class TraceWindow:
     outer_mean: np.ndarray | None = None
     outer_min: np.ndarray | None = None
     outer_max: np.ndarray | None = None
+    avg_pressure_mean: np.ndarray | None = None
+    avg_pressure_min: np.ndarray | None = None
+    avg_pressure_max: np.ndarray | None = None
+    set_pressure_mean: np.ndarray | None = None
+    set_pressure_min: np.ndarray | None = None
+    set_pressure_max: np.ndarray | None = None
 
 
 def ensure_float_array(data: np.ndarray) -> np.ndarray:

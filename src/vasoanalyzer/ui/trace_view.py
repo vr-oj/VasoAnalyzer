@@ -34,7 +34,7 @@ class TraceView:
         mode: str = "dual",
         y_label: str | None = None,
     ) -> None:
-        if mode not in {"inner", "outer", "dual"}:
+        if mode not in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}:
             raise ValueError(f"Unsupported trace view mode: {mode}")
         self.ax = ax
         self.canvas = canvas
@@ -175,6 +175,10 @@ class TraceView:
     def _default_ylabel(self) -> str:
         if self._mode == "outer":
             return "Outer Diameter (µm)"
+        elif self._mode == "avg_pressure":
+            return "Avg Pressure (mmHg)"
+        elif self._mode == "set_pressure":
+            return "Set Pressure (mmHg)"
         return "Inner Diameter (µm)"
 
     def _primary_series(
@@ -184,6 +188,14 @@ class TraceView:
             if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
+        elif self._mode == "avg_pressure":
+            if window.avg_pressure_mean is None or window.avg_pressure_min is None or window.avg_pressure_max is None:
+                return None
+            return window.avg_pressure_mean, window.avg_pressure_min, window.avg_pressure_max
+        elif self._mode == "set_pressure":
+            if window.set_pressure_mean is None or window.set_pressure_min is None or window.set_pressure_max is None:
+                return None
+            return window.set_pressure_mean, window.set_pressure_min, window.set_pressure_max
         return window.inner_mean, window.inner_min, window.inner_max
 
     def _secondary_series(

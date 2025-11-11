@@ -3982,6 +3982,28 @@ class VasoAnalyzerApp(QMainWindow):
         except Exception:
             return True
 
+    def _avg_pressure_channel_available(self) -> bool:
+        if self.trace_data is None:
+            return False
+        if "Avg Pressure (mmHg)" not in self.trace_data.columns:
+            return False
+        series = self.trace_data["Avg Pressure (mmHg)"]
+        try:
+            return not series.isna().all()
+        except Exception:
+            return True
+
+    def _set_pressure_channel_available(self) -> bool:
+        if self.trace_data is None:
+            return False
+        if "Set Pressure (mmHg)" not in self.trace_data.columns:
+            return False
+        series = self.trace_data["Set Pressure (mmHg)"]
+        try:
+            return not series.isna().all()
+        except Exception:
+            return True
+
     def _current_channel_presence(self) -> tuple[bool, bool]:
         if not hasattr(self, "plot_host"):
             return (False, False)
@@ -4055,6 +4077,27 @@ class VasoAnalyzerApp(QMainWindow):
                     height_ratio=1.0,
                 )
             )
+
+        # Add pressure tracks if available
+        if self._avg_pressure_channel_available():
+            specs.append(
+                ChannelTrackSpec(
+                    track_id="avg_pressure",
+                    component="avg_pressure",
+                    label="Avg Pressure (mmHg)",
+                    height_ratio=1.0,
+                )
+            )
+        if self._set_pressure_channel_available():
+            specs.append(
+                ChannelTrackSpec(
+                    track_id="set_pressure",
+                    component="set_pressure",
+                    label="Set Pressure (mmHg)",
+                    height_ratio=1.0,
+                )
+            )
+
         if not specs:
             specs.append(
                 ChannelTrackSpec(
