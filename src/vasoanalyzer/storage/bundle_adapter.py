@@ -263,7 +263,7 @@ def _open_bundle_handle(
     # Get current snapshot
     current_snapshot = get_current_snapshot(bundle_path)
 
-    if readonly or current_snapshot is None:
+    if readonly:
         # Read-only mode: open snapshot directly
         if current_snapshot is None:
             raise ValueError(f"Bundle has no snapshots: {bundle_path}")
@@ -284,10 +284,17 @@ def _open_bundle_handle(
         )
 
     else:
-        # Write mode: create staging database from current snapshot
+        # Write mode: create staging database from current snapshot (or empty if new)
+        init_from = current_snapshot.path if current_snapshot is not None else None
         staging_path, staging_conn = open_staging_db(
-            bundle_path, initialize_from=current_snapshot.path
+            bundle_path, initialize_from=init_from
         )
+
+        # If this is a brand new bundle (no snapshots), initialize the schema
+        if current_snapshot is None:
+            log.info(f"Initializing schema for new bundle: {bundle_path}")
+            from ..storage.sqlite import projects as _projects
+            _projects.ensure_schema(staging_conn, schema_version=3, initialize_if_empty=True)
 
         handle = ProjectHandle(
             path=bundle_path,

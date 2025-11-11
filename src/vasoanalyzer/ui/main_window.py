@@ -9311,11 +9311,28 @@ QPushButton[isGhost="true"]:hover {{
                 if self.trace_data is not None
                 else False
             )
-            columns = ["Event", "Time (s)", "ID (µm)"]
-            if has_od:
-                columns.append("OD (µm)")
-            columns.append("Frame")
+            has_avg_p = (
+                "Avg Pressure (mmHg)" in self.trace_data.columns
+                if self.trace_data is not None
+                else False
+            )
+            has_set_p = (
+                "Set Pressure (mmHg)" in self.trace_data.columns
+                if self.trace_data is not None
+                else False
+            )
+            # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+            columns = ["Event", "Time (s)", "ID (µm)", "OD (µm)", "Avg P (mmHg)", "Set P (mmHg)", "Frame"]
             df = pd.DataFrame(self.event_table_data, columns=columns)
+
+            # Drop columns that don't have data
+            if not has_od:
+                df = df.drop(columns=["OD (µm)"])
+            if not has_avg_p:
+                df = df.drop(columns=["Avg P (mmHg)"])
+            if not has_set_p:
+                df = df.drop(columns=["Set P (mmHg)"])
+
             df.to_csv(csv_path, index=False)
             log.info("Event table auto-exported to:\n%s", csv_path)
         except Exception as e:
