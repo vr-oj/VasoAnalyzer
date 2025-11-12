@@ -265,30 +265,39 @@ class PyQtGraphPlotHost:
     def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
         plot_item = track.view.get_widget().getPlotItem()
 
-        # Dynamically scale font size based on number of tracks
+        # Set fixed font sizes based on number of visible tracks
+        # These sizes provide optimal readability as vertical space changes
         track_count = len(self._channel_specs)
         if track_count == 1:
-            label_size_scale = 1.0
+            tick_size = 14
+            ylabel_size = 24
+            xlabel_size = 24
         elif track_count == 2:
-            label_size_scale = 0.9
+            tick_size = 14
+            ylabel_size = 22
+            xlabel_size = 22
         elif track_count == 3:
-            label_size_scale = 0.8
+            tick_size = 14
+            ylabel_size = 20
+            xlabel_size = 20
         else:  # 4 or more tracks
-            label_size_scale = 0.7
+            tick_size = 14
+            ylabel_size = 16
+            xlabel_size = 20
 
-        scaled_label_size = int(round(self._axis_font_size * label_size_scale))
-        label_font = QFont(self._axis_font_family, scaled_label_size)
-        tick_font = QFont(self._axis_font_family, int(round(self._tick_font_size)))
+        ylabel_font = QFont(self._axis_font_family, ylabel_size)
+        xlabel_font = QFont(self._axis_font_family, xlabel_size)
+        tick_font = QFont(self._axis_font_family, tick_size)
 
         left_axis = plot_item.getAxis("left")
-        left_axis.label.setFont(label_font)
+        left_axis.label.setFont(ylabel_font)
         with contextlib.suppress(AttributeError):
             left_axis.setTickFont(tick_font)
 
         is_bottom = not self._channel_specs or track.id == self._channel_specs[-1].track_id
         if is_bottom:
             bottom_axis = plot_item.getAxis("bottom")
-            bottom_axis.label.setFont(label_font)
+            bottom_axis.label.setFont(xlabel_font)
             with contextlib.suppress(AttributeError):
                 bottom_axis.setTickFont(tick_font)
 
@@ -635,7 +644,7 @@ class PyQtGraphPlotHost:
         if not self._tracks:
             return True  # Default to enabled
         first_track = next(iter(self._tracks.values()))
-        return first_track.view.is_autoscale_enabled()
+        return bool(first_track.view.is_autoscale_enabled())
 
     def use_track_event_lines(self, flag: bool) -> None:
         """Control whether tracks draw their own event lines (compatibility stub)."""

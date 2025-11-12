@@ -204,15 +204,23 @@ class PlotHost:
             ax.title.set_color(CURRENT_THEME["text"])
             ax.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
 
-            # Adjust y-axis label font size based on number of tracks
+            # Configure tick label and axis title font sizes based on number of visible tracks
+            # These sizes scale with available vertical space
             if row_count == 1:
-                ylabel_fontsize = 10
+                tick_fontsize = 14
+                ylabel_fontsize = 24
             elif row_count == 2:
-                ylabel_fontsize = 9
+                tick_fontsize = 14
+                ylabel_fontsize = 22
             elif row_count == 3:
-                ylabel_fontsize = 8
+                tick_fontsize = 14
+                ylabel_fontsize = 20
             else:  # 4 or more tracks
-                ylabel_fontsize = 6.5
+                tick_fontsize = 14
+                ylabel_fontsize = 16
+
+            # Set tick label and Y-axis title font sizes
+            ax.tick_params(labelsize=tick_fontsize)
             ax.yaxis.label.set_fontsize(ylabel_fontsize)
 
             spine_color = CURRENT_THEME.get(
@@ -678,10 +686,24 @@ class PlotHost:
         visible_tracks = [track for track in channel_tracks if track.is_visible()]
         layout_tracks = visible_tracks if visible_tracks else channel_tracks
         bottom_track = layout_tracks[-1]
+
+        # Determine X-axis title font size based on number of visible tracks
+        num_visible = len(layout_tracks)
+        if num_visible == 1:
+            xlabel_fontsize = 24
+        elif num_visible == 2:
+            xlabel_fontsize = 22
+        elif num_visible == 3:
+            xlabel_fontsize = 20
+        else:  # 4 or more tracks
+            xlabel_fontsize = 20
+
         for track in channel_tracks:
             ax = track.ax
             if track is bottom_track:
                 ax.tick_params(bottom=True, labelbottom=True)
+                # Set X-axis title font size on bottom track only
+                ax.xaxis.label.set_fontsize(xlabel_fontsize)
             else:
                 ax.tick_params(bottom=False, labelbottom=False)
                 ax.set_xlabel("")
