@@ -193,6 +193,22 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
 
         toolbar.addSeparator()
 
+        # Add Y-axis autoscale toggle
+        window.actAutoscaleY = QAction(QIcon(window.icon_path("Customize_edit_axis_ranges.svg")), "Y-Axis Autoscale", window)
+        window.actAutoscaleY.setCheckable(True)
+        window.actAutoscaleY.setChecked(True)  # Enabled by default
+        window.actAutoscaleY.setShortcut(QKeySequence("Y"))
+        window.actAutoscaleY.setToolTip(
+            "<b>Y-Axis Autoscale</b> <kbd>Y</kbd><br><br>"
+            "Toggle Y-axis autoscaling.<br>"
+            "When checked: Y-axis rescales as you pan.<br>"
+            "When unchecked: Y-axis stays locked at current range."
+        )
+        window.actAutoscaleY.triggered.connect(window._on_autoscale_y_triggered)
+        toolbar.addAction(window.actAutoscaleY)
+
+        toolbar.addSeparator()
+
     window.actGrid = QAction(QIcon(window.icon_path("Grid.svg")), "Grid", window)
     window.actGrid.setCheckable(True)
     window.actGrid.setChecked(window.grid_visible)

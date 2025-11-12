@@ -625,6 +625,18 @@ class PyQtGraphPlotHost:
         """Autoscale all tracks."""
         self.autoscale_all_tracks(margin=margin)
 
+    def set_autoscale_y_enabled(self, enabled: bool) -> None:
+        """Enable/disable Y-axis autoscaling for all tracks."""
+        for track in self._tracks.values():
+            track.view.set_autoscale_y(enabled)
+
+    def is_autoscale_y_enabled(self) -> bool:
+        """Check if Y-axis autoscaling is enabled (checks first track)."""
+        if not self._tracks:
+            return True  # Default to enabled
+        first_track = next(iter(self._tracks.values()))
+        return first_track.view.is_autoscale_enabled()
+
     def use_track_event_lines(self, flag: bool) -> None:
         """Control whether tracks draw their own event lines (compatibility stub)."""
         # PyQtGraph tracks always handle their own event rendering

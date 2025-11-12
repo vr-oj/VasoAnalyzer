@@ -5517,7 +5517,7 @@ QPushButton[isGhost="true"]:hover {{
         self._sync_grid_action()
 
     def _on_zoom_in_triggered(self) -> None:
-        """Handle zoom in button click - zoom in 2x centered on view center."""
+        """Handle zoom in button click - zoom in 2x keeping left edge fixed."""
         if not hasattr(self, 'plot_host'):
             return
 
@@ -5525,17 +5525,18 @@ QPushButton[isGhost="true"]:hover {{
         if window is None:
             return
 
+        # Keep left edge fixed, compress from left to right
+        left_edge = window[0]
         span = window[1] - window[0]
         new_span = span * 0.5  # Zoom in 2x
-        center = (window[0] + window[1]) / 2.0
 
-        new_start = center - new_span / 2.0
-        new_end = center + new_span / 2.0
+        new_start = left_edge
+        new_end = left_edge + new_span
 
         self.plot_host.set_time_window(new_start, new_end)
 
     def _on_zoom_out_triggered(self) -> None:
-        """Handle zoom out button click - zoom out 2x centered on view center."""
+        """Handle zoom out button click - zoom out 2x keeping left edge fixed."""
         if not hasattr(self, 'plot_host'):
             return
 
@@ -5543,12 +5544,13 @@ QPushButton[isGhost="true"]:hover {{
         if window is None:
             return
 
+        # Keep left edge fixed, stretch from left to right
+        left_edge = window[0]
         span = window[1] - window[0]
         new_span = span * 2.0  # Zoom out 2x
-        center = (window[0] + window[1]) / 2.0
 
-        new_start = center - new_span / 2.0
-        new_end = center + new_span / 2.0
+        new_start = left_edge
+        new_end = left_edge + new_span
 
         self.plot_host.set_time_window(new_start, new_end)
 
@@ -5564,6 +5566,14 @@ QPushButton[isGhost="true"]:hover {{
 
         # Autoscale all Y axes
         self.plot_host.autoscale_all()
+
+    def _on_autoscale_y_triggered(self, checked: bool) -> None:
+        """Handle Y-axis autoscale toggle."""
+        if not hasattr(self, 'plot_host'):
+            return
+
+        # Enable/disable Y-axis autoscaling for all tracks
+        self.plot_host.set_autoscale_y_enabled(checked)
 
     def _ensure_event_label_actions(self) -> None:
         if getattr(self, "_event_label_action_group", None) is not None:
