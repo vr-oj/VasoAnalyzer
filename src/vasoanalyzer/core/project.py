@@ -1184,8 +1184,9 @@ def load_project(path: str) -> Project:
     - Auto-migration from legacy to bundle
     - Recovery from corrupted databases
     """
-    
+
     import time
+
     from ..storage.project_storage import get_project_format
 
     start_time = time.time()
@@ -1215,7 +1216,14 @@ def load_project(path: str) -> Project:
 
             # Check if this is a database corruption error
             error_msg = str(e).lower()
-            corruption_keywords = ["malformed", "corrupt", "damaged", "disk image", "could not decode", "utf-8"]
+            corruption_keywords = [
+                "malformed",
+                "corrupt",
+                "damaged",
+                "disk image",
+                "could not decode",
+                "utf-8",
+            ]
             is_corruption_error = isinstance(e, sqlite3.DatabaseError) or any(
                 keyword in error_msg for keyword in corruption_keywords
             )
@@ -1228,7 +1236,9 @@ def load_project(path: str) -> Project:
                     try:
                         project = _load_project_sqlite(path)
                         elapsed = time.time() - start_time
-                        log.info(f"Project loaded successfully in {elapsed:.2f}s (after recovery): {path}")
+                        log.info(
+                            f"Project loaded successfully in {elapsed:.2f}s (after recovery): {path}"
+                        )
                         return project
                     except Exception as retry_error:
                         raise RuntimeError(
@@ -1256,7 +1266,11 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
 
     Creates a snapshot in the bundle's snapshot directory. Cloud-safe by design.
     """
-    from ..storage.project_storage import USE_BUNDLE_FORMAT_BY_DEFAULT, create_unified_project, open_unified_project
+    from ..storage.project_storage import (
+        USE_BUNDLE_FORMAT_BY_DEFAULT,
+        create_unified_project,
+        open_unified_project,
+    )
 
     dest = Path(path)
 
@@ -1289,16 +1303,14 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
 
     try:
         # Get repository from store connection
-        from vasoanalyzer.services.project_service import ProjectRepository
+        from vasoanalyzer.services.project_service import SQLiteProjectRepository
         from vasoanalyzer.storage.sqlite_store import ProjectStore
 
         # Wrap the UnifiedProjectStore as a ProjectStore for compatibility
         legacy_store = ProjectStore(path=store.path, conn=store.conn, dirty=store.dirty)
 
         # Create repository wrapper
-        from vasoanalyzer.services.project_service import _create_repository_from_store
-
-        repo = _create_repository_from_store(legacy_store)
+        repo = SQLiteProjectRepository(legacy_store)
 
         # Populate repository from project
         base_dir = Path(project.path).resolve().parent if project.path else dest.parent
@@ -1459,7 +1471,9 @@ def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = F
     project.path = dest.as_posix()
 
     elapsed = time.time() - start_time
-    log.info(f"Project saved successfully in {elapsed:.2f}s (optimized={not skip_optimize}): {path}")
+    log.info(
+        f"Project saved successfully in {elapsed:.2f}s (optimized={not skip_optimize}): {path}"
+    )
 
 
 def _write_sqlite_project(

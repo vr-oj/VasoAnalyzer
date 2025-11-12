@@ -21,10 +21,13 @@ def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv if argv is None else argv)
     project_path = argv[1] if len(argv) > 1 else None
 
-    # Setup production logging with file rotation
+    # Setup production logging with file rotation and INFO console output
     try:
-        log_dir = setup_production_logging(app_name="VasoAnalyzer", console_level=logging.WARNING)
-        log.info(f"VasoAnalyzer starting with project: {project_path or 'None'}")
+        log_dir = setup_production_logging(app_name="VasoAnalyzer", console_level=logging.INFO)
+        print("=" * 70)
+        print("VasoAnalyzer - Intuitive Vascular Analysis")
+        print("=" * 70)
+        log.info(f"Starting VasoAnalyzer with project: {project_path or 'None'}")
     except Exception as e:
         # Fallback to basic logging if production logging fails
         logging.basicConfig(level=logging.INFO)

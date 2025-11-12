@@ -965,6 +965,10 @@ class VasoAnalyzerApp(QMainWindow):
         if not name or not path:
             return
 
+        log.info(f"🆕 Creating new project: '{name}'")
+        if exp_name:
+            log.info(f"  └─ With experiment: '{exp_name}'")
+
         path_obj = Path(path).expanduser()
         if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
             path_obj = path_obj.with_suffix(".vasopack")
@@ -1011,6 +1015,9 @@ class VasoAnalyzerApp(QMainWindow):
         save_project_file(self.current_project, normalised_path)
         self.update_recent_projects(normalised_path)
         self.refresh_project_tree()
+
+        log.info(f"✓ Project '{name}' created successfully!")
+        log.info(f"  Path: {normalised_path}")
 
         if self.project_tree and project.experiments:
             root_item = self.project_tree.topLevelItem(0)
@@ -2608,16 +2615,19 @@ class VasoAnalyzerApp(QMainWindow):
             save_project(self.current_project, self.current_project.path)
 
     def load_data_into_sample(self, sample: SampleN):
-        log.info("Loading data into sample %s", sample.name)
+        log.info(f"📊 Loading data into sample: {sample.name}")
         trace_path, _ = QFileDialog.getOpenFileName(
             self, "Select Trace File", "", "CSV Files (*.csv)"
         )
         if not trace_path:
             return
 
+        log.info(f"  Reading trace file: {Path(trace_path).name}")
         try:
             df = self.load_trace_and_event_files(trace_path)
-        except Exception:
+            log.info(f"  └─ Loaded {len(df)} trace samples")
+        except Exception as e:
+            log.error(f"  ✗ Failed to load trace data: {e}")
             return
 
         trace_obj = Path(trace_path).expanduser().resolve(strict=False)
@@ -2627,10 +2637,11 @@ class VasoAnalyzerApp(QMainWindow):
         if event_path and os.path.exists(event_path):
             event_obj = Path(event_path).expanduser().resolve(strict=False)
             self._update_sample_link_metadata(sample, "events", event_obj)
+            log.info(f"  └─ Found matching event file: {Path(event_path).name}")
 
         self.refresh_project_tree()
 
-        log.info("Sample %s updated with data", sample.name)
+        log.info(f"✓ Sample '{sample.name}' updated successfully")
 
         if self.current_project and self.current_project.path:
             save_project(self.current_project, self.current_project.path)
@@ -2671,9 +2682,12 @@ class VasoAnalyzerApp(QMainWindow):
         if not folder_path:
             return
 
+        log.info(f"📁 Scanning folder for data files: {folder_path}")
+
         # Scan folder for trace files
         try:
             candidates = scan_folder_with_status(folder_path, target_experiment)
+            log.info(f"  └─ Found {len(candidates)} potential samples")
         except Exception as e:
             QMessageBox.critical(
                 self,

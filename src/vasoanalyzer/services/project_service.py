@@ -166,7 +166,10 @@ def manifest_to_project(manifest: dict[str, Any], state: dict[str, Any], path: s
 def open_project_file(path: str) -> Project:
     """Open ``path`` and return a fully populated :class:`Project`."""
 
-    return load_project(path)
+    log.info(f"📂 Opening project: {path}")
+    project = load_project(path)
+    log.info(f"✓ Project loaded successfully: {Path(path).name}")
+    return project
 
 
 def save_project_file(
@@ -185,7 +188,9 @@ def save_project_file(
     if not project.path:
         raise ValueError("Project path is not set")
 
+    log.info(f"💾 Saving project to: {project.path}")
     save_project(project, project.path, skip_optimize=skip_optimize)
+    log.info(f"✓ Project saved successfully: {Path(project.path).name}")
 
 
 def autosave_project(project: Project, autosave_path: str | None = None) -> str | None:
