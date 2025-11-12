@@ -109,6 +109,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window.toolbar.addAction(window.id_toggle_act)
     window.toolbar.addAction(window.od_toggle_act)
+    window.toolbar.addAction(window.avg_pressure_toggle_act)
+    window.toolbar.addAction(window.set_pressure_toggle_act)
     window.toolbar.addSeparator()
 
     window._update_toolbar_compact_mode(window.width())

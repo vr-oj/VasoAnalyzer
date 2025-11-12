@@ -3192,6 +3192,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.set_pressure_toggle_act.setShortcut("S")
         self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
         self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
+        self.avg_pressure_toggle_act.setIcon(QIcon(self.icon_path("P.svg")))
+        self.set_pressure_toggle_act.setIcon(QIcon(self.icon_path("SP.svg")))
         self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
         self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
         self.avg_pressure_toggle_act.toggled.connect(self.toggle_avg_pressure)
@@ -5518,7 +5520,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def _on_zoom_in_triggered(self) -> None:
         """Handle zoom in button click - zoom in 2x keeping left edge fixed."""
-        if not hasattr(self, 'plot_host'):
+        if not hasattr(self, "plot_host"):
             return
 
         window = self.plot_host.current_window()
@@ -5537,7 +5539,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def _on_zoom_out_triggered(self) -> None:
         """Handle zoom out button click - zoom out 2x keeping left edge fixed."""
-        if not hasattr(self, 'plot_host'):
+        if not hasattr(self, "plot_host"):
             return
 
         window = self.plot_host.current_window()
@@ -5556,7 +5558,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def _on_autoscale_triggered(self) -> None:
         """Handle autoscale button click - reset to full time range and autoscale Y axes."""
-        if not hasattr(self, 'plot_host'):
+        if not hasattr(self, "plot_host"):
             return
 
         # Reset to full time range
@@ -5569,7 +5571,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def _on_autoscale_y_triggered(self, checked: bool) -> None:
         """Handle Y-axis autoscale toggle."""
-        if not hasattr(self, 'plot_host'):
+        if not hasattr(self, "plot_host"):
             return
 
         # Enable/disable Y-axis autoscaling for all tracks
