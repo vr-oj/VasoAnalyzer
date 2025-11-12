@@ -141,22 +141,52 @@ class InteractionController:
 
     # ------------------------------------------------------------------ handlers
     def _on_scroll(self, event) -> None:
+        """Handle scroll events - pan by default, zoom with modifiers.
+
+        This provides intuitive trackpad behavior:
+        - Two-finger scroll = pan (default)
+        - Ctrl + scroll = zoom
+        - Pinch gesture = zoom (handled separately)
+        """
         if self._nav_active():
             return
         modifiers = _parse_modifiers(getattr(event, "key", None))
-        factor = self._scroll_factor(event)
         track = self._track_from_event(event)
 
+        # Shift + scroll = Y-axis zoom on specific track
         if "shift" in modifiers and track is not None:
             if event.ydata is None:
                 return
+            factor = self._scroll_factor(event)
             track.zoom_y(event.ydata, factor)
             self.canvas.draw_idle()
             return
 
-        if event.xdata is None:
+        # Ctrl/Cmd + scroll = zoom (for those who prefer scroll zoom)
+        if "control" in modifiers or "cmd" in modifiers:
+            if event.xdata is None:
+                return
+            factor = self._scroll_factor(event)
+            self.plot_host.zoom_at(event.xdata, factor)
             return
-        self.plot_host.zoom_at(event.xdata, factor)
+
+        # Default scroll behavior = pan (intuitive for trackpad users)
+        window = self.plot_host.current_window()
+        if window is None:
+            return
+
+        # Get scroll direction
+        step = getattr(event, "step", None)
+        if step is not None:
+            direction = 1 if step > 0 else -1
+        else:
+            direction = 1 if getattr(event, "button", "") == "up" else -1
+
+        # Pan amount based on current window size
+        window_span = window[1] - window[0]
+        pan_amount = direction * window_span * 0.1  # 10% of visible window
+
+        self.plot_host.scroll_by(pan_amount)
 
     def _on_press(self, event) -> None:
         if self._nav_active():
