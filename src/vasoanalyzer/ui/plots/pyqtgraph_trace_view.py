@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import QToolTip
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
+from vasoanalyzer.ui.plots.pan_only_viewbox import PanOnlyViewBox
+from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -47,9 +49,21 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._explicit_ylabel = y_label
         self._enable_opengl = enable_opengl
 
-        # Create plot widget with optimizations
-        self._plot_widget = pg.PlotWidget()
+        # Create custom ViewBox that handles scroll as horizontal pan (not zoom)
+        # This is the single source of truth for scroll behavior
+        view_box = PanOnlyViewBox(enableMenu=False)
+        view_box.setMouseEnabled(x=True, y=False)  # Horizontal interactions only
+        view_box.setMouseMode(view_box.RectMode)  # Enable rectangle selection zoom
+
+        # Create plot widget with our custom ViewBox
+        self._plot_widget = pg.PlotWidget(viewBox=view_box)
         self._plot_item = self._plot_widget.getPlotItem()
+        self._view_box = view_box
+
+        # Install pinch blocker on the viewport to prevent trackpad pinch-to-zoom
+        pinch_blocker = PinchBlocker(self._plot_widget)
+        self._plot_widget.viewport().installEventFilter(pinch_blocker)
+        self._pinch_blocker = pinch_blocker  # Keep reference to prevent garbage collection
 
         # Enable OpenGL acceleration for better performance
         if self._enable_opengl:
@@ -60,20 +74,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._plot_item.showGrid(x=True, y=True, alpha=0.3)
         self._plot_item.setMenuEnabled(False)  # Disable right-click menu
 
-        # Enable PyQtGraph native interactions (horizontal-only panning)
-        # This provides smooth trackpad scrolling and drag-to-pan
-        self._view_box = self._plot_item.getViewBox()
-        self._view_box.setMouseEnabled(x=True, y=False)  # Horizontal pan only, Y managed by us
-        self._view_box.setLimits(xMin=None, xMax=None, yMax=None)  # No hard limits
-
-        # Enable rectangle selection zoom mode
-        self._view_box.setMouseMode(self._view_box.RectMode)  # Drag to select area to zoom
-
-        # Note: Wheel events are consumed at canvas level to prevent ViewBox zoom
-        # See canvas_compat.py - wheel events are handled for horizontal panning only
-
         # Connect ViewBox range changes to sync with time window management
-        # This ensures native PyQtGraph pan/zoom syncs with our PlotHost
+        # This ensures native PyQtGraph interactions (pan/rectangle-zoom) sync with our PlotHost
         self._view_box.sigRangeChanged.connect(self._on_viewbox_range_changed)
         self._syncing_range = False  # Prevent circular updates
 
