@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QObject, Qt
 from PyQt5.QtGui import QColor, QCursor
 from PyQt5.QtWidgets import QToolTip
 
@@ -64,10 +64,23 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # This provides smooth trackpad scrolling and drag-to-pan
         self._view_box = self._plot_item.getViewBox()
         self._view_box.setMouseEnabled(x=True, y=False)  # Horizontal pan only, Y managed by us
-        self._view_box.setLimits(xMin=None, xMax=None, yMin=None, yMax=None)  # No hard limits
+        self._view_box.setLimits(xMin=None, xMax=None, yMax=None)  # No hard limits
 
         # Enable rectangle selection zoom mode
         self._view_box.setMouseMode(self._view_box.RectMode)  # Drag to select area to zoom
+
+        # Install event filter to block wheel events on ViewBox
+        # This prevents ViewBox from zooming on scroll, letting our scroll handler pan instead
+        class WheelBlocker(QObject):
+            """Event filter to block wheel events from ViewBox."""
+
+            def eventFilter(self, obj, event):
+                from PyQt5.QtCore import QEvent
+
+                return event.type() == QEvent.Wheel  # Block wheel events, allow others
+
+        self._wheel_blocker = WheelBlocker()
+        self._view_box.installEventFilter(self._wheel_blocker)
 
         # Connect ViewBox range changes to sync with time window management
         # This ensures native PyQtGraph pan/zoom syncs with our PlotHost
