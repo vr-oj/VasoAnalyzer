@@ -19,7 +19,11 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
 
     # Detect backend type
     plot_host = getattr(window, "plot_host", None)
-    is_pyqtgraph = plot_host is not None and hasattr(plot_host, 'get_render_backend') and plot_host.get_render_backend() == "pyqtgraph"
+    is_pyqtgraph = (
+        plot_host is not None
+        and hasattr(plot_host, "get_render_backend")
+        and plot_host.get_render_backend() == "pyqtgraph"
+    )
 
     toolbar = CustomToolbar(canvas, window, reset_callback=window.reset_to_full_view)
     toolbar.setIconSize(QSize(22, 22))
@@ -151,7 +155,9 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
         if window.actZoom:
             toolbar.addAction(window.actZoom)
 
-        window._nav_mode_actions = [act for act in (window.actPan, window.actZoom) if act is not None]
+        window._nav_mode_actions = [
+            act for act in (window.actPan, window.actZoom) if act is not None
+        ]
         for action in window._nav_mode_actions:
             with contextlib.suppress(Exception):
                 action.toggled.disconnect(window._handle_nav_mode_toggled)
@@ -194,7 +200,9 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
         toolbar.addSeparator()
 
         # Add Y-axis autoscale toggle
-        window.actAutoscaleY = QAction(QIcon(window.icon_path("Customize_edit_axis_ranges.svg")), "Y-Axis Autoscale", window)
+        window.actAutoscaleY = QAction(
+            QIcon(window.icon_path("Grid.svg")), "Y-Axis Autoscale", window
+        )
         window.actAutoscaleY.setCheckable(True)
         window.actAutoscaleY.setChecked(True)  # Enabled by default
         window.actAutoscaleY.setShortcut(QKeySequence("Y"))
