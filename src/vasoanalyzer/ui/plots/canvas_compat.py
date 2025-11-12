@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from PyQt5.QtCore import QEvent, Qt
+from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtGui import QMouseEvent
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 log = logging.getLogger(__name__)
 
@@ -57,12 +59,17 @@ class PyQtGraphCanvasCompat(QWidget):
         self.figure: Any = None  # PyQtGraph doesn't use matplotlib Figure
         self.widgetlock: Any = _DummyWidgetLock()  # For toolbar pan/zoom compatibility
 
-        # Gesture support
+        # Gesture support - enable on BOTH wrapper and child widget
         log.info("PyQtGraphCanvasCompat: Initializing with gesture support")
-        pinch_success = self.grabGesture(Qt.PinchGesture)
-        pan_success = self.grabGesture(Qt.PanGesture)
-        log.info(f"PyQtGraphCanvasCompat: grabGesture(PinchGesture) = {pinch_success}")
-        log.info(f"PyQtGraphCanvasCompat: grabGesture(PanGesture) = {pan_success}")
+        self.grabGesture(Qt.PinchGesture)
+        self.grabGesture(Qt.PanGesture)
+        log.info("PyQtGraphCanvasCompat (wrapper): Gestures enabled")
+
+        # CRITICAL: Also enable gestures on the child PyQtGraph widget
+        # This is where user interactions actually occur!
+        self._pg_widget.grabGesture(Qt.PinchGesture)
+        self._pg_widget.grabGesture(Qt.PanGesture)
+        log.info("PyQtGraphCanvasCompat (child): Gestures enabled")
 
         self._last_scale_factor: float = 1.0
         self._accumulated_pan_x: float = 0.0
@@ -157,7 +164,9 @@ class PyQtGraphCanvasCompat(QWidget):
 
         elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
             self._last_scale_factor = 1.0
-            log.info(f"PyQtGraphCanvasCompat: Pinch gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}")
+            log.info(
+                f"PyQtGraphCanvasCompat: Pinch gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
+            )
             return True
 
         return False
@@ -194,15 +203,22 @@ class PyQtGraphCanvasCompat(QWidget):
         elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
             self._accumulated_pan_x = 0.0
             self._accumulated_pan_y = 0.0
-            log.info(f"PyQtGraphCanvasCompat: Pan gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}")
+            log.info(
+                f"PyQtGraphCanvasCompat: Pan gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
+            )
             return True
 
         return False
 
-    def eventFilter(self, obj: QWidget, event: QEvent) -> bool:
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Intercept Qt events and translate to matplotlib-style events."""
         if obj != self._pg_widget:
             return False
+
+        # GESTURE EVENTS: Forward gestures from child widget to wrapper
+        if event.type() == QEvent.Gesture:
+            log.debug("PyQtGraphCanvasCompat: Gesture event from child widget, handling...")
+            return self._handle_gesture_event(event)
 
         # Mouse move -> motion_notify_event
         if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
@@ -215,9 +231,7 @@ class PyQtGraphCanvasCompat(QWidget):
             self._dispatch_event("button_press_event", mock_event)
 
         # Mouse release -> button_release_event
-        elif event.type() == QEvent.MouseButtonRelease and isinstance(
-            event, QMouseEvent
-        ):
+        elif event.type() == QEvent.MouseButtonRelease and isinstance(event, QMouseEvent):
             mock_event = self._create_mock_mouse_event(event)
             self._dispatch_event("button_release_event", mock_event)
 
@@ -259,11 +273,9 @@ class PyQtGraphCanvasCompat(QWidget):
     def _dispatch_event(self, event_name: str, event: Any) -> None:
         """Dispatch event to all registered handlers."""
         for handler in self._event_handlers.get(event_name, []):
-            try:
+            # Silently ignore handler exceptions to prevent crashes
+            with contextlib.suppress(Exception):
                 handler(event)
-            except Exception:
-                # Silently ignore handler exceptions to prevent crashes
-                pass
 
     def draw(self) -> None:
         """Trigger a redraw (matplotlib compatibility)."""

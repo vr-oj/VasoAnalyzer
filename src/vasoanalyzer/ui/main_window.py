@@ -1275,11 +1275,11 @@ class VasoAnalyzerApp(QMainWindow):
             self,
             "Save Project As",
             self.current_project.path or "",
-            "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)",
+            "Vaso Bundles (*.vasopack)",
         )
         if path:
             path_obj = Path(path).expanduser()
-            if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
+            if path_obj.suffix.lower() != ".vasopack":
                 path_obj = path_obj.with_suffix(".vasopack")
             path = str(path_obj.resolve(strict=False))
 
@@ -4200,7 +4200,6 @@ class VasoAnalyzerApp(QMainWindow):
     def _rebuild_channel_layout(
         self, inner_on: bool, outer_on: bool, *, redraw: bool = True
     ) -> None:
-
         specs: list[ChannelTrackSpec] = []
         if inner_on:
             specs.append(
@@ -4305,8 +4304,12 @@ class VasoAnalyzerApp(QMainWindow):
         if channel in ("avg_pressure", "set_pressure"):
             # Get current inner/outer state
             previous_inner, previous_outer = self._current_channel_presence()
-            inner_on = self.id_toggle_act.isChecked() if self.id_toggle_act is not None else previous_inner
-            outer_on = self.od_toggle_act.isChecked() if self.od_toggle_act is not None else previous_outer
+            inner_on = (
+                self.id_toggle_act.isChecked() if self.id_toggle_act is not None else previous_inner
+            )
+            outer_on = (
+                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else previous_outer
+            )
 
             self._rebuild_channel_layout(inner_on, outer_on)
             self._refresh_zoom_window()
@@ -4527,27 +4530,51 @@ class VasoAnalyzerApp(QMainWindow):
     # Edit Menu Actions
     def copy_selected_events(self, checked: bool = False):
         """Copy selected events to clipboard."""
-        QMessageBox.information(self, "Copy Events", "Copying selected events to clipboard.\n\nThis feature will copy event data in a format that can be pasted into other samples or projects.")
+        QMessageBox.information(
+            self,
+            "Copy Events",
+            "Copying selected events to clipboard.\n\nThis feature will copy event data in a format that can be pasted into other samples or projects.",
+        )
 
     def paste_events(self, checked: bool = False):
         """Paste events from clipboard."""
-        QMessageBox.information(self, "Paste Events", "Pasting events from clipboard.\n\nThis feature will insert copied events at the current time position or selection.")
+        QMessageBox.information(
+            self,
+            "Paste Events",
+            "Pasting events from clipboard.\n\nThis feature will insert copied events at the current time position or selection.",
+        )
 
     def duplicate_selected_event(self, checked: bool = False):
         """Duplicate the currently selected event."""
-        QMessageBox.information(self, "Duplicate Event", "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.")
+        QMessageBox.information(
+            self,
+            "Duplicate Event",
+            "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.",
+        )
 
     def delete_selected_events(self, checked: bool = False):
         """Delete selected events."""
-        QMessageBox.information(self, "Delete Events", "Deleting selected events.\n\nThis feature will remove the selected events from the current sample.")
+        QMessageBox.information(
+            self,
+            "Delete Events",
+            "Deleting selected events.\n\nThis feature will remove the selected events from the current sample.",
+        )
 
     def select_all_events(self, checked: bool = False):
         """Select all events in the event table."""
-        QMessageBox.information(self, "Select All", "Selecting all events.\n\nThis feature will select all events in the event table for bulk operations.")
+        QMessageBox.information(
+            self,
+            "Select All",
+            "Selecting all events.\n\nThis feature will select all events in the event table for bulk operations.",
+        )
 
     def find_event_dialog(self, checked: bool = False):
         """Open find event dialog."""
-        QMessageBox.information(self, "Find Event", "Find events by label, time, or other criteria.\n\nThis feature will help you quickly locate specific events in large datasets.")
+        QMessageBox.information(
+            self,
+            "Find Event",
+            "Find events by label, time, or other criteria.\n\nThis feature will help you quickly locate specific events in large datasets.",
+        )
 
     # View Menu Actions
     def set_renderer(self, renderer: str):
@@ -4562,7 +4589,7 @@ class VasoAnalyzerApp(QMainWindow):
             "Renderer Selection",
             f"Switching to {renderer.capitalize()} renderer.\n\n"
             f"{'Matplotlib: Traditional renderer with extensive customization options.' if is_matplotlib else 'PyQtGraph: GPU-accelerated renderer for smooth interaction with large datasets.'}\n\n"
-            "Note: This feature will be fully implemented in a future update."
+            "Note: This feature will be fully implemented in a future update.",
         )
 
     def set_color_scheme(self, scheme: str):
@@ -4577,7 +4604,7 @@ class VasoAnalyzerApp(QMainWindow):
             "Color Scheme",
             f"Setting color scheme to {scheme.capitalize()}.\n\n"
             "This will change the application's visual appearance to match your preference.\n\n"
-            "Note: This feature will be fully implemented in a future update."
+            "Note: This feature will be fully implemented in a future update.",
         )
 
     # Tools Menu Actions
@@ -4593,7 +4620,7 @@ class VasoAnalyzerApp(QMainWindow):
             "• Baseline vs. response comparisons\n"
             "• Custom time window analysis\n\n"
             "Results can be exported to CSV or Excel.\n\n"
-            "Note: This feature will be fully implemented in a future update."
+            "Note: This feature will be fully implemented in a future update.",
         )
 
     def show_batch_analysis_dialog(self, checked: bool = False):
@@ -4608,7 +4635,7 @@ class VasoAnalyzerApp(QMainWindow):
             "• Generate summary statistics for all samples\n"
             "• Export combined results to Excel\n\n"
             "Ideal for analyzing entire experiments with many samples.\n\n"
-            "Note: This feature will be fully implemented in a future update."
+            "Note: This feature will be fully implemented in a future update.",
         )
 
     def show_data_validation_dialog(self, checked: bool = False):
@@ -4624,7 +4651,7 @@ class VasoAnalyzerApp(QMainWindow):
             "• Inconsistent sampling rates\n"
             "• Frame synchronization issues\n\n"
             "Helps ensure data quality before analysis.\n\n"
-            "Note: This feature will be fully implemented in a future update."
+            "Note: This feature will be fully implemented in a future update.",
         )
 
     # Window Menu Actions
@@ -4694,9 +4721,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
         toolbar.addAction(self.excel_action)
 
-        self.save_session_action = QAction(
-            QIcon(self.icon_path("Save.svg")), "Save Project", self
-        )
+        self.save_session_action = QAction(QIcon(self.icon_path("Save.svg")), "Save Project", self)
         self.save_session_action.setToolTip("Save the current project")
         self.save_session_action.setShortcut(QKeySequence.Save)
         self.save_session_action.triggered.connect(self.save_project_file)
@@ -6072,7 +6097,9 @@ QPushButton[isGhost="true"]:hover {{
         self.event_table_data = []
         has_od = od_before is not None
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
-        for lbl, diam, od in zip(labels, diam_before, od_before if has_od else [None] * len(labels), strict=False):
+        for lbl, diam, od in zip(
+            labels, diam_before, od_before if has_od else [None] * len(labels), strict=False
+        ):
             self.event_table_data.append((lbl, 0.0, diam, od, None, None, 0))
         self.populate_table()
 
@@ -6103,16 +6130,8 @@ QPushButton[isGhost="true"]:hover {{
                 if "Outer Diameter" in self.trace_data.columns
                 else None
             )
-            arr_avg_p = (
-                self.trace_data["Avg Pressure (mmHg)"].values
-                if has_avg_pressure
-                else None
-            )
-            arr_set_p = (
-                self.trace_data["Set Pressure (mmHg)"].values
-                if has_set_pressure
-                else None
-            )
+            arr_avg_p = self.trace_data["Avg Pressure (mmHg)"].values if has_avg_pressure else None
+            arr_set_p = self.trace_data["Set Pressure (mmHg)"].values if has_set_pressure else None
 
             for lbl, t, fr in zip(
                 self.event_labels,
@@ -6129,7 +6148,9 @@ QPushButton[isGhost="true"]:hover {{
                 set_p_val = float(arr_set_p[idx]) if arr_set_p is not None else None
 
                 # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
-                self.event_table_data.append((lbl, float(t), diam, od_val, avg_p_val, set_p_val, int(fr)))
+                self.event_table_data.append(
+                    (lbl, float(t), diam, od_val, avg_p_val, set_p_val, int(fr))
+                )
         else:
             # When loading from saved data (diam_before, od_before exist)
             # Pressure data would come from trace_data, not saved event data
@@ -6142,9 +6163,13 @@ QPushButton[isGhost="true"]:hover {{
             ):
                 if pd.isna(t):
                     continue
-                od_val = float(od_before[self.event_labels.index(lbl)]) if has_od and od_before else None
+                od_val = (
+                    float(od_before[self.event_labels.index(lbl)]) if has_od and od_before else None
+                )
                 # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
-                self.event_table_data.append((lbl, float(t), float(diam_i), od_val, None, None, int(fr)))
+                self.event_table_data.append(
+                    (lbl, float(t), float(diam_i), od_val, None, None, int(fr))
+                )
 
         self.populate_table()
         self.xlim_full = None
@@ -9348,7 +9373,15 @@ QPushButton[isGhost="true"]:hover {{
                 else False
             )
             # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
-            columns = ["Event", "Time (s)", "ID (µm)", "OD (µm)", "Avg P (mmHg)", "Set P (mmHg)", "Frame"]
+            columns = [
+                "Event",
+                "Time (s)",
+                "ID (µm)",
+                "OD (µm)",
+                "Avg P (mmHg)",
+                "Set P (mmHg)",
+                "Frame",
+            ]
             df = pd.DataFrame(self.event_table_data, columns=columns)
 
             # Drop columns that don't have data

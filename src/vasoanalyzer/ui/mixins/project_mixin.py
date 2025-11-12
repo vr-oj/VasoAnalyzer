@@ -350,12 +350,9 @@ class ProjectMixin:
         if not self.current_project:
             return
 
-        # Determine default path and filter based on current project format
+        # Always use .vasopack format - the modern, corruption-resistant bundle format
         current_path = self.current_project.path or ""
-        if current_path.endswith(".vasopack"):
-            default_filter = "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)"
-        else:
-            default_filter = "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)"
+        default_filter = "Vaso Bundles (*.vasopack)"
 
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
@@ -366,17 +363,9 @@ class ProjectMixin:
         if path:
             path_obj = Path(path).expanduser()
 
-            # Determine extension based on selected filter
-            if selected_filter and "*.vasopack" in selected_filter:
-                if path_obj.suffix.lower() != ".vasopack":
-                    path_obj = path_obj.with_suffix(".vasopack")
-            elif selected_filter and "*.vaso" in selected_filter:
-                if path_obj.suffix.lower() != ".vaso":
-                    path_obj = path_obj.with_suffix(".vaso")
-            else:
-                # No filter selected, use existing extension or default to .vasopack
-                if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
-                    path_obj = path_obj.with_suffix(".vasopack")
+            # Always enforce .vasopack extension
+            if path_obj.suffix.lower() != ".vasopack":
+                path_obj = path_obj.with_suffix(".vasopack")
 
             path = str(path_obj.resolve(strict=False))
             self.current_project.ui_state = self.gather_ui_state()
@@ -387,9 +376,8 @@ class ProjectMixin:
             save_project_file(self.current_project, path)
             self.update_recent_projects(path)
 
-            # Show appropriate status message
-            format_name = "bundle" if path_obj.suffix.lower() == ".vasopack" else "project"
-            self.statusBar().showMessage(f"\u2713 {format_name.capitalize()} saved: {path_obj.name}", 3000)
+            # Show success message
+            self.statusBar().showMessage(f"\u2713 Bundle saved: {path_obj.name}", 3000)
         else:
             return
 
@@ -1178,9 +1166,7 @@ class ProjectMixin:
 
                 # Load events if found
                 if candidate.events_file and os.path.exists(candidate.events_file):
-                    event_obj = Path(candidate.events_file).expanduser().resolve(
-                        strict=False
-                    )
+                    event_obj = Path(candidate.events_file).expanduser().resolve(strict=False)
                     self._update_sample_link_metadata(sample, "events", event_obj)
                     sample.events_sig = get_file_signature(candidate.events_file)
 
