@@ -138,6 +138,9 @@ class ProjectMixin:
                 first_exp_item = root_item.child(0)
                 self.project_tree.setCurrentItem(first_exp_item)
 
+        # Switch to analysis workspace so user can start working
+        self.show_analysis_workspace()
+
         self.statusBar().showMessage(
             "Project created. Use the Add Data actions to start populating your experiment.",
             6000,

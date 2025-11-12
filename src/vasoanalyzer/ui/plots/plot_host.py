@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from matplotlib.axes import Axes
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.text import Annotation, Text
@@ -26,6 +25,7 @@ from vasoanalyzer.ui.event_labels_v3 import (
     LayoutOptionsV3,
 )
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack, ChannelTrackSpec
+from vasoanalyzer.ui.plots.gesture_canvas import GestureCanvas
 from vasoanalyzer.ui.plots.overlays import (
     AnnotationLane,
     AnnotationSpec,
@@ -57,7 +57,7 @@ class PlotHost:
             dpi=dpi,
             constrained_layout=False,
         )
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas = GestureCanvas(self.figure)
         self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
         self._channel_specs: list[ChannelTrackSpec] = []
         self._tracks: dict[str, ChannelTrack] = {}
@@ -168,8 +168,6 @@ class PlotHost:
     def _rebuild_tracks(self) -> None:
         """Recreate axes and channel wrappers to match specs."""
 
-        for spec in self._channel_specs:
-
         self._destroy_event_labeler()
         self.figure.clf()
         self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
@@ -182,8 +180,8 @@ class PlotHost:
         specs = self._channel_specs
         height_ratios: list[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
-        # Add vertical gap between tracks (diameter traces) when stacked
-        hspace = 0.05 if row_count > 1 else 0.0
+        # Eliminate gap between tracks for cleaner appearance - dividers provide separation
+        hspace = 0.0
         gs = self.figure.add_gridspec(
             nrows=row_count,
             ncols=1,
@@ -199,6 +197,7 @@ class PlotHost:
                 shared_ax = ax
             else:
                 ax.tick_params(labelbottom=False)
+                ax.set_xlabel("")  # Clear xlabel for non-bottom tracks
             ax.tick_params(colors=CURRENT_THEME["text"])
             ax.yaxis.label.set_color(CURRENT_THEME["text"])
             ax.xaxis.label.set_color(CURRENT_THEME["text"])
@@ -213,7 +212,7 @@ class PlotHost:
             elif row_count == 3:
                 ylabel_fontsize = 8
             else:  # 4 or more tracks
-                ylabel_fontsize = 7
+                ylabel_fontsize = 6.5
             ax.yaxis.label.set_fontsize(ylabel_fontsize)
 
             spine_color = CURRENT_THEME.get(

@@ -730,12 +730,16 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         except Exception:
             return ""
         lines = [f"t: {time_val} s"]
-        try:
-            inner_val = fmt.format(float(window.inner_mean[idx]))
-            lines.append(f"Inner: {inner_val} µm")
-        except Exception:
-            pass
 
+        # Show inner diameter (unless in outer/pressure-only modes)
+        if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
+            try:
+                inner_val = fmt.format(float(window.inner_mean[idx]))
+                lines.append(f"Inner: {inner_val} µm")
+            except Exception:
+                pass
+
+        # Show outer diameter for dual/outer modes
         if (
             self._mode in {"outer", "dual"}
             and window.outer_mean is not None
@@ -743,18 +747,32 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         ):
             with contextlib.suppress(Exception):
                 outer_val = fmt.format(float(window.outer_mean[idx]))
-                label = "Outer" if self._mode != "inner" else "Outer"
-                lines.append(f"{label}: {outer_val} µm")
+                lines.append(f"Outer: {outer_val} µm")
+
+        # Show average pressure if available
+        if window.avg_pressure_mean is not None and window.avg_pressure_mean.size > idx:
+            with contextlib.suppress(Exception):
+                pressure_val = fmt.format(float(window.avg_pressure_mean[idx]))
+                lines.append(f"Avg P: {pressure_val} mmHg")
+
+        # Show set pressure if available
+        if window.set_pressure_mean is not None and window.set_pressure_mean.size > idx:
+            with contextlib.suppress(Exception):
+                pressure_val = fmt.format(float(window.set_pressure_mean[idx]))
+                lines.append(f"Set P: {pressure_val} mmHg")
+
         return "\n".join(lines)
 
     def _show_hover_tooltip(self, text: str) -> None:
         if not text:
             self._hide_hover_tooltip()
             return
-        if text == self._hover_last_text:
-            return
+        # Always update tooltip to prevent it from disappearing
+        # Don't check if text == self._hover_last_text to keep tooltip visible
         self._hover_last_text = text
-        QToolTip.showText(QCursor.pos(), text)
+        # Use widget position offset for better positioning near the plot
+        global_pos = self._plot_widget.mapToGlobal(self._plot_widget.rect().center())
+        QToolTip.showText(QCursor.pos(), text, self._plot_widget)
 
     def _hide_hover_tooltip(self) -> None:
         self._hover_last_text = ""

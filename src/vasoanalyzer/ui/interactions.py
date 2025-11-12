@@ -65,6 +65,7 @@ class InteractionController:
         self._connection_ids: list[int] = []
 
         self._connect_events()
+        self._connect_gestures()
 
     # ------------------------------------------------------------------ lifecycle
     def disconnect(self) -> None:
@@ -85,6 +86,27 @@ class InteractionController:
                 mpl_connect("key_press_event", self._on_key_press),
             ]
         )
+
+    def _connect_gestures(self) -> None:
+        """Connect gesture callbacks if canvas supports them."""
+        import logging
+        log = logging.getLogger(__name__)
+
+        log.info(f"InteractionController: Canvas type = {type(self.canvas).__name__}")
+        log.info(f"InteractionController: Canvas has on_pinch_zoom = {hasattr(self.canvas, 'on_pinch_zoom')}")
+        log.info(f"InteractionController: Canvas has on_pan_gesture = {hasattr(self.canvas, 'on_pan_gesture')}")
+
+        if hasattr(self.canvas, "on_pinch_zoom"):
+            self.canvas.on_pinch_zoom = self._on_pinch_gesture
+            log.info("InteractionController: Connected pinch zoom callback")
+        else:
+            log.warning("InteractionController: Canvas does not support on_pinch_zoom")
+
+        if hasattr(self.canvas, "on_pan_gesture"):
+            self.canvas.on_pan_gesture = self._on_pan_gesture
+            log.info("InteractionController: Connected pan gesture callback")
+        else:
+            log.warning("InteractionController: Canvas does not support on_pan_gesture")
 
     # ------------------------------------------------------------------ helpers
     def _nav_active(self) -> bool:
@@ -113,12 +135,17 @@ class InteractionController:
         return (x_coord < left + margin_px) or (x_coord > right - margin_px)
 
     def _scroll_factor(self, event) -> float:
+        """Calculate zoom factor for scroll events.
+
+        Uses gentler zoom factors (0.9/1.11 vs 0.8/1.25) for better
+        trackpad control and less sensitive zooming.
+        """
         step = getattr(event, "step", None)
         if step is not None:
             direction = 1 if step > 0 else -1
         else:
             direction = 1 if getattr(event, "button", "") == "up" else -1
-        return 0.8 if direction > 0 else 1.25
+        return 0.9 if direction > 0 else 1.11
 
     def _active_track(self) -> ChannelTrack | None:
         if self._hover_track is not None:
@@ -128,22 +155,52 @@ class InteractionController:
 
     # ------------------------------------------------------------------ handlers
     def _on_scroll(self, event) -> None:
+        """Handle scroll events - pan by default, zoom with modifiers.
+
+        This provides intuitive trackpad behavior:
+        - Two-finger scroll = pan (default)
+        - Ctrl + scroll = zoom
+        - Pinch gesture = zoom (handled separately)
+        """
         if self._nav_active():
             return
         modifiers = _parse_modifiers(getattr(event, "key", None))
-        factor = self._scroll_factor(event)
         track = self._track_from_event(event)
 
+        # Shift + scroll = Y-axis zoom on specific track
         if "shift" in modifiers and track is not None:
             if event.ydata is None:
                 return
+            factor = self._scroll_factor(event)
             track.zoom_y(event.ydata, factor)
             self.canvas.draw_idle()
             return
 
-        if event.xdata is None:
+        # Ctrl/Cmd + scroll = zoom (for those who prefer scroll zoom)
+        if "control" in modifiers or "cmd" in modifiers:
+            if event.xdata is None:
+                return
+            factor = self._scroll_factor(event)
+            self.plot_host.zoom_at(event.xdata, factor)
             return
-        self.plot_host.zoom_at(event.xdata, factor)
+
+        # Default scroll behavior = pan (intuitive for trackpad users)
+        window = self.plot_host.current_window()
+        if window is None:
+            return
+
+        # Get scroll direction
+        step = getattr(event, "step", None)
+        if step is not None:
+            direction = 1 if step > 0 else -1
+        else:
+            direction = 1 if getattr(event, "button", "") == "up" else -1
+
+        # Pan amount based on current window size
+        window_span = window[1] - window[0]
+        pan_amount = direction * window_span * 0.1  # 10% of visible window
+
+        self.plot_host.scroll_by(pan_amount)
 
     def _on_press(self, event) -> None:
         if self._nav_active():
@@ -284,3 +341,72 @@ class InteractionController:
         if base == "0" and "alt" in modifiers:
             self.plot_host.autoscale_all()
             return
+
+    # ------------------------------------------------------------------ gesture handlers
+    def _on_pinch_gesture(self, center_x: float, center_y: float, zoom_factor: float) -> None:
+        """Handle pinch-to-zoom gesture from trackpad.
+
+        Args:
+            center_x: X coordinate of gesture center in widget coordinates
+            center_y: Y coordinate of gesture center in widget coordinates
+            zoom_factor: Zoom factor (> 1 for zoom out, < 1 for zoom in)
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        log.info(f"InteractionController: _on_pinch_gesture called - zoom_factor={zoom_factor:.3f}")
+
+        if self._nav_active():
+            log.debug("InteractionController: Navigation mode active, ignoring pinch")
+            return
+
+        # Get current window
+        window = self.plot_host.current_window()
+        if window is None:
+            log.warning("InteractionController: No current window, cannot apply pinch")
+            return
+
+        # For pinch gestures, zoom around the center of the visible window
+        # (trackpad pinch doesn't give us precise location like mouse scroll)
+        center_time = (window[0] + window[1]) / 2.0
+
+        log.info(f"InteractionController: Applying zoom at time={center_time:.2f}, factor={zoom_factor:.3f}")
+
+        # Apply zoom at center of window
+        self.plot_host.zoom_at(center_time, zoom_factor)
+
+    def _on_pan_gesture(self, dx: float, dy: float) -> None:
+        """Handle two-finger pan gesture from trackpad.
+
+        Args:
+            dx: Horizontal pan delta in pixels
+            dy: Vertical pan delta in pixels
+        """
+        import logging
+        log = logging.getLogger(__name__)
+
+        log.info(f"InteractionController: _on_pan_gesture called - dx={dx:.1f}, dy={dy:.1f}")
+
+        if self._nav_active():
+            log.debug("InteractionController: Navigation mode active, ignoring pan")
+            return
+
+        window = self.plot_host.current_window()
+        if window is None:
+            log.warning("InteractionController: No current window, cannot apply pan")
+            return
+
+        # Convert pixel delta to data delta
+        # Use figure width to scale the pan amount
+        fig_width_px = self.canvas.get_width_height()[0]
+        if fig_width_px <= 0:
+            log.warning(f"InteractionController: Invalid canvas width={fig_width_px}")
+            return
+
+        window_span = window[1] - window[0]
+        data_delta = (dx / fig_width_px) * window_span
+
+        log.info(f"InteractionController: Applying pan - data_delta={data_delta:.3f}")
+
+        # Apply pan (negative because trackpad motion is opposite to data motion)
+        self.plot_host.scroll_by(-data_delta)

@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import logging
 import sqlite3
+import time
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
@@ -232,7 +233,8 @@ def create_project_handle(
         # Initialize schema (this is normally done by the ProjectRepository)
         from ..storage.sqlite import projects as _projects
 
-        _projects.ensure_schema(conn, schema_version=3, initialize_if_empty=True)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _projects.ensure_schema(conn, schema_version=3, now=now)
 
         handle = ProjectHandle(
             path=path,
@@ -263,7 +265,7 @@ def _open_bundle_handle(
     # Get current snapshot
     current_snapshot = get_current_snapshot(bundle_path)
 
-    if readonly or current_snapshot is None:
+    if readonly:
         # Read-only mode: open snapshot directly
         if current_snapshot is None:
             raise ValueError(f"Bundle has no snapshots: {bundle_path}")
@@ -284,10 +286,18 @@ def _open_bundle_handle(
         )
 
     else:
-        # Write mode: create staging database from current snapshot
+        # Write mode: create staging database from current snapshot (or empty if new)
+        init_from = current_snapshot.path if current_snapshot is not None else None
         staging_path, staging_conn = open_staging_db(
-            bundle_path, initialize_from=current_snapshot.path
+            bundle_path, initialize_from=init_from
         )
+
+        # If this is a brand new bundle (no snapshots), initialize the schema
+        if current_snapshot is None:
+            log.info(f"Initializing schema for new bundle: {bundle_path}")
+            from ..storage.sqlite import projects as _projects
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _projects.ensure_schema(staging_conn, schema_version=3, now=now)
 
         handle = ProjectHandle(
             path=bundle_path,
@@ -368,8 +378,21 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
             # Ensure staging connection is committed
             if handle.staging_conn:
                 handle.staging_conn.commit()
+            else:
+                log.error("No staging connection available for bundle save")
+                raise RuntimeError("Cannot save bundle: no staging connection")
+
+            # Verify staging path exists
+            if not handle.staging_path:
+                log.error("No staging database path available for bundle save")
+                raise RuntimeError("Cannot save bundle: no staging database path")
+
+            if not handle.staging_path.exists():
+                log.error(f"Staging database does not exist: {handle.staging_path}")
+                raise RuntimeError(f"Cannot save bundle: staging database not found at {handle.staging_path}")
 
             # Create snapshot from staging database
+            log.debug(f"Creating snapshot from staging DB: {handle.staging_path}")
             snapshot_info = create_snapshot(handle.path, handle.staging_path)
             log.info(
                 f"Snapshot created: {snapshot_info.number} "
@@ -385,6 +408,8 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
             # Just commit staging database
             if handle.staging_conn:
                 handle.staging_conn.commit()
+            else:
+                log.warning("No staging connection to commit for bundle")
 
     else:
         # Legacy format: just commit
