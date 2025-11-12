@@ -360,15 +360,7 @@ class InteractionController:
             log.debug("InteractionController: Navigation mode active, ignoring pinch")
             return
 
-        # Find which track (if any) contains the gesture center
-        track = None
-        for t in self.plot_host.tracks():
-            bbox = t.ax.get_window_extent()
-            if bbox.contains(center_x, center_y):
-                track = t
-                break
-
-        # Convert widget coordinates to data coordinates
+        # Get current window
         window = self.plot_host.current_window()
         if window is None:
             log.warning("InteractionController: No current window, cannot apply pinch")
