@@ -1416,11 +1416,24 @@ def _load_project_bundle(path: str) -> Project:
         )
 
         project.resources.register_tempdir(tmp_manager, tmp_root.as_posix())
+
+        # CRITICAL FIX: Keep database connection open for project lifetime
+        # Register context close as a project resource to ensure:
+        # 1. Database stays open for lazy data loading (traces, events, snapshots)
+        # 2. File lock is held to prevent concurrent access
+        # 3. Both are properly cleaned up when project is closed
+        project.register_resource(lambda: close_project_ctx(ctx))
+
         log.info(f"Bundle loaded successfully: {path_obj}")
         return project
 
-    finally:
+    except Exception as e:
+        # On error, close context immediately and re-raise
+        log.error(
+            f"🔍 DIAGNOSTIC - Exception during project load, closing context: {e}", exc_info=True
+        )
         close_project_ctx(ctx)
+        raise
 
 
 def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = False) -> None:
@@ -2196,9 +2209,23 @@ def _load_project_sqlite(path: str) -> Project:
         )
 
         project.resources.register_tempdir(tmp_manager, tmp_root.as_posix())
+
+        # CRITICAL FIX: Keep database connection open for project lifetime
+        # Register context close as a project resource to ensure:
+        # 1. Database stays open for lazy data loading (traces, events, snapshots)
+        # 2. File lock is held to prevent concurrent access
+        # 3. Both are properly cleaned up when project is closed
+        project.register_resource(lambda: close_project_ctx(ctx))
+
         return project
-    finally:
+    except Exception as e:
+        # On error, close context immediately and re-raise
+        log.error(
+            f"🔍 DIAGNOSTIC - Exception during SQLite project load, closing context: {e}",
+            exc_info=True,
+        )
         close_project_ctx(ctx)
+        raise
 
 
 def autosave_path_for(project_path: str | Path) -> Path:

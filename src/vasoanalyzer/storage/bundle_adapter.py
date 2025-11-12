@@ -76,9 +76,9 @@ class ProjectHandle:
     format: str
     is_bundle: bool
     readonly: bool
-    bundle_info: Optional[BundleInfo]
-    staging_path: Optional[Path]
-    staging_conn: Optional[sqlite3.Connection]
+    bundle_info: BundleInfo | None
+    staging_path: Path | None
+    staging_conn: sqlite3.Connection | None
     snapshot_on_save: bool = True
 
     def __post_init__(self):
@@ -90,7 +90,7 @@ class ProjectHandle:
 _open_handles: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 
 
-def _cleanup_handle(bundle_path: Path, staging_path: Optional[Path]):
+def _cleanup_handle(bundle_path: Path, staging_path: Path | None):
     """Cleanup function called on handle destruction or process exit."""
     try:
         if staging_path and staging_path.exists():
@@ -270,9 +270,7 @@ def _open_bundle_handle(
         if current_snapshot is None:
             raise ValueError(f"Bundle has no snapshots: {bundle_path}")
 
-        conn = sqlite3.connect(
-            f"file:{current_snapshot.path}?mode=ro", uri=True, timeout=10.0
-        )
+        conn = sqlite3.connect(f"file:{current_snapshot.path}?mode=ro", uri=True, timeout=10.0)
 
         handle = ProjectHandle(
             path=bundle_path,
@@ -288,14 +286,13 @@ def _open_bundle_handle(
     else:
         # Write mode: create staging database from current snapshot (or empty if new)
         init_from = current_snapshot.path if current_snapshot is not None else None
-        staging_path, staging_conn = open_staging_db(
-            bundle_path, initialize_from=init_from
-        )
+        staging_path, staging_conn = open_staging_db(bundle_path, initialize_from=init_from)
 
         # If this is a brand new bundle (no snapshots), initialize the schema
         if current_snapshot is None:
             log.info(f"Initializing schema for new bundle: {bundle_path}")
             from ..storage.sqlite import projects as _projects
+
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             _projects.ensure_schema(staging_conn, schema_version=3, now=now)
 
@@ -389,7 +386,9 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
 
             if not handle.staging_path.exists():
                 log.error(f"Staging database does not exist: {handle.staging_path}")
-                raise RuntimeError(f"Cannot save bundle: staging database not found at {handle.staging_path}")
+                raise RuntimeError(
+                    f"Cannot save bundle: staging database not found at {handle.staging_path}"
+                )
 
             # Create snapshot from staging database
             log.debug(f"Creating snapshot from staging DB: {handle.staging_path}")
@@ -428,7 +427,13 @@ def close_project_handle(handle: ProjectHandle, *, save_before_close: bool = Tru
     Raises:
         RuntimeError: If close fails
     """
+    import traceback
+
     log.debug(f"Closing project handle: {handle.path}")
+
+    # DIAGNOSTIC: Log stack trace to understand who's calling close
+    stack_trace = "".join(traceback.format_stack())
+    log.info(f"🔍 DIAGNOSTIC - Project close called from:\n{stack_trace}")
 
     try:
         # Save if requested
@@ -517,7 +522,7 @@ def is_bundle_format(path: str | Path) -> bool:
     return fmt == "bundle-v1"
 
 
-def force_snapshot_now(handle: ProjectHandle) -> Optional[int]:
+def force_snapshot_now(handle: ProjectHandle) -> int | None:
     """
     Force creation of snapshot immediately (manual snapshot).
 

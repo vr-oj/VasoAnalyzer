@@ -87,7 +87,7 @@ class UnifiedProjectStore:
     path: Path
     conn: sqlite3.Connection
     dirty: bool = False
-    handle: Optional[ProjectHandle] = None
+    handle: ProjectHandle | None = None
     is_bundle: bool = False
     readonly: bool = False
     _closed: bool = field(default=False, init=False, repr=False)
@@ -160,11 +160,10 @@ class UnifiedProjectStore:
 
     def __del__(self):
         """Ensure cleanup on garbage collection."""
-        if not self._closed:
-            try:
-                self.close()
-            except Exception:
-                pass
+        # DISABLED: __del__ was causing premature closure during object transfer
+        # The Repository wrapper (SQLiteProjectRepository) handles cleanup properly
+        # This defensive cleanup was closing the database before it could be used
+        pass
 
 
 # =============================================================================
@@ -177,7 +176,7 @@ def create_unified_project(
     *,
     app_version: str,
     timezone: str,
-    use_bundle_format: Optional[bool] = None,
+    use_bundle_format: bool | None = None,
 ) -> UnifiedProjectStore:
     """
     Create a new project (bundle or legacy format).
@@ -293,9 +292,7 @@ def open_unified_project(
     # Check if bundle format
     if fmt == "bundle-v1" or (auto_migrate and is_bundle_format(path)):
         # Open as bundle
-        handle, conn = open_project_handle(
-            path, readonly=readonly, auto_migrate=auto_migrate
-        )
+        handle, conn = open_project_handle(path, readonly=readonly, auto_migrate=auto_migrate)
 
         return UnifiedProjectStore(
             path=handle.path,
@@ -371,7 +368,7 @@ def get_project_format(path: str | os.PathLike[str]) -> str:
 def convert_to_bundle(
     legacy_path: str | os.PathLike[str],
     *,
-    bundle_path: Optional[str | os.PathLike[str]] = None,
+    bundle_path: str | os.PathLike[str] | None = None,
     keep_legacy: bool = True,
 ) -> Path:
     """
@@ -401,7 +398,7 @@ def convert_to_bundle(
 def export_bundle_to_legacy(
     bundle_path: str | os.PathLike[str],
     *,
-    output_path: Optional[str | os.PathLike[str]] = None,
+    output_path: str | os.PathLike[str] | None = None,
 ) -> Path:
     """
     Export bundle to legacy single-file format.

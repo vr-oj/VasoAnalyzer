@@ -51,6 +51,7 @@ class PyQtGraphCanvasCompat(QWidget):
             "button_press_event": [],
             "button_release_event": [],
             "figure_leave_event": [],
+            "scroll_event": [],  # CRITICAL: Required for pan/zoom interactions
         }
         self._connection_ids: int = 0
 
@@ -58,24 +59,6 @@ class PyQtGraphCanvasCompat(QWidget):
         self.toolbar: Any = None
         self.figure: Any = None  # PyQtGraph doesn't use matplotlib Figure
         self.widgetlock: Any = _DummyWidgetLock()  # For toolbar pan/zoom compatibility
-
-        # Gesture support - enable on BOTH wrapper and child widget
-        log.info("PyQtGraphCanvasCompat: Initializing with gesture support")
-        self.grabGesture(Qt.PinchGesture)
-        self.grabGesture(Qt.PanGesture)
-        log.info("PyQtGraphCanvasCompat (wrapper): Gestures enabled")
-
-        # CRITICAL: Also enable gestures on the child PyQtGraph widget
-        # This is where user interactions actually occur!
-        self._pg_widget.grabGesture(Qt.PinchGesture)
-        self._pg_widget.grabGesture(Qt.PanGesture)
-        log.info("PyQtGraphCanvasCompat (child): Gestures enabled")
-
-        self._last_scale_factor: float = 1.0
-        self._accumulated_pan_x: float = 0.0
-        self._accumulated_pan_y: float = 0.0
-        self.on_pinch_zoom: Callable | None = None
-        self.on_pan_gesture: Callable | None = None
 
         # Create layout and add the PyQtGraph widget to it
         # This ensures the canvas wrapper actually displays the plots
@@ -109,121 +92,10 @@ class PyQtGraphCanvasCompat(QWidget):
         """Disconnect an event handler (not implemented for simplicity)."""
         pass
 
-    def event(self, event: QEvent) -> bool:
-        """Override event handler to process gestures."""
-        if event.type() == QEvent.Gesture:
-            log.debug("PyQtGraphCanvasCompat: Gesture event detected")
-            return self._handle_gesture_event(event)
-        return super().event(event)
-
-    def _handle_gesture_event(self, event) -> bool:
-        """Handle gesture events (pinch, pan)."""
-        # Handle pinch gesture for zooming
-        pinch = event.gesture(Qt.PinchGesture)
-        if pinch is not None:
-            log.debug(f"PyQtGraphCanvasCompat: Pinch gesture detected, state={pinch.state()}")
-            handled = self._handle_pinch_gesture(pinch)
-            if handled:
-                event.accept()
-                return True
-
-        # Handle pan gesture for panning
-        pan = event.gesture(Qt.PanGesture)
-        if pan is not None:
-            log.debug(f"PyQtGraphCanvasCompat: Pan gesture detected, state={pan.state()}")
-            handled = self._handle_pan_gesture(pan)
-            if handled:
-                event.accept()
-                return True
-
-        return False
-
-    def _handle_pinch_gesture(self, gesture) -> bool:
-        """Handle pinch-to-zoom gesture."""
-        state = gesture.state()
-
-        if state == Qt.GestureStarted:
-            self._last_scale_factor = 1.0
-            log.info("PyQtGraphCanvasCompat: Pinch gesture STARTED")
-            return True
-
-        elif state == Qt.GestureUpdated:
-            current_scale = gesture.totalScaleFactor()
-            scale_change = current_scale / self._last_scale_factor
-            self._last_scale_factor = current_scale
-
-            # Only trigger pinch zoom for significant scale changes (> 2%)
-            # This prevents horizontal swipes from being misdetected as pinch
-            if self.on_pinch_zoom and abs(scale_change - 1.0) > 0.02:
-                center = gesture.centerPoint()
-                zoom_factor = 1.0 / scale_change
-                log.info(f"PyQtGraphCanvasCompat: Pinch zoom - zoom_factor={zoom_factor:.3f}")
-                self.on_pinch_zoom(center.x(), center.y(), zoom_factor)
-            elif abs(scale_change - 1.0) <= 0.02:
-                # Ignore tiny scale changes (likely from horizontal swipe)
-                log.debug(f"PyQtGraphCanvasCompat: Ignoring tiny scale change: {scale_change:.4f}")
-            elif not self.on_pinch_zoom:
-                log.warning("PyQtGraphCanvasCompat: Pinch gesture detected but no callback set!")
-
-            return True
-
-        elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
-            self._last_scale_factor = 1.0
-            log.info(
-                f"PyQtGraphCanvasCompat: Pinch gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
-            )
-            return True
-
-        return False
-
-    def _handle_pan_gesture(self, gesture) -> bool:
-        """Handle two-finger pan gesture."""
-        state = gesture.state()
-
-        if state == Qt.GestureStarted:
-            self._accumulated_pan_x = 0.0
-            self._accumulated_pan_y = 0.0
-            log.info("PyQtGraphCanvasCompat: Pan gesture STARTED")
-            return True
-
-        elif state == Qt.GestureUpdated:
-            offset = gesture.offset()
-            total_dx = offset.x()
-            total_dy = offset.y()
-
-            dx = total_dx - self._accumulated_pan_x
-            dy = total_dy - self._accumulated_pan_y
-
-            self._accumulated_pan_x = total_dx
-            self._accumulated_pan_y = total_dy
-
-            if self.on_pan_gesture and (abs(dx) > 1 or abs(dy) > 1):
-                log.info(f"PyQtGraphCanvasCompat: Pan gesture - dx={dx:.1f}, dy={dy:.1f}")
-                self.on_pan_gesture(dx, dy)
-            elif not self.on_pan_gesture:
-                log.warning("PyQtGraphCanvasCompat: Pan gesture detected but no callback set!")
-
-            return True
-
-        elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
-            self._accumulated_pan_x = 0.0
-            self._accumulated_pan_y = 0.0
-            log.info(
-                f"PyQtGraphCanvasCompat: Pan gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
-            )
-            return True
-
-        return False
-
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Intercept Qt events and translate to matplotlib-style events."""
         if obj != self._pg_widget:
             return False
-
-        # GESTURE EVENTS: Forward gestures from child widget to wrapper
-        if event.type() == QEvent.Gesture:
-            log.debug("PyQtGraphCanvasCompat: Gesture event from child widget, handling...")
-            return self._handle_gesture_event(event)
 
         # WHEEL EVENTS: Translate to matplotlib scroll_event for panning/zooming
         if event.type() == QEvent.Wheel and isinstance(event, QWheelEvent):
@@ -277,6 +149,19 @@ class PyQtGraphCanvasCompat(QWidget):
         delta = qt_event.angleDelta().y()
         step = 1 if delta > 0 else -1
 
+        # Extract modifier keys from Qt event
+        modifiers = qt_event.modifiers()
+        key_parts = []
+        if modifiers & Qt.ControlModifier:
+            key_parts.append("ctrl")
+        if modifiers & Qt.ShiftModifier:
+            key_parts.append("shift")
+        if modifiers & Qt.AltModifier:
+            key_parts.append("alt")
+        if modifiers & Qt.MetaModifier:
+            key_parts.append("cmd")  # Meta key is Cmd on macOS
+        key_str = "+".join(key_parts) if key_parts else None
+
         # Create mock matplotlib scroll event
         mock_event = type(
             "MouseEvent",
@@ -290,7 +175,7 @@ class PyQtGraphCanvasCompat(QWidget):
                 "ydata": None,  # Would need axis transformation
                 "canvas": self,
                 "guiEvent": qt_event,
-                "key": None,  # Modifier keys (ctrl, shift, etc)
+                "key": key_str,  # Now contains actual modifier keys
             },
         )()
         return mock_event
