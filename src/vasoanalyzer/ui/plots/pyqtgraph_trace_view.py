@@ -69,18 +69,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Enable rectangle selection zoom mode
         self._view_box.setMouseMode(self._view_box.RectMode)  # Drag to select area to zoom
 
-        # Install event filter to block wheel events on ViewBox
-        # This prevents ViewBox from zooming on scroll, letting our scroll handler pan instead
-        class WheelBlocker(QObject):
-            """Event filter to block wheel events from ViewBox."""
-
-            def eventFilter(self, obj, event):
-                from PyQt5.QtCore import QEvent
-
-                return event.type() == QEvent.Wheel  # Block wheel events, allow others
-
-        self._wheel_blocker = WheelBlocker()
-        self._view_box.installEventFilter(self._wheel_blocker)
+        # Note: Wheel events are consumed at canvas level to prevent ViewBox zoom
+        # See canvas_compat.py - wheel events are handled for horizontal panning only
 
         # Connect ViewBox range changes to sync with time window management
         # This ensures native PyQtGraph pan/zoom syncs with our PlotHost

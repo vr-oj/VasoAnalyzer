@@ -97,11 +97,14 @@ class PyQtGraphCanvasCompat(QWidget):
         if obj != self._pg_widget:
             return False
 
-        # WHEEL EVENTS: Translate to matplotlib scroll_event for panning/zooming
+        # WHEEL EVENTS: Translate to matplotlib scroll_event for panning
+        # Consume the event to prevent ViewBox from zooming - we handle panning instead
         if event.type() == QEvent.Wheel and isinstance(event, QWheelEvent):
             mock_event = self._create_mock_wheel_event(event)
             self._dispatch_event("scroll_event", mock_event)
-            return False  # Don't consume - allow propagation
+            return (
+                True  # Consume event - prevent ViewBox zoom, we handle pan in InteractionController
+            )
 
         # Mouse move -> motion_notify_event
         if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
