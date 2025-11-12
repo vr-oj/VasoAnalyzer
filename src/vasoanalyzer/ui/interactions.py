@@ -170,11 +170,16 @@ class InteractionController:
         - Ctrl + scroll = zoom
         - Pinch gesture = zoom (handled separately)
         """
+        import logging
+
+        log = logging.getLogger(__name__)
+
         if self._nav_active():
             return
 
         # Block scroll events while gesture is active to prevent interference
         if self._gesture_active:
+            log.debug("Scroll event blocked - gesture active")
             return
 
         modifiers = _parse_modifiers(getattr(event, "key", None))
@@ -213,6 +218,7 @@ class InteractionController:
         window_span = window[1] - window[0]
         pan_amount = direction * window_span * 0.1  # 10% of visible window
 
+        log.info(f"📜 Scroll pan: direction={direction}, amount={pan_amount:.2f}s")
         self.plot_host.scroll_by(pan_amount)
 
     def _on_press(self, event) -> None:
@@ -397,9 +403,10 @@ class InteractionController:
         self.plot_host.zoom_at(center_time, zoom_factor)
 
         # Clear gesture flag after a short delay (gesture updates come in bursts)
+        # Use shorter delay to allow scroll events sooner
         from PyQt5.QtCore import QTimer
 
-        QTimer.singleShot(100, lambda: setattr(self, "_gesture_active", False))
+        QTimer.singleShot(50, lambda: setattr(self, "_gesture_active", False))
 
     def _on_pan_gesture(self, dx: float, dy: float) -> None:
         """Handle two-finger pan gesture from trackpad.

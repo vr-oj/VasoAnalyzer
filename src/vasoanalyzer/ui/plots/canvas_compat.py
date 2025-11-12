@@ -152,11 +152,16 @@ class PyQtGraphCanvasCompat(QWidget):
             scale_change = current_scale / self._last_scale_factor
             self._last_scale_factor = current_scale
 
-            if self.on_pinch_zoom and abs(scale_change - 1.0) > 0.01:
+            # Only trigger pinch zoom for significant scale changes (> 2%)
+            # This prevents horizontal swipes from being misdetected as pinch
+            if self.on_pinch_zoom and abs(scale_change - 1.0) > 0.02:
                 center = gesture.centerPoint()
                 zoom_factor = 1.0 / scale_change
                 log.info(f"PyQtGraphCanvasCompat: Pinch zoom - zoom_factor={zoom_factor:.3f}")
                 self.on_pinch_zoom(center.x(), center.y(), zoom_factor)
+            elif abs(scale_change - 1.0) <= 0.02:
+                # Ignore tiny scale changes (likely from horizontal swipe)
+                log.debug(f"PyQtGraphCanvasCompat: Ignoring tiny scale change: {scale_change:.4f}")
             elif not self.on_pinch_zoom:
                 log.warning("PyQtGraphCanvasCompat: Pinch gesture detected but no callback set!")
 
