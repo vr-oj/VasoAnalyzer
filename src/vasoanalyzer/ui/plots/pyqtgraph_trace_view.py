@@ -176,6 +176,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Set initial X range to full data range and render initial data
         if model is not None:
             x0, x1 = model.full_range
+
+            # Constrain ViewBox to prevent panning beyond data boundaries
+            # setLimits restricts the user's ability to pan/zoom outside the specified range
+            self._view_box.setLimits(xMin=x0, xMax=x1)
+
             self._plot_item.setXRange(x0, x1, padding=0.02)
 
             # Render the initial data window
