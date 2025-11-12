@@ -258,6 +258,10 @@ class InteractionController:
             self.canvas.draw_idle()
 
     def _on_key_press(self, event) -> None:
+        import logging
+
+        log = logging.getLogger(__name__)
+
         key = getattr(event, "key", None)
         if key is None:
             return
@@ -304,4 +308,24 @@ class InteractionController:
 
         if base == "0" and "alt" in modifiers:
             self.plot_host.autoscale_all()
+            return
+
+        # Zoom in/out with +/- keys (LabChart-style)
+        if base in {"equal", "+", "minus", "-"} and window is not None:
+            # Determine zoom direction
+            zoom_in = base in {"equal", "+"}
+            zoom_factor = 0.5 if zoom_in else 2.0  # 0.5 = zoom in, 2.0 = zoom out
+
+            span = window[1] - window[0]
+            new_span = span * zoom_factor
+
+            # Center zoom on hover position if available, otherwise center of view
+            center = self._hover_time if self._hover_time is not None else (window[0] + window[1]) / 2.0
+
+            # Calculate new window bounds
+            new_start = center - new_span / 2.0
+            new_end = center + new_span / 2.0
+
+            log.info(f"🔍 Zoom {'in' if zoom_in else 'out'}: {span:.2f}s → {new_span:.2f}s (center: {center:.2f}s)")
+            self.plot_host.set_time_window(new_start, new_end)
             return
