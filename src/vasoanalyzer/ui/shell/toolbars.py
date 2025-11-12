@@ -45,6 +45,7 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
             border-radius: 8px;
             margin: 0px 5px;
             padding: 6px 8px;
+            min-width: 52px;
             color: {CURRENT_THEME["text"]};
         }}
         QToolBar > QToolButton:hover {{
