@@ -60,12 +60,19 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._plot_item.showGrid(x=True, y=True, alpha=0.3)
         self._plot_item.setMenuEnabled(False)  # Disable right-click menu
 
-        # CRITICAL: Disable ViewBox wheel event handling
-        # This allows matplotlib-style scroll events to work for panning
-        # PyQtGraph's ViewBox consumes wheel events by default, blocking our handlers
-        view_box = self._plot_item.getViewBox()
-        view_box.setMouseEnabled(x=False, y=False)  # Disable ViewBox mouse interactions
-        # We handle all mouse/wheel interactions through InteractionController instead
+        # Enable PyQtGraph native interactions (horizontal-only panning)
+        # This provides smooth trackpad scrolling and drag-to-pan
+        self._view_box = self._plot_item.getViewBox()
+        self._view_box.setMouseEnabled(x=True, y=False)  # Horizontal pan only, Y managed by us
+        self._view_box.setLimits(xMin=None, xMax=None, yMin=None, yMax=None)  # No hard limits
+
+        # Enable rectangle selection zoom mode
+        self._view_box.setMouseMode(self._view_box.RectMode)  # Drag to select area to zoom
+
+        # Connect ViewBox range changes to sync with time window management
+        # This ensures native PyQtGraph pan/zoom syncs with our PlotHost
+        self._view_box.sigRangeChanged.connect(self._on_viewbox_range_changed)
+        self._syncing_range = False  # Prevent circular updates
 
         # Data model and state
         self.model: TraceModel | None = None
@@ -459,9 +466,34 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # optimize by hiding lines far outside the viewport
         pass
 
+    def _on_viewbox_range_changed(self) -> None:
+        """Handle ViewBox range changes from native PyQtGraph interactions.
+
+        When the user pans/zooms with trackpad or rectangle selection,
+        this syncs the new range with our LOD rendering system.
+        """
+        if self._syncing_range or self.model is None:
+            return
+
+        # Get new X range from ViewBox
+        x_range = self._view_box.viewRange()[0]
+        x0, x1 = float(x_range[0]), float(x_range[1])
+
+        # Re-render data at new range with LOD
+        self._syncing_range = True
+        try:
+            pixel_width = max(int(self._plot_widget.width()), 400)
+            self.update_window(x0, x1, pixel_width=pixel_width)
+        finally:
+            self._syncing_range = False
+
     def set_xlim(self, x0: float, x1: float) -> None:
         """Set X-axis limits."""
-        self._plot_item.setXRange(x0, x1, padding=0)
+        self._syncing_range = True
+        try:
+            self._plot_item.setXRange(x0, x1, padding=0)
+        finally:
+            self._syncing_range = False
 
     def set_ylim(self, y0: float, y1: float) -> None:
         """Set Y-axis limits."""
