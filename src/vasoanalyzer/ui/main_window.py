@@ -5516,6 +5516,55 @@ QPushButton[isGhost="true"]:hover {{
         self.toggle_grid()
         self._sync_grid_action()
 
+    def _on_zoom_in_triggered(self) -> None:
+        """Handle zoom in button click - zoom in 2x centered on view center."""
+        if not hasattr(self, 'plot_host'):
+            return
+
+        window = self.plot_host.current_window()
+        if window is None:
+            return
+
+        span = window[1] - window[0]
+        new_span = span * 0.5  # Zoom in 2x
+        center = (window[0] + window[1]) / 2.0
+
+        new_start = center - new_span / 2.0
+        new_end = center + new_span / 2.0
+
+        self.plot_host.set_time_window(new_start, new_end)
+
+    def _on_zoom_out_triggered(self) -> None:
+        """Handle zoom out button click - zoom out 2x centered on view center."""
+        if not hasattr(self, 'plot_host'):
+            return
+
+        window = self.plot_host.current_window()
+        if window is None:
+            return
+
+        span = window[1] - window[0]
+        new_span = span * 2.0  # Zoom out 2x
+        center = (window[0] + window[1]) / 2.0
+
+        new_start = center - new_span / 2.0
+        new_end = center + new_span / 2.0
+
+        self.plot_host.set_time_window(new_start, new_end)
+
+    def _on_autoscale_triggered(self) -> None:
+        """Handle autoscale button click - reset to full time range and autoscale Y axes."""
+        if not hasattr(self, 'plot_host'):
+            return
+
+        # Reset to full time range
+        full = self.plot_host.full_range()
+        if full is not None:
+            self.plot_host.set_time_window(*full)
+
+        # Autoscale all Y axes
+        self.plot_host.autoscale_all()
+
     def _ensure_event_label_actions(self) -> None:
         if getattr(self, "_event_label_action_group", None) is not None:
             return

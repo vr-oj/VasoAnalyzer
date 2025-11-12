@@ -159,6 +159,40 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
 
         toolbar.addSeparator()
 
+    # Add zoom in/out/autoscale buttons for PyQtGraph
+    if is_pyqtgraph:
+        window.actZoomIn = QAction(QIcon(window.icon_path("Zoom.svg")), "Zoom In", window)
+        window.actZoomIn.setShortcut(QKeySequence("+"))
+        window.actZoomIn.setToolTip(
+            "<b>Zoom In</b> <kbd>+</kbd><br><br>"
+            "Zoom in to see more detail.<br>"
+            "Increases magnification 2x."
+        )
+        window.actZoomIn.triggered.connect(window._on_zoom_in_triggered)
+        toolbar.addAction(window.actZoomIn)
+
+        window.actZoomOut = QAction(QIcon(window.icon_path("ZoomOut.svg")), "Zoom Out", window)
+        window.actZoomOut.setShortcut(QKeySequence("-"))
+        window.actZoomOut.setToolTip(
+            "<b>Zoom Out</b> <kbd>-</kbd><br><br>"
+            "Zoom out to see more time range.<br>"
+            "Decreases magnification 2x."
+        )
+        window.actZoomOut.triggered.connect(window._on_zoom_out_triggered)
+        toolbar.addAction(window.actZoomOut)
+
+        window.actAutoscale = QAction(QIcon(window.icon_path("Home.svg")), "Autoscale", window)
+        window.actAutoscale.setShortcut(QKeySequence("A"))
+        window.actAutoscale.setToolTip(
+            "<b>Autoscale</b> <kbd>A</kbd><br><br>"
+            "Reset to full time range and autoscale Y axes.<br>"
+            "Shows all data in view."
+        )
+        window.actAutoscale.triggered.connect(window._on_autoscale_triggered)
+        toolbar.addAction(window.actAutoscale)
+
+        toolbar.addSeparator()
+
     window.actGrid = QAction(QIcon(window.icon_path("Grid.svg")), "Grid", window)
     window.actGrid.setCheckable(True)
     window.actGrid.setChecked(window.grid_visible)
