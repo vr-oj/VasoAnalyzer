@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import logging
 import sqlite3
+import time
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
@@ -232,7 +233,8 @@ def create_project_handle(
         # Initialize schema (this is normally done by the ProjectRepository)
         from ..storage.sqlite import projects as _projects
 
-        _projects.ensure_schema(conn, schema_version=3, initialize_if_empty=True)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _projects.ensure_schema(conn, schema_version=3, now=now)
 
         handle = ProjectHandle(
             path=path,
@@ -294,7 +296,8 @@ def _open_bundle_handle(
         if current_snapshot is None:
             log.info(f"Initializing schema for new bundle: {bundle_path}")
             from ..storage.sqlite import projects as _projects
-            _projects.ensure_schema(staging_conn, schema_version=3, initialize_if_empty=True)
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _projects.ensure_schema(staging_conn, schema_version=3, now=now)
 
         handle = ProjectHandle(
             path=bundle_path,
