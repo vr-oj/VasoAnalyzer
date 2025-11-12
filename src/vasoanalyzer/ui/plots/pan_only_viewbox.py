@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pyqtgraph as pg
-from PyQt5.QtGui import QWheelEvent
+from PyQt5.QtWidgets import QGraphicsSceneWheelEvent
 
 
 class PanOnlyViewBox(pg.ViewBox):
@@ -16,26 +16,17 @@ class PanOnlyViewBox(pg.ViewBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def wheelEvent(self, ev: QWheelEvent) -> None:
+    def wheelEvent(self, ev: QGraphicsSceneWheelEvent) -> None:
         """Override wheel event to pan horizontally instead of zooming.
 
         Consume the event here so ViewBox's default zoom logic never runs.
         Map vertical scroll to horizontal pan. The amount is proportional to current view width.
-        Supports both angleDelta (mice) and pixelDelta (trackpads).
+        QGraphicsSceneWheelEvent only provides delta(), not angleDelta/pixelDelta.
         """
-        # Prefer pixelDelta for trackpad smoothness; fallback to angleDelta
-        try:
-            delta_px = ev.pixelDelta().y()
-        except Exception:
-            delta_px = 0
-
-        if delta_px == 0:
-            # Typical mouse: 120 units per notch in angleDelta
-            delta_angle = ev.angleDelta().y()
-            steps = delta_angle / 120.0
-        else:
-            # Empirical scaling: ~240 pixels ≈ 2 "notches" → 0.5 per 60 px
-            steps = delta_px / 120.0  # tune if you want slower/faster trackpad pan
+        # QGraphicsSceneWheelEvent uses delta() - returns degrees * 8
+        # Typical mouse: 120 units (15 degrees * 8) per notch
+        delta = ev.delta()
+        steps = delta / 120.0
 
         # Sign convention: scrolling down moves forward in time (to the right)
         # This is the "natural" document scrolling feel
