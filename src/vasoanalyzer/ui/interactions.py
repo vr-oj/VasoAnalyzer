@@ -65,6 +65,7 @@ class InteractionController:
         self._connection_ids: list[int] = []
 
         self._connect_events()
+        self._connect_gestures()
 
     # ------------------------------------------------------------------ lifecycle
     def disconnect(self) -> None:
@@ -85,6 +86,13 @@ class InteractionController:
                 mpl_connect("key_press_event", self._on_key_press),
             ]
         )
+
+    def _connect_gestures(self) -> None:
+        """Connect gesture callbacks if canvas supports them."""
+        if hasattr(self.canvas, "on_pinch_zoom"):
+            self.canvas.on_pinch_zoom = self._on_pinch_gesture
+        if hasattr(self.canvas, "on_pan_gesture"):
+            self.canvas.on_pan_gesture = self._on_pan_gesture
 
     # ------------------------------------------------------------------ helpers
     def _nav_active(self) -> bool:
@@ -289,3 +297,61 @@ class InteractionController:
         if base == "0" and "alt" in modifiers:
             self.plot_host.autoscale_all()
             return
+
+    # ------------------------------------------------------------------ gesture handlers
+    def _on_pinch_gesture(self, center_x: float, center_y: float, zoom_factor: float) -> None:
+        """Handle pinch-to-zoom gesture from trackpad.
+
+        Args:
+            center_x: X coordinate of gesture center in widget coordinates
+            center_y: Y coordinate of gesture center in widget coordinates
+            zoom_factor: Zoom factor (> 1 for zoom out, < 1 for zoom in)
+        """
+        if self._nav_active():
+            return
+
+        # Find which track (if any) contains the gesture center
+        track = None
+        for t in self.plot_host.tracks():
+            bbox = t.ax.get_window_extent()
+            if bbox.contains(center_x, center_y):
+                track = t
+                break
+
+        # Convert widget coordinates to data coordinates
+        window = self.plot_host.current_window()
+        if window is None:
+            return
+
+        # For pinch gestures, zoom around the center of the visible window
+        # (trackpad pinch doesn't give us precise location like mouse scroll)
+        center_time = (window[0] + window[1]) / 2.0
+
+        # Apply zoom at center of window
+        self.plot_host.zoom_at(center_time, zoom_factor)
+
+    def _on_pan_gesture(self, dx: float, dy: float) -> None:
+        """Handle two-finger pan gesture from trackpad.
+
+        Args:
+            dx: Horizontal pan delta in pixels
+            dy: Vertical pan delta in pixels
+        """
+        if self._nav_active():
+            return
+
+        window = self.plot_host.current_window()
+        if window is None:
+            return
+
+        # Convert pixel delta to data delta
+        # Use figure width to scale the pan amount
+        fig_width_px = self.canvas.get_width_height()[0]
+        if fig_width_px <= 0:
+            return
+
+        window_span = window[1] - window[0]
+        data_delta = (dx / fig_width_px) * window_span
+
+        # Apply pan (negative because trackpad motion is opposite to data motion)
+        self.plot_host.scroll_by(-data_delta)

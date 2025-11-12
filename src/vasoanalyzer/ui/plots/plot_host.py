@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from matplotlib.axes import Axes
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.text import Annotation, Text
@@ -26,6 +25,7 @@ from vasoanalyzer.ui.event_labels_v3 import (
     LayoutOptionsV3,
 )
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack, ChannelTrackSpec
+from vasoanalyzer.ui.plots.gesture_canvas import GestureCanvas
 from vasoanalyzer.ui.plots.overlays import (
     AnnotationLane,
     AnnotationSpec,
@@ -57,7 +57,7 @@ class PlotHost:
             dpi=dpi,
             constrained_layout=False,
         )
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas = GestureCanvas(self.figure)
         self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
         self._channel_specs: list[ChannelTrackSpec] = []
         self._tracks: dict[str, ChannelTrack] = {}
