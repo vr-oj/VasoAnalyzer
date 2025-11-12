@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtGui import QMouseEvent
+from PyQt5.QtGui import QMouseEvent, QWheelEvent
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 log = logging.getLogger(__name__)
@@ -225,6 +225,12 @@ class PyQtGraphCanvasCompat(QWidget):
             log.debug("PyQtGraphCanvasCompat: Gesture event from child widget, handling...")
             return self._handle_gesture_event(event)
 
+        # WHEEL EVENTS: Translate to matplotlib scroll_event for panning/zooming
+        if event.type() == QEvent.Wheel and isinstance(event, QWheelEvent):
+            mock_event = self._create_mock_wheel_event(event)
+            self._dispatch_event("scroll_event", mock_event)
+            return False  # Don't consume - allow propagation
+
         # Mouse move -> motion_notify_event
         if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
             mock_event = self._create_mock_mouse_event(event)
@@ -261,6 +267,30 @@ class PyQtGraphCanvasCompat(QWidget):
                 "ydata": None,  # Would need axis transformation
                 "canvas": self,
                 "guiEvent": qt_event,
+            },
+        )()
+        return mock_event
+
+    def _create_mock_wheel_event(self, qt_event: QWheelEvent) -> Any:
+        """Create a matplotlib-compatible scroll event from Qt wheel event."""
+        # Get scroll direction from wheel delta
+        delta = qt_event.angleDelta().y()
+        step = 1 if delta > 0 else -1
+
+        # Create mock matplotlib scroll event
+        mock_event = type(
+            "MouseEvent",
+            (),
+            {
+                "x": qt_event.position().x() if hasattr(qt_event.position(), "x") else qt_event.x(),
+                "y": qt_event.position().y() if hasattr(qt_event.position(), "y") else qt_event.y(),
+                "button": "up" if step > 0 else "down",
+                "step": step,
+                "xdata": None,  # Would need axis transformation
+                "ydata": None,  # Would need axis transformation
+                "canvas": self,
+                "guiEvent": qt_event,
+                "key": None,  # Modifier keys (ctrl, shift, etc)
             },
         )()
         return mock_event

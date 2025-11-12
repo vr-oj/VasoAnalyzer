@@ -60,6 +60,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._plot_item.showGrid(x=True, y=True, alpha=0.3)
         self._plot_item.setMenuEnabled(False)  # Disable right-click menu
 
+        # CRITICAL: Disable ViewBox wheel event handling
+        # This allows matplotlib-style scroll events to work for panning
+        # PyQtGraph's ViewBox consumes wheel events by default, blocking our handlers
+        view_box = self._plot_item.getViewBox()
+        view_box.setMouseEnabled(x=False, y=False)  # Disable ViewBox mouse interactions
+        # We handle all mouse/wheel interactions through InteractionController instead
+
         # Data model and state
         self.model: TraceModel | None = None
         self._current_window: TraceWindow | None = None
@@ -419,11 +426,19 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
         elif self._mode == "avg_pressure":
-            if window.avg_pressure_mean is None or window.avg_pressure_min is None or window.avg_pressure_max is None:
+            if (
+                window.avg_pressure_mean is None
+                or window.avg_pressure_min is None
+                or window.avg_pressure_max is None
+            ):
                 return None
             return window.avg_pressure_mean, window.avg_pressure_min, window.avg_pressure_max
         elif self._mode == "set_pressure":
-            if window.set_pressure_mean is None or window.set_pressure_min is None or window.set_pressure_max is None:
+            if (
+                window.set_pressure_mean is None
+                or window.set_pressure_min is None
+                or window.set_pressure_max is None
+            ):
                 return None
             return window.set_pressure_mean, window.set_pressure_min, window.set_pressure_max
         return window.inner_mean, window.inner_min, window.inner_max
