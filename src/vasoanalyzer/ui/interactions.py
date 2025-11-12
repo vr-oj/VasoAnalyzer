@@ -89,10 +89,24 @@ class InteractionController:
 
     def _connect_gestures(self) -> None:
         """Connect gesture callbacks if canvas supports them."""
+        import logging
+        log = logging.getLogger(__name__)
+
+        log.info(f"InteractionController: Canvas type = {type(self.canvas).__name__}")
+        log.info(f"InteractionController: Canvas has on_pinch_zoom = {hasattr(self.canvas, 'on_pinch_zoom')}")
+        log.info(f"InteractionController: Canvas has on_pan_gesture = {hasattr(self.canvas, 'on_pan_gesture')}")
+
         if hasattr(self.canvas, "on_pinch_zoom"):
             self.canvas.on_pinch_zoom = self._on_pinch_gesture
+            log.info("InteractionController: Connected pinch zoom callback")
+        else:
+            log.warning("InteractionController: Canvas does not support on_pinch_zoom")
+
         if hasattr(self.canvas, "on_pan_gesture"):
             self.canvas.on_pan_gesture = self._on_pan_gesture
+            log.info("InteractionController: Connected pan gesture callback")
+        else:
+            log.warning("InteractionController: Canvas does not support on_pan_gesture")
 
     # ------------------------------------------------------------------ helpers
     def _nav_active(self) -> bool:
@@ -337,7 +351,13 @@ class InteractionController:
             center_y: Y coordinate of gesture center in widget coordinates
             zoom_factor: Zoom factor (> 1 for zoom out, < 1 for zoom in)
         """
+        import logging
+        log = logging.getLogger(__name__)
+
+        log.info(f"InteractionController: _on_pinch_gesture called - zoom_factor={zoom_factor:.3f}")
+
         if self._nav_active():
+            log.debug("InteractionController: Navigation mode active, ignoring pinch")
             return
 
         # Find which track (if any) contains the gesture center
@@ -351,11 +371,14 @@ class InteractionController:
         # Convert widget coordinates to data coordinates
         window = self.plot_host.current_window()
         if window is None:
+            log.warning("InteractionController: No current window, cannot apply pinch")
             return
 
         # For pinch gestures, zoom around the center of the visible window
         # (trackpad pinch doesn't give us precise location like mouse scroll)
         center_time = (window[0] + window[1]) / 2.0
+
+        log.info(f"InteractionController: Applying zoom at time={center_time:.2f}, factor={zoom_factor:.3f}")
 
         # Apply zoom at center of window
         self.plot_host.zoom_at(center_time, zoom_factor)
@@ -367,21 +390,31 @@ class InteractionController:
             dx: Horizontal pan delta in pixels
             dy: Vertical pan delta in pixels
         """
+        import logging
+        log = logging.getLogger(__name__)
+
+        log.info(f"InteractionController: _on_pan_gesture called - dx={dx:.1f}, dy={dy:.1f}")
+
         if self._nav_active():
+            log.debug("InteractionController: Navigation mode active, ignoring pan")
             return
 
         window = self.plot_host.current_window()
         if window is None:
+            log.warning("InteractionController: No current window, cannot apply pan")
             return
 
         # Convert pixel delta to data delta
         # Use figure width to scale the pan amount
         fig_width_px = self.canvas.get_width_height()[0]
         if fig_width_px <= 0:
+            log.warning(f"InteractionController: Invalid canvas width={fig_width_px}")
             return
 
         window_span = window[1] - window[0]
         data_delta = (dx / fig_width_px) * window_span
+
+        log.info(f"InteractionController: Applying pan - data_delta={data_delta:.3f}")
 
         # Apply pan (negative because trackpad motion is opposite to data motion)
         self.plot_host.scroll_by(-data_delta)
