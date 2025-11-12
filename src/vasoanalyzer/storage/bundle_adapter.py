@@ -378,8 +378,21 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
             # Ensure staging connection is committed
             if handle.staging_conn:
                 handle.staging_conn.commit()
+            else:
+                log.error("No staging connection available for bundle save")
+                raise RuntimeError("Cannot save bundle: no staging connection")
+
+            # Verify staging path exists
+            if not handle.staging_path:
+                log.error("No staging database path available for bundle save")
+                raise RuntimeError("Cannot save bundle: no staging database path")
+
+            if not handle.staging_path.exists():
+                log.error(f"Staging database does not exist: {handle.staging_path}")
+                raise RuntimeError(f"Cannot save bundle: staging database not found at {handle.staging_path}")
 
             # Create snapshot from staging database
+            log.debug(f"Creating snapshot from staging DB: {handle.staging_path}")
             snapshot_info = create_snapshot(handle.path, handle.staging_path)
             log.info(
                 f"Snapshot created: {snapshot_info.number} "
@@ -395,6 +408,8 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
             # Just commit staging database
             if handle.staging_conn:
                 handle.staging_conn.commit()
+            else:
+                log.warning("No staging connection to commit for bundle")
 
     else:
         # Legacy format: just commit
