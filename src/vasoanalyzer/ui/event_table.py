@@ -7,16 +7,22 @@ from collections.abc import Sequence
 import pandas as pd
 from PyQt5.QtCore import (
     QAbstractTableModel,
+    QEvent,
     QModelIndex,
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QResizeEvent
+from PyQt5.QtGui import QHelpEvent, QPainter, QResizeEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QHeaderView,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableView,
+    QToolTip,
 )
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -24,6 +30,50 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 # EventRow: (label, time, inner_diameter, outer_diameter | None, avg_pressure | None, set_pressure | None, frame | None)
 EventRow = tuple[str, float, float, float | None, float | None, float | None, int | None]
 DEFAULT_QMODEL_INDEX = QModelIndex()
+
+EVENT_COLUMN_INDEX = 0
+DEFAULT_EVENT_COLUMN_WIDTH = 220
+
+HEADER_TOOLTIPS = {
+    "Event": "Event label or description",
+    "Time (s)": "Timestamp of the event",
+    "ID (µm)": "Inner diameter at the event",
+    "OD (µm)": "Outer diameter at the event",
+    "Avg P (mmHg)": "Average pressure across the interval",
+    "Set P (mmHg)": "Commanded set pressure",
+    "Frame": "Frame index if available",
+}
+
+
+class EventNameDelegate(QStyledItemDelegate):
+    """Delegate for rendering long event labels with elided text and tooltips."""
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
+        text = index.data(Qt.DisplayRole)
+        if text is None:
+            super().paint(painter, option, index)
+            return
+
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        metrics = opt.fontMetrics
+        opt.text = metrics.elidedText(str(text), Qt.ElideRight, opt.rect.width())
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter)
+
+    def helpEvent(
+        self,
+        event: QHelpEvent,
+        view: QAbstractItemView,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> bool:
+        if event.type() == QEvent.ToolTip:
+            text = index.data(Qt.DisplayRole)
+            if text:
+                QToolTip.showText(event.globalPos(), str(text), view)
+                return True
+        return super().helpEvent(event, view, option, index)
 
 
 class EventTableModel(QAbstractTableModel):
@@ -46,10 +96,17 @@ class EventTableModel(QAbstractTableModel):
         return 0 if parent.isValid() else len(self._headers)
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
-        if role != Qt.DisplayRole:
-            return None
         if orientation == Qt.Horizontal and 0 <= section < len(self._headers):
-            return self._headers[section]
+            header = self._headers[section]
+            if role == Qt.DisplayRole:
+                return header
+            if role == Qt.ToolTipRole:
+                return HEADER_TOOLTIPS.get(header)
+            if role == Qt.TextAlignmentRole:
+                if section == 0:
+                    return Qt.AlignLeft | Qt.AlignVCenter
+                return Qt.AlignHCenter | Qt.AlignVCenter
+            return None
         return super().headerData(section, orientation, role)
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
@@ -66,6 +123,10 @@ class EventTableModel(QAbstractTableModel):
             return self._format_display(col, raw_value)
         if role == Qt.EditRole:
             return "" if raw_value is None else str(raw_value)
+        if role == Qt.TextAlignmentRole:
+            if col == 0:
+                return Qt.AlignVCenter | Qt.AlignLeft
+            return Qt.AlignVCenter | Qt.AlignRight
         return None
 
     def flags(self, index: QModelIndex):
@@ -242,13 +303,19 @@ class EventTableWidget(QTableView):
         self.setAlternatingRowColors(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setFrameShape(QFrame.NoFrame)
+        self._event_delegate = EventNameDelegate(self)
+        self.setItemDelegateForColumn(EVENT_COLUMN_INDEX, self._event_delegate)
+        self._preferred_event_width = DEFAULT_EVENT_COLUMN_WIDTH
 
         h_header = self.horizontalHeader()
         h_header.setSectionResizeMode(QHeaderView.ResizeToContents)
         h_header.setMinimumSectionSize(70)
-        h_header.setStretchLastSection(True)
+        h_header.setStretchLastSection(False)
         h_header.setDefaultSectionSize(110)
         h_header.setMinimumHeight(24)
+        if h_header.count() > EVENT_COLUMN_INDEX:
+            h_header.resizeSection(EVENT_COLUMN_INDEX, self._preferred_event_width)
+            h_header.setSectionResizeMode(EVENT_COLUMN_INDEX, QHeaderView.Interactive)
 
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.Fixed)
@@ -286,9 +353,7 @@ class EventTableWidget(QTableView):
 
         model = self.model()
         if model and model.columnCount() > 0:
-            for col in range(model.columnCount()):
-                header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
-            header.setStretchLastSection(True)
+            self._apply_column_resize_modes()
             self.refresh_column_widths()
 
     def _emit_cell_clicked(self, index: QModelIndex) -> None:
@@ -304,7 +369,11 @@ class EventTableWidget(QTableView):
         if not model or model.columnCount() == 0:
             return
 
-        self.resizeColumnsToContents()
+        header = self.horizontalHeader()
+        for col in range(model.columnCount()):
+            mode = header.sectionResizeMode(col)
+            if mode == QHeaderView.ResizeToContents:
+                self.resizeColumnToContents(col)
         self._fit_columns_to_viewport()
 
     def _fit_columns_to_viewport(self) -> None:
@@ -323,3 +392,35 @@ class EventTableWidget(QTableView):
         remaining = viewport_width - total_width
         last_col = model.columnCount() - 1
         self.setColumnWidth(last_col, self.columnWidth(last_col) + remaining)
+
+    def _apply_column_resize_modes(self) -> None:
+        model = self.model()
+        if not model or model.columnCount() == 0:
+            return
+
+        header = self.horizontalHeader()
+        header.setStretchLastSection(False)
+
+        important_numeric = {"ID (µm)", "OD (µm)", "Avg P (mmHg)"}
+        trailing = {"Set P (mmHg)", "Frame"}
+
+        for col in range(model.columnCount()):
+            title = model.headerData(col, Qt.Horizontal, Qt.DisplayRole) or ""
+            if col == EVENT_COLUMN_INDEX:
+                header.setSectionResizeMode(col, QHeaderView.Interactive)
+                preferred_width = max(
+                    self._preferred_event_width,
+                    header.sectionSize(col),
+                    header.minimumSectionSize(),
+                )
+                header.resizeSection(col, preferred_width)
+            elif title in important_numeric:
+                header.setSectionResizeMode(col, QHeaderView.Interactive)
+                header.resizeSection(col, max(90, header.sectionSize(col)))
+            elif title == "Time (s)":
+                header.setSectionResizeMode(col, QHeaderView.Interactive)
+                header.resizeSection(col, max(80, header.sectionSize(col)))
+            elif title in trailing:
+                header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            else:
+                header.setSectionResizeMode(col, QHeaderView.ResizeToContents)

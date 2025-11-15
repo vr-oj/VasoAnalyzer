@@ -6141,42 +6141,80 @@ QPushButton[isGhost="true"]:hover {{
         self._sync_grid_action()
 
     def _on_zoom_in_triggered(self) -> None:
-        """Handle zoom in button click - zoom in 2x keeping left edge fixed."""
-        if not hasattr(self, "plot_host"):
+        """Handle zoom in button click - zoom in 2x around the current center."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
             return
 
-        window = self.plot_host.current_window()
-        if window is None:
+        window = plot_host.current_window()
+        full_range = plot_host.full_range()
+        if window is None or full_range is None:
             return
 
-        # Keep left edge fixed, compress from left to right
-        left_edge = window[0]
-        span = window[1] - window[0]
-        new_span = span * 0.5  # Zoom in 2x
+        start, end = float(window[0]), float(window[1])
+        full_start, full_end = float(full_range[0]), float(full_range[1])
+        span = end - start
+        full_span = full_end - full_start
+        if span <= 0 or full_span <= 0:
+            return
 
-        new_start = left_edge
-        new_end = left_edge + new_span
+        center = (start + end) / 2.0
+        min_span = full_span / 1000.0
+        new_span = max(span * 0.5, min_span)
+        new_span = min(new_span, full_span)
 
-        self.plot_host.set_time_window(new_start, new_end)
+        half_span = new_span / 2.0
+        new_start = center - half_span
+        new_end = center + half_span
+
+        if new_start < full_start:
+            new_start = full_start
+            new_end = full_start + new_span
+        if new_end > full_end:
+            new_end = full_end
+            new_start = full_end - new_span
+
+        if new_end <= new_start or new_span <= 0:
+            new_start, new_end = full_start, full_end
+
+        self._apply_time_window((new_start, new_end))
 
     def _on_zoom_out_triggered(self) -> None:
-        """Handle zoom out button click - zoom out 2x keeping left edge fixed."""
-        if not hasattr(self, "plot_host"):
+        """Handle zoom out button click - zoom out 2x around the current center."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
             return
 
-        window = self.plot_host.current_window()
-        if window is None:
+        window = plot_host.current_window()
+        full_range = plot_host.full_range()
+        if window is None or full_range is None:
             return
 
-        # Keep left edge fixed, stretch from left to right
-        left_edge = window[0]
-        span = window[1] - window[0]
-        new_span = span * 2.0  # Zoom out 2x
+        start, end = float(window[0]), float(window[1])
+        full_start, full_end = float(full_range[0]), float(full_range[1])
+        span = end - start
+        full_span = full_end - full_start
+        if full_span <= 0:
+            return
 
-        new_start = left_edge
-        new_end = left_edge + new_span
+        center = (start + end) / 2.0
+        new_span = full_span if span <= 0 else min(span * 2.0, full_span)
 
-        self.plot_host.set_time_window(new_start, new_end)
+        half_span = new_span / 2.0
+        new_start = center - half_span
+        new_end = center + half_span
+
+        if new_start < full_start:
+            new_start = full_start
+            new_end = full_start + new_span
+        if new_end > full_end:
+            new_end = full_end
+            new_start = full_end - new_span
+
+        if new_end <= new_start or new_span <= 0:
+            new_start, new_end = full_start, full_end
+
+        self._apply_time_window((new_start, new_end))
 
     def _on_autoscale_triggered(self) -> None:
         """Handle autoscale button click - reset to full time range and autoscale Y axes."""
@@ -6868,8 +6906,16 @@ QPushButton[isGhost="true"]:hover {{
                 idx = int(np.argmin(np.abs(arr_t - t)))
                 diam = float(arr_d[idx])
                 od_val = float(arr_od[idx]) if has_od and arr_od is not None else None
-                avg_p_val = float(arr_avg_p[idx]) if arr_avg_p is not None else None
-                set_p_val = float(arr_set_p[idx]) if arr_set_p is not None else None
+                avg_p_val = None
+                if arr_avg_p is not None:
+                    avg_val = arr_avg_p[idx]
+                    if avg_val is not None and not pd.isna(avg_val):
+                        avg_p_val = float(avg_val)
+                set_p_val = None
+                if arr_set_p is not None:
+                    set_val = arr_set_p[idx]
+                    if set_val is not None and not pd.isna(set_val):
+                        set_p_val = float(set_val)
 
                 # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
                 self.event_table_data.append(
@@ -10073,8 +10119,15 @@ QPushButton[isGhost="true"]:hover {{
         side_panel.setMinimumWidth(480)
         side_panel.setMaximumWidth(640)
         side_layout = QVBoxLayout(side_panel)
-        side_layout.setContentsMargins(12, 12, 12, 12)
-        side_layout.setSpacing(10)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(0)
+
+        right_panel_card = QFrame()
+        right_panel_card.setObjectName("PlotContainer")
+        right_panel_layout = QVBoxLayout(right_panel_card)
+        right_panel_layout.setContentsMargins(14, 14, 14, 14)
+        right_panel_layout.setSpacing(6)
+        side_layout.addWidget(right_panel_card)
 
         self.snapshot_card = QFrame()
         self.snapshot_card.setObjectName("SnapshotCard")
@@ -10085,15 +10138,14 @@ QPushButton[isGhost="true"]:hover {{
         snapshot_box.addWidget(self.slider)
         snapshot_box.addWidget(self.snapshot_controls)
         snapshot_box.addWidget(self.metadata_panel)
-        side_layout.addWidget(self.snapshot_card, 0, Qt.AlignTop)
-        side_layout.addSpacing(12)
+        right_panel_layout.addWidget(self.snapshot_card, 0, Qt.AlignTop)
         table_card = QFrame()
         table_card.setObjectName("TableCard")
         table_layout = QVBoxLayout(table_card)
         table_layout.setContentsMargins(12, 12, 12, 12)
         table_layout.setSpacing(0)
         table_layout.addWidget(self.event_table, 1)
-        side_layout.addWidget(table_card, 1)
+        right_panel_layout.addWidget(table_card, 1)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setObjectName("DataSplitter")

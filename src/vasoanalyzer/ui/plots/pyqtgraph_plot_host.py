@@ -99,6 +99,18 @@ class PyQtGraphPlotHost:
         self._compact_legend_location: str = "upper right"
         self._time_window_listeners: list[Callable[[float, float], None]] = []
         self._range_change_user_driven: bool = False
+        border_color = CURRENT_THEME.get(
+            "hover_label_border",
+            CURRENT_THEME.get("text", "#000000"),
+        )
+        self._lane_border_pen = pg.mkPen(
+            color=border_color,
+            width=1,
+            cosmetic=True,
+        )
+        self._x_grid_visible: bool = True
+        self._y_grid_visible: bool = True
+        self._grid_alpha: float = 0.3
 
     def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -156,53 +168,25 @@ class PyQtGraphPlotHost:
             plot_item = track.view.get_widget().getPlotItem()
             plot_items.append(plot_item)
 
-            # Configure X-axis visibility: only show on bottom track
+            # Configure X-axis visibility: only show labels on bottom track
             is_bottom_track = idx == len(self._channel_specs) - 1
-            bottom_axis = plot_item.getAxis("bottom")
-
-            if not is_bottom_track:
-                # Hide all components of the bottom axis for non-bottom tracks
-                plot_item.hideAxis("bottom")
-                bottom_axis.setLabel("")  # Remove label text
-                bottom_axis.setStyle(showValues=False)  # Hide tick labels
-                bottom_axis.setTicks([])  # Remove ticks
-                bottom_axis.setHeight(0)  # Collapse the axis height
-                # Hide the label item completely
-                if hasattr(bottom_axis, "label"):
-                    bottom_axis.label.hide()
-                if hasattr(bottom_axis, "showLabel"):
-                    bottom_axis.showLabel(False)
-            else:
-                # Ensure bottom track shows complete x-axis with ticks and label
-                plot_item.showAxis("bottom")
-                bottom_axis.setStyle(showValues=True)
-                bottom_axis.setLabel("Time", units="s")
-                # Reset height to default for bottom track
-                bottom_axis.setHeight(None)
+            self._configure_bottom_axis(plot_item, is_bottom_track=is_bottom_track)
 
             # Add subtle border around each plot's ViewBox for visual separation
             view_box = plot_item.getViewBox()
-            view_box.setBorder(pg.mkPen(color=(180, 180, 180), width=0.5))
+            view_box.setBorder(self._lane_border_pen)
 
             # Ensure Y-axes are aligned by setting consistent width
             left_axis = plot_item.getAxis("left")
             left_axis.setWidth(80)  # Fixed width for alignment
 
+            axes_wrapper = track.ax
+            if hasattr(axes_wrapper, "set_grid_callback"):
+                axes_wrapper.set_grid_callback(self._handle_axis_grid_request)
+
             # Apply model if already set
             if self._model is not None:
                 track.set_model(self._model)
-
-                # Re-apply bottom axis hiding after set_model (which resets the label)
-                if not is_bottom_track:
-                    plot_item.hideAxis("bottom")
-                    bottom_axis.setLabel("")
-                    bottom_axis.setStyle(showValues=False)
-                    bottom_axis.setTicks([])
-                    # Hide the label item completely
-                    if hasattr(bottom_axis, "label"):
-                        bottom_axis.label.hide()
-                    if hasattr(bottom_axis, "showLabel"):
-                        bottom_axis.showLabel(False)
 
             # Apply events if already set
             if self._event_times:
@@ -225,6 +209,7 @@ class PyQtGraphPlotHost:
         # Sync overlays with new tracks
         self._time_cursor_overlay.sync_tracks(plot_items)
         self._event_highlight_overlay.sync_tracks(plot_items)
+        self._apply_grid_to_all_tracks()
 
         # Update window if already set
         if self._current_window is not None:
@@ -255,6 +240,35 @@ class PyQtGraphPlotHost:
         self._apply_axis_font_to_track(track)
         self._apply_axis_font_to_track(track)
 
+    def _configure_bottom_axis(
+        self,
+        plot_item: pg.PlotItem,
+        *,
+        is_bottom_track: bool,
+    ) -> None:
+        """Ensure only the bottom track shows X-axis labels/ticks."""
+        bottom_axis = plot_item.getAxis("bottom")
+        if bottom_axis is None:
+            return
+        plot_item.showAxis("bottom")
+        with contextlib.suppress(AttributeError):
+            bottom_axis.enableAutoSIPrefix(False)
+        bottom_axis.setVisible(True)
+        if is_bottom_track:
+            bottom_axis.setStyle(showValues=True)
+            bottom_axis.setLabel("Time (s)")
+            bottom_axis.setHeight(None)
+            with contextlib.suppress(AttributeError):
+                bottom_axis.label.show()
+                bottom_axis.showLabel(True)
+        else:
+            bottom_axis.setStyle(showValues=False, tickLength=0)
+            bottom_axis.setLabel("")
+            bottom_axis.setHeight(12)
+            with contextlib.suppress(AttributeError):
+                bottom_axis.label.hide()
+                bottom_axis.showLabel(False)
+
     def _apply_event_label_options(self) -> None:
         if not self._tracks:
             return
@@ -275,6 +289,42 @@ class PyQtGraphPlotHost:
             track.view.enable_hover_tooltip(
                 self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
             )
+
+    def _apply_grid_to_all_tracks(
+        self,
+        *,
+        x_enabled: bool | None = None,
+        y_enabled: bool | None = None,
+        alpha: float | None = None,
+    ) -> None:
+        """Apply the current grid visibility/settings to every track."""
+        if x_enabled is not None:
+            self._x_grid_visible = bool(x_enabled)
+        if y_enabled is not None:
+            self._y_grid_visible = bool(y_enabled)
+        if alpha is not None:
+            self._grid_alpha = max(0.0, min(float(alpha), 1.0))
+
+        tracks = self.all_tracks()
+        if not tracks:
+            return
+
+        last_index = len(tracks) - 1
+        for idx, track in enumerate(tracks):
+            plot_item = track.view.get_widget().getPlotItem()
+            plot_item.showGrid(
+                x=self._x_grid_visible,
+                y=self._y_grid_visible,
+                alpha=self._grid_alpha,
+            )
+            self._configure_bottom_axis(plot_item, is_bottom_track=(idx == last_index))
+
+    def _handle_axis_grid_request(self, visible: bool) -> None:
+        """Normalize grid toggles triggered through matplotlib-compatible axes."""
+        desired = bool(visible)
+        if desired == self._x_grid_visible and desired == self._y_grid_visible:
+            return
+        self.set_grid_visible(desired)
 
     def set_axis_font(self, *, family: str | None = None, size: float | None = None) -> None:
         changed = False
@@ -301,6 +351,14 @@ class PyQtGraphPlotHost:
 
     def tick_font_size(self) -> float:
         return self._tick_font_size
+
+    def set_grid_visible(self, enabled: bool, *, alpha: float | None = None) -> None:
+        """Show/hide the shared grid across all tracks."""
+        self._apply_grid_to_all_tracks(x_enabled=enabled, y_enabled=enabled, alpha=alpha)
+
+    def grid_visible(self) -> bool:
+        """Return whether the shared grid is currently visible."""
+        return self._x_grid_visible
 
     def set_default_line_width(self, width: float) -> None:
         value = float(width)
@@ -431,26 +489,9 @@ class PyQtGraphPlotHost:
         """Set the trace data model for all tracks."""
         self._model = model
 
-        # Get ordered track IDs to determine which is bottom
-        ordered_ids = [spec.track_id for spec in self._channel_specs]
-        bottom_track_id = ordered_ids[-1] if ordered_ids else None
-
         for track in self._tracks.values():
             track.set_model(model)
-
-            # Re-hide bottom axis for non-bottom tracks (set_model resets the label)
-            is_bottom = track.id == bottom_track_id
-            if not is_bottom:
-                plot_item = track.view.get_widget().getPlotItem()
-                bottom_axis = plot_item.getAxis("bottom")
-                plot_item.hideAxis("bottom")
-                bottom_axis.setLabel("")
-                bottom_axis.setStyle(showValues=False)
-                bottom_axis.setTicks([])
-                if hasattr(bottom_axis, "label"):
-                    bottom_axis.label.hide()
-                if hasattr(bottom_axis, "showLabel"):
-                    bottom_axis.showLabel(False)
+        self._apply_grid_to_all_tracks()
 
         # Set initial window to full range
         if model is not None:

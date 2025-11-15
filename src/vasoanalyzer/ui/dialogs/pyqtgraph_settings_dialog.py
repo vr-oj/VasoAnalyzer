@@ -1067,10 +1067,7 @@ class PyQtGraphSettingsDialog(QDialog):
             # Grid visibility and styling
             grid_visible = self.grid_visible_cb.isChecked()
             grid_alpha = float(self.grid_alpha.value())
-
-            for track in self.plot_host._tracks.values():
-                plot_item = track.view.get_widget().getPlotItem()
-                plot_item.showGrid(x=grid_visible, y=grid_visible, alpha=grid_alpha)
+            self.plot_host.set_grid_visible(grid_visible, alpha=grid_alpha)
 
             # Background colors
             bg_color = self._get_label_color(self.bg_color_label)
