@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import multiprocessing
 import sqlite3
 from pathlib import Path
 
@@ -69,16 +70,52 @@ def test_autosave_creates_snapshot_and_can_restore(tmp_path: Path) -> None:
         assert row is not None
 
 
+def _lock_holder_process(
+    path: str,
+    ready: multiprocessing.Event,
+    release: multiprocessing.Event,
+) -> None:
+    lock = ProjectFileLock(path)
+    lock.acquire(timeout=5.0)
+    ready.set()
+    release.wait()
+    lock.release()
+
+
 def test_project_lock_blocks_second_open(tmp_path: Path) -> None:
     project_path = tmp_path / "locking.vaso"
+    project_path.write_text("", encoding="utf-8")
+    ready = multiprocessing.Event()
+    release = multiprocessing.Event()
+    proc = multiprocessing.Process(
+        target=_lock_holder_process,
+        args=(project_path.as_posix(), ready, release),
+    )
+    proc.start()
+    assert ready.wait(timeout=5.0), "Child process failed to acquire lock"
+
+    try:
+        competing_lock = ProjectFileLock(project_path)
+        with pytest.raises(RuntimeError):
+            competing_lock.acquire(timeout=0.2)
+    finally:
+        release.set()
+        proc.join(timeout=5.0)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join()
+
+
+def test_project_lock_reentrant_same_process(tmp_path: Path) -> None:
+    project_path = tmp_path / "reentrant.vaso"
     project_path.write_text("", encoding="utf-8")
     primary_lock = ProjectFileLock(project_path)
     assert primary_lock.acquire(timeout=1.0)
 
     secondary_lock = ProjectFileLock(project_path)
-    with pytest.raises(RuntimeError):
-        secondary_lock.acquire(timeout=0.2)
+    assert secondary_lock.acquire(timeout=1.0)
 
+    secondary_lock.release()
     primary_lock.release()
 
 

@@ -301,6 +301,10 @@ class PlotHost:
         self._redraw_event_labels()
         self._schedule_draw()
 
+    def is_user_range_change_active(self) -> bool:
+        """Return True if the current time-window change was initiated by the user."""
+        return False
+
     def set_events(
         self,
         times: Sequence[float],

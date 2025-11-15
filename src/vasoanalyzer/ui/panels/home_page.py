@@ -138,10 +138,10 @@ class HomePage(QWidget):
 
         row.addWidget(
             window._make_home_button(
-                "Import trace/events file…",
-                "folder-open.svg",
-                lambda: window._handle_load_trace(),
-                secondary=True,
+                "Create new project…",
+                "folder-plus.svg",
+                lambda: window.new_project(),
+                primary=True,
             )
         )
         row.addWidget(
@@ -149,7 +149,7 @@ class HomePage(QWidget):
                 "Open project…",
                 "folder-open.svg",
                 lambda: window.open_project_file(),
-                primary=True,
+                secondary=True,
             )
         )
         return row
@@ -161,9 +161,9 @@ class HomePage(QWidget):
 
         row.addWidget(
             window._make_home_button(
-                "Create new project…",
-                "folder-plus.svg",
-                lambda: window.new_project(),
+                "Import trace/events file…",
+                "folder-open.svg",
+                lambda: window._handle_load_trace(),
                 secondary=True,
             )
         )

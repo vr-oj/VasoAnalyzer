@@ -49,6 +49,7 @@ class ProjectFileLock:
         self.lock_path = self.project_path.with_suffix(self.project_path.suffix + ".lock")
         self.lock_file: int | None = None
         self._acquired = False
+        self._owns_lockfile = False
 
     def acquire(self, timeout: float = 5.0) -> bool:
         """
@@ -77,10 +78,21 @@ class ProjectFileLock:
 
                 self.lock_file = fd
                 self._acquired = True
+                self._owns_lockfile = True
                 log.info(f"Acquired project lock: {self.lock_path}")
                 return True
 
             except FileExistsError as exc:
+                if self._is_held_by_current_process():
+                    self._acquired = True
+                    self._owns_lockfile = False
+                    log.info(
+                        "Reusing project lock for current process path=%s lock=%s pid=%s",
+                        self.project_path,
+                        self.lock_path,
+                        os.getpid(),
+                    )
+                    return True
                 # Lock file exists - check if it's stale
                 if self._is_stale_lock():
                     log.warning(f"Removing stale lock file: {self.lock_path}")
@@ -115,7 +127,8 @@ class ProjectFileLock:
                         f"Project is already open in another instance.\n\n"
                         f"Lock file: {self.lock_path}\n"
                         f"{lock_holder}\n\n"
-                        f"If you're certain no other instance is running, delete the lock file manually."
+                        f"If you're certain no other instance is running, "
+                        f"delete the lock file manually."
                     ) from exc
 
                 # Wait a bit before retrying
@@ -141,14 +154,16 @@ class ProjectFileLock:
                     self.lock_file = None
 
             # Remove lock file
-            try:
-                self.lock_path.unlink(missing_ok=True)
-                log.info(f"Released project lock: {self.lock_path}")
-            except Exception as e:
-                log.error(f"Failed to remove lock file: {e}")
+            if self._owns_lockfile:
+                try:
+                    self.lock_path.unlink(missing_ok=True)
+                    log.info(f"Released project lock: {self.lock_path}")
+                except Exception as e:
+                    log.error(f"Failed to remove lock file: {e}")
 
         finally:
             self._acquired = False
+            self._owns_lockfile = False
 
     def is_locked(self) -> bool:
         """Check if a lock file exists (doesn't verify if it's stale)."""
@@ -192,6 +207,14 @@ class ProjectFileLock:
             log.debug(f"Error checking stale lock: {e}")
             # If we can't read it, assume it might be valid to be safe
             return False
+
+    def _is_held_by_current_process(self) -> bool:
+        """Return True when the lock metadata references this PID."""
+        metadata = self._read_lock_metadata()
+        if metadata is None:
+            return False
+        pid, _ = metadata
+        return pid == os.getpid()
 
     def _read_lock_metadata(self) -> tuple[int | None, float | None] | None:
         """Return (pid, timestamp) tuple from lock file when available."""

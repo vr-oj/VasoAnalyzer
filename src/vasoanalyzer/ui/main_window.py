@@ -646,6 +646,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table_action: QAction | None = None
         self._event_panel_has_data = False
         self._layout_log_ready = False
+        self._next_step_hint_widget: QWidget | None = None
+        self._next_step_hint_dismissed = False
 
         # ===== Axis + Slider State =====
         self.axis_dragging = False
@@ -715,6 +717,18 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_dock.visibilityChanged.connect(self.project_toggle_btn.setChecked)
         self.toolbar.addWidget(self.project_toggle_btn)
         self.project_dock.hide()
+
+    def _reveal_project_sidebar(self) -> None:
+        """Ensure the project dock is visible when a project is active."""
+
+        dock = getattr(self, "project_dock", None)
+        if dock is None:
+            return
+        dock.setVisible(True)
+        dock.show()
+        raise_method = getattr(dock, "raise_", None)
+        if callable(raise_method):
+            raise_method()
 
     def setup_metadata_panel(self):
         self.metadata_dock = MetadataDock(self)
@@ -821,6 +835,9 @@ class VasoAnalyzerApp(QMainWindow):
                 old_project.close()
             except Exception:
                 log.debug("Failed to close previous project resources", exc_info=True)
+
+        self._next_step_hint_dismissed = False
+        self._update_next_step_hint()
 
     def _ensure_data_cache(self, hint_path: str | None = None) -> DataCache:
         """Return the active DataCache, creating it when necessary."""
@@ -1107,6 +1124,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Switch to analysis workspace so user can see project panel
         self.show_analysis_workspace()
+        self._reveal_project_sidebar()
 
         self.statusBar().showMessage(
             "Project created. Use the Add Data actions to start populating your experiment.",
@@ -1255,6 +1273,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.apply_ui_state(getattr(self.current_project, "ui_state", None))
         self.refresh_project_tree()
         self.show_analysis_workspace()
+        self._reveal_project_sidebar()
 
         status = f"\u2713 Project loaded: {self.current_project.name}"
         if restored_from_autosave:
@@ -1615,7 +1634,11 @@ class VasoAnalyzerApp(QMainWindow):
             exp_item.setFlags(exp_item.flags() | Qt.ItemIsEditable)
             exp_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogListView))
             root.addChild(exp_item)
-            for s in exp.samples:
+            samples = sorted(
+                exp.samples,
+                key=lambda sample: (sample.name or "").lower(),
+            )
+            for s in samples:
                 has_data = bool(
                     s.trace_path or s.trace_data is not None or s.dataset_id is not None
                 )
@@ -1658,6 +1681,54 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.expandAll()
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()
+        if self.current_sample:
+            self._select_tree_item_for_sample(self.current_sample)
+
+    def _select_tree_item_for_sample(self, sample: SampleN | None) -> None:
+        if sample is None or not self.project_tree:
+            return
+
+        tree = self.project_tree
+        for i in range(tree.topLevelItemCount()):
+            project_item = tree.topLevelItem(i)
+            if project_item is None:
+                continue
+            for j in range(project_item.childCount()):
+                exp_item = project_item.child(j)
+                if exp_item is None:
+                    continue
+                for k in range(exp_item.childCount()):
+                    sample_item = exp_item.child(k)
+                    if sample_item is None:
+                        continue
+                    item_sample = sample_item.data(0, Qt.UserRole)
+                    if item_sample is sample:
+                        tree.blockSignals(True)
+                        tree.setCurrentItem(sample_item)
+                        tree.blockSignals(False)
+                        tree.scrollToItem(sample_item)
+                        return
+
+    def _open_first_sample_if_none_active(self) -> None:
+        if self.current_project is None:
+            return
+        if getattr(self, "current_sample", None) is not None:
+            return
+
+        first_sample: SampleN | None = None
+        for exp in self.current_project.experiments:
+            if not exp.samples:
+                continue
+            candidates = sorted(exp.samples, key=lambda s: (s.name or "").lower())
+            if candidates:
+                first_sample = candidates[0]
+                break
+
+        if first_sample is None:
+            return
+
+        self.load_sample_into_view(first_sample)
+        self._select_tree_item_for_sample(first_sample)
 
     def _schedule_missing_asset_scan(self) -> None:
         if self.current_project is None or not getattr(self.current_project, "experiments", None):
@@ -2110,6 +2181,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.current_sample = sample
         self._sample_summary_logged = False
         self._last_track_layout_sample_id = None
+        self._select_tree_item_for_sample(sample)
 
         token = object()
         self._current_sample_token = token
@@ -3095,6 +3167,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Refresh UI
         self.refresh_project_tree()
+        self._open_first_sample_if_none_active()
 
         # Save project
         if self.current_project and self.current_project.path:
@@ -5148,7 +5221,17 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_trace_action.setToolTip("Open a CSV trace file and auto-detect matching events")
         self.load_trace_action.setShortcut(QKeySequence.Open)
         self.load_trace_action.triggered.connect(self._handle_load_trace)
-        toolbar.addAction(self.load_trace_action)
+
+        self.load_snapshot_action = QAction(
+            QIcon(self.icon_path("empty-box.svg")), "Load Result TIFF…", self
+        )
+        self.load_snapshot_action.setToolTip("Load Vasotracker _Result.tiff snapshot")
+        self.load_snapshot_action.triggered.connect(self.load_snapshot)
+
+        self.excel_action = QAction(QIcon(self.icon_path("chart-bar.svg")), "Excel mapper…", self)
+        self.excel_action.setToolTip("Map events to an Excel template")
+        self.excel_action.setEnabled(False)
+        self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
 
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Load events…", self
@@ -5156,20 +5239,25 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_events_action.setToolTip("Load an events table without reloading the trace")
         self.load_events_action.setEnabled(False)
         self.load_events_action.triggered.connect(self._handle_load_events)
-        toolbar.addAction(self.load_events_action)
 
-        self.load_snapshot_action = QAction(
-            QIcon(self.icon_path("empty-box.svg")), "Load Result TIFF…", self
-        )
-        self.load_snapshot_action.setToolTip("Load Vasotracker _Result.tiff snapshot")
-        self.load_snapshot_action.triggered.connect(self.load_snapshot)
+        import_button = QToolButton(self)
+        import_button.setObjectName("ImportDataButton")
+        import_button.setText("Import data…")
+        import_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        if not self.load_trace_action.icon().isNull():
+            import_button.setIcon(self.load_trace_action.icon())
+        import_menu = QMenu(import_button)
+        import_menu.addAction(self.load_trace_action)
+        import_menu.addAction(self.action_import_folder)
+        import_menu.addAction(self.load_events_action)
+        import_menu.addAction(self.excel_action)
+        import_button.setMenu(import_menu)
+        import_button.setPopupMode(QToolButton.InstantPopup)
+        toolbar.addWidget(import_button)
+
         toolbar.addAction(self.load_snapshot_action)
-
-        self.excel_action = QAction(QIcon(self.icon_path("chart-bar.svg")), "Excel mapper…", self)
-        self.excel_action.setToolTip("Map events to an Excel template")
-        self.excel_action.setEnabled(False)
-        self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
         toolbar.addAction(self.excel_action)
+        toolbar.addAction(self.action_figure_composer)
 
         self.save_session_action = QAction(QIcon(self.icon_path("Save.svg")), "Save Project", self)
         self.save_session_action.setToolTip("Save the current project")
@@ -5352,6 +5440,94 @@ class VasoAnalyzerApp(QMainWindow):
         layout.setSpacing(0)
 
         return header
+
+    def _create_next_step_hint_widget(self, parent: QWidget) -> QWidget:
+        container = QFrame(parent)
+        container.setObjectName("NextStepHint")
+        container.setFrameShape(QFrame.StyledPanel)
+        container.setFrameShadow(QFrame.Raised)
+
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
+
+        label = QLabel("Next step: Add data to this project", container)
+        label.setObjectName("NextStepHintLabel")
+
+        btn_import_folder = QPushButton("Import folder…", container)
+        btn_import_folder.setCursor(Qt.PointingHandCursor)
+        btn_import_folder.clicked.connect(self._handle_import_folder)
+
+        btn_import_trace = QPushButton("Import trace/events file…", container)
+        btn_import_trace.setCursor(Qt.PointingHandCursor)
+        btn_import_trace.clicked.connect(self._handle_load_trace)
+
+        dismiss_btn = QToolButton(container)
+        dismiss_btn.setText("Dismiss")
+        dismiss_btn.setCursor(Qt.PointingHandCursor)
+        dismiss_btn.setAutoRaise(True)
+        dismiss_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        dismiss_btn.clicked.connect(self._dismiss_next_step_hint)
+
+        layout.addWidget(label)
+        layout.addStretch(1)
+        layout.addWidget(btn_import_folder)
+        layout.addWidget(btn_import_trace)
+        layout.addWidget(dismiss_btn)
+
+        border = CURRENT_THEME.get("grid_color", "#d0d0d0")
+        bg = CURRENT_THEME.get("window_bg", "#ffffff")
+        text = CURRENT_THEME.get("text", "#000000")
+        container.setStyleSheet(
+            f"#NextStepHint {{"
+            f"background: {bg};"
+            f"border: 1px dashed {border};"
+            "border-radius: 12px;"
+            "}"
+            "#NextStepHint QLabel#NextStepHintLabel {"
+            f"color: {text};"
+            "font-weight: 600;"
+            "}"
+        )
+        container.hide()
+        return container
+
+    def _project_has_imported_data(self, project: Project | None) -> bool:
+        if self._next_step_hint_widget is None:
+            return False
+        if project is None or not getattr(project, "experiments", None):
+            return False
+        for experiment in project.experiments:
+            for sample in getattr(experiment, "samples", []) or []:
+                if getattr(sample, "trace_path", None):
+                    return True
+                if getattr(sample, "trace_data", None) is not None:
+                    return True
+                if getattr(sample, "dataset_id", None) is not None:
+                    return True
+        return False
+
+    def _update_next_step_hint(self) -> None:
+        if self._next_step_hint_widget is None:
+            return
+        widget = getattr(self, "_next_step_hint_widget", None)
+        if widget is None:
+            return
+        project = getattr(self, "current_project", None)
+        if project is None or self._next_step_hint_dismissed:
+            widget.hide()
+            return
+        if self._project_has_imported_data(project):
+            widget.hide()
+            return
+        widget.show()
+
+    def _dismiss_next_step_hint(self) -> None:
+        if self._next_step_hint_widget is None:
+            return
+        self._next_step_hint_dismissed = True
+        if self._next_step_hint_widget is not None:
+            self._next_step_hint_widget.hide()
 
     def _build_home_page_legacy(self, target_widget: QWidget | None = None):
         from vasoanalyzer.ui.panels.home_page import HomePage
@@ -7360,7 +7536,7 @@ QPushButton[isGhost="true"]:hover {{
         if vaso_path:
             event.acceptProposedAction()
             try:
-                project = load_project(vaso_path)
+                self.open_project_file(vaso_path)
             except Exception as e:
                 error_msg = str(e)
 
@@ -7406,15 +7582,6 @@ QPushButton[isGhost="true"]:hover {{
                         f"Could not open project:\n{e}",
                     )
                 return
-            self._replace_current_project(project)
-            self.refresh_project_tree()
-
-            # Always show analysis workspace so user can see project panel
-            self.show_analysis_workspace()
-
-            self.statusBar().showMessage(
-                f"\u2713 Project loaded: {self.current_project.name}", 3000
-            )
             return
 
         h5_path = next((p for p in files if p.lower().endswith(".h5")), None)
@@ -7888,6 +8055,14 @@ QPushButton[isGhost="true"]:hover {{
             return
         self.update_scroll_slider()
         self._invalidate_sample_state_cache()
+        plot_host = getattr(self, "plot_host", None)
+        is_user_range = bool(
+            plot_host
+            and hasattr(plot_host, "is_user_range_change_active")
+            and plot_host.is_user_range_change_active()
+        )
+        if is_user_range:
+            self.mark_session_dirty(reason="view range changed")
 
     def _collect_plot_view_state(self) -> dict[str, Any]:
         state: dict[str, Any] = {}
@@ -8048,6 +8223,7 @@ QPushButton[isGhost="true"]:hover {{
         new_right = new_left + window_width
 
         self._apply_time_window((new_left, new_right))
+        self.mark_session_dirty(reason="view range changed")
 
     # [F] ========================= EVENT TABLE MANAGEMENT ================================
 
@@ -10119,8 +10295,11 @@ QPushButton[isGhost="true"]:hover {{
         pyqtgraph_tracks = state.get("pyqtgraph_track_state")
         if pyqtgraph_tracks:
             self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
-        if "event_table_data" in state:
-            self.event_table_data = state["event_table_data"]
+        event_rows = state.get("event_table_data")
+        # Only restore saved event rows when the state actually contains data; otherwise
+        # keep the freshly populated events from storage.
+        if isinstance(event_rows, list) and event_rows:
+            self.event_table_data = event_rows
             meta_payload = state.get("event_label_meta")
             if isinstance(meta_payload, list):
                 self.event_label_meta = [
@@ -10256,10 +10435,6 @@ QPushButton[isGhost="true"]:hover {{
 
             project_path = self.current_project.path
             try:
-                log.info(
-                    "Close-event save requested path=%s (skip_optimize=True)",
-                    project_path,
-                )
                 # Wait for any in-progress save to complete (with timeout)
                 max_wait_iterations = 50  # 5 seconds max (50 * 100ms)
                 wait_iteration = 0
@@ -10275,16 +10450,23 @@ QPushButton[isGhost="true"]:hover {{
                 if self._save_in_progress:
                     log.warning("Timed out waiting for save to complete, forcing save anyway")
 
-                self._save_in_progress = True
-                self.current_project.ui_state = self.gather_ui_state()
-                if self.current_sample:
-                    state = self.gather_sample_state()
-                    self.current_sample.ui_state = state
-                    self.project_state[id(self.current_sample)] = state
-                # Skip expensive OPTIMIZE operation on close for faster exit
-                save_project_file(self.current_project, skip_optimize=True)
-                log.info("Close-event save completed path=%s", project_path)
-                self._reset_session_dirty(reason="close-event save")
+                if not self.session_dirty:
+                    log.info("Close-event save skipped (not dirty) path=%s", project_path)
+                else:
+                    log.info(
+                        "Close-event save requested path=%s (skip_optimize=True)",
+                        project_path,
+                    )
+                    self._save_in_progress = True
+                    self.current_project.ui_state = self.gather_ui_state()
+                    if self.current_sample:
+                        state = self.gather_sample_state()
+                        self.current_sample.ui_state = state
+                        self.project_state[id(self.current_sample)] = state
+                    # Skip expensive OPTIMIZE operation on close for faster exit
+                    save_project_file(self.current_project, skip_optimize=True)
+                    log.info("Close-event save completed path=%s", project_path)
+                    self._reset_session_dirty(reason="close-event save")
             except Exception as e:
                 log.error("Failed to auto-save project:\n%s", e)
             finally:

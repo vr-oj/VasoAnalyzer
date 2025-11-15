@@ -98,6 +98,7 @@ class PyQtGraphPlotHost:
         self._compact_legend_enabled: bool = False
         self._compact_legend_location: str = "upper right"
         self._time_window_listeners: list[Callable[[float, float], None]] = []
+        self._range_change_user_driven: bool = False
 
     def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -419,7 +420,12 @@ class PyQtGraphPlotHost:
             plot_item.setXRange(x0, x1, padding=0)
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
 
-        self._notify_time_window_changed()
+        previous_flag = self._range_change_user_driven
+        self._range_change_user_driven = True
+        try:
+            self._notify_time_window_changed()
+        finally:
+            self._range_change_user_driven = previous_flag
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
@@ -467,7 +473,12 @@ class PyQtGraphPlotHost:
             # Reconnect signals
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
 
-        self._notify_time_window_changed()
+        previous_flag = self._range_change_user_driven
+        self._range_change_user_driven = False
+        try:
+            self._notify_time_window_changed()
+        finally:
+            self._range_change_user_driven = previous_flag
 
     def set_events(
         self,
@@ -521,6 +532,10 @@ class PyQtGraphPlotHost:
     def get_render_backend(self) -> str:
         """Get the rendering backend identifier."""
         return "pyqtgraph"
+
+    def is_user_range_change_active(self) -> bool:
+        """Return True if the latest time-window update originated from user input."""
+        return bool(self._range_change_user_driven)
 
     # Compatibility properties/methods for matplotlib PlotHost interface
     @property
