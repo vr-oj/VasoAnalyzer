@@ -128,8 +128,14 @@ class ProjectMixin:
         if project.experiments:
             self.current_experiment = project.experiments[0]
 
-        save_project_file(self.current_project, normalised_path)
-        self.update_recent_projects(normalised_path)
+        # Show progress bar during initial save
+        self.show_progress("Creating project", maximum=0)
+        try:
+            save_project_file(self.current_project, normalised_path)
+            self.update_recent_projects(normalised_path)
+        finally:
+            self.hide_progress()
+
         self.refresh_project_tree()
 
         if self.project_tree and project.experiments:
@@ -187,92 +193,108 @@ class ProjectMixin:
         project_path = path
         restored_from_autosave = False
 
-        # Check if this is a new-style bundle directory
-        if path_obj.is_dir() and path_obj.suffix.lower() == ".vasopack":
-            # New snapshot-based bundle format - open directly
-            try:
-                project = load_project_file(path)
-                project_path = path
-                self.statusBar().showMessage(f"\u2713 Opened bundle: {path_obj.name}", 3000)
-            except Exception as exc:
-                QMessageBox.critical(
-                    self,
-                    "Bundle Open Error",
-                    f"Could not open bundle:\n{exc}",
-                )
-                return
-        elif path_obj.is_file() and path_obj.suffix.lower() == ".vasopack":
-            # Old ZIP-based bundle format - needs unpacking
-            base_dir = QFileDialog.getExistingDirectory(
-                self,
-                "Select Folder to Unpack Legacy Bundle",
-                path_obj.parent.as_posix(),
-            )
-            if not base_dir:
-                return
-            stem = path_obj.stem
-            target_dir = Path(base_dir).expanduser().resolve(strict=False) / stem
-            counter = 1
-            while target_dir.exists():
-                counter += 1
-                target_dir = Path(base_dir) / f"{stem}_{counter}"
-            try:
-                project = import_project_bundle(path, target_dir.as_posix())
-                project_path = project.path or target_dir.joinpath(f"{stem}.vaso").as_posix()
-                self.statusBar().showMessage(f"\u2713 Legacy bundle unpacked to {target_dir}", 5000)
-            except Exception as exc:
-                QMessageBox.critical(
-                    self,
-                    "Bundle Import Error",
-                    f"Could not unpack legacy bundle:\n{exc}",
-                )
-                return
-        else:
-            autosave_candidate = pending_autosave_path(path)
-            if autosave_candidate:
+        # Show progress bar during load
+        self.show_progress("Loading project", maximum=0)  # Indeterminate progress
+        try:
+            # Check if this is a new-style bundle directory
+            if path_obj.is_dir() and path_obj.suffix.lower() == ".vasopack":
+                # New snapshot-based bundle format - open directly
                 try:
-                    autosave_mtime = os.path.getmtime(autosave_candidate)
-                    project_mtime = os.path.getmtime(path)
-                except OSError:
-                    autosave_mtime = project_mtime = 0
-
-                if autosave_mtime > project_mtime:
-                    choice = QMessageBox.question(
-                        self,
-                        "Recover Autosave?",
-                        (
-                            "An autosave snapshot newer than this project was found.\n"
-                            "Would you like to recover it?"
-                        ),
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes,
-                    )
-                    if choice == QMessageBox.Yes:
-                        try:
-                            project = restore_autosave(path)
-                            restored_from_autosave = True
-                            with contextlib.suppress(OSError):
-                                os.remove(autosave_candidate)
-                        except Exception as exc:
-                            QMessageBox.warning(
-                                self,
-                                "Autosave Recovery Failed",
-                                (
-                                    "Could not restore autosave:\n"
-                                    f"{exc}\n\nOpening original file instead."
-                                ),
-                            )
-
-            if project is None:
-                try:
-                    project = load_project(path)
+                    project = load_project_file(path)
+                    project_path = path
+                    self.statusBar().showMessage(f"\u2713 Opened bundle: {path_obj.name}", 3000)
                 except Exception as exc:
+                    self.hide_progress()
                     QMessageBox.critical(
                         self,
-                        "Project Load Error",
-                        f"Could not open project:\n{exc}",
+                        "Bundle Open Error",
+                        f"Could not open bundle:\n{exc}",
                     )
                     return
+            elif path_obj.is_file() and path_obj.suffix.lower() == ".vasopack":
+                # Old ZIP-based bundle format - needs unpacking
+                self.hide_progress()  # Hide during user dialog
+                base_dir = QFileDialog.getExistingDirectory(
+                    self,
+                    "Select Folder to Unpack Legacy Bundle",
+                    path_obj.parent.as_posix(),
+                )
+                if not base_dir:
+                    return
+                stem = path_obj.stem
+                target_dir = Path(base_dir).expanduser().resolve(strict=False) / stem
+                counter = 1
+                while target_dir.exists():
+                    counter += 1
+                    target_dir = Path(base_dir) / f"{stem}_{counter}"
+                self.show_progress("Unpacking legacy bundle", maximum=0)
+                try:
+                    project = import_project_bundle(path, target_dir.as_posix())
+                    project_path = project.path or target_dir.joinpath(f"{stem}.vaso").as_posix()
+                    self.statusBar().showMessage(
+                        f"\u2713 Legacy bundle unpacked to {target_dir}", 5000
+                    )
+                except Exception as exc:
+                    self.hide_progress()
+                    QMessageBox.critical(
+                        self,
+                        "Bundle Import Error",
+                        f"Could not unpack legacy bundle:\n{exc}",
+                    )
+                    return
+            else:
+                autosave_candidate = pending_autosave_path(path)
+                if autosave_candidate:
+                    try:
+                        autosave_mtime = os.path.getmtime(autosave_candidate)
+                        project_mtime = os.path.getmtime(path)
+                    except OSError:
+                        autosave_mtime = project_mtime = 0
+
+                    if autosave_mtime > project_mtime:
+                        self.hide_progress()  # Hide during user dialog
+                        choice = QMessageBox.question(
+                            self,
+                            "Recover Autosave?",
+                            (
+                                "An autosave snapshot newer than this project was found.\n"
+                                "Would you like to recover it?"
+                            ),
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        self.show_progress("Loading project", maximum=0)
+                        if choice == QMessageBox.Yes:
+                            try:
+                                project = restore_autosave(path)
+                                restored_from_autosave = True
+                                with contextlib.suppress(OSError):
+                                    os.remove(autosave_candidate)
+                            except Exception as exc:
+                                self.hide_progress()
+                                QMessageBox.warning(
+                                    self,
+                                    "Autosave Recovery Failed",
+                                    (
+                                        "Could not restore autosave:\n"
+                                        f"{exc}\n\nOpening original file instead."
+                                    ),
+                                )
+                                self.show_progress("Loading project", maximum=0)
+
+                if project is None:
+                    try:
+                        project = load_project(path)
+                    except Exception as exc:
+                        self.hide_progress()
+                        QMessageBox.critical(
+                            self,
+                            "Project Load Error",
+                            f"Could not open project:\n{exc}",
+                        )
+                        return
+        finally:
+            self.hide_progress()
 
         self._replace_current_project(project)
         self.apply_ui_state(getattr(self.current_project, "ui_state", None))
@@ -338,11 +360,17 @@ class ProjectMixin:
                 state = self.gather_sample_state()
                 self.current_sample.ui_state = state
                 self.project_state[id(self.current_sample)] = state
-            save_project_file(self.current_project)
-            self.update_recent_projects(self.current_project.path)
-            self.statusBar().showMessage("\u2713 Project saved", 3000)
-            self._reset_session_dirty()
-            self._update_window_title()
+
+            # Show progress bar during save
+            self.show_progress("Saving project", maximum=0)  # Indeterminate progress
+            try:
+                save_project_file(self.current_project)
+                self.update_recent_projects(self.current_project.path)
+                self.statusBar().showMessage("\u2713 Project saved", 3000)
+                self._reset_session_dirty()
+                self._update_window_title()
+            finally:
+                self.hide_progress()
         elif self.current_project:
             self.save_project_file_as()
 
@@ -350,22 +378,27 @@ class ProjectMixin:
         if not self.current_project:
             return
 
-        # Always use .vasopack format - the modern, corruption-resistant bundle format
+        # Offer both single-file and folder bundle formats
         current_path = self.current_project.path or ""
-        default_filter = "Vaso Bundles (*.vasopack)"
+        filters = "VasoAnalyzer Projects (*.vaso);;Folder Bundles (*.vasopack)"
 
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Project As",
             current_path,
-            default_filter,
+            filters,
         )
         if path:
             path_obj = Path(path).expanduser()
 
-            # Always enforce .vasopack extension
-            if path_obj.suffix.lower() != ".vasopack":
-                path_obj = path_obj.with_suffix(".vasopack")
+            # Enforce extension based on selected filter
+            if "Folder Bundles" in selected_filter:
+                if path_obj.suffix.lower() != ".vasopack":
+                    path_obj = path_obj.with_suffix(".vasopack")
+            else:
+                # Default to .vaso (single-file container)
+                if path_obj.suffix.lower() != ".vaso":
+                    path_obj = path_obj.with_suffix(".vaso")
 
             path = str(path_obj.resolve(strict=False))
             self.current_project.ui_state = self.gather_ui_state()
@@ -373,11 +406,20 @@ class ProjectMixin:
                 state = self.gather_sample_state()
                 self.current_sample.ui_state = state
                 self.project_state[id(self.current_sample)] = state
-            save_project_file(self.current_project, path)
-            self.update_recent_projects(path)
 
-            # Show success message
-            self.statusBar().showMessage(f"\u2713 Bundle saved: {path_obj.name}", 3000)
+            # Show progress bar during save
+            self.show_progress("Saving project", maximum=0)  # Indeterminate progress
+            try:
+                save_project_file(self.current_project, path)
+                self.update_recent_projects(path)
+
+                # Show success message with appropriate format name
+                format_name = "bundle" if path_obj.suffix == ".vasopack" else "project"
+                self.statusBar().showMessage(
+                    f"\u2713 {format_name.capitalize()} saved: {path_obj.name}", 3000
+                )
+            finally:
+                self.hide_progress()
         else:
             return
 
@@ -1058,27 +1100,33 @@ class ProjectMixin:
         if not trace_path:
             return
 
+        # Show progress during data load
+        self.show_progress(f"Loading data into {sample.name}", maximum=0)
         try:
-            df = self.load_trace_and_event_files(trace_path)
-        except Exception:
-            return
+            try:
+                df = self.load_trace_and_event_files(trace_path)
+            except Exception:
+                self.hide_progress()
+                return
 
-        trace_obj = Path(trace_path).expanduser().resolve(strict=False)
-        self._update_sample_link_metadata(sample, "trace", trace_obj)
-        sample.trace_data = df
-        from vasoanalyzer.io.events import find_matching_event_file
+            trace_obj = Path(trace_path).expanduser().resolve(strict=False)
+            self._update_sample_link_metadata(sample, "trace", trace_obj)
+            sample.trace_data = df
+            from vasoanalyzer.io.events import find_matching_event_file
 
-        event_path = find_matching_event_file(trace_path)
-        if event_path and os.path.exists(event_path):
-            event_obj = Path(event_path).expanduser().resolve(strict=False)
-            self._update_sample_link_metadata(sample, "events", event_obj)
+            event_path = find_matching_event_file(trace_path)
+            if event_path and os.path.exists(event_path):
+                event_obj = Path(event_path).expanduser().resolve(strict=False)
+                self._update_sample_link_metadata(sample, "events", event_obj)
 
-        self.refresh_project_tree()
+            self.refresh_project_tree()
 
-        log.info("Sample %s updated with data", sample.name)
+            log.info("Sample %s updated with data", sample.name)
 
-        if self.current_project and self.current_project.path:
-            save_project(self.current_project, self.current_project.path)
+            if self.current_project and self.current_project.path:
+                save_project(self.current_project, self.current_project.path)
+        finally:
+            self.hide_progress()
 
     def _handle_import_folder(self, target_experiment=None):
         """Handle the Import Folder action."""
@@ -1148,43 +1196,61 @@ class ProjectMixin:
         error_count = 0
         errors = []
 
-        for candidate in candidates:
-            try:
-                # Create sample
-                sample = SampleN(name=candidate.subfolder)
+        total = len(candidates)
+        # Show progress bar with real progress
+        self.show_progress(f"Importing samples", maximum=total)
+        try:
+            for idx, candidate in enumerate(candidates, 1):
+                try:
+                    # Update progress message
+                    self._progress_bar.setFormat(
+                        f"Importing {idx}/{total}: {candidate.subfolder} %p%"
+                    )
 
-                # Load trace data
-                df = self.load_trace_and_event_files(candidate.trace_file)
-                sample.trace_data = df
+                    # Create sample
+                    sample = SampleN(name=candidate.subfolder)
 
-                # Update metadata for trace
-                trace_obj = Path(candidate.trace_file).expanduser().resolve(strict=False)
-                self._update_sample_link_metadata(sample, "trace", trace_obj)
+                    # Load trace data
+                    df = self.load_trace_and_event_files(candidate.trace_file)
+                    sample.trace_data = df
 
-                # Store file signature for change detection
-                sample.trace_sig = get_file_signature(candidate.trace_file)
+                    # Update metadata for trace
+                    trace_obj = Path(candidate.trace_file).expanduser().resolve(strict=False)
+                    self._update_sample_link_metadata(sample, "trace", trace_obj)
 
-                # Load events if found
-                if candidate.events_file and os.path.exists(candidate.events_file):
-                    event_obj = Path(candidate.events_file).expanduser().resolve(strict=False)
-                    self._update_sample_link_metadata(sample, "events", event_obj)
-                    sample.events_sig = get_file_signature(candidate.events_file)
+                    # Store file signature for change detection
+                    sample.trace_sig = get_file_signature(candidate.trace_file)
 
-                # Add to experiment
-                target_experiment.samples.append(sample)
-                success_count += 1
+                    # Load events if found
+                    if candidate.events_file and os.path.exists(candidate.events_file):
+                        event_obj = Path(candidate.events_file).expanduser().resolve(strict=False)
+                        self._update_sample_link_metadata(sample, "events", event_obj)
+                        sample.events_sig = get_file_signature(candidate.events_file)
 
-            except Exception as e:
-                error_count += 1
-                errors.append(f"{candidate.subfolder}: {str(e)}")
-                log.exception("Error importing %s", candidate.trace_file)
+                    # Add to experiment
+                    target_experiment.samples.append(sample)
+                    success_count += 1
+
+                    # Update progress
+                    self.update_progress(idx)
+
+                except Exception as e:
+                    error_count += 1
+                    errors.append(f"{candidate.subfolder}: {str(e)}")
+                    log.exception("Error importing %s", candidate.trace_file)
+        finally:
+            self.hide_progress()
 
         # Refresh UI
         self.refresh_project_tree()
 
-        # Save project
+        # Save project with progress indication
         if self.current_project and self.current_project.path:
-            save_project(self.current_project, self.current_project.path)
+            self.show_progress("Saving project", maximum=0)
+            try:
+                save_project(self.current_project, self.current_project.path)
+            finally:
+                self.hide_progress()
 
         # Show summary
         if error_count == 0:
@@ -1288,21 +1354,33 @@ class ProjectMixin:
         self._refresh_home_recent()
 
     def open_recent_project(self, path):
+        # Use the standard open flow which creates ProjectContext
+        from vasoanalyzer.app.openers import open_project_file
+
+        # Show progress during load
+        self.show_progress("Loading project", maximum=0)
         try:
-            self._clear_canvas_and_table()
-            project = load_project(path)
+            open_project_file(self, path)
         except Exception as e:
+            self.hide_progress()
+            import logging
+
+            log = logging.getLogger(__name__)
+            log.error(f"Failed to open recent project: {e}", exc_info=True)
             QMessageBox.critical(
                 self,
                 "Project Load Error",
                 f"Could not open project:\n{e}",
             )
             return
-        self._replace_current_project(project)
-        self.apply_ui_state(getattr(self.current_project, "ui_state", None))
-        self.refresh_project_tree()
-        self.statusBar().showMessage(f"\u2713 Project loaded: {self.current_project.name}", 3000)
-        self.update_recent_projects(path)
-        if self.current_project.experiments and self.current_project.experiments[0].samples:
+        finally:
+            self.hide_progress()
+
+        # Load first sample if available
+        if (
+            self.current_project
+            and self.current_project.experiments
+            and self.current_project.experiments[0].samples
+        ):
             first_sample = self.current_project.experiments[0].samples[0]
             self.load_sample_into_view(first_sample)

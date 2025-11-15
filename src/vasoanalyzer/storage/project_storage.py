@@ -12,7 +12,6 @@ import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 from .bundle_adapter import (
     ProjectHandle,
@@ -51,7 +50,8 @@ def get_use_bundle_format_by_default() -> bool:
 
         settings = QSettings("TykockiLab", "VasoAnalyzer")
         # Default to True (bundle format) if not set
-        return settings.value("project/use_bundle_format", True, type=bool)
+        value = settings.value("project/use_bundle_format", True, type=bool)
+        return bool(value)
     except Exception:
         # If Qt not available or settings fail, default to bundle format
         return True
@@ -177,9 +177,10 @@ def create_unified_project(
     app_version: str,
     timezone: str,
     use_bundle_format: bool | None = None,
+    use_container_format: bool | None = None,
 ) -> UnifiedProjectStore:
     """
-    Create a new project (bundle or legacy format).
+    Create a new project (container, bundle, or legacy format).
 
     Args:
         path: Path for new project
@@ -187,6 +188,9 @@ def create_unified_project(
         timezone: Timezone string (e.g., "UTC", "America/New_York")
         use_bundle_format: If True, create bundle; if False, create legacy;
                           if None, use USE_BUNDLE_FORMAT_BY_DEFAULT
+        use_container_format: If True, create single-file container (.vaso);
+            if False, create folder bundle (.vasopack); if None, defaults to
+            True (container format)
 
     Returns:
         UnifiedProjectStore
@@ -200,15 +204,30 @@ def create_unified_project(
     if use_bundle_format is None:
         use_bundle_format = USE_BUNDLE_FORMAT_BY_DEFAULT
 
-    log.info(f"Creating new project ({'bundle' if use_bundle_format else 'legacy'}): {path}")
+    if use_container_format is None:
+        use_container_format = True  # Default to container format
+
+    format_name = (
+        "container"
+        if (use_bundle_format and use_container_format)
+        else ("bundle" if use_bundle_format else "legacy")
+    )
+    log.info(f"Creating new project ({format_name}): {path}")
 
     if use_bundle_format:
-        # Ensure .vasopack extension
-        if path.suffix != ".vasopack":
-            path = path.with_suffix(".vasopack")
+        if use_container_format:
+            # Ensure .vaso extension
+            if path.suffix != ".vaso":
+                path = path.with_suffix(".vaso")
+        else:
+            # Ensure .vasopack extension
+            if path.suffix != ".vasopack":
+                path = path.with_suffix(".vasopack")
 
-        # Create bundle project
-        handle, conn = create_project_handle(path, use_bundle_format=True)
+        # Create bundle/container project
+        handle, conn = create_project_handle(
+            path, use_bundle_format=True, use_container_format=use_container_format
+        )
 
         # Initialize schema
         from .sqlite import projects as _projects
@@ -289,9 +308,9 @@ def open_unified_project(
     fmt = detect_project_format(path)
     log.info(f"Opening project ({fmt}): {path}")
 
-    # Check if bundle format
-    if fmt == "bundle-v1" or (auto_migrate and is_bundle_format(path)):
-        # Open as bundle
+    # Check if bundle or container format
+    if fmt in ("bundle-v1", "zip-bundle-v1") or (auto_migrate and is_bundle_format(path)):
+        # Open as bundle or container
         handle, conn = open_project_handle(path, readonly=readonly, auto_migrate=auto_migrate)
 
         return UnifiedProjectStore(
@@ -389,10 +408,9 @@ def convert_to_bundle(
     from .migration import migrate_to_bundle
 
     legacy_path = Path(legacy_path)
-    if bundle_path:
-        bundle_path = Path(bundle_path)
+    bundle_path_obj: Path | None = Path(bundle_path) if bundle_path is not None else None
 
-    return migrate_to_bundle(legacy_path, bundle_path=bundle_path, keep_legacy=keep_legacy)
+    return migrate_to_bundle(legacy_path, bundle_path=bundle_path_obj, keep_legacy=keep_legacy)
 
 
 def export_bundle_to_legacy(
@@ -417,8 +435,7 @@ def export_bundle_to_legacy(
     """
     from .migration import export_to_legacy
 
-    bundle_path = Path(bundle_path)
-    if output_path:
-        output_path = Path(output_path)
+    bundle_path_path = Path(bundle_path)
+    output_path_obj: Path | None = Path(output_path) if output_path is not None else None
 
-    return export_to_legacy(bundle_path, output_path=output_path)
+    return export_to_legacy(bundle_path_path, output_path=output_path_obj)

@@ -199,6 +199,7 @@ class SampleN:
     exported: bool = False
     column: str | None = None
     trace_data: pd.DataFrame | None = None
+    trace_column_labels: dict[str, str] | None = None
     events_data: pd.DataFrame | None = None
     ui_state: dict | None = None
     snapshots: np.ndarray | None = None
@@ -242,6 +243,9 @@ class SampleN:
             exported=self.exported,
             column=self.column,
             trace_data=self.trace_data.copy() if self.trace_data is not None else None,
+            trace_column_labels=dict(self.trace_column_labels)
+            if isinstance(self.trace_column_labels, dict)
+            else None,
             events_data=self.events_data.copy() if self.events_data is not None else None,
             ui_state=copy.deepcopy(self.ui_state) if self.ui_state is not None else None,
             snapshots=self.snapshots.copy() if isinstance(self.snapshots, np.ndarray) else None,
@@ -292,6 +296,9 @@ class Project:
     updated_at: str | None = None
     attachments: list[Attachment] = field(default_factory=list)
 
+    # Internal: current open store handle (for persistent connection)
+    _store: Any = field(default=None, repr=False, compare=False, init=False)
+
     # --------------------------------------------------
     def close(self) -> None:
         """Release temporary resources (e.g., extracted archives)."""
@@ -305,6 +312,24 @@ class Project:
 
         if self.resources is not None and closer is not None:
             self.resources.add_closer(closer)
+
+    # --------------------------------------------------
+    def _attach_store(self, store: Any) -> None:
+        """Attach a persistent store to this project for efficient data access."""
+        # Close old store if exists
+        if self._store is not None and self._store is not store:
+            try:
+                self._store.close()
+            except Exception:
+                log.debug("Error closing old project store during attach", exc_info=True)
+
+        self._store = store
+
+        # Register cleanup handler that will close whatever store is attached at close time
+        # Only register once - it will reference self._store dynamically
+        if not hasattr(self, "_store_cleanup_registered"):
+            self.register_resource(lambda: self._store.close() if self._store else None)
+            self._store_cleanup_registered = True
 
     # --------------------------------------------------
     def __enter__(self) -> Project:
@@ -592,6 +617,8 @@ def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
         edit_log = sample.trace_data.attrs.get("edit_log")
         if edit_log is not None:
             data["trace_edit_log"] = edit_log
+    if sample.trace_column_labels:
+        data["trace_column_labels"] = dict(sample.trace_column_labels)
     if isinstance(sample.events_data, pd.DataFrame):
         data["events_data"] = sample.events_data.to_dict(orient="list")
     if isinstance(sample.analysis_results, dict):
@@ -774,6 +801,16 @@ def sample_from_dict(data: dict) -> SampleN:
     elif analysis_payload is not None:
         analysis_results = analysis_payload
 
+    trace_column_labels_raw = data.get("trace_column_labels")
+    trace_column_labels = None
+    if isinstance(trace_column_labels_raw, dict):
+        trace_column_labels = {
+            str(k): str(v)
+            for k, v in trace_column_labels_raw.items()
+            if isinstance(k, str) and isinstance(v, str)
+        } or None
+        trace_column_labels = _normalize_trace_column_labels(trace_column_labels)
+
     attachments_payload = data.get("attachments") or []
     attachments = []
     if isinstance(attachments_payload, list):
@@ -790,6 +827,7 @@ def sample_from_dict(data: dict) -> SampleN:
         exported=data.get("exported", False),
         column=data.get("column"),
         trace_data=trace_data,
+        trace_column_labels=trace_column_labels,
         events_data=events_data,
         ui_state=data.get("ui_state"),
         snapshots=None,
@@ -1168,8 +1206,10 @@ def save_project(project: Project, path: str, *, skip_optimize: bool = False) ->
     path_obj = Path(path)
     fmt = get_project_format(path_obj) if path_obj.exists() else "unknown"
 
-    # Use bundle format for new bundles or if path ends with .vasopack
-    if fmt == "bundle-v1" or (not path_obj.exists() and path.endswith(".vasopack")):
+    # Use bundle format for bundles, containers, or new .vaso/.vasopack files
+    if fmt in ("bundle-v1", "zip-bundle-v1") or (
+        not path_obj.exists() and path.endswith((".vasopack", ".vaso"))
+    ):
         _save_project_bundle(project, path, skip_optimize=skip_optimize)
     else:
         _save_project_sqlite(project, path, skip_optimize=skip_optimize)
@@ -1179,6 +1219,7 @@ def load_project(path: str) -> Project:
     """Open ``path`` returning a populated :class:`Project` instance.
 
     Automatically handles:
+    - Container format (.vaso single-file containers)
     - Bundle format (.vasopack directories)
     - Legacy SQLite format (.vaso files)
     - Auto-migration from legacy to bundle
@@ -1197,8 +1238,8 @@ def load_project(path: str) -> Project:
     # Detect format
     fmt = get_project_format(path_obj)
 
-    # Handle bundle format
-    if fmt == "bundle-v1" or (path_obj.is_dir() and path.endswith(".vasopack")):
+    # Handle bundle and container formats
+    if fmt in ("bundle-v1", "zip-bundle-v1") or (path_obj.is_dir() and path.endswith(".vasopack")):
         project = _load_project_bundle(path)
         elapsed = time.time() - start_time
         log.info(f"Project loaded successfully in {elapsed:.2f}s: {path}")
@@ -1262,9 +1303,11 @@ def load_project(path: str) -> Project:
 
 def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = False) -> None:
     """
-    Save project to bundle format (.vasopack).
+    Save project to bundle format (.vasopack) or container format (.vaso).
 
     Creates a snapshot in the bundle's snapshot directory. Cloud-safe by design.
+
+    OPTIMIZATION: Reuses existing store if available to avoid redundant unpack/pack cycles.
     """
     from ..storage.project_storage import (
         USE_BUNDLE_FORMAT_BY_DEFAULT,
@@ -1274,11 +1317,17 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
 
     dest = Path(path)
 
-    # Ensure .vasopack extension
-    if dest.suffix != ".vasopack":
-        dest = dest.with_suffix(".vasopack")
+    # Determine format based on extension
+    use_container_format = dest.suffix == ".vaso"
 
-    log.info(f"Saving project to bundle format: {dest}")
+    # Ensure proper extension
+    if not dest.suffix in (".vaso", ".vasopack"):
+        # Default to container format (.vaso)
+        dest = dest.with_suffix(".vaso")
+        use_container_format = True
+
+    format_name = "container" if use_container_format else "bundle"
+    log.info(f"Saving project to {format_name} format: {dest}")
 
     # Update timestamps
     now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -1286,20 +1335,49 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
         project.created_at = now_iso
     project.updated_at = now_iso
 
-    # Check if bundle exists
-    if not dest.exists():
-        # Create new bundle
-        log.info(f"Creating new bundle: {dest}")
-        tz_name = _project_timezone()
-        store = create_unified_project(
-            dest,
-            app_version=APP_VERSION,
-            timezone=tz_name,
-            use_bundle_format=True,
+    # OPTIMIZATION: Check if we can reuse the existing store
+    store_needs_close = False
+    store = None
+
+    if project._store is not None:
+        # Check if existing store is for the same path
+        existing_path = getattr(
+            project._store, "container_path", getattr(project._store, "path", None)
         )
-    else:
-        # Open existing bundle
-        store = open_unified_project(dest, readonly=False, auto_migrate=False)
+        if existing_path and Path(existing_path).resolve() == dest.resolve():
+            # Check if readonly
+            is_readonly = getattr(project._store, "readonly", True)
+            if is_readonly:
+                # Need to close readonly and reopen as writable
+                log.debug("Reopening readonly store as writable for save")
+                project._store.close()
+                project._store = None
+                store = open_unified_project(dest, readonly=False, auto_migrate=False)
+                store_needs_close = False  # Will attach to project
+            else:
+                # Can reuse existing writable store!
+                log.debug("Reusing existing writable store (avoiding unpack/pack)")
+                store = project._store
+                store_needs_close = False  # Already attached to project
+
+    # If we don't have a reusable store, open/create one
+    if store is None:
+        if not dest.exists():
+            # Create new bundle/container
+            log.info(f"Creating new {format_name}: {dest}")
+            tz_name = _project_timezone()
+            store = create_unified_project(
+                dest,
+                app_version=APP_VERSION,
+                timezone=tz_name,
+                use_bundle_format=True,
+                use_container_format=use_container_format,
+            )
+            store_needs_close = False  # Will attach to project
+        else:
+            # Open existing bundle/container
+            store = open_unified_project(dest, readonly=False, auto_migrate=False)
+            store_needs_close = False  # Will attach to project
 
     try:
         # Get repository from store connection
@@ -1316,34 +1394,57 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
         base_dir = Path(project.path).resolve().parent if project.path else dest.parent
         _populate_store_from_project(project, repo, base_dir)
 
-        # Save (creates snapshot for bundles)
+        # Save (creates snapshot for bundles/containers)
         if not skip_optimize:
             store.save(skip_snapshot=False)
         else:
             # During app close, skip snapshot creation for speed
             store.commit()
 
-        log.info(f"Bundle saved successfully: {dest}")
+        log.info(f"{format_name.capitalize()} saved successfully: {dest}")
 
-    finally:
-        store.close()
+        # OPTIMIZATION: Attach store to project for reuse on next save
+        # This ensures the same unpacked container is reused, avoiding redundant pack/unpack
+        if project._store is not store:
+            project._attach_store(store)
+
+    except Exception:
+        # On error, close the store if it's not already attached to the project
+        if store is not None and project._store is not store:
+            try:
+                store.close()
+            except Exception:
+                log.debug("Error closing store after save failure", exc_info=True)
+        raise
 
     project.path = dest.as_posix()
 
 
 def _load_project_bundle(path: str) -> Project:
     """
-    Load project from bundle format (.vasopack).
+    Load project from bundle format (.vasopack) or container format (.vaso).
 
     Automatically handles snapshot recovery if current snapshot is corrupted.
     """
-    path_obj = Path(path)
-    log.info(f"Loading project from bundle: {path_obj}")
+    from vasoanalyzer.services.project_service import SQLiteProjectRepository
+    from vasoanalyzer.storage.sqlite_store import ProjectStore
 
-    # Use the same loading logic as SQLite, but with bundle support
-    # The open_project_ctx will handle bundle format automatically
-    ctx = open_project_ctx(path)
-    repo = ctx.repo
+    from ..storage.project_storage import open_unified_project
+
+    path_obj = Path(path)
+    format_name = "container" if path_obj.suffix == ".vaso" else "bundle"
+    log.info(f"Loading project from {format_name}: {path_obj}")
+
+    # Open using unified project storage (handles both bundles and containers)
+    # NOTE: Open with readonly=False to ensure staging database is created
+    # This allows background jobs to read embedded data from the staging DB
+    store = open_unified_project(path, readonly=False, auto_migrate=False)
+
+    # Wrap the UnifiedProjectStore as a ProjectStore for compatibility
+    legacy_store = ProjectStore(path=store.path, conn=store.conn, dirty=store.dirty)
+
+    # Create repository wrapper
+    repo = SQLiteProjectRepository(legacy_store)
 
     try:
         meta_rows = repo.read_meta()
@@ -1418,21 +1519,22 @@ def _load_project_bundle(path: str) -> Project:
         project.resources.register_tempdir(tmp_manager, tmp_root.as_posix())
 
         # CRITICAL FIX: Keep database connection open for project lifetime
-        # Register context close as a project resource to ensure:
+        # Attach store to project so it can be reused during save operations
+        # This ensures:
         # 1. Database stays open for lazy data loading (traces, events, snapshots)
-        # 2. File lock is held to prevent concurrent access
-        # 3. Both are properly cleaned up when project is closed
-        project.register_resource(lambda: close_project_ctx(ctx))
+        # 2. Save operations can reuse the same store (avoiding redundant unpack/pack)
+        # 3. Store is properly cleaned up when project is closed
+        project._attach_store(store)
 
-        log.info(f"Bundle loaded successfully: {path_obj}")
+        log.info(f"{format_name.capitalize()} loaded successfully: {path_obj}")
         return project
 
     except Exception as e:
-        # On error, close context immediately and re-raise
+        # On error, close store immediately and re-raise
         log.error(
-            f"🔍 DIAGNOSTIC - Exception during project load, closing context: {e}", exc_info=True
+            f"🔍 DIAGNOSTIC - Exception during project load, closing store: {e}", exc_info=True
         )
-        close_project_ctx(ctx)
+        store.close()
         raise
 
 
@@ -1537,6 +1639,20 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
     """Populate ``store`` with the contents of ``project``."""
 
     base_dir = base_dir.resolve()
+
+    # CRITICAL: Clear all existing datasets to avoid duplication
+    # When saving, we want to REPLACE the database contents, not append to them
+    try:
+        # Get the store's connection and clear all datasets
+        if hasattr(repo, "store") and hasattr(repo.store, "conn"):
+            conn = repo.store.conn
+            # Delete all datasets (this will cascade to related tables via foreign keys)
+            conn.execute("DELETE FROM dataset")
+            conn.commit()
+            log.debug("Cleared existing datasets before repopulating")
+    except Exception as e:
+        log.warning(f"Failed to clear datasets before save: {e}")
+
     meta_entries: list[tuple[str, str]] = []
 
     meta_entries.append(("project_name", project.name or ""))
@@ -1615,7 +1731,14 @@ def _save_sample_to_store(
     trace_df = _resolve_trace_dataframe(sample, base_dir, source_repo)
     events_df = _resolve_events_dataframe(sample, base_dir, source_repo)
 
-    extra = _build_sample_extra(experiment, sample, base_dir)
+    # DEBUG: Log events DataFrame info
+    if events_df is not None:
+        log.info(f"💾 Saving {len(events_df)} events for sample '{sample.name}'")
+        log.debug(f"   Events columns: {list(events_df.columns)}")
+    else:
+        log.warning(f"⚠️  No events DataFrame for sample '{sample.name}'")
+
+    extra = _build_sample_extra(experiment, sample, base_dir, trace_df=trace_df)
     metadata = {
         "notes": sample.notes,
         "extra_json": extra,
@@ -1688,30 +1811,128 @@ def _resolve_events_dataframe(
     base_dir: Path,
     source_repo: ProjectRepository | None = None,
 ) -> pd.DataFrame | None:
+    # DEBUG: Check if events_data exists
     if isinstance(sample.events_data, pd.DataFrame):
+        log.info(
+            f"✓ Found events_data DataFrame for '{sample.name}' ({len(sample.events_data)} rows)"
+        )
         return sample.events_data
+
+    log.info(f"⚠️  No events_data in memory for '{sample.name}', checking other sources...")
+
     if sample.events_path:
+        log.debug(f"  Trying events_path: {sample.events_path}")
         path = _absolute_path(sample.events_path, base_dir)
         if path and path.exists():
             try:
-                return pd.read_csv(path)
+                df = pd.read_csv(path)
+                log.debug(f"  ✓ Loaded {len(df)} events from CSV")
+                return df
             except Exception:
                 log.debug("Failed to reload events CSV from %s", path, exc_info=True)
+
     if source_repo is not None and sample.dataset_id is not None:
+        log.debug(f"  Trying source_repo for dataset_id={sample.dataset_id}")
         get_events = getattr(source_repo, "get_events", None)
         if callable(get_events):
             try:
-                return cast(pd.DataFrame, get_events(sample.dataset_id))
+                df = cast(pd.DataFrame, get_events(sample.dataset_id))
+                log.debug(f"  ✓ Loaded {len(df)} events from source repo")
+                return df
             except Exception:
                 log.debug(
                     "Failed to copy events data from source repo for dataset %s",
                     sample.dataset_id,
                     exc_info=True,
                 )
+
+    log.debug(f"  ✗ No events found for '{sample.name}'")
     return None
 
 
-def _build_sample_extra(experiment: Experiment, sample: SampleN, base_dir: Path) -> dict[str, Any]:
+P2_CANONICAL_LABEL = "Set Pressure (mmHg)"
+_P2_LABEL_ALIASES = (
+    "Pressure 2 (mmHg)",
+    "Pressure2 (mmHg)",
+    "Pressure 2",
+    "Pressure2",
+    "P2 (mmHg)",
+    "P2",
+    "Set P (mmHg)",
+)
+
+
+def normalize_p2_label(label: str | None) -> str:
+    if not isinstance(label, str) or not label.strip():
+        return P2_CANONICAL_LABEL
+    normalized = _normalize_column_label(label)
+    alias_norms = {
+        _normalize_column_label(alias) for alias in (_P2_LABEL_ALIASES + (P2_CANONICAL_LABEL,))
+    }
+    if normalized in alias_norms:
+        return P2_CANONICAL_LABEL
+    return label
+
+
+def _normalize_trace_column_labels(labels: dict[str, str] | None) -> dict[str, str] | None:
+    if labels is None:
+        return {"p2": P2_CANONICAL_LABEL}
+    normalized = dict(labels)
+    normalized["p2"] = normalize_p2_label(normalized.get("p2"))
+    return normalized
+
+
+_TRACE_COLUMN_LABEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "p_avg": (
+        "Avg Pressure (mmHg)",
+        "Average Pressure (mmHg)",
+        "Avg Pressure",
+        "Average Pressure",
+        "Avg P (mmHg)",
+        "Average P (mmHg)",
+    ),
+    "p1": (
+        "Pressure 1 (mmHg)",
+        "Pressure1 (mmHg)",
+        "Pressure 1",
+        "P1 (mmHg)",
+        "P1",
+    ),
+    "p2": (
+        *_P2_LABEL_ALIASES,
+        "Set Pressure (mmHg)",
+        "Set Pressure",
+    ),
+}
+
+
+def _normalize_column_label(value: str) -> str:
+    return "".join(ch for ch in str(value).lower() if ch.isalnum())
+
+
+def _detect_trace_column_labels(trace_df: pd.DataFrame | None) -> dict[str, str]:
+    if trace_df is None or trace_df.empty:
+        return {}
+    normalized_columns = {
+        _normalize_column_label(col): col for col in trace_df.columns if isinstance(col, str)
+    }
+    labels: dict[str, str] = {}
+    for canonical, aliases in _TRACE_COLUMN_LABEL_ALIASES.items():
+        for alias in aliases:
+            alias_norm = _normalize_column_label(alias)
+            if alias_norm in normalized_columns:
+                labels[canonical] = normalized_columns[alias_norm]
+                break
+    normalized = _normalize_trace_column_labels(labels) or {}
+    return normalized
+
+
+def _build_sample_extra(
+    experiment: Experiment,
+    sample: SampleN,
+    base_dir: Path,
+    trace_df: pd.DataFrame | None = None,
+) -> dict[str, Any]:
     trace_link = _sample_link_payload(
         path_value=sample.trace_path,
         relative_hint=sample.trace_relative,
@@ -1743,6 +1964,16 @@ def _build_sample_extra(experiment: Experiment, sample: SampleN, base_dir: Path)
         payload["trace_link"] = trace_link
     if events_link:
         payload["events_link"] = events_link
+
+    trace_labels: dict[str, str] | None = None
+    if sample.trace_column_labels:
+        trace_labels = _normalize_trace_column_labels(sample.trace_column_labels)
+    else:
+        trace_source = trace_df if trace_df is not None else sample.trace_data
+        trace_labels = _detect_trace_column_labels(trace_source)
+    if trace_labels:
+        payload["trace_column_labels"] = trace_labels
+
     return cast(dict[str, Any], _normalise_json_data(payload))
 
 
@@ -2334,6 +2565,15 @@ def _dataset_to_sample(
 
     trace_link_meta = extra.get("trace_link") if isinstance(extra, dict) else None
     events_link_meta = extra.get("events_link") if isinstance(extra, dict) else None
+    trace_column_labels = None
+    if isinstance(extra, dict):
+        raw_labels = extra.get("trace_column_labels")
+        if isinstance(raw_labels, dict):
+            trace_column_labels = {
+                str(k): str(v)
+                for k, v in raw_labels.items()
+                if isinstance(k, str) and isinstance(v, str)
+            } or None
     trace_path = _resolve_linked_path(extra.get("trace_path"), trace_link_meta, base_dir)
     events_path = _resolve_linked_path(extra.get("events_path"), events_link_meta, base_dir)
     raw_snapshot = extra.get("snapshot_path")
@@ -2357,6 +2597,7 @@ def _dataset_to_sample(
         exported=bool(extra.get("exported")),
         column=extra.get("column"),
         trace_data=None,
+        trace_column_labels=trace_column_labels,
         events_data=None,
         ui_state=extra.get("ui_state"),
         snapshots=None,
@@ -2380,19 +2621,85 @@ def _dataset_to_sample(
     return sample, experiment
 
 
-def _format_trace_df(df: pd.DataFrame) -> pd.DataFrame | None:
+def _format_trace_df(
+    df: pd.DataFrame,
+    column_labels: dict[str, str] | None = None,
+    sample_name: str | None = None,
+) -> pd.DataFrame | None:
+    """
+    Convert canonical trace columns (t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
+    into UI-facing labels using per-sample metadata. The `p2` channel is always treated
+    as the Set Pressure channel unless metadata explicitly sets a custom label.
+    """
+
     if df is None or df.empty:
         return None
-    rename_map = {
-        "t_seconds": "Time (s)",
-        "inner_diam": "Inner Diameter",
-        "outer_diam": "Outer Diameter",
-        "p_avg": "p_avg",
-        "p1": "p1",
-        "p2": "p2",
-    }
-    present = {k: v for k, v in rename_map.items() if k in df.columns}
-    formatted = df.rename(columns=present)
+
+    sample_label = sample_name or "<unknown>"
+
+    def _label_for(key: str, default: str) -> str:
+        if not column_labels:
+            return default
+        raw_value = column_labels.get(key)
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            return default
+        if key == "p2":
+            return normalize_p2_label(raw_value)
+        return raw_value
+
+    time_label = _label_for("t_seconds", "Time (s)")
+    inner_label = _label_for("inner_diam", "Inner Diameter")
+    outer_label = _label_for("outer_diam", "Outer Diameter")
+    p_avg_label = _label_for("p_avg", "Avg Pressure (mmHg)")
+    p1_label = _label_for("p1", "Pressure 1 (mmHg)")
+    p2_label = _label_for("p2", P2_CANONICAL_LABEL)
+
+    log.info("Trace format raw columns=%s for sample=%s", list(df.columns), sample_label)
+    log.info(
+        "Trace format labels: t_seconds=%r inner_diam=%r outer_diam=%r " "p_avg=%r p1=%r p2=%r",
+        time_label,
+        inner_label,
+        outer_label,
+        p_avg_label,
+        p1_label,
+        p2_label,
+    )
+
+    columns: dict[str, pd.Series] = {}
+
+    if "t_seconds" in df.columns:
+        columns[time_label] = df["t_seconds"]
+    if "inner_diam" in df.columns:
+        columns[inner_label] = df["inner_diam"]
+    if "outer_diam" in df.columns:
+        columns[outer_label] = df["outer_diam"]
+    if "p_avg" in df.columns:
+        columns[p_avg_label] = df["p_avg"]
+    if "p1" in df.columns:
+        columns[p1_label] = df["p1"]
+    if "p2" in df.columns:
+        columns[p2_label] = df["p2"]
+
+    formatted = pd.DataFrame(columns)
+    log.info(
+        "Trace format final UI columns=%s for sample=%s", list(formatted.columns), sample_label
+    )
+    if P2_CANONICAL_LABEL in formatted.columns:
+        col = formatted[P2_CANONICAL_LABEL]
+        log.info(
+            "Format: UI Set Pressure for sample %s -> non_null=%d of %d, head=%s",
+            sample_label,
+            int(col.notna().sum()),
+            len(col),
+            col.head(5).tolist(),
+        )
+    else:
+        log.info(
+            "Format: UI trace for sample %s has no '%s' column; columns=%s",
+            sample_label,
+            P2_CANONICAL_LABEL,
+            list(formatted.columns),
+        )
     return formatted
 
 
@@ -2400,7 +2707,8 @@ def _format_events_df(df: pd.DataFrame) -> pd.DataFrame | None:
     if df is None or df.empty:
         return None
     df_local = df.copy()
-    extras = df_local.pop("extra", None)
+    # pandas DataFrame.pop() doesn't accept default parameter in newer versions
+    extras = df_local.pop("extra") if "extra" in df_local.columns else None
     if extras is not None:
         all_keys: set[str] = set()
         for payload in extras:

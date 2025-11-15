@@ -76,7 +76,14 @@ def prepare_event_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     if "t_seconds" not in df_local.columns or "label" not in df_local.columns:
         raise ValueError("Events DataFrame must include time and label columns")
 
-    df_local["t_seconds"] = pd.to_numeric(df_local["t_seconds"], errors="coerce")
+    time_raw = df_local["t_seconds"].copy()
+    df_local["t_seconds"] = pd.to_numeric(time_raw, errors="coerce")
+    if df_local["t_seconds"].isna().all():
+        # Attempt to parse timestamps like HH:MM:SS and convert to seconds
+        td = pd.to_timedelta(time_raw, errors="coerce")
+        if not td.isna().all():
+            df_local["t_seconds"] = td.dt.total_seconds()
+
     df_local = df_local.dropna(subset=["t_seconds"])
     df_local["label"] = df_local["label"].astype(str)
 

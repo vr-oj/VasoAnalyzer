@@ -320,12 +320,20 @@ class InteractionController:
             new_span = span * zoom_factor
 
             # Center zoom on hover position if available, otherwise center of view
-            center = self._hover_time if self._hover_time is not None else (window[0] + window[1]) / 2.0
+            center = (
+                self._hover_time if self._hover_time is not None else (window[0] + window[1]) / 2.0
+            )
 
             # Calculate new window bounds
             new_start = center - new_span / 2.0
             new_end = center + new_span / 2.0
 
-            log.info(f"🔍 Zoom {'in' if zoom_in else 'out'}: {span:.2f}s → {new_span:.2f}s (center: {center:.2f}s)")
+            log.debug(
+                "Zoom %s: %.2fs \u2192 %.2fs (center %.2fs)",
+                "in" if zoom_in else "out",
+                span,
+                new_span,
+                center,
+            )
             self.plot_host.set_time_window(new_start, new_end)
             return

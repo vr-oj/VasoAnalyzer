@@ -140,14 +140,16 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     window.actPan = pan_act
     window.actZoom = zoom_act
 
-    if window.actReset:
-        toolbar.addAction(window.actReset)
-    if window.actBack:
-        toolbar.addAction(window.actBack)
-    if window.actForward:
-        toolbar.addAction(window.actForward)
+    # For PyQtGraph, Back/Forward don't work (no view history), and Reset View is redundant with Autoscale
+    if not is_pyqtgraph:
+        if window.actReset:
+            toolbar.addAction(window.actReset)
+        if window.actBack:
+            toolbar.addAction(window.actBack)
+        if window.actForward:
+            toolbar.addAction(window.actForward)
 
-    toolbar.addSeparator()
+        toolbar.addSeparator()
 
     # PyQtGraph has built-in mouse interaction - pan/zoom buttons not needed
     if not is_pyqtgraph:

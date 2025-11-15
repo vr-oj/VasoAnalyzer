@@ -99,6 +99,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._event_entries: list[EventEntryV3] = []
         self._event_labels_visible: bool = False
 
+        # Event line styling parameters
+        self._event_line_width: float = 1.2
+        self._event_line_style: Qt.PenStyle = Qt.DashLine
+        self._event_line_color: str = "#8A8A8A"
+        self._event_line_alpha: float = 1.0
+
         # Create initial plot items
         self._create_plot_items()
 
@@ -233,11 +239,15 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             if labels is not None and i < len(labels):
                 label_text = labels[i]
 
-            # Create dashed vertical line
+            # Create vertical line with configured styling
+            qcolor = QColor(self._event_line_color)
+            qcolor.setAlphaF(self._event_line_alpha)
             line = pg.InfiniteLine(
                 pos=time,
                 angle=90,
-                pen=pg.mkPen(color=color, width=1.2, style=Qt.DashLine),
+                pen=pg.mkPen(
+                    color=qcolor, width=self._event_line_width, style=self._event_line_style
+                ),
                 movable=False,
             )
             line.setZValue(5)  # Draw above traces
@@ -255,6 +265,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     t=time,
                     text=label_text,
                     meta=meta_payload,
+                    index=i + 1,  # 1-indexed for display
                 )
                 self._event_entries.append(event_entry)
 
@@ -615,6 +626,37 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Set plot title."""
         self._plot_item.setTitle(title)
 
+    def set_event_line_style(
+        self,
+        width: float | None = None,
+        style: Qt.PenStyle | None = None,
+        color: str | None = None,
+        alpha: float | None = None,
+    ) -> None:
+        """Configure event line styling parameters.
+
+        Args:
+            width: Line width in pixels
+            style: Qt pen style (Qt.SolidLine, Qt.DashLine, Qt.DotLine, Qt.DashDotLine)
+            color: Line color as hex string
+            alpha: Line alpha/opacity (0.0 to 1.0)
+        """
+        if width is not None:
+            self._event_line_width = float(width)
+        if style is not None:
+            self._event_line_style = style
+        if color is not None:
+            self._event_line_color = color
+        if alpha is not None:
+            self._event_line_alpha = float(alpha)
+
+        # Update existing event lines
+        for line in self.event_lines:
+            qcolor = QColor(self._event_line_color)
+            qcolor.setAlphaF(self._event_line_alpha)
+            pen = pg.mkPen(color=qcolor, width=self._event_line_width, style=self._event_line_style)
+            line.setPen(pen)
+
     def apply_style(self, style: dict[str, Any]) -> None:
         """Apply visual styling to the renderer.
 
@@ -646,9 +688,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         # Update event line colors
         if "event_line_color" in style:
-            event_color = style["event_line_color"]
+            self._event_line_color = style["event_line_color"]
+            qcolor = QColor(self._event_line_color)
+            qcolor.setAlphaF(self._event_line_alpha)
             for line in self.event_lines:
-                pen = pg.mkPen(color=event_color, width=1.2, style=Qt.DashLine)
+                pen = pg.mkPen(
+                    color=qcolor, width=self._event_line_width, style=self._event_line_style
+                )
                 line.setPen(pen)
 
     def get_render_backend(self) -> str:

@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable, Iterable
 from typing import Any, cast
 
+import pyqtgraph as pg
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
@@ -140,6 +141,8 @@ class PyQtGraphPlotHost:
             return
 
         # Create new tracks
+        plot_items = []
+
         for idx, spec in enumerate(self._channel_specs):
             track = PyQtGraphChannelTrack(spec, enable_opengl=self._enable_opengl)
 
@@ -149,20 +152,56 @@ class PyQtGraphPlotHost:
 
             self._tracks[spec.track_id] = track
 
-            # Hide x-axis labels on all tracks except the last (bottom) one
-            is_bottom_track = idx == len(self._channel_specs) - 1
             plot_item = track.view.get_widget().getPlotItem()
+            plot_items.append(plot_item)
+
+            # Configure X-axis visibility: only show on bottom track
+            is_bottom_track = idx == len(self._channel_specs) - 1
+            bottom_axis = plot_item.getAxis("bottom")
+
             if not is_bottom_track:
-                # Hide x-axis label and tick labels on non-bottom tracks
-                plot_item.getAxis("bottom").setLabel("")
-                plot_item.getAxis("bottom").setStyle(showValues=False)
+                # Hide all components of the bottom axis for non-bottom tracks
+                plot_item.hideAxis("bottom")
+                bottom_axis.setLabel("")  # Remove label text
+                bottom_axis.setStyle(showValues=False)  # Hide tick labels
+                bottom_axis.setTicks([])  # Remove ticks
+                bottom_axis.setHeight(0)  # Collapse the axis height
+                # Hide the label item completely
+                if hasattr(bottom_axis, "label"):
+                    bottom_axis.label.hide()
+                if hasattr(bottom_axis, "showLabel"):
+                    bottom_axis.showLabel(False)
             else:
-                # Ensure bottom track shows x-axis
-                plot_item.getAxis("bottom").setStyle(showValues=True)
+                # Ensure bottom track shows complete x-axis with ticks and label
+                plot_item.showAxis("bottom")
+                bottom_axis.setStyle(showValues=True)
+                bottom_axis.setLabel("Time", units="s")
+                # Reset height to default for bottom track
+                bottom_axis.setHeight(None)
+
+            # Add subtle border around each plot's ViewBox for visual separation
+            view_box = plot_item.getViewBox()
+            view_box.setBorder(pg.mkPen(color=(180, 180, 180), width=0.5))
+
+            # Ensure Y-axes are aligned by setting consistent width
+            left_axis = plot_item.getAxis("left")
+            left_axis.setWidth(80)  # Fixed width for alignment
 
             # Apply model if already set
             if self._model is not None:
                 track.set_model(self._model)
+
+                # Re-apply bottom axis hiding after set_model (which resets the label)
+                if not is_bottom_track:
+                    plot_item.hideAxis("bottom")
+                    bottom_axis.setLabel("")
+                    bottom_axis.setStyle(showValues=False)
+                    bottom_axis.setTicks([])
+                    # Hide the label item completely
+                    if hasattr(bottom_axis, "label"):
+                        bottom_axis.label.hide()
+                    if hasattr(bottom_axis, "showLabel"):
+                        bottom_axis.showLabel(False)
 
             # Apply events if already set
             if self._event_times:
@@ -175,10 +214,14 @@ class PyQtGraphPlotHost:
 
             # Connect signals for synchronized interactions
             self._connect_track_signals(track)
-            self._configure_track_defaults(track)
+            is_top_track = idx == 0
+            self._configure_track_defaults(track, is_top_track=is_top_track)
+
+        # Set row spacing between tracks for visual separation
+        # Note: QVBoxLayout spacing is set in __init__, but we can adjust per-item spacing
+        self.layout.setSpacing(5)  # 5px spacing between tracks
 
         # Sync overlays with new tracks
-        plot_items = [track.view.get_widget().getPlotItem() for track in self._tracks.values()]
         self._time_cursor_overlay.sync_tracks(plot_items)
         self._event_highlight_overlay.sync_tracks(plot_items)
 
@@ -194,13 +237,17 @@ class PyQtGraphPlotHost:
         # Connect view range changed signal
         plot_item.sigRangeChanged.connect(self._on_track_range_changed)
 
-    def _configure_track_defaults(self, track: PyQtGraphChannelTrack) -> None:
+    def _configure_track_defaults(
+        self, track: PyQtGraphChannelTrack, is_top_track: bool = False
+    ) -> None:
         track.view.enable_hover_tooltip(
             self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
         )
+        # Only enable event labels on the top track
+        enable_labels = self._event_labels_enabled and is_top_track
         track.view.enable_event_labels(
-            self._event_labels_enabled,
-            options=self._event_label_options if self._event_labels_enabled else None,
+            enable_labels,
+            options=self._event_label_options if enable_labels else None,
         )
         if track.primary_line:
             track.set_line_width(self._default_line_width)
@@ -378,8 +425,26 @@ class PyQtGraphPlotHost:
         """Set the trace data model for all tracks."""
         self._model = model
 
+        # Get ordered track IDs to determine which is bottom
+        ordered_ids = [spec.track_id for spec in self._channel_specs]
+        bottom_track_id = ordered_ids[-1] if ordered_ids else None
+
         for track in self._tracks.values():
             track.set_model(model)
+
+            # Re-hide bottom axis for non-bottom tracks (set_model resets the label)
+            is_bottom = track.id == bottom_track_id
+            if not is_bottom:
+                plot_item = track.view.get_widget().getPlotItem()
+                bottom_axis = plot_item.getAxis("bottom")
+                plot_item.hideAxis("bottom")
+                bottom_axis.setLabel("")
+                bottom_axis.setStyle(showValues=False)
+                bottom_axis.setTicks([])
+                if hasattr(bottom_axis, "label"):
+                    bottom_axis.label.hide()
+                if hasattr(bottom_axis, "showLabel"):
+                    bottom_axis.showLabel(False)
 
         # Set initial window to full range
         if model is not None:
@@ -749,6 +814,8 @@ class PyQtGraphPlotHost:
         color = kwargs.get("color")
         if color:
             self._event_label_options.font_color = str(color)
+        if "show_numbers_only" in kwargs:
+            self._event_label_options.show_numbers_only = bool(kwargs["show_numbers_only"])
         self._apply_event_label_options()
 
     # Additional core PlotHost methods for full compatibility

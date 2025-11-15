@@ -33,6 +33,16 @@ def main(argv: list[str] | None = None) -> None:
         logging.basicConfig(level=logging.INFO)
         log.error(f"Failed to setup production logging: {e}", exc_info=True)
 
+    # Clean up stale temp directories from crashed sessions
+    try:
+        from vasoanalyzer.storage.container_fs import cleanup_stale_temp_dirs
+
+        cleaned = cleanup_stale_temp_dirs()
+        if cleaned > 0:
+            log.info(f"Cleaned up {cleaned} stale temp directories from previous sessions")
+    except Exception as e:
+        log.warning(f"Failed to clean up stale temp directories: {e}")
+
     try:
         launcher = VasoAnalyzerLauncher(project_path=project_path)
         launcher.run()

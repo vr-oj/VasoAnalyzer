@@ -175,7 +175,14 @@ class PyQtGraphEventLabeler:
         text_item.setFont(font)
         text_extent_px = self._text_pixel_length(font, label_text)
 
-        if mode == "vertical":
+        # When showing numbers only, display horizontally regardless of mode
+        if self.options.show_numbers_only:
+            # Horizontal display for numbers
+            text_item.setAnchor((0.5, 0.0))
+            x_pos = cluster_x
+            rotation = 0.0
+            text_item.setRotation(rotation)
+        elif mode == "vertical":
             rotation = self.options.rotation_deg or -90.0
             text_item.setRotation(rotation)
             text_item.setAnchor((0.5, 0.0))
@@ -222,6 +229,23 @@ class PyQtGraphEventLabeler:
         cluster: list[EventEntryV3],
         representative: EventEntryV3,
     ) -> str:
+        # If showing numbers only, use event index
+        if self.options.show_numbers_only and representative.index is not None:
+            if len(cluster) > 1:
+                # Show index range or list for clusters
+                indices = sorted([e.index for e in cluster if e.index is not None])
+                if len(indices) > 1:
+                    if indices[-1] - indices[0] == len(indices) - 1:
+                        # Consecutive indices - show range
+                        return f"{indices[0]}-{indices[-1]}"
+                    else:
+                        # Non-consecutive - show count
+                        return f"{representative.index} (+{len(cluster) - 1})"
+                else:
+                    return str(representative.index)
+            return str(representative.index)
+
+        # Default text-based labels
         if len(cluster) > self.options.max_labels_per_cluster:
             if self.options.compact_counts:
                 return str(len(cluster))

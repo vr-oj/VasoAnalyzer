@@ -143,12 +143,12 @@ class VasoAnalyzerLauncher:
 
     # ------------------------------------------------------------------
     def _start_main_window(self) -> None:
-        if hasattr(self, "splash"):
-            self.splash.close()
-
+        splash = getattr(self, "splash", None)
         try:
             window = VasoAnalyzerApp()
             window.show()
+            if splash:
+                splash.finish(window)
 
             # Note: Crash recovery is handled inline when opening projects
             # (see main_window.py lines ~945 and project_mixin.py lines ~192)
@@ -162,6 +162,8 @@ class VasoAnalyzerLauncher:
             log.info("Main window started successfully")
         except Exception:  # pragma: no cover - defensive logging for GUI
             log.exception("Error launching main window")
+            if splash:
+                splash.close()
 
     # ------------------------------------------------------------------
     def run(self) -> None:

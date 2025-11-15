@@ -76,3 +76,4 @@ src/vasoanalyzer/ui/dialogs/__pycache__/figure_export_dialog.cpython-313.pyc
 src/vasoanalyzer/ui/dialogs/__pycache__/subplot_layout_dialog.cpython-313.pyc
 src/vasoanalyzer/ui/dialogs/__pycache__/legend_settings_dialog.cpython-313.pyc
 src/vasoanalyzer/ui/dialogs/__pycache__/unified_settings_dialog.cpython-313.pyc
+/SampleData

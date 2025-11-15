@@ -405,14 +405,24 @@ class PyQtGraphSettingsDialog(QDialog):
             line_style_combo.addItems(["Solid", "Dashed", "Dotted", "DashDot"])
             track_form.addRow("Line Style:", line_style_combo)
 
-            color_widget = self._create_color_picker_widget()
+            # Get current line color from the track
+            current_color = "#000000"  # Default fallback
+            current_alpha = 1.0
+            try:
+                if track.primary_line:
+                    current_color = track.primary_line.get_color()
+                    current_alpha = track.primary_line.get_alpha()
+            except Exception:
+                pass
+
+            color_widget = self._create_color_picker_widget(current_color)
             track_form.addRow("Line Color:", color_widget["widget"])
 
             line_alpha_spin = QDoubleSpinBox()
             line_alpha_spin.setRange(0.0, 1.0)
             line_alpha_spin.setSingleStep(0.1)
             line_alpha_spin.setDecimals(2)
-            line_alpha_spin.setValue(1.0)
+            line_alpha_spin.setValue(current_alpha)
             track_form.addRow("Line Alpha (Opacity):", line_alpha_spin)
 
             track_widgets: LineStyleWidgets = {
@@ -468,6 +478,37 @@ class PyQtGraphSettingsDialog(QDialog):
 
         layout.addWidget(markers_group)
 
+        # Event Lines Section (vertical dashed lines)
+        event_lines_group = QGroupBox("Event Lines (Vertical Markers)")
+        event_lines_form = QFormLayout(event_lines_group)
+        event_lines_form.setLabelAlignment(Qt.AlignRight)
+
+        self.event_line_width_spin = QDoubleSpinBox()
+        self.event_line_width_spin.setRange(0.5, 5.0)
+        self.event_line_width_spin.setSingleStep(0.1)
+        self.event_line_width_spin.setDecimals(1)
+        self.event_line_width_spin.setValue(1.2)
+        event_lines_form.addRow("Line Width:", self.event_line_width_spin)
+
+        self.event_line_style_combo = QComboBox()
+        self.event_line_style_combo.addItems(["Solid", "Dashed", "Dotted", "DashDot"])
+        self.event_line_style_combo.setCurrentIndex(1)  # Default to Dashed
+        event_lines_form.addRow("Line Style:", self.event_line_style_combo)
+
+        event_line_color_widget = self._create_color_picker_widget("#8A8A8A")
+        self.event_line_color_btn = event_line_color_widget["button"]
+        self.event_line_color_label = event_line_color_widget["label"]
+        event_lines_form.addRow("Line Color:", event_line_color_widget["widget"])
+
+        self.event_line_alpha_spin = QDoubleSpinBox()
+        self.event_line_alpha_spin.setRange(0.0, 1.0)
+        self.event_line_alpha_spin.setSingleStep(0.1)
+        self.event_line_alpha_spin.setDecimals(2)
+        self.event_line_alpha_spin.setValue(1.0)
+        event_lines_form.addRow("Line Alpha (Opacity):", self.event_line_alpha_spin)
+
+        layout.addWidget(event_lines_group)
+
         layout.addStretch()
         scroll.setWidget(content)
         main_layout.addWidget(scroll)
@@ -497,6 +538,13 @@ class PyQtGraphSettingsDialog(QDialog):
         self.event_labels_enabled_cb = QCheckBox("Show Event Labels")
         self.event_labels_enabled_cb.setChecked(True)
         enable_layout.addWidget(self.event_labels_enabled_cb)
+
+        self.event_show_numbers_cb = QCheckBox("Show Numbers Only (instead of full text)")
+        self.event_show_numbers_cb.setChecked(False)
+        self.event_show_numbers_cb.setToolTip(
+            "Display event index numbers (1, 2, 3...) instead of full event labels"
+        )
+        enable_layout.addWidget(self.event_show_numbers_cb)
 
         layout.addWidget(enable_group)
 
@@ -945,6 +993,30 @@ class PyQtGraphSettingsDialog(QDialog):
                 with contextlib.suppress(Exception):
                     self.plot_host.set_default_line_width(default_width)
 
+            # Apply event line styling
+            event_line_width = self.event_line_width_spin.value()
+            event_line_style_text = self.event_line_style_combo.currentText()
+            event_line_color = self._get_label_color(self.event_line_color_label)
+            event_line_alpha = self.event_line_alpha_spin.value()
+
+            # Map style text to Qt style
+            style_map = {
+                "Solid": Qt.SolidLine,
+                "Dashed": Qt.DashLine,
+                "Dotted": Qt.DotLine,
+                "DashDot": Qt.DashDotLine,
+            }
+            event_line_qt_style = style_map.get(event_line_style_text, Qt.DashLine)
+
+            # Apply to all tracks
+            for _track_id, track in self.plot_host._tracks.items():
+                track.view.set_event_line_style(
+                    width=event_line_width,
+                    style=event_line_qt_style,
+                    color=event_line_color,
+                    alpha=event_line_alpha,
+                )
+
         except Exception as e:
             log.error(f"Failed to apply line styling: {e}", exc_info=True)
 
@@ -983,6 +1055,7 @@ class PyQtGraphSettingsDialog(QDialog):
                 bold=self.event_font_bold.isChecked(),
                 italic=self.event_font_italic.isChecked(),
                 color=self._get_label_color(self.event_label_color_label),
+                show_numbers_only=self.event_show_numbers_cb.isChecked(),
             )
 
         except Exception as e:

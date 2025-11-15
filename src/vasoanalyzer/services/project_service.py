@@ -188,9 +188,18 @@ def save_project_file(
     if not project.path:
         raise ValueError("Project path is not set")
 
-    log.info(f"💾 Saving project to: {project.path}")
+    path_obj = Path(project.path).expanduser()
+    project.path = str(path_obj)
+    was_new_file = not path_obj.exists()
+
+    log.debug("Saving project to %s", path_obj)
     save_project(project, project.path, skip_optimize=skip_optimize)
-    log.info(f"✓ Project saved successfully: {Path(project.path).name}")
+
+    if was_new_file:
+        format_hint = path_obj.suffix.lstrip(".") or "directory"
+        log.info("Project: Created new project at %s (format=%s)", path_obj, format_hint)
+    else:
+        log.debug("Project saved successfully: %s", path_obj.name)
 
 
 def autosave_project(project: Project, autosave_path: str | None = None) -> str | None:

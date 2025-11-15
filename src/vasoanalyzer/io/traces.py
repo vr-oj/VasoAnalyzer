@@ -39,7 +39,7 @@ def load_trace(file_path, *, cache: Any | None = None):
         pandas.errors.ParserError: If the CSV cannot be parsed.
     """
 
-    log.info("Loading trace from %s", file_path)
+    log.debug("Loading trace from %s", file_path)
 
     # Auto-detect delimiter using the CSV sniffer
     with open(file_path, encoding="utf-8-sig") as f:
@@ -104,7 +104,7 @@ def load_trace(file_path, *, cache: Any | None = None):
     diam_candidates = []
     outer_candidates = []
     avg_pressure_candidates = []
-    set_pressure_candidates = []
+    set_pressure_candidates: list[str] = []
 
     for c in df.columns:
         norm = _normalize(c)
@@ -122,7 +122,10 @@ def load_trace(file_path, *, cache: Any | None = None):
         if "avg" in norm and "pressure" in norm:
             avg_pressure_candidates.append(c)
         elif "set" in norm and "pressure" in norm:
-            set_pressure_candidates.append(c)
+            if c in ("Set Pressure (mmHg)", "Set P (mmHg)"):
+                set_pressure_candidates.insert(0, c)
+            else:
+                set_pressure_candidates.append(c)
 
     if inner_candidates:
         diam_col = inner_candidates[0]
@@ -180,9 +183,15 @@ def load_trace(file_path, *, cache: Any | None = None):
     # Pressure values can be negative (e.g., vacuum), so we don't filter them out
     # Just log if pressure columns were found
     if "Avg Pressure (mmHg)" in df.columns:
-        log.info("Loaded Avg Pressure column with %d valid values", df["Avg Pressure (mmHg)"].notna().sum())
+        log.debug(
+            "Loaded Avg Pressure column with %d valid values",
+            df["Avg Pressure (mmHg)"].notna().sum(),
+        )
     if "Set Pressure (mmHg)" in df.columns:
-        log.info("Loaded Set Pressure column with %d valid values", df["Set Pressure (mmHg)"].notna().sum())
+        log.debug(
+            "Loaded Set Pressure column with %d valid values",
+            df["Set Pressure (mmHg)"].notna().sum(),
+        )
 
-    log.info("Loaded trace with %d rows", len(df))
+    log.debug("Loaded trace with %d rows", len(df))
     return df
