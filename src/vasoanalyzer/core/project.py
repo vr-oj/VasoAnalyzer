@@ -83,13 +83,26 @@ def open_project_ctx(path: str, repo: ProjectRepository | None = None) -> Projec
     """
     from vasoanalyzer.core.file_lock import ProjectFileLock
 
+    path_obj = Path(path)
+    log.info(
+        "Opening project context path=%s (exists=%s)",
+        path_obj,
+        path_obj.exists(),
+    )
+
     # Acquire file lock to prevent concurrent access
     file_lock = ProjectFileLock(path)
+    log.info("Requesting project lock path=%s lock=%s", path_obj, file_lock.lock_path)
     try:
         file_lock.acquire(timeout=5)
-        log.info(f"Acquired lock for project: {path}")
+        log.info("Project lock acquired path=%s lock=%s", path_obj, file_lock.lock_path)
     except RuntimeError as e:
-        log.error(f"Failed to acquire lock for {path}: {e}")
+        log.error(
+            "Failed to acquire lock for %s (lock=%s): %s",
+            path_obj,
+            file_lock.lock_path,
+            e,
+        )
         raise ValueError(f"Cannot open project: {e}") from e
 
     try:

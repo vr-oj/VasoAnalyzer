@@ -643,6 +643,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._pending_asset_scan_token: object | None = None
         self._project_missing_messages: list[str] = []
         self._last_missing_assets_snapshot: tuple[int, int] | None = None
+        self.event_table_action: QAction | None = None
+        self._event_panel_has_data = False
+        self._layout_log_ready = False
 
         # ===== Axis + Slider State =====
         self.axis_dragging = False
@@ -1321,12 +1324,14 @@ class VasoAnalyzerApp(QMainWindow):
             checked: Unused boolean from Qt signal (ignored)
         """
         if self.current_project and self.current_project.path:
+            project_path = self.current_project.path
             # Prevent concurrent saves
             if self._save_in_progress:
                 log.debug("Save already in progress, skipping concurrent save request")
                 return
 
             try:
+                log.info("Manual save requested path=%s", project_path)
                 self._save_in_progress = True
                 self.current_project.ui_state = self.gather_ui_state()
                 if self.current_sample:
@@ -1334,12 +1339,13 @@ class VasoAnalyzerApp(QMainWindow):
                     self.current_sample.ui_state = state
                     self.project_state[id(self.current_sample)] = state
                 save_project_file(self.current_project)
+                log.info("Manual save completed path=%s", project_path)
                 self.update_recent_projects(self.current_project.path)
                 self.statusBar().showMessage("\u2713 Project saved", 3000)
-                self._reset_session_dirty()
+                self._reset_session_dirty(reason="manual save")
                 self._update_window_title()
             except Exception as e:
-                log.error(f"Failed to save project: {e}", exc_info=True)
+                log.error("Manual save failed path=%s error=%s", project_path, e, exc_info=True)
                 self.statusBar().showMessage(f"Save failed: {e}", 5000)
                 raise
             finally:
@@ -1399,10 +1405,12 @@ class VasoAnalyzerApp(QMainWindow):
                 state = self.gather_sample_state()
                 self.current_sample.ui_state = state
                 self.project_state[id(self.current_sample)] = state
+            log.info("Manual save (Save As) requested destination=%s", path)
             save_project_file(self.current_project, path)
+            log.info("Manual save (Save As) completed destination=%s", path)
             self.update_recent_projects(path)
         self.statusBar().showMessage("\u2713 Project saved", 3000)
-        self._reset_session_dirty()
+        self._reset_session_dirty(reason="save as")
         self._update_window_title()
 
     def export_project_bundle_action(self, checked: bool = False):
@@ -1538,10 +1546,12 @@ class VasoAnalyzerApp(QMainWindow):
         if not self.current_project or not self.current_project.path:
             return
 
+        project_path = self.current_project.path
         # Prevent concurrent saves (don't autosave if manual save is in progress)
         if self._save_in_progress:
-            log.debug(
-                "Manual save in progress, deferring autosave (reason=%s)",
+            log.info(
+                "Manual save in progress, deferring autosave path=%s reason=%s",
+                project_path,
                 reason or "auto",
             )
             # Reschedule autosave for later
@@ -1549,6 +1559,11 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         try:
+            log.info(
+                "Autosave started path=%s reason=%s",
+                project_path,
+                reason or "auto",
+            )
             self._save_in_progress = True
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
@@ -1559,13 +1574,20 @@ class VasoAnalyzerApp(QMainWindow):
             autosave_path = autosave_project(self.current_project)
             if autosave_path:
                 self.last_autosave_path = autosave_path
-                log.debug(
-                    "Autosave written to %s (reason=%s)",
+                log.info(
+                    "Autosave completed path=%s autosave=%s reason=%s",
+                    project_path,
                     autosave_path,
-                    reason or "manual",
+                    reason or "auto",
                 )
         except Exception as exc:
-            log.error("Failed to write autosave (%s): %s", reason or "manual", exc)
+            log.error(
+                "Failed to write autosave path=%s reason=%s error=%s",
+                project_path,
+                reason or "auto",
+                exc,
+                exc_info=True,
+            )
         finally:
             self._save_in_progress = False
 
@@ -2206,6 +2228,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_frames = []
         self.event_table_data = []
         self.event_label_meta = []
+        self._layout_log_ready = False
 
     def _begin_sample_load_job(
         self,
@@ -2390,6 +2413,7 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.warning(self, "Event Load Error", str(error))
 
         self.trace_data = self._prepare_trace_dataframe(trace)
+        self._layout_log_ready = True
         self._reset_channel_view_defaults()
         self.xlim_full = None
         self.ylim_full = None
@@ -3482,6 +3506,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.showhide_menu.addAction(evt_tbl)
         self.showhide_menu.addAction(snap_vw)
         self.snapshot_viewer_action = snap_vw
+        self.event_table_action = evt_tbl
 
         shortcut = "Meta+M" if sys.platform == "darwin" else "Ctrl+M"
         self.action_snapshot_metadata = QAction("Metadata…", self)
@@ -4270,6 +4295,7 @@ class VasoAnalyzerApp(QMainWindow):
             rows = []
         self.event_table_data = [tuple(row) for row in rows]
         self._sync_event_data_from_table()
+        self._update_event_table_presence_state(bool(self.event_table_data))
 
     def _ensure_event_meta_length(self, length: int | None = None) -> None:
         if length is None:
@@ -4415,8 +4441,21 @@ class VasoAnalyzerApp(QMainWindow):
             self._refresh_event_annotation_artists()
         self.mark_session_dirty()
 
+    def _set_event_table_visible(self, visible: bool, *, source: str = "user") -> None:
+        event_table = getattr(self, "event_table", None)
+        if event_table is None:
+            return
+        action = getattr(self, "event_table_action", None)
+        if event_table.isVisible() != visible:
+            event_table.setVisible(visible)
+        if action is not None and action.isChecked() != visible:
+            action.blockSignals(True)
+            action.setChecked(visible)
+            action.blockSignals(False)
+        log.debug("UI: Event table visibility updated to %s (source=%s)", visible, source)
+
     def toggle_event_table(self, checked: bool):
-        self.event_table.setVisible(checked)
+        self._set_event_table_visible(bool(checked), source="user")
 
     def toggle_snapshot_viewer(self, checked: bool):
         if not checked:
@@ -4657,7 +4696,12 @@ class VasoAnalyzerApp(QMainWindow):
         sample = getattr(self, "current_sample", None)
         avg_track_added = any(spec.track_id == "avg_pressure" for spec in specs)
         set_track_added = any(spec.track_id == "set_pressure" for spec in specs)
-        if sample is not None and getattr(self, "_last_track_layout_sample_id", None) != id(sample):
+        layout_ready = bool(getattr(self, "_layout_log_ready", False))
+        if (
+            sample is not None
+            and layout_ready
+            and getattr(self, "_last_track_layout_sample_id", None) != id(sample)
+        ):
             sample_name = getattr(sample, "name", getattr(sample, "label", "N/A"))
             log.info(
                 "UI: Track layout for sample %s -> inner=%s outer=%s avg_pressure=%s set_pressure=%s",
@@ -5519,13 +5563,24 @@ QPushButton[isGhost="true"]:hover {{
         self.trace_file_label.setText(display)
         self.trace_file_label.setProperty("_full_status_text", full_text)
 
-    def _reset_session_dirty(self) -> None:
+    def _reset_session_dirty(self, *, reason: str | None = None) -> None:
+        if self.session_dirty:
+            log.info(
+                "Project dirty state changed: False (reason=%s, path=%s)",
+                reason or "reset",
+                getattr(self.current_project, "path", None) or "<unsaved>",
+            )
         self.session_dirty = False
         self._update_status_chip()
 
-    def mark_session_dirty(self) -> None:
+    def mark_session_dirty(self, reason: str | None = None) -> None:
         if not self.session_dirty:
             self.session_dirty = True
+            log.info(
+                "Project dirty state changed: True (reason=%s, path=%s)",
+                reason or "unspecified",
+                getattr(self.current_project, "path", None) or "<unsaved>",
+            )
             self._update_status_chip()
         # Invalidate cached state since something changed
         self._invalidate_sample_state_cache()
@@ -6409,6 +6464,7 @@ QPushButton[isGhost="true"]:hover {{
         return True
 
     def populate_table(self):
+        has_data = bool(self.event_table_data)
         has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
         avg_label = self._trace_label_for("p_avg")
         set_label = self._trace_label_for("p2")
@@ -6421,6 +6477,12 @@ QPushButton[isGhost="true"]:hover {{
             has_set_pressure=has_set_p,
         )
         self._update_excel_controls()
+        self._update_event_table_presence_state(has_data)
+
+    def _update_event_table_presence_state(self, has_events: bool) -> None:
+        self._event_panel_has_data = bool(has_events)
+        if has_events:
+            self._set_event_table_visible(True, source="data")
 
     def _update_excel_controls(self):
         """Enable or disable Excel mapping actions based on available data."""
@@ -9547,6 +9609,7 @@ QPushButton[isGhost="true"]:hover {{
         self._sync_event_controls()
         self._apply_toggle_state(True, False, outer_supported=False)
         self._update_trace_controls_state()
+        self._update_event_table_presence_state(False)
 
     def show_event_table_context_menu(self, position):
         index = self.event_table.indexAt(position)
@@ -10191,7 +10254,12 @@ QPushButton[isGhost="true"]:hover {{
             self.autosave_timer.stop()
             self._deferred_autosave_timer.stop()
 
+            project_path = self.current_project.path
             try:
+                log.info(
+                    "Close-event save requested path=%s (skip_optimize=True)",
+                    project_path,
+                )
                 # Wait for any in-progress save to complete (with timeout)
                 max_wait_iterations = 50  # 5 seconds max (50 * 100ms)
                 wait_iteration = 0
@@ -10215,6 +10283,8 @@ QPushButton[isGhost="true"]:hover {{
                     self.project_state[id(self.current_sample)] = state
                 # Skip expensive OPTIMIZE operation on close for faster exit
                 save_project_file(self.current_project, skip_optimize=True)
+                log.info("Close-event save completed path=%s", project_path)
+                self._reset_session_dirty(reason="close-event save")
             except Exception as e:
                 log.error("Failed to auto-save project:\n%s", e)
             finally:

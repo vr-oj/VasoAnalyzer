@@ -210,7 +210,11 @@ class EventMixin:
         self.mark_session_dirty()
 
     def toggle_event_table(self, checked: bool):
-        self.event_table.setVisible(checked)
+        setter = getattr(self, "_set_event_table_visible", None)
+        if callable(setter):
+            setter(bool(checked), source="user")
+        elif hasattr(self, "event_table"):
+            self.event_table.setVisible(checked)
 
     def _ensure_event_label_actions(self) -> None:
         if getattr(self, "_event_label_action_group", None) is not None:

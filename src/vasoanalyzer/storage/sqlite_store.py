@@ -148,7 +148,7 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
 
     fmt = get_project_format(project_path)
 
-    if fmt == "bundle-v1":
+    if fmt in ("bundle-v1", "zip-bundle-v1"):
         # Open as bundle and return wrapped ProjectStore
         unified_store = open_unified_project(project_path, readonly=False, auto_migrate=False)
         # Return the unified store (which is already a ProjectStore-compatible object)
