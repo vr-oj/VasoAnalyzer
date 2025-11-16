@@ -450,6 +450,13 @@ class SampleLoaderMixin:
         try:
             if sample.events_data is not None:
                 labels, times, frames = load_events(sample.events_data)
+                first_label = labels[0] if labels else None
+                log.info(
+                    "Project load: sample '%s' using %d events from project data (first=%r)",
+                    sample.name,
+                    len(labels),
+                    first_label,
+                )
                 self._clear_missing_asset(sample, "events")
             elif sample.events_path:
                 resolved_events = self._resolve_sample_link(sample, "events")
@@ -1174,6 +1181,15 @@ class SampleLoaderMixin:
                     if pd.isna(t):
                         continue
                     self.event_table_data.append((lbl, float(t), float(diam), int(fr)))
+
+        if self.event_table_data:
+            log.info(
+                "DEBUG load: event_table_data rows=%s first_label=%r",
+                len(self.event_table_data),
+                self.event_table_data[0][0],
+            )
+        else:
+            log.info("DEBUG load: event_table_data rows=0")
 
         self.populate_table()
         self.xlim_full = None

@@ -2485,6 +2485,7 @@ def write_project_autosave(project: Project, autosave_path: str | None = None) -
 
     dest = Path(autosave_path) if autosave_path else autosave_path_for(project.path)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dest = dest.with_suffix(dest.suffix + ".tmp")
 
     original_created = project.created_at
     original_updated = project.updated_at
@@ -2497,10 +2498,14 @@ def write_project_autosave(project: Project, autosave_path: str | None = None) -
 
         tz_name = _project_timezone()
         base_dir = Path(project.path).resolve().parent
-        _write_sqlite_project(project, dest, timezone_name=tz_name, base_dir=base_dir)
+        _write_sqlite_project(project, tmp_dest, timezone_name=tz_name, base_dir=base_dir)
+        os.replace(tmp_dest, dest)
     finally:
         project.created_at = original_created
         project.updated_at = original_updated
+        with contextlib.suppress(OSError):
+            if tmp_dest.exists():
+                tmp_dest.unlink()
 
     return dest.as_posix()
 

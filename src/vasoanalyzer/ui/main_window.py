@@ -99,10 +99,14 @@ from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.services.cache_service import DataCache, cache_dir_for_project
 from vasoanalyzer.services.project_service import (
     autosave_project,
+    events_dataframe_from_rows,
     export_project_bundle,
     export_project_single_file,
     import_project_bundle,
+    is_valid_autosave_snapshot,
+    normalize_event_table_rows,
     pending_autosave_path,
+    quarantine_autosave_snapshot,
     restore_autosave,
     save_project_file,
 )
@@ -1179,38 +1183,51 @@ class VasoAnalyzerApp(QMainWindow):
         else:
             autosave_candidate = pending_autosave_path(path)
             if autosave_candidate:
-                try:
-                    autosave_mtime = os.path.getmtime(autosave_candidate)
-                    project_mtime = os.path.getmtime(path)
-                except OSError:
-                    autosave_mtime = project_mtime = 0
-
-                if autosave_mtime > project_mtime:
-                    choice = QMessageBox.question(
+                if not is_valid_autosave_snapshot(autosave_candidate):
+                    quarantine_autosave_snapshot(autosave_candidate)
+                    log.warning("Discarded corrupt autosave snapshot: %s", autosave_candidate)
+                    QMessageBox.warning(
                         self,
-                        "Recover Autosave?",
+                        "Autosave Discarded",
                         (
-                            "An autosave snapshot newer than this project was found.\n"
-                            "Would you like to recover it?"
+                            "The autosave snapshot for this project was corrupted and "
+                            "has been discarded.\n\nThe original project will be opened instead."
                         ),
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes,
                     )
-                    if choice == QMessageBox.Yes:
-                        try:
-                            project = restore_autosave(path)
-                            restored_from_autosave = True
-                            with contextlib.suppress(OSError):
-                                os.remove(autosave_candidate)
-                        except Exception as exc:
-                            QMessageBox.warning(
-                                self,
-                                "Autosave Recovery Failed",
-                                (
-                                    "Could not restore autosave:\n"
-                                    f"{exc}\n\nOpening original file instead."
-                                ),
-                            )
+                    autosave_candidate = None
+                else:
+                    try:
+                        autosave_mtime = os.path.getmtime(autosave_candidate)
+                        project_mtime = os.path.getmtime(path)
+                    except OSError:
+                        autosave_mtime = project_mtime = 0
+
+                    if autosave_mtime > project_mtime:
+                        choice = QMessageBox.question(
+                            self,
+                            "Recover Autosave?",
+                            (
+                                "An autosave snapshot newer than this project was found.\n"
+                                "Would you like to recover it?"
+                            ),
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes,
+                        )
+                        if choice == QMessageBox.Yes:
+                            try:
+                                project = restore_autosave(path)
+                                restored_from_autosave = True
+                                with contextlib.suppress(OSError):
+                                    os.remove(autosave_candidate)
+                            except Exception as exc:
+                                QMessageBox.warning(
+                                    self,
+                                    "Autosave Recovery Failed",
+                                    (
+                                        "Could not restore autosave:\n"
+                                        f"{exc}\n\nOpening original file instead."
+                                    ),
+                                )
 
             if project is None:
                 try:
@@ -2136,6 +2153,9 @@ class VasoAnalyzerApp(QMainWindow):
         if getattr(self, "_sample_summary_logged", False):
             return
 
+        sample_name = getattr(sample, "name", getattr(sample, "label", "N/A"))
+        dataset_id = getattr(sample, "dataset_id", None)
+
         trace_source = (
             trace_df if isinstance(trace_df, pd.DataFrame) else getattr(sample, "trace_data", None)
         )
@@ -2148,6 +2168,17 @@ class VasoAnalyzerApp(QMainWindow):
 
         if isinstance(events_source, pd.DataFrame):
             event_rows = len(events_source.index)
+            first_event = (
+                events_source.iloc[0]["Event"]
+                if not events_source.empty and "Event" in events_source.columns
+                else None
+            )
+            log.info(
+                "DEBUG load: sample '%s' events_data rows=%s first_label=%r",
+                sample_name,
+                event_rows,
+                first_event,
+            )
         elif events_source is None:
             event_rows = 0
         else:
@@ -2155,9 +2186,13 @@ class VasoAnalyzerApp(QMainWindow):
                 event_rows = len(events_source)
             except TypeError:
                 event_rows = 0
+            log.info(
+                "DEBUG load: sample '%s' events_source type=%s rows=%s",
+                sample_name,
+                type(events_source),
+                event_rows,
+            )
 
-        sample_name = getattr(sample, "name", getattr(sample, "label", "N/A"))
-        dataset_id = getattr(sample, "dataset_id", None)
         self._sample_summary_logged = True
 
         log.info(
@@ -4399,6 +4434,7 @@ class VasoAnalyzerApp(QMainWindow):
         """Recompute cached event arrays, metadata, and annotation entries."""
 
         rows = list(getattr(self, "event_table_data", []) or [])
+        self._apply_event_rows_to_current_sample(rows)
         if not rows:
             self.event_labels = []
             self.event_times = []
@@ -4415,6 +4451,25 @@ class VasoAnalyzerApp(QMainWindow):
             self.event_text_objects = []
             self._apply_current_style()
         return
+
+    def _apply_event_rows_to_current_sample(self, rows: list[tuple]) -> None:
+        """Update the current sample's UI state and DataFrame to mirror ``rows``."""
+
+        sample = getattr(self, "current_sample", None)
+        if sample is None:
+            return
+        normalized = normalize_event_table_rows(rows)
+        if normalized:
+            df = events_dataframe_from_rows(normalized)
+            sample.events_data = df
+        else:
+            sample.events_data = None
+        state = getattr(sample, "ui_state", None)
+        if not isinstance(state, dict):
+            state = {}
+            sample.ui_state = state
+        state["event_table_data"] = list(normalized or [])
+        self.project_state[id(sample)] = state
 
     def apply_event_label_overrides(
         self,
@@ -5075,13 +5130,59 @@ class VasoAnalyzerApp(QMainWindow):
             "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.",
         )
 
-    def delete_selected_events(self, checked: bool = False):
+    def delete_selected_events(self, checked: bool = False, *, indices: list[int] | None = None):
         """Delete selected events."""
-        QMessageBox.information(
+        if indices is None:
+            selection = self.event_table.selectionModel()
+            if selection is None:
+                return
+            indices = sorted({index.row() for index in selection.selectedRows()})
+        if not indices:
+            return
+
+        events_desc = [
+            self.event_table_data[idx][0]
+            for idx in indices
+            if 0 <= idx < len(self.event_table_data)
+        ]
+        if len(indices) == 1 and events_desc:
+            prompt = f"Delete event: {events_desc[0]}?"
+        else:
+            prompt = f"Delete {len(indices)} selected events?"
+
+        confirm = QMessageBox.question(
             self,
-            "Delete Events",
-            "Deleting selected events.\n\nThis feature will remove the selected events from the current sample.",
+            "Delete Event" if len(indices) == 1 else "Delete Events",
+            prompt,
+            QMessageBox.Yes | QMessageBox.No,
         )
+        if confirm != QMessageBox.Yes:
+            return
+
+        self._delete_events_by_indices(indices)
+
+    def _delete_events_by_indices(self, indices: list[int]) -> None:
+        if not indices:
+            return
+        indices = sorted(
+            set(idx for idx in indices if 0 <= idx < len(self.event_table_data)), reverse=True
+        )
+        if not indices:
+            return
+
+        for idx in indices:
+            del self.event_labels[idx]
+            if idx < len(self.event_times):
+                del self.event_times[idx]
+            if idx < len(self.event_frames):
+                del self.event_frames[idx]
+            self._delete_event_meta(idx)
+            self.event_table_data.pop(idx)
+            self.event_table_controller.remove_row(idx)
+
+        self.update_plot()
+        self._update_excel_controls()
+        self.mark_session_dirty()
 
     def select_all_events(self, checked: bool = False):
         """Select all events in the event table."""
@@ -6941,6 +7042,14 @@ QPushButton[isGhost="true"]:hover {{
                     (lbl, float(t), float(diam_i), od_val, None, None, int(fr))
                 )
 
+        if self.event_table_data:
+            log.info(
+                "DEBUG load: event_table_data rows=%s first_label=%r",
+                len(self.event_table_data),
+                self.event_table_data[0][0],
+            )
+        else:
+            log.info("DEBUG load: event_table_data rows=0")
         self.populate_table()
         self.xlim_full = None
         self.ylim_full = None
@@ -8307,6 +8416,32 @@ QPushButton[isGhost="true"]:hover {{
         log.info("ID updated at %.2fs → %.2f µm", time, rounded_val)
         self.mark_session_dirty()
         self._sync_event_data_from_table()
+
+    def handle_event_label_edit(self, row: int, new_label: str, old_label: str) -> None:
+        if not (0 <= row < len(self.event_table_data)):
+            return
+
+        label_text = "" if new_label is None else str(new_label)
+        row_data = list(self.event_table_data[row])
+        if not row_data or row_data[0] == label_text:
+            return
+
+        row_data[0] = label_text
+        self.event_table_data[row] = tuple(row_data)
+
+        if not hasattr(self, "event_labels") or self.event_labels is None:
+            self.event_labels = []
+        if len(self.event_labels) < len(self.event_table_data):
+            self.event_labels.extend(
+                "" for _ in range(len(self.event_table_data) - len(self.event_labels))
+            )
+        if row < len(self.event_labels):
+            self.event_labels[row] = label_text
+        else:
+            self.event_labels.append(label_text)
+
+        self._ensure_event_meta_length(len(self.event_table_data))
+        self.apply_event_label_overrides(self.event_labels, self.event_label_meta)
 
     def table_row_clicked(self, row, col):
         self._focus_event_row(row, source="table")
@@ -9835,33 +9970,30 @@ QPushButton[isGhost="true"]:hover {{
 
     def show_event_table_context_menu(self, position):
         index = self.event_table.indexAt(position)
+        if index.isValid():
+            selection = self.event_table.selectionModel()
+            if selection is not None and not selection.isSelected(index):
+                self.event_table.selectRow(index.row())
         row = index.row() if index.isValid() else len(self.event_table_data)
         menu = QMenu()
 
-        # Group 1: Edit & Delete
         if index.isValid():
             edit_action = menu.addAction("✏️ Edit ID (µm)…")
             delete_action = menu.addAction("🗑️ Delete Event")
-        menu.addSeparator()
-
-        # Group 2: Plot Navigation
-        if index.isValid():
+            menu.addSeparator()
             jump_action = menu.addAction("🔍 Jump to Event on Plot")
             pin_action = menu.addAction("📌 Pin to Plot")
-        menu.addSeparator()
-
-        # Group 3: Pin Utilities
-        if index.isValid():
+            menu.addSeparator()
             replace_with_pin_action = menu.addAction("🔄 Replace ID with Pinned Value")
+        else:
+            edit_action = delete_action = jump_action = pin_action = replace_with_pin_action = None
+
         clear_pins_action = menu.addAction("❌ Clear All Pins")
         menu.addSeparator()
-
         add_event_action = menu.addAction("➕ Add Event…")
 
-        # Show menu
         action = menu.exec_(self.event_table.viewport().mapToGlobal(position))
 
-        # Group 1 actions
         if index.isValid() and action == edit_action:
             if row >= len(self.event_table_data):
                 return
@@ -9888,35 +10020,16 @@ QPushButton[isGhost="true"]:hover {{
                 self.auto_export_table()
 
         elif index.isValid() and action == delete_action:
-            confirm = QMessageBox.question(
-                self,
-                "Delete Event",
-                f"Delete event: {self.event_table_data[row][0]}?",
-                QMessageBox.Yes | QMessageBox.No,
-            )
-            if confirm == QMessageBox.Yes:
-                del self.event_labels[row]
-                del self.event_times[row]
-                if len(self.event_frames) > row:
-                    del self.event_frames[row]
-                self._delete_event_meta(row)
-                self.event_table_data.pop(row)
-                self.event_table_controller.remove_row(row)
-                self.update_plot()
-                self._update_excel_controls()
+            self.delete_selected_events(indices=[row])
 
-        # Group 2 actions
         elif index.isValid() and action == jump_action:
             self._focus_event_row(row, source="context")
 
         elif index.isValid() and action == pin_action:
-            # PyQtGraph doesn't support matplotlib-style pinned points yet
             plot_host = getattr(self, "plot_host", None)
             is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
             if is_pyqtgraph:
-                # TODO: Implement PyQtGraph-compatible pinned points
                 return
-
             t = self.event_table_data[row][1]
             id_val = self.event_table_data[row][2]
             marker = self.ax.plot(t, id_val, "ro", markersize=6)[0]
@@ -9936,7 +10049,6 @@ QPushButton[isGhost="true"]:hover {{
             self.pinned_points.append((marker, label))
             self.canvas.draw_idle()
 
-        # Group 3 actions
         elif index.isValid() and action == replace_with_pin_action:
             t_event = self.event_table_data[row][1]
             if not self.pinned_points:
@@ -10246,10 +10358,24 @@ QPushButton[isGhost="true"]:hover {{
         self._snapshot_style_dirty = True
         self._cached_snapshot_style = None
 
+    def _sync_sample_events_dataframe(self, sample_state: dict) -> None:
+        """Ensure the current sample's events_data mirrors the table rows in sample_state."""
+        sample = getattr(self, "current_sample", None)
+        if sample is None:
+            return
+        rows = list(sample_state.get("event_table_data") or [])
+        normalized_rows = normalize_event_table_rows(rows)
+        if normalized_rows:
+            df = events_dataframe_from_rows(normalized_rows)
+            sample.events_data = df
+        else:
+            sample.events_data = None
+
     def gather_sample_state(self):
         """Gather current sample state (cached for performance)."""
         # Return cached version if still valid
         if not self._sample_state_dirty and self._cached_sample_state is not None:
+            self._sync_sample_events_dataframe(self._cached_sample_state)
             return self._cached_sample_state
 
         # preserve any previously saved style_settings
@@ -10286,6 +10412,7 @@ QPushButton[isGhost="true"]:hover {{
             state["plot_layout"] = layout_state
         state.update(self._collect_plot_view_state())
 
+        self._sync_sample_events_dataframe(state)
         # Cache the result
         self._cached_sample_state = state
         self._sample_state_dirty = False
@@ -10515,8 +10642,8 @@ QPushButton[isGhost="true"]:hover {{
                         state = self.gather_sample_state()
                         self.current_sample.ui_state = state
                         self.project_state[id(self.current_sample)] = state
-                    # Skip expensive OPTIMIZE operation on close for faster exit
-                    save_project_file(self.current_project, skip_optimize=True)
+                    # Data integrity takes precedence; use full save path to ensure event edits persist.
+                    save_project_file(self.current_project)
                     log.info("Close-event save completed path=%s", project_path)
                     self._reset_session_dirty(reason="close-event save")
             except Exception as e:

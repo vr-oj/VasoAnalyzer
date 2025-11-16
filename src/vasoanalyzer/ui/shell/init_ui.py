@@ -246,6 +246,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.event_table.cellClicked.connect(window.table_row_clicked)
     window.event_table_controller = EventTableController(window.event_table, window)
     window.event_table_controller.cell_edited.connect(window.handle_table_edit)
+    window.event_table_controller.label_edited.connect(window.handle_event_label_edit)
     window.event_table_controller.rows_changed.connect(window._on_event_rows_changed)
 
     window.header_frame = window._build_data_header()

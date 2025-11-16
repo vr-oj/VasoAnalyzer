@@ -12,7 +12,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QHelpEvent, QPainter, QResizeEvent
+from PyQt5.QtGui import QHelpEvent, QKeySequence, QPainter, QResizeEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -77,9 +77,10 @@ class EventNameDelegate(QStyledItemDelegate):
 
 
 class EventTableModel(QAbstractTableModel):
-    """Model backing the event table view with editable ID values."""
+    """Model backing the event table view with editable event labels."""
 
     value_edited = pyqtSignal(int, float, float)
+    label_edited = pyqtSignal(int, str, str)
     structure_changed = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
@@ -133,31 +134,30 @@ class EventTableModel(QAbstractTableModel):
         if not index.isValid():
             return Qt.ItemIsEnabled
         base = Qt.ItemIsSelectable | Qt.ItemIsEnabled
-        if index.column() == 2:  # ID (µm)
+        if index.column() == EVENT_COLUMN_INDEX:
             base |= Qt.ItemIsEditable
         return base
 
     def setData(self, index: QModelIndex, value: object, role: int = Qt.EditRole) -> bool:
         if role not in (Qt.EditRole, Qt.DisplayRole) or not index.isValid():
             return False
-        if index.column() != 2:
+        if index.column() != EVENT_COLUMN_INDEX:
             return False
 
         row_idx = index.row()
-        if row_idx >= len(self._rows):
-            return False
-
-        try:
-            new_val = round(float(str(value)), 2)
-        except (TypeError, ValueError):
+        if not 0 <= row_idx < len(self._rows):
             return False
 
         current = list(self._rows[row_idx])
-        old_val = float(current[2]) if current[2] is not None else 0.0
-        current[2] = new_val
+        old_label = str(current[0]) if current and current[0] is not None else ""
+        new_label = "" if value is None else str(value)
+        if new_label == old_label:
+            return False
+
+        current[0] = new_label
         self._rows[row_idx] = tuple(current)
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
-        self.value_edited.emit(row_idx, new_val, old_val)
+        self.label_edited.emit(row_idx, new_label, old_label)
         return True
 
     # Public helpers ---------------------------------------------------
@@ -294,12 +294,14 @@ class EventTableWidget(QTableView):
     """QTableView wrapper with styling helpers for event data."""
 
     cellClicked = pyqtSignal(int, int)
+    rowsDeletionRequested = pyqtSignal(list)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("EventTable")
         self.setEditTriggers(QAbstractItemView.DoubleClicked)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectItems)
         self.setAlternatingRowColors(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setFrameShape(QFrame.NoFrame)
@@ -359,6 +361,40 @@ class EventTableWidget(QTableView):
     def _emit_cell_clicked(self, index: QModelIndex) -> None:
         if index.isValid():
             self.cellClicked.emit(index.row(), index.column())
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.Copy):
+            self._copy_selection_to_clipboard()
+            event.accept()
+            return
+
+        if event.key() == Qt.Key_F2:
+            self._start_editing_event_column()
+            event.accept()
+            return
+
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if self.state() == QAbstractItemView.EditingState:
+                super().keyPressEvent(event)
+                if self.state() != QAbstractItemView.EditingState:
+                    self._move_to_next_event_cell()
+            else:
+                self._start_editing_event_column()
+            event.accept()
+            return
+
+        if (
+            event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
+            and self.state() != QAbstractItemView.EditingState
+        ):
+            selection = self.selectionModel()
+            if selection is not None:
+                rows = {index.row() for index in selection.selectedRows()}
+                if rows:
+                    self.rowsDeletionRequested.emit(sorted(rows))
+                    event.accept()
+                    return
+        super().keyPressEvent(event)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -424,3 +460,56 @@ class EventTableWidget(QTableView):
                 header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
             else:
                 header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+
+    def _copy_selection_to_clipboard(self) -> None:
+        indexes = self.selectedIndexes()
+        if not indexes:
+            return
+
+        indexes = sorted(indexes, key=lambda idx: (idx.row(), idx.column()))
+        rows = [idx.row() for idx in indexes]
+        cols = [idx.column() for idx in indexes]
+        min_row, max_row = min(rows), max(rows)
+        min_col, max_col = min(cols), max(cols)
+        selected_map = {(idx.row(), idx.column()): idx for idx in indexes}
+
+        lines: list[str] = []
+        for row in range(min_row, max_row + 1):
+            values: list[str] = []
+            for col in range(min_col, max_col + 1):
+                idx = selected_map.get((row, col))
+                data = idx.data(Qt.DisplayRole) if idx is not None else ""
+                if data is None:
+                    data = ""
+                values.append(str(data))
+            lines.append("\t".join(values))
+
+        QApplication.clipboard().setText("\n".join(lines))
+
+    def _start_editing_event_column(self) -> None:
+        model = self.model()
+        selection = self.selectionModel()
+        if model is None or selection is None:
+            return
+        if model.rowCount() == 0:
+            return
+        current = selection.currentIndex()
+        if not current.isValid():
+            current = model.index(0, EVENT_COLUMN_INDEX)
+        elif current.column() != EVENT_COLUMN_INDEX:
+            current = model.index(current.row(), EVENT_COLUMN_INDEX)
+        self.setCurrentIndex(current)
+        self.edit(current)
+
+    def _move_to_next_event_cell(self) -> None:
+        model = self.model()
+        selection = self.selectionModel()
+        if model is None or selection is None:
+            return
+        current = selection.currentIndex()
+        if not current.isValid():
+            return
+        next_row = min(current.row() + 1, model.rowCount() - 1)
+        next_index = model.index(next_row, EVENT_COLUMN_INDEX)
+        if next_index.isValid():
+            self.setCurrentIndex(next_index)

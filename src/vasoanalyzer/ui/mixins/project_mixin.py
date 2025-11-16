@@ -50,7 +50,9 @@ from vasoanalyzer.services.project_service import (
     export_project_bundle,
     export_project_single_file,
     import_project_bundle,
+    is_valid_autosave_snapshot,
     pending_autosave_path,
+    quarantine_autosave_snapshot,
     restore_autosave,
     save_project_file,
 )
@@ -245,42 +247,57 @@ class ProjectMixin:
             else:
                 autosave_candidate = pending_autosave_path(path)
                 if autosave_candidate:
-                    try:
-                        autosave_mtime = os.path.getmtime(autosave_candidate)
-                        project_mtime = os.path.getmtime(path)
-                    except OSError:
-                        autosave_mtime = project_mtime = 0
-
-                    if autosave_mtime > project_mtime:
-                        self.hide_progress()  # Hide during user dialog
-                        choice = QMessageBox.question(
+                    if not is_valid_autosave_snapshot(autosave_candidate):
+                        quarantine_autosave_snapshot(autosave_candidate)
+                        log.warning("Discarded corrupt autosave snapshot: %s", autosave_candidate)
+                        self.hide_progress()
+                        QMessageBox.warning(
                             self,
-                            "Recover Autosave?",
+                            "Autosave Discarded",
                             (
-                                "An autosave snapshot newer than this project was found.\n"
-                                "Would you like to recover it?"
+                                "The autosave snapshot for this project was corrupted and "
+                                "has been discarded.\n\nThe original project will be opened instead."
                             ),
-                            QMessageBox.Yes | QMessageBox.No,
-                            QMessageBox.Yes,
                         )
                         self.show_progress("Loading project", maximum=0)
-                        if choice == QMessageBox.Yes:
-                            try:
-                                project = restore_autosave(path)
-                                restored_from_autosave = True
-                                with contextlib.suppress(OSError):
-                                    os.remove(autosave_candidate)
-                            except Exception as exc:
-                                self.hide_progress()
-                                QMessageBox.warning(
-                                    self,
-                                    "Autosave Recovery Failed",
-                                    (
-                                        "Could not restore autosave:\n"
-                                        f"{exc}\n\nOpening original file instead."
-                                    ),
-                                )
-                                self.show_progress("Loading project", maximum=0)
+                        autosave_candidate = None
+                    else:
+                        try:
+                            autosave_mtime = os.path.getmtime(autosave_candidate)
+                            project_mtime = os.path.getmtime(path)
+                        except OSError:
+                            autosave_mtime = project_mtime = 0
+
+                        if autosave_mtime > project_mtime:
+                            self.hide_progress()  # Hide during user dialog
+                            choice = QMessageBox.question(
+                                self,
+                                "Recover Autosave?",
+                                (
+                                    "An autosave snapshot newer than this project was found.\n"
+                                    "Would you like to recover it?"
+                                ),
+                                QMessageBox.Yes | QMessageBox.No,
+                                QMessageBox.Yes,
+                            )
+                            self.show_progress("Loading project", maximum=0)
+                            if choice == QMessageBox.Yes:
+                                try:
+                                    project = restore_autosave(path)
+                                    restored_from_autosave = True
+                                    with contextlib.suppress(OSError):
+                                        os.remove(autosave_candidate)
+                                except Exception as exc:
+                                    self.hide_progress()
+                                    QMessageBox.warning(
+                                        self,
+                                        "Autosave Recovery Failed",
+                                        (
+                                            "Could not restore autosave:\n"
+                                            f"{exc}\n\nOpening original file instead."
+                                        ),
+                                    )
+                                    self.show_progress("Loading project", maximum=0)
 
                 if project is None:
                     try:

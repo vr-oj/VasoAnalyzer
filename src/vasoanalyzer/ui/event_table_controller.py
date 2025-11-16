@@ -15,6 +15,7 @@ class EventTableController(QObject):
 
     rows_changed = pyqtSignal()
     cell_edited = pyqtSignal(int, float, float)
+    label_edited = pyqtSignal(int, str, str)
 
     def __init__(self, table: EventTableWidget, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -24,6 +25,8 @@ class EventTableController(QObject):
         self._table.apply_theme()
 
         self._model.value_edited.connect(self.cell_edited.emit)
+        self._model.label_edited.connect(self.label_edited.emit)
+        self._table.rowsDeletionRequested.connect(self._handle_row_deletion_request)
         self._model.structure_changed.connect(self._table.apply_theme)
         self._model.dataChanged.connect(lambda *_: self._table.refresh_column_widths())
         self._model.rowsInserted.connect(lambda *_: self._table.refresh_column_widths())
@@ -84,3 +87,11 @@ class EventTableController(QObject):
     def update_row(self, index: int, row: EventRow) -> None:
         self._model.update_row(index, row)
         self.rows_changed.emit()
+
+    def _handle_row_deletion_request(self, rows: list[int]) -> None:
+        if not rows:
+            return
+        parent = self.parent()
+        handler = getattr(parent, "delete_selected_events", None)
+        if callable(handler):
+            handler(indices=rows)
