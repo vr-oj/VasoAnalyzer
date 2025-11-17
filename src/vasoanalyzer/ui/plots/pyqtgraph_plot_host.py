@@ -360,6 +360,10 @@ class PyQtGraphPlotHost:
         """Return whether the shared grid is currently visible."""
         return self._x_grid_visible
 
+    def grid_state(self) -> tuple[bool, bool, float]:
+        """Return current grid visibility flags and alpha."""
+        return self._x_grid_visible, self._y_grid_visible, self._grid_alpha
+
     def set_default_line_width(self, width: float) -> None:
         value = float(width)
         if value == self._default_line_width:
@@ -935,6 +939,41 @@ class PyQtGraphPlotHost:
             return
         x0, x1 = self._current_window
         self.set_time_window(x0 + delta, x1 + delta)
+
+    def center_on_time(self, time_value: float) -> None:
+        """Recenter the current window around ``time_value`` without changing span."""
+        # Determine current span
+        window = self.current_window()
+        if window is None:
+            window = self.full_range()
+        full_range = self.full_range()
+        if window is None or full_range is None:
+            return
+
+        x0, x1 = window
+        span = x1 - x0
+        fr_min, fr_max = full_range
+        fr_span = fr_max - fr_min
+        if fr_span <= 0:
+            return
+        if span <= 0:
+            span = fr_span
+
+        half = span / 2.0
+        new_start = time_value - half
+        new_end = time_value + half
+
+        if span >= fr_span:
+            new_start, new_end = fr_min, fr_max
+        else:
+            if new_start < fr_min:
+                new_start = fr_min
+                new_end = fr_min + span
+            elif new_end > fr_max:
+                new_end = fr_max
+                new_start = fr_max - span
+
+        self.set_time_window(new_start, new_end)
 
     # Event label configuration getters (return defaults for PyQtGraph)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,6 +19,9 @@ from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
 __all__ = ["PyQtGraphChannelTrack"]
 
 
+_log = logging.getLogger(__name__)
+
+
 class PyQtGraphChannelTrack:
     """PyQtGraph-based channel track with GPU-accelerated rendering.
 
@@ -31,7 +35,11 @@ class PyQtGraphChannelTrack:
         enable_opengl: bool = True,
     ) -> None:
         self.spec: ChannelTrackSpec = spec
-        mode = spec.component if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"} else "inner"
+        mode = (
+            spec.component
+            if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}
+            else "inner"
+        )
         self.view: PyQtGraphTraceView = PyQtGraphTraceView(
             mode=mode,
             y_label=spec.label,
@@ -47,6 +55,7 @@ class PyQtGraphChannelTrack:
         self._auto_margin: float = 0.05
         self._sticky_ylim: tuple[float, float] | None = None
         self._last_time_span: float | None = None
+        self._current_window: tuple[float, float] | None = None
 
         # Create matplotlib-compatible axes wrapper
         self._ax_compat: PyQtGraphAxesCompat | None = None
@@ -155,7 +164,18 @@ class PyQtGraphChannelTrack:
         )
         self._last_time_span = span
 
+        track_id = getattr(self, "id", None) or getattr(self, "name", None) or repr(self)
+        _log.debug(
+            "update_window track=%s x0=%.6f x1=%.6f span=%.6f span_changed=%s",
+            track_id,
+            x0,
+            x1,
+            span,
+            span_changed,
+        )
+
         self.view.update_window(x0, x1, pixel_width=pixel_width)
+        self._current_window = (x0, x1)
         self._apply_auto_y(span_changed)
 
     def set_events(
@@ -261,36 +281,145 @@ class PyQtGraphChannelTrack:
     # ------------------------------------------------------------------ helpers
     def _compute_padded_limits(self, *, margin: float | None = None) -> tuple[float, float] | None:
         """Compute Y limits with padding."""
-        limits = self.data_limits()
-        if limits is None:
+        track_id = getattr(self, "id", None) or getattr(self, "name", None) or repr(self)
+
+        limits = self._window_data_limits()
+        if limits is not None:
+            ymin, ymax = limits
+            _log.debug(
+                "compute_padded_limits track=%s using window_limits ymin=%.6f ymax=%.6f",
+                track_id,
+                ymin,
+                ymax,
+            )
+        else:
+            _log.debug(
+                "compute_padded_limits track=%s: window limits unavailable, falling back to data_limits",
+                track_id,
+            )
+            limits = self.data_limits()
+            if limits is None:
+                _log.warning(
+                    "compute_padded_limits track=%s: no limits from data_limits()",
+                    track_id,
+                )
+                return None
+            ymin, ymax = limits
+            _log.debug(
+                "compute_padded_limits track=%s using data_limits ymin=%.6f ymax=%.6f",
+                track_id,
+                ymin,
+                ymax,
+            )
+
+        if not math.isfinite(ymin) or not math.isfinite(ymax):
+            _log.warning(
+                "compute_padded_limits track=%s: non-finite limits ymin=%r ymax=%r",
+                track_id,
+                ymin,
+                ymax,
+            )
             return None
 
-        ymin, ymax = limits
         span = ymax - ymin
-
         if span <= 0:
             span = max(abs(ymin), abs(ymax), 1.0)
 
         fraction = self._auto_margin if margin is None else float(margin)
         pad = span * max(fraction, 0.0)
-        return ymin - pad, ymax + pad
+        padded_min = ymin - pad
+        padded_max = ymax + pad
+        _log.debug(
+            "padded_limits track=%s ymin=%.6f ymax=%.6f",
+            track_id,
+            padded_min,
+            padded_max,
+        )
+        return padded_min, padded_max
+
+    def _window_data_limits(self) -> tuple[float, float] | None:
+        """Return limits for the currently visible window, if available."""
+        track_id = getattr(self, "id", None) or getattr(self, "name", None) or repr(self)
+        try:
+            limits = self.view.data_limits()
+        except Exception as exc:
+            _log.debug("window_limits track=%s unavailable: exception=%r", track_id, exc)
+            return None
+        if limits is None:
+            _log.debug("window_limits track=%s unavailable: data_limits() returned None", track_id)
+            return None
+
+        ymin, ymax = limits
+        if ymin is None or ymax is None:
+            _log.debug(
+                "window_limits track=%s unavailable: ymin/ymax is None (%r, %r)",
+                track_id,
+                ymin,
+                ymax,
+            )
+            return None
+        if not math.isfinite(ymin) or not math.isfinite(ymax):
+            _log.debug(
+                "window_limits track=%s unavailable: non-finite limits ymin=%r ymax=%r",
+                track_id,
+                ymin,
+                ymax,
+            )
+            return None
+        if math.isclose(ymin, ymax, rel_tol=1e-12, abs_tol=1e-12):
+            _log.debug(
+                "window_limits track=%s unavailable: degenerate span ymin=%.6f ymax=%.6f",
+                track_id,
+                ymin,
+                ymax,
+            )
+            return None
+
+        _log.debug("window_limits track=%s ymin=%.6f ymax=%.6f", track_id, ymin, ymax)
+        return float(ymin), float(ymax)
 
     def _apply_auto_y(self, span_changed: bool) -> None:
         """Apply automatic Y-axis scaling."""
+        track_id = getattr(self, "id", None) or getattr(self, "name", None) or repr(self)
+        autoscale_enabled = bool(self.view.is_autoscale_enabled())
+        _log.debug(
+            "apply_auto_y track=%s autoscale_enabled=%s span_changed=%s",
+            track_id,
+            autoscale_enabled,
+            span_changed,
+        )
+
         if self._model is None or self.spec.component == "dual":
+            _log.debug("apply_auto_y track=%s skipped: model missing or dual component", track_id)
             return
 
         if self._sticky_ylim is not None and not span_changed:
             ymin, ymax = self._sticky_ylim
             self.view.set_ylim(ymin, ymax)
+            _log.debug(
+                "apply_auto_y track=%s using sticky ylim ymin=%.6f ymax=%.6f",
+                track_id,
+                ymin,
+                ymax,
+            )
             return
 
         limits = self._compute_padded_limits()
         if limits is None:
+            _log.debug(
+                "apply_auto_y track=%s: _compute_padded_limits returned None",
+                track_id,
+            )
             return
 
         ymin, ymax = limits
         if not math.isfinite(ymin) or not math.isfinite(ymax):
+            _log.warning(
+                "apply_auto_y track=%s: non-finite limits ymin=%r ymax=%r",
+                track_id,
+                ymin,
+                ymax,
+            )
             return
 
         if math.isclose(ymin, ymax, rel_tol=1e-6, abs_tol=1e-6):
@@ -298,4 +427,10 @@ class PyQtGraphChannelTrack:
             ymin -= margin
             ymax += margin
 
+        _log.debug(
+            "apply_auto_y track=%s setting ylim ymin=%.6f ymax=%.6f",
+            track_id,
+            ymin,
+            ymax,
+        )
         self.view.set_ylim(ymin, ymax)

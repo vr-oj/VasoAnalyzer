@@ -6319,6 +6319,8 @@ QPushButton[isGhost="true"]:hover {{
 
     def _on_autoscale_triggered(self) -> None:
         """Handle autoscale button click - reset to full time range and autoscale Y axes."""
+        if hasattr(self, "_logger"):
+            self._logger.debug("Toolbar autoscale: reset to full range and autoscale all tracks")
         if not hasattr(self, "plot_host"):
             return
 
@@ -6332,6 +6334,8 @@ QPushButton[isGhost="true"]:hover {{
 
     def _on_autoscale_y_triggered(self, checked: bool) -> None:
         """Handle Y-axis autoscale toggle."""
+        if hasattr(self, "_logger"):
+            self._logger.debug("Toolbar Y-autoscale toggle: %s", checked)
         if not hasattr(self, "plot_host"):
             return
 
@@ -8209,6 +8213,10 @@ QPushButton[isGhost="true"]:hover {{
         if getattr(self, "_syncing_time_window", False):
             return
         self.update_scroll_slider()
+        try:
+            self.sync_slider_with_plot()
+        except Exception:
+            log.exception("Failed to synchronize scroll slider with plot window")
         self._invalidate_sample_state_cache()
         plot_host = getattr(self, "plot_host", None)
         is_user_range = bool(
@@ -8464,6 +8472,11 @@ QPushButton[isGhost="true"]:hover {{
 
         if event_time is not None:
             self._highlight_selected_event(event_time)
+            if self._plot_host_is_pyqtgraph():
+                plot_host = getattr(self, "plot_host", None)
+                if plot_host is not None and hasattr(plot_host, "center_on_time"):
+                    with contextlib.suppress(Exception):
+                        plot_host.center_on_time(event_time)
         else:
             self._clear_event_highlight()
 

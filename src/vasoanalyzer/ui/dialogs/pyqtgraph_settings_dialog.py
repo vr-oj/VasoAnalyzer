@@ -247,6 +247,14 @@ class PyQtGraphSettingsDialog(QDialog):
 
         self.track_widgets[spec.track_id] = (track, widgets)
 
+        auto_scale_cb.toggled.connect(
+            lambda checked, track_id=spec.track_id: self._on_track_autoscale_toggled(
+                track_id, checked
+            )
+        )
+
+        self._on_track_autoscale_toggled(spec.track_id, auto_scale_cb.isChecked())
+
         return group
 
     # ========================================================================
@@ -760,6 +768,14 @@ class PyQtGraphSettingsDialog(QDialog):
         style = label.styleSheet()
         return style.split("background-color: ")[1].split(";")[0]
 
+    def _on_track_autoscale_toggled(self, track_id: str, checked: bool) -> None:
+        entry = self.track_widgets.get(track_id)
+        if not entry:
+            return
+        widgets = entry[1]
+        widgets["y_min"].setEnabled(not checked)
+        widgets["y_max"].setEnabled(not checked)
+
     def _set_label_color(self, label: QLabel, color: str) -> None:
         """Apply a hex color to a preview swatch label."""
         if not color:
@@ -853,12 +869,15 @@ class PyQtGraphSettingsDialog(QDialog):
                     enabled_flag = getattr(self.plot_host, "_event_labels_enabled", True)
                     self._set_event_label_controls(options, enabled_flag)
 
-            # Load grid visibility
+            # Load grid visibility directly from the plot host state
+            with contextlib.suppress(Exception):
+                x_visible, y_visible, grid_alpha = self.plot_host.grid_state()
+                self.grid_visible_cb.setChecked(bool(x_visible and y_visible))
+                self.grid_alpha.setValue(float(grid_alpha))
+
+            # Hover tooltip settings still come from the first track
             if self.plot_host._tracks:
                 first_track = next(iter(self.plot_host._tracks.values()))
-                plot_item = first_track.view.get_widget().getPlotItem()
-                grid_visible = plot_item.ctrl.xGridCheck.isChecked()
-                self.grid_visible_cb.setChecked(grid_visible)
                 try:
                     self.tooltip_enabled_cb.setChecked(first_track.view.hover_tooltip_enabled())
                     self.tooltip_precision.setValue(first_track.view.hover_tooltip_precision())
@@ -889,6 +908,8 @@ class PyQtGraphSettingsDialog(QDialog):
                     track.set_ylim(y_min, y_max)
                 else:
                     track.view.set_autoscale_y(True)
+                    with contextlib.suppress(Exception):
+                        track.autoscale()
 
                 # Visibility
                 track.set_visible(widgets["visible"].isChecked())
@@ -1068,6 +1089,16 @@ class PyQtGraphSettingsDialog(QDialog):
             grid_visible = self.grid_visible_cb.isChecked()
             grid_alpha = float(self.grid_alpha.value())
             self.plot_host.set_grid_visible(grid_visible, alpha=grid_alpha)
+
+            # Keep toolbar and persisted flag in sync with the host state
+            owner = getattr(self, "parent_window", None) or self.parent()
+            while owner is not None and not hasattr(owner, "grid_visible"):
+                owner = owner.parent()
+            if owner is not None:
+                with contextlib.suppress(Exception):
+                    owner.grid_visible = grid_visible
+                    if hasattr(owner, "_sync_grid_action"):
+                        owner._sync_grid_action()
 
             # Background colors
             bg_color = self._get_label_color(self.bg_color_label)
