@@ -97,6 +97,13 @@ def setup_production_logging(
     for name in noisy_modules:
         logging.getLogger(name).setLevel(logging.WARNING)
 
+    # Ensure plotting modules emit DEBUG logs (e.g., [RANGE DEBUG] helpers)
+    plot_logger = logging.getLogger("vasoanalyzer.ui.plots")
+    plot_logger.setLevel(logging.DEBUG)
+
+    trace_view_logger = logging.getLogger("vasoanalyzer.ui.trace_view")
+    trace_view_logger.setLevel(logging.DEBUG)
+
     # Log startup message
     log = logging.getLogger(__name__)
     log.info("=" * 70)

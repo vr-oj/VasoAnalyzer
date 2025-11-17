@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -19,6 +20,8 @@ from vasoanalyzer.ui.plots.pan_only_viewbox import PanOnlyViewBox
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 
 class PyQtGraphTraceView(AbstractTraceRenderer):
@@ -520,6 +523,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Set Y-axis limits."""
         self._plot_item.setYRange(y0, y1, padding=0)
         self._autoscale_y = False  # Disable autoscale when manually set
+        trace_id = self._explicit_ylabel or self._mode or hex(id(self))
+        log.debug(
+            "[PLOT DEBUG] set_ylim trace=%s new_ylim=(%s, %s)",
+            trace_id,
+            y0,
+            y1,
+        )
 
     def get_xlim(self) -> tuple[float, float]:
         """Get current X-axis limits."""
@@ -545,6 +555,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._autoscale_y = enabled
         if enabled:
             self.autoscale_y()
+        trace_id = self._explicit_ylabel or self._mode or hex(id(self))
+        log.debug("[PLOT DEBUG] set_autoscale_y trace=%s enabled=%s", trace_id, enabled)
 
     def is_autoscale_enabled(self) -> bool:
         """Return whether Y-axis autoscaling is active."""

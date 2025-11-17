@@ -2530,6 +2530,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_project_events(labels, times, frames, diam, od)
         state_to_apply = self.project_state.get(id(sample), getattr(sample, "ui_state", None))
         self.apply_sample_state(state_to_apply)
+        if self._plot_host_is_pyqtgraph():
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "log_data_and_view_ranges"):
+                plot_host.log_data_and_view_ranges("after_sample_render")
 
         if self.current_project is not None:
             if not isinstance(self.current_project.ui_state, dict):
@@ -6339,8 +6343,19 @@ QPushButton[isGhost="true"]:hover {{
         if not hasattr(self, "plot_host"):
             return
 
+        plot_host = self.plot_host
+        if plot_host is not None and hasattr(plot_host, "debug_dump_state"):
+            plot_host.debug_dump_state("autoscale_y_toolbar (before)")
+
         # Enable/disable Y-axis autoscaling for all tracks
         self.plot_host.set_autoscale_y_enabled(checked)
+
+        if plot_host is not None and hasattr(plot_host, "debug_dump_state"):
+            plot_host.debug_dump_state("autoscale_y_toolbar (after)")
+        if self._plot_host_is_pyqtgraph() and plot_host is not None and hasattr(
+            plot_host, "log_data_and_view_ranges"
+        ):
+            plot_host.log_data_and_view_ranges("autoscale_y_toolbar")
 
     def _ensure_event_label_actions(self) -> None:
         if getattr(self, "_event_label_action_group", None) is not None:
@@ -9152,6 +9167,9 @@ QPushButton[isGhost="true"]:hover {{
             tab_name: Name of tab to open (if supported by the backend dialog)
         """
         if self._plot_host_is_pyqtgraph():
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "debug_dump_state"):
+                plot_host.debug_dump_state("open_plot_settings_dialog (before)")
             # Use PyQtGraph-specific settings dialog
             self.open_pyqtgraph_settings_dialog()
         else:

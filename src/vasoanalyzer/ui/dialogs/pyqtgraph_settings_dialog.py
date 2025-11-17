@@ -899,6 +899,8 @@ class PyQtGraphSettingsDialog(QDialog):
     def _save_settings(self):
         """Save settings to plot host."""
         try:
+            if self.plot_host is not None and hasattr(self.plot_host, "debug_dump_state"):
+                self.plot_host.debug_dump_state("pyqtgraph_settings_apply (before)")
             # Apply track settings
             for _track_id, (track, widgets) in self.track_widgets.items():
                 # Y-axis limits
@@ -932,6 +934,8 @@ class PyQtGraphSettingsDialog(QDialog):
             # Notify parent window
             if hasattr(self.parent_window, "on_plot_settings_changed"):
                 self.parent_window.on_plot_settings_changed()
+            if self.plot_host is not None and hasattr(self.plot_host, "debug_dump_state"):
+                self.plot_host.debug_dump_state("pyqtgraph_settings_apply (after)")
 
         except Exception as e:
             log.error(f"Failed to apply PyQtGraph settings: {e}", exc_info=True)

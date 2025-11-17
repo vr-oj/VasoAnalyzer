@@ -238,11 +238,15 @@ class ChannelTrack:
     def _apply_auto_y(self, span_changed: bool) -> None:
         if self._model is None or self.spec.component == "dual":
             return
+        get_auto = getattr(self.ax, "get_autoscaley_on", None)
+        axis_auto = True if get_auto is None else bool(get_auto())
+        if not axis_auto:
+            return
         if self._sticky_ylim is not None and not span_changed:
             ymin, ymax = self._sticky_ylim
             self.ax.set_ylim(ymin, ymax)
             ax2 = self.view.ax2
-            if ax2 is not None:
+            if ax2 is not None and getattr(ax2, "get_autoscaley_on", lambda: True)():
                 set_auto = getattr(ax2, "set_autoscaley_on", None)
                 if callable(set_auto):
                     set_auto(False)
@@ -261,7 +265,7 @@ class ChannelTrack:
             ymax += margin
         self.ax.set_ylim(ymin, ymax)
         ax2 = self.view.ax2
-        if ax2 is not None:
+        if ax2 is not None and getattr(ax2, "get_autoscaley_on", lambda: True)():
             set_auto = getattr(ax2, "set_autoscaley_on", None)
             if callable(set_auto):
                 set_auto(False)

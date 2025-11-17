@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable, Iterable
 from typing import Any, cast
 
+import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
@@ -111,6 +112,127 @@ class PyQtGraphPlotHost:
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
         self._grid_alpha: float = 0.3
+
+    def debug_dump_state(self, label: str) -> None:
+        if not log.isEnabledFor(logging.DEBUG):
+            return
+        window = self._current_window
+        if window is None:
+            window_repr = "None"
+            span_repr = "None"
+        else:
+            x0, x1 = window
+            window_repr = f"({x0:.6f}, {x1:.6f})"
+            span_repr = f"{(x1 - x0):.6f}"
+        log.debug(
+            "[PLOT DEBUG] label=%s backend=pyqtgraph window=%s span=%s tracks=%d",
+            label,
+            window_repr,
+            span_repr,
+            len(self._tracks),
+        )
+        for track_id, track in self._tracks.items():
+            try:
+                visible = track.is_visible()
+            except Exception:
+                visible = None
+            try:
+                autoscale = bool(track.view.is_autoscale_enabled())
+            except Exception:
+                autoscale = None
+            try:
+                ylim = track.view.get_ylim()
+            except Exception:
+                ylim = None
+            sticky = getattr(track, "_sticky_ylim", None)
+            event_labels = getattr(track.view, "_event_labels_visible", None)
+            log.debug(
+                "[PLOT DEBUG] track=%s visible=%s autoscale=%s ylim=%s sticky=%s event_labels=%s",
+                track_id,
+                visible,
+                autoscale,
+                ylim,
+                sticky,
+                event_labels,
+            )
+
+    def log_data_and_view_ranges(self, label: str) -> None:
+        """
+        Debug helper: log raw data ranges from the TraceModel and current view ranges.
+        """
+        if not log.isEnabledFor(logging.DEBUG):
+            return
+        model = getattr(self, "_model", None)
+        window = getattr(self, "_current_window", None)
+        if model is None:
+            log.debug(
+                "[RANGE DEBUG] label=%s backend=pyqtgraph model=None window=%s",
+                label,
+                window,
+            )
+            return
+        log.debug(
+            "[RANGE DEBUG] label=%s backend=pyqtgraph window=%s",
+            label,
+            window,
+        )
+        time_full = getattr(model, "time_full", None)
+        raw_x = None
+        if time_full is not None:
+            try:
+                raw_x = (float(np.nanmin(time_full)), float(np.nanmax(time_full)))
+            except Exception:
+                raw_x = None
+        tracks = getattr(self, "_tracks", None)
+        if not tracks:
+            return
+        if isinstance(tracks, dict):
+            iterable = tracks.values()
+        else:
+            iterable = tracks
+        component_attr = {
+            "inner": "inner_full",
+            "outer": "outer_full",
+            "avg_pressure": "avg_pressure_full",
+            "set_pressure": "set_pressure_full",
+            "dual": "inner_full",
+        }
+        for track in iterable:
+            try:
+                spec = getattr(track, "spec", None)
+                component = getattr(spec, "component", None) if spec is not None else None
+                track_id = getattr(spec, "track_id", None) if spec is not None else None
+                if track_id is None:
+                    track_id = getattr(track, "id", None)
+                if track_id is None:
+                    track_id = repr(track)
+                raw_y = None
+                attr_name = component_attr.get(component)
+                if attr_name is not None:
+                    series = getattr(model, attr_name, None)
+                    if series is not None:
+                        try:
+                            raw_y = (float(np.nanmin(series)), float(np.nanmax(series)))
+                        except Exception:
+                            raw_y = None
+                view = getattr(track, "view", None)
+                view_y = None
+                if view is not None and hasattr(view, "get_ylim"):
+                    try:
+                        view_y = view.get_ylim()
+                    except Exception:
+                        view_y = None
+                log.debug(
+                    "[RANGE DEBUG] track=%s component=%s raw_x=%s raw_y=%s view_x=%s view_y=%s",
+                    track_id,
+                    component,
+                    raw_x,
+                    raw_y,
+                    window,
+                    view_y,
+                )
+            except Exception:
+                log.debug("[RANGE DEBUG] track=%r failed to compute ranges", track)
 
     def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
         """Add a channel to the stack and rebuild the layout."""
@@ -488,6 +610,7 @@ class PyQtGraphPlotHost:
             self._notify_time_window_changed()
         finally:
             self._range_change_user_driven = previous_flag
+        self.debug_dump_state("range_changed")
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
@@ -501,6 +624,7 @@ class PyQtGraphPlotHost:
         if model is not None:
             x0, x1 = model.full_range
             self.set_time_window(x0, x1)
+        self.debug_dump_state("set_trace_model (after)")
 
     def set_time_window(self, x0: float, x1: float) -> None:
         """Set the visible time window for all tracks."""
@@ -524,6 +648,8 @@ class PyQtGraphPlotHost:
             self._notify_time_window_changed()
         finally:
             self._range_change_user_driven = previous_flag
+        self.debug_dump_state("set_time_window (after)")
+        self.log_data_and_view_ranges("time_window_changed")
 
     def set_events(
         self,
@@ -677,6 +803,7 @@ class PyQtGraphPlotHost:
     def set_trace_model(self, model: TraceModel) -> None:
         """Set trace model (matplotlib PlotHost compatibility - alias for set_model)."""
         self.set_model(model)
+        self.debug_dump_state("set_trace_model (alias)")
 
     def set_shared_xlabel(self, text: str) -> None:
         """Set xlabel on bottom axis (matplotlib PlotHost compatibility)."""
@@ -761,6 +888,7 @@ class PyQtGraphPlotHost:
 
     def set_autoscale_y_enabled(self, enabled: bool) -> None:
         """Enable/disable Y-axis autoscaling for all tracks."""
+        self.debug_dump_state(f"set_autoscale_y_enabled (request={enabled})")
         for track in self._tracks.values():
             track.view.set_autoscale_y(enabled)
 

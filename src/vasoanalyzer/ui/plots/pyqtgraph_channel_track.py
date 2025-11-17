@@ -389,6 +389,10 @@ class PyQtGraphChannelTrack:
             span_changed,
         )
 
+        if not autoscale_enabled:
+            _log.debug("apply_auto_y track=%s skipped: autoscale disabled", track_id)
+            return
+
         if self._model is None or self.spec.component == "dual":
             _log.debug("apply_auto_y track=%s skipped: model missing or dual component", track_id)
             return
