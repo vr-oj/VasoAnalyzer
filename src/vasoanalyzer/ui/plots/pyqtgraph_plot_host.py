@@ -96,6 +96,8 @@ class PyQtGraphPlotHost:
         self._axis_font_size: float = 20.0
         self._tick_font_size: float = 16.0
         self._default_line_width: float = 4.0
+        self._window_bg_color: tuple[int, int, int] | None = None
+        self._plot_bg_color: tuple[int, int, int] | None = None
         self._compact_legend_enabled: bool = False
         self._compact_legend_location: str = "upper right"
         self._time_window_listeners: list[Callable[[float, float], None]] = []
@@ -186,10 +188,7 @@ class PyQtGraphPlotHost:
         tracks = getattr(self, "_tracks", None)
         if not tracks:
             return
-        if isinstance(tracks, dict):
-            iterable = tracks.values()
-        else:
-            iterable = tracks
+        iterable = tracks.values() if isinstance(tracks, dict) else tracks
         component_attr = {
             "inner": "inner_full",
             "outer": "outer_full",
@@ -207,7 +206,7 @@ class PyQtGraphPlotHost:
                 if track_id is None:
                     track_id = repr(track)
                 raw_y = None
-                attr_name = component_attr.get(component)
+                attr_name = component_attr.get(str(component))
                 if attr_name is not None:
                     series = getattr(model, attr_name, None)
                     if series is not None:
@@ -399,8 +398,15 @@ class PyQtGraphPlotHost:
             for spec in self._channel_specs
             if spec.track_id in self._tracks
         ] or list(self._tracks.values())
-        for idx, track in enumerate(ordered_tracks):
-            enable = self._event_labels_enabled and idx == 0
+        label_track: PyQtGraphChannelTrack | None = None
+        for track in ordered_tracks:
+            if getattr(track, "is_visible", lambda: True)():
+                label_track = track
+                break
+        if label_track is None and ordered_tracks:
+            label_track = ordered_tracks[0]
+        for track in ordered_tracks:
+            enable = self._event_labels_enabled and track is label_track
             track.view.enable_event_labels(
                 enable,
                 options=self._event_label_options if enable else None,
@@ -485,6 +491,30 @@ class PyQtGraphPlotHost:
     def grid_state(self) -> tuple[bool, bool, float]:
         """Return current grid visibility flags and alpha."""
         return self._x_grid_visible, self._y_grid_visible, self._grid_alpha
+
+    def set_window_background_color(self, color: tuple[int, int, int]) -> None:
+        if color is None:
+            self._window_bg_color = None
+            return
+        r, g, b = (int(c) for c in color)
+        self._window_bg_color = (r, g, b)
+        self.widget.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
+
+    def window_background_color(self) -> tuple[int, int, int] | None:
+        return self._window_bg_color
+
+    def set_plot_background_color(self, color: tuple[int, int, int]) -> None:
+        if color is None:
+            self._plot_bg_color = None
+            return
+        r, g, b = (int(c) for c in color)
+        self._plot_bg_color = (r, g, b)
+        for track in self._tracks.values():
+            plot_widget = track.view.get_widget()
+            plot_widget.setBackground(self._plot_bg_color)
+
+    def plot_background_color(self) -> tuple[int, int, int] | None:
+        return self._plot_bg_color
 
     def set_default_line_width(self, width: float) -> None:
         value = float(width)
@@ -1145,11 +1175,15 @@ class PyQtGraphPlotHost:
 
     def label_tooltips_enabled(self) -> bool:
         """Get whether label tooltips are enabled."""
-        return True
+        return bool(getattr(self, "_hover_tooltip_enabled", True))
 
     def tooltip_proximity(self) -> int:
         """Get tooltip proximity in pixels."""
-        return 10
+        return int(getattr(self, "_tooltip_proximity", 10))
+
+    def tooltip_precision(self) -> int:
+        """Get tooltip precision in decimals."""
+        return int(getattr(self, "_hover_tooltip_precision", 3))
 
     def compact_legend_enabled(self) -> bool:
         """Get whether compact legend is enabled."""

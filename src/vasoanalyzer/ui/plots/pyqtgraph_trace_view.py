@@ -255,22 +255,20 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             )
             line.setZValue(5)  # Draw above traces
 
-            # Store label for event labeler
-            if label_text:
-                line.label = label_text
-                meta_payload: dict[str, Any] = {}
-                if meta is not None and i < len(meta):
-                    candidate = meta[i]
-                    if isinstance(candidate, Mapping):
-                        meta_payload.update(dict(candidate))
-                meta_payload.setdefault("event_color", color)
-                event_entry = EventEntryV3(
-                    t=time,
-                    text=label_text,
-                    meta=meta_payload,
-                    index=i + 1,  # 1-indexed for display
-                )
-                self._event_entries.append(event_entry)
+            # Store label for event labeler (always create entry for numeric mode)
+            meta_payload: dict[str, Any] = {}
+            if meta is not None and i < len(meta):
+                candidate = meta[i]
+                if isinstance(candidate, Mapping):
+                    meta_payload.update(dict(candidate))
+            meta_payload.setdefault("event_color", color)
+            event_entry = EventEntryV3(
+                t=time,
+                text=label_text or "",
+                meta=meta_payload,
+                index=i + 1,  # 1-indexed for display
+            )
+            self._event_entries.append(event_entry)
 
             self._plot_item.addItem(line)
             self.event_lines.append(line)
@@ -522,7 +520,6 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def set_ylim(self, y0: float, y1: float) -> None:
         """Set Y-axis limits."""
         self._plot_item.setYRange(y0, y1, padding=0)
-        self._autoscale_y = False  # Disable autoscale when manually set
         trace_id = self._explicit_ylabel or self._mode or hex(id(self))
         log.debug(
             "[PLOT DEBUG] set_ylim trace=%s new_ylim=(%s, %s)",

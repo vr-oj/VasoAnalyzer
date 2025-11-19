@@ -208,7 +208,8 @@ class _SampleLoadJob(QRunnable):
             # If we have a staging DB path, create a thread-local connection
             if self._staging_db_path and repo is not None:
                 log.debug(
-                    "Background job: creating thread-local connection to %s", self._staging_db_path
+                    "Background job: creating thread-local connection to %s",
+                    self._staging_db_path,
                 )
                 # Create connection in THIS thread (safe for SQLite)
                 thread_local_conn = sqlite3.connect(self._staging_db_path)
@@ -222,14 +223,17 @@ class _SampleLoadJob(QRunnable):
                 temp_store = ProjectStore(path=Path(self._staging_db_path), conn=thread_local_conn)
 
                 # Wrap in a temporary repository
-                from vasoanalyzer.services.project_service import SQLiteProjectRepository
+                from vasoanalyzer.services.project_service import (
+                    SQLiteProjectRepository,
+                )
 
                 repo = SQLiteProjectRepository(temp_store)
                 log.debug("Background job: thread-safe repository created")
 
             elif repo is None:
                 log.warning(
-                    "Background job repo missing; creating new context for %s", self._project_path
+                    "Background job repo missing; creating new context for %s",
+                    self._project_path,
                 )
                 if not self._project_path:
                     raise RuntimeError("Project path unavailable for sample load")
@@ -239,7 +243,8 @@ class _SampleLoadJob(QRunnable):
                 log.debug("Created new context %s (repo=%s)", owned_ctx, repo)
             else:
                 log.debug(
-                    "Background job: using existing repo from window.project_ctx (repo=%s)", repo
+                    "Background job: using existing repo from window.project_ctx (repo=%s)",
+                    repo,
                 )
 
             if repo is None:
@@ -1381,7 +1386,12 @@ class VasoAnalyzerApp(QMainWindow):
                 self._reset_session_dirty(reason="manual save")
                 self._update_window_title()
             except Exception as e:
-                log.error("Manual save failed path=%s error=%s", project_path, e, exc_info=True)
+                log.error(
+                    "Manual save failed path=%s error=%s",
+                    project_path,
+                    e,
+                    exc_info=True,
+                )
                 self.statusBar().showMessage(f"Save failed: {e}", 5000)
                 raise
             finally:
@@ -5169,7 +5179,8 @@ class VasoAnalyzerApp(QMainWindow):
         if not indices:
             return
         indices = sorted(
-            set(idx for idx in indices if 0 <= idx < len(self.event_table_data)), reverse=True
+            set(idx for idx in indices if 0 <= idx < len(self.event_table_data)),
+            reverse=True,
         )
         if not indices:
             return
@@ -6352,8 +6363,10 @@ QPushButton[isGhost="true"]:hover {{
 
         if plot_host is not None and hasattr(plot_host, "debug_dump_state"):
             plot_host.debug_dump_state("autoscale_y_toolbar (after)")
-        if self._plot_host_is_pyqtgraph() and plot_host is not None and hasattr(
-            plot_host, "log_data_and_view_ranges"
+        if (
+            self._plot_host_is_pyqtgraph()
+            and plot_host is not None
+            and hasattr(plot_host, "log_data_and_view_ranges")
         ):
             plot_host.log_data_and_view_ranges("autoscale_y_toolbar")
 
@@ -6978,7 +6991,10 @@ QPushButton[isGhost="true"]:hover {{
         has_od = od_before is not None
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
         for lbl, diam, od in zip(
-            labels, diam_before, od_before if has_od else [None] * len(labels), strict=False
+            labels,
+            diam_before,
+            od_before if has_od else [None] * len(labels),
+            strict=False,
         ):
             self.event_table_data.append((lbl, 0.0, diam, od, None, None, 0))
         self.populate_table()
@@ -9228,6 +9244,7 @@ QPushButton[isGhost="true"]:hover {{
             return
 
         dialog = PyQtGraphSettingsDialog(self, plot_host)
+        dialog.resize(200, 1000)
         dialog.exec_()
 
     def open_figure_composer(

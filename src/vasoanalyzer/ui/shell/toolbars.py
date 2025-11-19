@@ -216,9 +216,9 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
             "When unchecked: Y-axis stays locked at current range."
         )
         window.actAutoscaleY.triggered.connect(window._on_autoscale_y_triggered)
-        toolbar.addAction(window.actAutoscaleY)
-
-        toolbar.addSeparator()
+        # NOTE: Do not add actAutoscaleY to the toolbar. Per-track autoscale is
+        # controlled from the Plot Settings dialog's Tracks tab, and exposing a
+        # second global toggle caused conflicting state.
 
     window.actGrid = QAction(QIcon(window.icon_path("Grid.svg")), "Grid", window)
     window.actGrid.setCheckable(True)

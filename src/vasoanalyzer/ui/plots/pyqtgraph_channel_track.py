@@ -227,7 +227,6 @@ class PyQtGraphChannelTrack:
 
         ymin, ymax = padded
         self._auto_margin = float(margin)
-        self._sticky_ylim = (ymin, ymax)
         self.view.set_ylim(ymin, ymax)
         self.view.set_autoscale_y(True)
         return (ymin, ymax)
@@ -235,8 +234,8 @@ class PyQtGraphChannelTrack:
     def set_ylim(self, ymin: float, ymax: float) -> None:
         """Set Y-axis limits manually."""
         self._sticky_ylim = None
-        self.view.set_ylim(ymin, ymax)
         self.view.set_autoscale_y(False)
+        self.view.set_ylim(ymin, ymax)
 
     def pan_y(self, delta: float) -> None:
         """Pan the Y-axis by a delta amount."""
@@ -244,8 +243,8 @@ class PyQtGraphChannelTrack:
         ymin, ymax = self.view.get_ylim()
         new_min = ymin + delta
         new_max = ymax + delta
-        self.view.set_ylim(new_min, new_max)
         self.view.set_autoscale_y(False)
+        self.view.set_ylim(new_min, new_max)
 
     def zoom_y(self, center: float, factor: float) -> None:
         """Zoom the Y-axis around a center point."""
@@ -265,8 +264,8 @@ class PyQtGraphChannelTrack:
         new_min = center - half
         new_max = center + half
 
-        self.view.set_ylim(new_min, new_max)
         self.view.set_autoscale_y(False)
+        self.view.set_ylim(new_min, new_max)
 
     def get_xlim(self) -> tuple[float, float]:
         """Get current X-axis limits."""
@@ -390,22 +389,21 @@ class PyQtGraphChannelTrack:
         )
 
         if not autoscale_enabled:
-            _log.debug("apply_auto_y track=%s skipped: autoscale disabled", track_id)
+            if self._sticky_ylim is not None:
+                ymin, ymax = self._sticky_ylim
+                self.view.set_ylim(ymin, ymax)
+                _log.debug(
+                    "apply_auto_y track=%s using sticky ylim ymin=%.6f ymax=%.6f",
+                    track_id,
+                    ymin,
+                    ymax,
+                )
+            else:
+                _log.debug("apply_auto_y track=%s skipped: autoscale disabled", track_id)
             return
 
         if self._model is None or self.spec.component == "dual":
             _log.debug("apply_auto_y track=%s skipped: model missing or dual component", track_id)
-            return
-
-        if self._sticky_ylim is not None and not span_changed:
-            ymin, ymax = self._sticky_ylim
-            self.view.set_ylim(ymin, ymax)
-            _log.debug(
-                "apply_auto_y track=%s using sticky ylim ymin=%.6f ymax=%.6f",
-                track_id,
-                ymin,
-                ymax,
-            )
             return
 
         limits = self._compute_padded_limits()
