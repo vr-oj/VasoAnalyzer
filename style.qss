@@ -45,3 +45,29 @@ QMenu {
   background: #ffffff;
   border: 1px solid #ccc;
 }
+
+/* ----- Buttons and dropdowns hover/press feedback ----- */
+QToolButton,
+QPushButton {
+  border-radius: 4px;
+}
+
+QToolButton:hover,
+QPushButton:hover {
+  background-color: #e9f1fb; /* subtle tint */
+  border: 1px solid #b0c4de;
+}
+
+QToolButton:pressed,
+QPushButton:pressed {
+  background-color: #d7e5fb;
+}
+
+QComboBox {
+  border-radius: 4px;
+}
+
+QComboBox:hover {
+  background-color: #e9f1fb;
+  border: 1px solid #b0c4de;
+}

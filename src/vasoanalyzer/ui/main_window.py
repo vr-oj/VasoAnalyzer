@@ -257,6 +257,9 @@ class _SampleLoadJob(QRunnable):
                     getattr(self._sample, "trace_column_labels", None),
                     getattr(self._sample, "name", None),
                 )
+                history = getattr(self._sample, "edit_history", None)
+                if trace_df is not None and history is not None:
+                    trace_df.attrs["edit_log"] = history
 
             if self._load_events:
                 log.debug("Background job: loading events for dataset_id=%s", self._dataset_id)
@@ -6173,9 +6176,11 @@ QPushButton[isGhost="true"]:hover {{
                 else:
                     self.trace_data["Outer Diameter (raw)"] = self.trace_model.outer_raw.copy()
 
-        self.trace_data.attrs["edit_log"] = serialize_edit_log(self.trace_model.edit_log)
+        serialized_log = serialize_edit_log(self.trace_model.edit_log)
+        self.trace_data.attrs["edit_log"] = serialized_log
 
         if self.current_sample is not None:
+            self.current_sample.edit_history = serialized_log
             synchronized = self.trace_data.copy()
             synchronized.attrs = dict(self.trace_data.attrs)
             self.current_sample.trace_data = synchronized

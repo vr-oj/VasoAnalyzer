@@ -172,6 +172,38 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Return the PyQtGraph PlotWidget for embedding."""
         return self._plot_widget
 
+    def _build_display_curve(
+        self, time: np.ndarray, mean: np.ndarray, ymin: np.ndarray, ymax: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Build x/y arrays for the primary curve.
+
+        For bucket_size == 1 (or no min/max data), return (time, mean) as-is.
+        For bucket_size > 1, interleave min/max to preserve spikes.
+        """
+
+        # Fallback: no min/max provided or arrays are incompatible
+        if (
+            time is None
+            or mean is None
+            or ymin is None
+            or ymax is None
+            or time.size != mean.size
+            or time.size != ymin.size
+            or time.size != ymax.size
+        ):
+            return time, mean
+
+        # If min/max differ from the mean, build an envelope to preserve spikes.
+        if not (np.allclose(ymin, ymax) and np.allclose(ymin, mean)):
+            x = np.repeat(time, 2)
+            y = np.empty_like(x)
+            y[0::2] = ymin
+            y[1::2] = ymax
+            return x, y
+
+        return time, mean
+
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model."""
         self.model = model
@@ -241,6 +273,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             label_text = ""
             if labels is not None and i < len(labels):
                 label_text = labels[i]
+            if not label_text:
+                label_text = str(i + 1)
 
             # Create vertical line with configured styling
             qcolor = QColor(self._event_line_color)
@@ -327,8 +361,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         primary = self._primary_series(window)
         if primary is not None and self.inner_curve is not None:
             mean, ymin, ymax = primary
-            # Plot the mean line
-            self.inner_curve.setData(time, mean)
+            x_vals, y_vals = self._build_display_curve(time, mean, ymin, ymax)
+            self.inner_curve.setData(x_vals, y_vals)
 
             # Add uncertainty bands if enabled
             if self._show_uncertainty_bands and time.size > 1:

@@ -226,6 +226,7 @@ class SampleN:
     snapshot_tiff_role: str | None = None
     snapshot_format: str | None = None
     analysis_result_keys: list[str] | None = None
+    edit_history: list[dict[str, Any]] | None = None
 
     def copy(self) -> SampleN:
         """Return a deep copy of this sample."""
@@ -280,6 +281,7 @@ class SampleN:
                 if isinstance(self.analysis_result_keys, list)
                 else self.analysis_result_keys
             ),
+            edit_history=(list(self.edit_history) if isinstance(self.edit_history, list) else None),
         )
 
 
@@ -644,6 +646,8 @@ def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
         data.pop("analysis_results", None)
     if sample.figure_configs is None:
         data.pop("figure_configs", None)
+    if sample.edit_history:
+        data["edit_history"] = sample.edit_history
     if sample.notes is None:
         data.pop("notes", None)
     if sample.attachments:
@@ -807,6 +811,10 @@ def sample_from_dict(data: dict) -> SampleN:
     if isinstance(events_data, dict):
         events_data = pd.DataFrame(events_data)
 
+    edit_history = data.get("edit_history")
+    if not isinstance(edit_history, list):
+        edit_history = None
+
     analysis_payload = data.get("analysis_results")
     analysis_results = None
     if isinstance(analysis_payload, dict):
@@ -831,6 +839,9 @@ def sample_from_dict(data: dict) -> SampleN:
             if isinstance(raw, dict):
                 attachments.append(Attachment.from_metadata(raw))
 
+    if isinstance(trace_data, pd.DataFrame) and edit_history is not None:
+        trace_data.attrs["edit_log"] = edit_history
+
     return SampleN(
         name=data.get("name", ""),
         trace_path=data.get("trace_path"),
@@ -848,6 +859,7 @@ def sample_from_dict(data: dict) -> SampleN:
         analysis_results=analysis_results,
         figure_configs=data.get("figure_configs"),
         attachments=attachments,
+        edit_history=edit_history,
     )
 
 
@@ -1987,6 +1999,9 @@ def _build_sample_extra(
     if trace_labels:
         payload["trace_column_labels"] = trace_labels
 
+    if sample.edit_history:
+        payload["edit_history"] = sample.edit_history
+
     return cast(dict[str, Any], _normalise_json_data(payload))
 
 
@@ -2606,6 +2621,9 @@ def _dataset_to_sample(
     snapshot_tiff_role = extra.get("snapshot_tiff_role")
     result_keys_meta = extra.get("analysis_result_keys")
     analysis_result_keys = list(result_keys_meta) if isinstance(result_keys_meta, list) else None
+    edit_history = extra.get("edit_history") if isinstance(extra, dict) else None
+    if not isinstance(edit_history, list):
+        edit_history = None
 
     sample = SampleN(
         name=dataset.get("name", f"Dataset {dataset_id}"),
@@ -2630,6 +2648,7 @@ def _dataset_to_sample(
         snapshot_tiff_role=snapshot_tiff_role,
         snapshot_format=extra.get("snapshot_format"),
         analysis_result_keys=analysis_result_keys,
+        edit_history=edit_history,
     )
 
     _populate_link_metadata(sample, "trace", trace_path, trace_link_meta, base_dir)

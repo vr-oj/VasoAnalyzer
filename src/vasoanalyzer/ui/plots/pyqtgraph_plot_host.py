@@ -13,12 +13,13 @@ from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
-from vasoanalyzer.ui.event_labels_v3 import LayoutOptionsV3
+from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
 from vasoanalyzer.ui.plots.plot_host import LayoutState
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
+from vasoanalyzer.ui.plots.pyqtgraph_event_strip import PyQtGraphEventStripTrack
 from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
     PyQtGraphEventHighlightOverlay,
     PyQtGraphTimeCursorOverlay,
@@ -53,6 +54,9 @@ class PyQtGraphPlotHost:
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(2)  # Small gap between tracks
 
+        # Create graphics layout for tracks
+        # Tracks are managed as individual widgets stacked vertically.
+
         # Apply theme
         bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
         self.widget.setStyleSheet(f"background-color: {bg_color};")
@@ -73,6 +77,10 @@ class PyQtGraphPlotHost:
         self._event_colors: list[str] | None = None
         self._event_labels: list[str] = []
         self._event_label_meta: list[dict[str, Any]] | None = None
+        self._event_label_options = LayoutOptionsV3(mode="h_belt", show_numbers_only=True)
+        self._event_entries: list[EventEntryV3] = []
+        self._event_strip_track: PyQtGraphEventStripTrack | None = None
+        self._event_strip_widget: pg.PlotWidget | None = None
 
         # Interaction state
         self._pan_active: bool = False
@@ -86,7 +94,6 @@ class PyQtGraphPlotHost:
         # Overlays
         self._time_cursor_overlay = PyQtGraphTimeCursorOverlay()
         self._event_highlight_overlay = PyQtGraphEventHighlightOverlay()
-        self._event_label_options = LayoutOptionsV3()
         self._event_labels_enabled = True
         self._auto_event_label_mode = True
         self._label_density_thresholds: dict[str, float | None] = {"compact": None, "belt": None}
@@ -293,6 +300,18 @@ class PyQtGraphPlotHost:
             self._tracks = new_tracks
             return
 
+        # Ensure event strip exists and sits at top
+        if self._event_strip_track is None:
+            self._event_strip_widget = pg.PlotWidget()
+            self._event_strip_widget.setMaximumHeight(40 if self._event_labels_enabled else 0)
+            self._event_strip_widget.setVisible(self._event_labels_enabled)
+            self._event_strip_track = PyQtGraphEventStripTrack(
+                self._event_strip_widget.getPlotItem()
+            )
+            self.layout.insertWidget(
+                0, self._event_strip_widget, 5 if self._event_labels_enabled else 0
+            )
+
         plot_items = []
 
         for idx, spec in enumerate(self._channel_specs):
@@ -334,6 +353,10 @@ class PyQtGraphPlotHost:
             # Apply model if already set
             if self._model is not None:
                 track.set_model(self._model)
+
+            # Link strip X-axis to first track
+            if idx == 0 and self._event_strip_track is not None:
+                self._event_strip_track.plot_item.setXLink(plot_item)
 
             # Apply events if already set
             if self._event_times:
@@ -386,11 +409,19 @@ class PyQtGraphPlotHost:
         track.view.enable_hover_tooltip(
             self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
         )
-        # Only enable event labels on the top track
-        enable_labels = self._event_labels_enabled and is_top_track
+        # Only enable per-track labels when strip is absent
+        enable_labels = (
+            self._event_labels_enabled and is_top_track and self._event_strip_track is None
+        )
+        # Fill in safe defaults without clobbering any user-provided settings
+        options = self._event_label_options
+        if getattr(options, "mode", None) is None:
+            options.mode = "h_belt"
+        if getattr(options, "show_numbers_only", None) is None:
+            options.show_numbers_only = True
         track.view.enable_event_labels(
             enable_labels,
-            options=self._event_label_options if enable_labels else None,
+            options=options if enable_labels else None,
         )
         if track.primary_line:
             track.set_line_width(self._default_line_width)
@@ -414,6 +445,8 @@ class PyQtGraphPlotHost:
         if is_bottom_track:
             bottom_axis.setStyle(showValues=True)
             bottom_axis.setLabel("Time (s)")
+            with contextlib.suppress(AttributeError):
+                bottom_axis.setTickLength(5, 0)
             bottom_axis.setHeight(None)
             with contextlib.suppress(AttributeError):
                 bottom_axis.label.show()
@@ -429,6 +462,11 @@ class PyQtGraphPlotHost:
     def _apply_event_label_options(self) -> None:
         if not self._tracks:
             return
+        # Ensure defaults are present unless explicitly set by user/settings
+        if getattr(self._event_label_options, "mode", None) is None:
+            self._event_label_options.mode = "h_belt"
+        if getattr(self._event_label_options, "show_numbers_only", None) is None:
+            self._event_label_options.show_numbers_only = True
         ordered_tracks = [
             self._tracks[spec.track_id]
             for spec in self._channel_specs
@@ -442,11 +480,28 @@ class PyQtGraphPlotHost:
         if label_track is None and ordered_tracks:
             label_track = ordered_tracks[0]
         for track in ordered_tracks:
-            enable = self._event_labels_enabled and track is label_track
+            enable = (
+                self._event_strip_track is None
+                and self._event_labels_enabled
+                and track is label_track
+            )
             track.view.enable_event_labels(
                 enable,
                 options=self._event_label_options if enable else None,
             )
+        if self._event_strip_track is not None and self._event_strip_widget is not None:
+            if self._event_labels_enabled:
+                self._event_strip_widget.setMaximumHeight(40)
+                self._event_strip_widget.setVisible(True)
+                self._event_strip_track.set_visible(True)
+                if self._event_entries:
+                    self._event_strip_track.set_events(
+                        self._event_entries, self._event_label_options
+                    )
+            else:
+                self._event_strip_widget.setMaximumHeight(0)
+                self._event_strip_widget.setVisible(False)
+                self._event_strip_track.set_visible(False)
 
     def _apply_tooltip_settings(self) -> None:
         for track in self._tracks.values():
@@ -591,6 +646,7 @@ class PyQtGraphPlotHost:
         left_axis.label.setFont(ylabel_font)
         with contextlib.suppress(AttributeError):
             left_axis.setTickFont(tick_font)
+            left_axis.setTickLength(5, 0)
 
         is_bottom = not self._channel_specs or track.id == self._channel_specs[-1].track_id
         if is_bottom:
@@ -737,8 +793,42 @@ class PyQtGraphPlotHost:
         self._event_labels = [] if labels is None else list(labels)
         self._event_label_meta = None if label_meta is None else list(label_meta)
 
+        entries: list[EventEntryV3] = []
+        for idx, t in enumerate(self._event_times):
+            text = ""
+            if self._event_labels and idx < len(self._event_labels):
+                text = self._event_labels[idx]
+            if not text:
+                text = str(idx + 1)
+            meta_payload = {}
+            if self._event_label_meta and idx < len(self._event_label_meta):
+                candidate = self._event_label_meta[idx]
+                if isinstance(candidate, dict):
+                    meta_payload.update(candidate)
+            if colors and idx < len(colors):
+                meta_payload.setdefault("color", colors[idx])
+            entries.append(
+                EventEntryV3(
+                    t=float(t),
+                    text=str(text),
+                    meta=meta_payload,
+                    index=idx + 1,
+                )
+            )
+        self._event_entries = entries
+
         for track in self._tracks.values():
             track.set_events(times, colors, labels, label_meta=self._event_label_meta)
+        if self._event_strip_track is not None and self._event_strip_widget is not None:
+            if self._event_labels_enabled:
+                self._event_strip_widget.setMaximumHeight(40)
+                self._event_strip_widget.setVisible(True)
+                self._event_strip_track.set_visible(True)
+                self._event_strip_track.set_events(entries, self._event_label_options)
+            else:
+                self._event_strip_widget.setMaximumHeight(0)
+                self._event_strip_widget.setVisible(False)
+                self._event_strip_track.set_visible(False)
         self._apply_event_label_options()
 
     def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:
