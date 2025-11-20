@@ -107,7 +107,7 @@ class PyQtGraphEventStripTrack:
 
             # Short vertical tick (bottom to just below the label)
             y_bottom = 0.0
-            y_top = 0.4
+            y_top = 0.2
             line = self._plot_item.plot([x, x], [y_bottom, y_top], pen=color)
             line.setZValue(5)
             self._lines.append(line)

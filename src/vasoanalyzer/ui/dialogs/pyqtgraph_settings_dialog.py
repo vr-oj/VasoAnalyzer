@@ -702,7 +702,7 @@ class PyQtGraphSettingsDialog(QDialog):
         self.event_line_width_spin.setRange(0.5, 5.0)
         self.event_line_width_spin.setSingleStep(0.1)
         self.event_line_width_spin.setDecimals(1)
-        self.event_line_width_spin.setValue(1.2)
+        self.event_line_width_spin.setValue(2.0)
         event_lines_form.addRow("Line Width:", self.event_line_width_spin)
 
         self.event_line_style_combo = QComboBox()
@@ -758,7 +758,7 @@ class PyQtGraphSettingsDialog(QDialog):
         enable_layout.addWidget(self.event_labels_enabled_cb)
 
         self.event_show_numbers_cb = QCheckBox("Show Numbers Only (instead of full text)")
-        self.event_show_numbers_cb.setChecked(False)
+        self.event_show_numbers_cb.setChecked(True)
         self.event_show_numbers_cb.setToolTip(
             "Display event index numbers (1, 2, 3...) instead of full event labels"
         )
@@ -888,7 +888,7 @@ class PyQtGraphSettingsDialog(QDialog):
         self.grid_alpha.setSingleStep(0.1)
         self.grid_alpha.setDecimals(2)
         self.grid_alpha.setToolTip("0 = fully transparent, 1 = fully opaque")
-        self.grid_alpha.setValue(0.3)
+        self.grid_alpha.setValue(0.10)
         grid_form.addRow("Grid Alpha (Opacity):", self.grid_alpha)
 
         grid_color_widget = self._create_color_picker_widget("#CCCCCC")

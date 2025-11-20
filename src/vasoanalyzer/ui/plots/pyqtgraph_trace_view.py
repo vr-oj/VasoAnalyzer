@@ -74,7 +74,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 self._plot_widget.useOpenGL(True)
 
         # Configure plot appearance
-        self._plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self._plot_item.showGrid(x=True, y=True, alpha=0.10)
         self._plot_item.setMenuEnabled(False)  # Disable right-click menu
 
         # Connect ViewBox range changes to sync with time window management
@@ -103,7 +103,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._event_labels_visible: bool = False
 
         # Event line styling parameters
-        self._event_line_width: float = 1.2
+        self._event_line_width: float = 2.0
         self._event_line_style: Qt.PenStyle = Qt.DashLine
         self._event_line_color: str = "#8A8A8A"
         self._event_line_alpha: float = 1.0
@@ -166,7 +166,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             ax.setTextPen(text_color)
 
         # Grid visibility
-        self._plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self._plot_item.showGrid(x=True, y=True, alpha=0.10)
 
     def get_widget(self) -> pg.PlotWidget:
         """Return the PyQtGraph PlotWidget for embedding."""

@@ -86,7 +86,7 @@ class LayoutOptionsV3:
     outline_width: float = 0.0
     outline_color: tuple[float, float, float, float] | None = None
     compact_counts: bool = False
-    show_numbers_only: bool = False  # Show event index numbers instead of text labels
+    show_numbers_only: bool = True  # Show event index numbers instead of text labels
     font_family: str = "Arial"
     font_size: float = 10.0
     font_bold: bool = False

@@ -121,7 +121,7 @@ class PyQtGraphPlotHost:
         )
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
-        self._grid_alpha: float = 0.3
+        self._grid_alpha: float = 0.10
 
     # ------------------------------------------------------------------ visibility helpers
     def set_channel_visible(self, channel_kind: str, visible: bool) -> None:
