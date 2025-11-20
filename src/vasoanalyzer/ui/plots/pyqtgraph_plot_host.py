@@ -64,6 +64,7 @@ class PyQtGraphPlotHost:
         # Channel management
         self._channel_specs: list[ChannelTrackSpec] = []
         self._tracks: dict[str, PyQtGraphChannelTrack] = {}
+        self._channel_visible: dict[str, bool] = {}
 
         # Data model and state
         self._model: TraceModel | None = None
@@ -114,6 +115,32 @@ class PyQtGraphPlotHost:
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
         self._grid_alpha: float = 0.3
+
+    # ------------------------------------------------------------------ visibility helpers
+    def set_channel_visible(self, channel_kind: str, visible: bool) -> None:
+        """Set visibility for a given channel kind.
+
+        Keeps tracks instantiated; only toggles their visibility state.
+        If the track exists, apply visibility directly. If a spec exists but the
+        track hasn't been built yet, the stored flag is applied when tracks are created.
+        """
+
+        kind = str(channel_kind)
+        self._channel_visible[kind] = bool(visible)
+
+        track = self._tracks.get(kind)
+        if track is not None:
+            track.set_visible(bool(visible))
+
+    def is_channel_visible(self, channel_kind: str) -> bool:
+        """Return visibility flag for a channel kind (defaults to True)."""
+
+        return bool(self._channel_visible.get(str(channel_kind), True))
+
+    def iter_channels(self) -> Iterable[ChannelTrackSpec]:
+        """Yield channel specs for currently configured channels."""
+
+        return list(self._channel_specs)
 
     def debug_dump_state(self, label: str) -> None:
         if not log.isEnabledFor(logging.DEBUG):
@@ -249,42 +276,41 @@ class PyQtGraphPlotHost:
         current_ids = [spec.track_id for spec in self._channel_specs]
         desired_ids = [spec.track_id for spec in desired]
 
-        if current_ids == desired_ids:
-            # Update stored specs without rebuilding
-            self._channel_specs = desired
-            for spec in desired:
-                track = self._tracks.get(spec.track_id)
-                if track:
-                    track.height_ratio = spec.height_ratio
-            return
-
         self._channel_specs = desired
         self._rebuild_tracks()
 
     def _rebuild_tracks(self) -> None:
         """Recreate tracks to match specs."""
-        # Clear existing tracks
-        for _track_id, track in self._tracks.items():
+        # Clear existing widgets/layout but keep track objects we can reuse
+        for _track_id, track in list(self._tracks.items()):
             widget = track.widget
             self.layout.removeWidget(widget)
             widget.setParent(None)
 
-        self._tracks.clear()
-
+        # Recreate tracks and re-add widgets in desired order
+        new_tracks: dict[str, PyQtGraphChannelTrack] = {}
         if not self._channel_specs:
+            self._tracks = new_tracks
             return
 
-        # Create new tracks
         plot_items = []
 
         for idx, spec in enumerate(self._channel_specs):
-            track = PyQtGraphChannelTrack(spec, enable_opengl=self._enable_opengl)
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                track = PyQtGraphChannelTrack(spec, enable_opengl=self._enable_opengl)
+            else:
+                track.spec = spec
+            track.height_ratio = spec.height_ratio
+
+            # Initialize visibility flag default if unseen
+            self._channel_visible.setdefault(spec.track_id, True)
 
             # Add to layout with stretch factor based on height ratio
             stretch = max(int(spec.height_ratio * 100), 1)
             self.layout.addWidget(track.widget, stretch)
 
-            self._tracks[spec.track_id] = track
+            new_tracks[spec.track_id] = track
 
             plot_item = track.view.get_widget().getPlotItem()
             plot_items.append(plot_item)
@@ -317,6 +343,16 @@ class PyQtGraphPlotHost:
                     self._event_labels,
                     label_meta=self._event_label_meta,
                 )
+
+            # Apply stored visibility state for this track
+            track.set_visible(self.is_channel_visible(spec.track_id))
+
+        self._tracks = new_tracks
+
+        # Prune visibility flags for channels that no longer exist
+        for key in list(self._channel_visible.keys()):
+            if key not in self._tracks:
+                self._channel_visible.pop(key, None)
 
             # Connect signals for synchronized interactions
             self._connect_track_signals(track)

@@ -4772,6 +4772,150 @@ class VasoAnalyzerApp(QMainWindow):
     def _rebuild_channel_layout(
         self, inner_on: bool, outer_on: bool, *, redraw: bool = True
     ) -> None:
+        # PyQtGraph: always build tracks for available data; show/hide via visibility flags
+        render_backend = None
+        if hasattr(self, "plot_host") and self.plot_host is not None:
+            with contextlib.suppress(Exception):
+                render_backend = self.plot_host.get_render_backend()
+
+        if render_backend == "pyqtgraph":
+            specs: list[ChannelTrackSpec] = []
+            has_outer = self._outer_channel_available()
+            has_avg = self._avg_pressure_channel_available()
+            has_set = self._set_pressure_channel_available()
+
+            specs.append(
+                ChannelTrackSpec(
+                    track_id="inner",
+                    component="inner",
+                    label="Inner Diameter (µm)",
+                    height_ratio=1.0,
+                )
+            )
+
+            if has_outer:
+                specs.append(
+                    ChannelTrackSpec(
+                        track_id="outer",
+                        component="outer",
+                        label="Outer Diameter (µm)",
+                        height_ratio=1.0,
+                    )
+                )
+
+            if has_avg:
+                specs.append(
+                    ChannelTrackSpec(
+                        track_id="avg_pressure",
+                        component="avg_pressure",
+                        label=self._trace_label_for("p_avg"),
+                        height_ratio=1.0,
+                    )
+                )
+
+            if has_set:
+                specs.append(
+                    ChannelTrackSpec(
+                        track_id="set_pressure",
+                        component="set_pressure",
+                        label=self._trace_label_for("p2"),
+                        height_ratio=1.0,
+                    )
+                )
+
+            if not specs:
+                specs.append(
+                    ChannelTrackSpec(
+                        track_id="inner",
+                        component="inner",
+                        label="Inner Diameter (µm)",
+                        height_ratio=1.0,
+                    )
+                )
+
+            host = self.plot_host
+            # Align host visibility flags with requested toggle states (or defaults)
+            host.set_channel_visible("inner", bool(inner_on))
+            host.set_channel_visible("outer", bool(outer_on and has_outer))
+            if has_avg:
+                desired_avg = (
+                    self.avg_pressure_toggle_act.isChecked()
+                    if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act
+                    else True
+                )
+                host.set_channel_visible("avg_pressure", bool(desired_avg))
+            else:
+                host.set_channel_visible("avg_pressure", False)
+            if has_set:
+                desired_set = (
+                    self.set_pressure_toggle_act.isChecked()
+                    if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act
+                    else True
+                )
+                host.set_channel_visible("set_pressure", bool(desired_set))
+            else:
+                host.set_channel_visible("set_pressure", False)
+
+            sample = getattr(self, "current_sample", None)
+            avg_track_added = has_avg
+            set_track_added = has_set
+            layout_ready = bool(getattr(self, "_layout_log_ready", False))
+            if (
+                sample is not None
+                and layout_ready
+                and getattr(self, "_last_track_layout_sample_id", None) != id(sample)
+            ):
+                sample_name = getattr(sample, "name", getattr(sample, "label", "N/A"))
+                log.info(
+                    "UI: Track layout for sample %s -> inner=%s outer=%s avg_pressure=%s set_pressure=%s",
+                    sample_name,
+                    True,
+                    has_outer,
+                    avg_track_added,
+                    set_track_added,
+                )
+                self._last_track_layout_sample_id = id(sample)
+
+            self._unbind_primary_axis_callbacks()
+            host.ensure_channels(specs)
+
+            inner_track = host.track("inner")
+            outer_track = host.track("outer") if has_outer else None
+            avg_track = host.track("avg_pressure") if has_avg else None
+            set_track = host.track("set_pressure") if has_set else None
+
+            ordered_tracks = [t for t in (inner_track, outer_track, avg_track, set_track) if t]
+            primary_track = next((t for t in ordered_tracks if t.is_visible()), None) or (
+                ordered_tracks[0] if ordered_tracks else None
+            )
+
+            self.ax = primary_track.ax if primary_track else None
+            self.ax2 = outer_track.ax if inner_track and outer_track else None
+            self._bind_primary_axis_callbacks()
+            self._init_hover_artists()
+
+            self.trace_line = inner_track.primary_line if inner_track else None
+            self.inner_line = self.trace_line
+            self.od_line = outer_track.primary_line if outer_track else None
+            self.outer_line = self.od_line
+
+            for axis in self.plot_host.axes():
+                if self.grid_visible:
+                    axis.grid(True, color=CURRENT_THEME["grid_color"])
+                else:
+                    axis.grid(False)
+
+            stored_xlabel = getattr(self, "_shared_xlabel", None)
+            if stored_xlabel is not None:
+                self._set_shared_xlabel(stored_xlabel)
+
+            self._apply_current_style(redraw=False)
+            self._refresh_plot_legend()
+            self._sync_track_visibility_from_host()
+            if redraw and hasattr(self, "canvas"):
+                self.canvas.draw_idle()
+            return
+
         specs: list[ChannelTrackSpec] = []
         if inner_on:
             specs.append(
@@ -4892,6 +5036,15 @@ class VasoAnalyzerApp(QMainWindow):
             self.canvas.draw_idle()
 
     def _apply_channel_toggle(self, channel: str, checked: bool) -> None:
+        # PyQtGraph: drive host visibility without rebuilding tracks
+        render_backend = None
+        if hasattr(self, "plot_host") and self.plot_host is not None:
+            with contextlib.suppress(Exception):
+                render_backend = self.plot_host.get_render_backend()
+        if render_backend == "pyqtgraph":
+            self._apply_channel_toggle_pyqtgraph(channel, checked)
+            return
+
         # For pressure channels, simply rebuild the layout
         if channel in ("avg_pressure", "set_pressure"):
             # Get current inner/outer state
@@ -4956,6 +5109,45 @@ class VasoAnalyzerApp(QMainWindow):
 
     def toggle_set_pressure(self, checked: bool):
         self._apply_channel_toggle("set_pressure", checked)
+
+    def _apply_channel_toggle_pyqtgraph(self, channel: str, checked: bool) -> None:
+        host = getattr(self, "plot_host", None)
+        if host is None:
+            return
+
+        if channel in ("avg_pressure", "set_pressure"):
+            host.set_channel_visible(channel, bool(checked))
+        else:
+            has_outer = self._outer_channel_available()
+            inner_visible = host.is_channel_visible("inner")
+            outer_visible = host.is_channel_visible("outer") if has_outer else False
+
+            if channel == "inner":
+                inner_visible = bool(checked)
+            else:
+                if checked and not has_outer:
+                    self._apply_toggle_state(inner_visible, False, outer_supported=False)
+                    self._update_trace_controls_state()
+                    return
+                outer_visible = bool(checked)
+
+            inner_visible, outer_visible = self._ensure_valid_channel_selection(
+                inner_visible,
+                outer_visible,
+                toggled=channel,
+                outer_supported=has_outer,
+            )
+
+            self._apply_toggle_state(inner_visible, outer_visible, outer_supported=has_outer)
+            host.set_channel_visible("inner", inner_visible)
+            host.set_channel_visible("outer", outer_visible)
+
+        self._sync_track_visibility_from_host()
+        self._update_trace_controls_state()
+        self._refresh_plot_legend()
+        if hasattr(self, "canvas"):
+            with contextlib.suppress(Exception):
+                self.canvas.draw_idle()
 
     def toggle_fullscreen(self, checked: bool = False):
         """Toggle fullscreen mode.
@@ -6571,6 +6763,35 @@ QPushButton[isGhost="true"]:hover {{
                 self.od_toggle_act.blockSignals(False)
         if getattr(self, "actEditPoints", None) is not None:
             self.actEditPoints.setEnabled(has_trace)
+
+    def _sync_track_visibility_from_host(self) -> None:
+        """Align toolbar actions with PyQtGraph host visibility state."""
+
+        host = getattr(self, "plot_host", None)
+        if host is None:
+            return
+        with contextlib.suppress(Exception):
+            backend = host.get_render_backend()
+        if host is None or backend != "pyqtgraph":
+            return
+
+        mapping = {
+            "inner": getattr(self, "id_toggle_act", None),
+            "outer": getattr(self, "od_toggle_act", None),
+            "avg_pressure": getattr(self, "avg_pressure_toggle_act", None),
+            "set_pressure": getattr(self, "set_pressure_toggle_act", None),
+        }
+
+        for key, action in mapping.items():
+            if action is None:
+                continue
+            desired = host.is_channel_visible(key)
+            if action.isChecked() != desired:
+                action.blockSignals(True)
+                action.setChecked(desired)
+                action.blockSignals(False)
+
+        self._update_trace_controls_state()
 
     def _toggle_event_lines_legacy(self, visible: bool) -> None:
         ax = getattr(self, "ax", None)

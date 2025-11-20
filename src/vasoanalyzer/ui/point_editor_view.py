@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -42,6 +43,18 @@ def _parse_modifiers(key: str | None) -> tuple[bool, bool]:
     return additive, toggle
 
 
+class PointEditorTableWidget(QTableWidget):
+    """Table with guarded keyboard shortcuts for the point editor."""
+
+    def keyPressEvent(self, event) -> None:
+        # Ignore Select All to avoid freezes on very large tables
+        if (event.key() == Qt.Key_A) and (
+            event.modifiers() & (Qt.ControlModifier | Qt.MetaModifier)
+        ):
+            return
+        super().keyPressEvent(event)
+
+
 class PointEditorDialog(QDialog):
     """Interactive dialog that previews manual point edits."""
 
@@ -54,6 +67,7 @@ class PointEditorDialog(QDialog):
         self._summary: SessionSummary | None = None
         self._updating_table_selection = False
         self._drag_origin: tuple[float, float, str, float, float] | None = None
+        self._sel_rows: set[int] = set()
 
         self._visible_indices = self.session.visible_indices()
         self._visible_times = self.session.visible_times()
@@ -133,13 +147,21 @@ class PointEditorDialog(QDialog):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(8)
 
-        self.table = QTableWidget(container)
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Idx", "Time (s)", "Raw", "Preview"])
+        self.table = PointEditorTableWidget(container)
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Sel", "Idx", "Time (s)", "Raw", "Preview"])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table.setAlternatingRowColors(True)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
         grid.addWidget(self.table, 0, 0, 1, 3)
 
         method_label = QLabel("Connect Method", container)
@@ -207,6 +229,7 @@ class PointEditorDialog(QDialog):
         clean = self.session.visible_clean()
         row_count = len(times)
         self.table.setRowCount(row_count)
+        self._sel_rows = set()
         self._row_to_index: list[int] = []
         self._index_to_row: dict[int, int] = {}
         for row in range(row_count):
@@ -214,19 +237,28 @@ class PointEditorDialog(QDialog):
             self._row_to_index.append(idx)
             self._index_to_row[idx] = row
 
+            sel_item = QTableWidgetItem("")
+            sel_item.setFlags(Qt.ItemIsEnabled)
+            sel_item.setTextAlignment(int(Qt.AlignCenter))
+
             idx_item = QTableWidgetItem(str(idx))
             idx_item.setFlags(idx_item.flags() & ~Qt.ItemIsEditable)
+            idx_item.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
             time_item = QTableWidgetItem(_format_float(times[row]))
             time_item.setFlags(time_item.flags() & ~Qt.ItemIsEditable)
+            time_item.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
             raw_item = QTableWidgetItem(_format_float(raw[row]))
             raw_item.setFlags(raw_item.flags() & ~Qt.ItemIsEditable)
+            raw_item.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
             clean_item = QTableWidgetItem(_format_float(clean[row]))
             clean_item.setFlags(clean_item.flags() & ~Qt.ItemIsEditable)
+            clean_item.setTextAlignment(int(Qt.AlignRight | Qt.AlignVCenter))
 
-            self.table.setItem(row, 0, idx_item)
-            self.table.setItem(row, 1, time_item)
-            self.table.setItem(row, 2, raw_item)
-            self.table.setItem(row, 3, clean_item)
+            self.table.setItem(row, 0, sel_item)
+            self.table.setItem(row, 1, idx_item)
+            self.table.setItem(row, 2, time_item)
+            self.table.setItem(row, 3, raw_item)
+            self.table.setItem(row, 4, clean_item)
         self.table.resizeColumnsToContents()
 
     def _update_plot_data(self) -> None:
@@ -267,7 +299,7 @@ class PointEditorDialog(QDialog):
     def _update_preview_column(self) -> None:
         clean = self.session.visible_clean()
         for row, value in enumerate(clean):
-            item = self.table.item(row, 3)
+            item = self.table.item(row, 4)
             if item is not None:
                 item.setText(_format_float(float(value)))
 
@@ -287,7 +319,32 @@ class PointEditorDialog(QDialog):
             else:
                 self._selected_scatter.set_offsets(np.empty((0, 2)))
         self._sync_table_selection()
+        self._update_sel_column()
         self.canvas.draw_idle()
+
+    def _update_sel_column(self) -> None:
+        """Keep the 'Sel' column markers in sync with the current selection."""
+        selected_rows: set[int] = set()
+        for idx in self.session.selection():
+            row = self._index_to_row.get(idx)
+            if row is not None:
+                selected_rows.add(row)
+        previous: set[int] = getattr(self, "_sel_rows", set())
+        to_clear = previous - selected_rows
+        to_set = selected_rows - previous
+
+        for row in to_clear:
+            item = self.table.item(int(row), 0)
+            if item is not None:
+                item.setText("")
+
+        for row in to_set:
+            item = self.table.item(int(row), 0)
+            if item is not None:
+                item.setText("✓")
+                item.setTextAlignment(int(Qt.AlignCenter))
+
+        self._sel_rows = selected_rows
 
     def _update_status(self) -> None:
         selection_count = len(self.session.selection())
@@ -396,6 +453,7 @@ class PointEditorDialog(QDialog):
         rows = self.table.selectionModel().selectedRows()
         indices = [int(self._row_to_index[row.row()]) for row in rows]
         self.session.set_selection(indices, additive=False)
+        self._update_sel_column()
 
     def _sync_table_selection(self) -> None:
         self._updating_table_selection = True

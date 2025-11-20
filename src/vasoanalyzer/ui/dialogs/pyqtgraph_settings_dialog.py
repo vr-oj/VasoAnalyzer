@@ -39,6 +39,7 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 if TYPE_CHECKING:
     from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
     from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
+from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class PyQtGraphSettingsDialog(QDialog):
             "Georgia",
         ]
 
-        self.track_widgets: dict[str, tuple[PyQtGraphChannelTrack, TrackWidgetControls]] = {}
+        self.track_widgets: dict[str, tuple[PyQtGraphChannelTrack | None, TrackWidgetControls]] = {}
         self.y_axis_widgets: dict[str, tuple[PyQtGraphChannelTrack, AxisTitleWidgets]] = {}
         self.line_widgets: dict[str, tuple[PyQtGraphChannelTrack, LineStyleWidgets]] = {}
 
@@ -204,8 +205,9 @@ class PyQtGraphSettingsDialog(QDialog):
 
         self.track_widgets = {}
         row = 1
-        for idx, track in enumerate(self.plot_host._tracks.values()):
-            label_text, widgets = self._create_track_group(track, idx)
+        for idx, spec in enumerate(self.plot_host.iter_channels()):
+            track = self.plot_host.track(spec.track_id)
+            label_text, widgets = self._create_track_group(spec, track, idx)
             name_label = QLabel(label_text)
             grid.addWidget(name_label, row, 0)
             grid.addWidget(widgets["visible"], row, 1, alignment=Qt.AlignCenter)
@@ -258,9 +260,10 @@ class PyQtGraphSettingsDialog(QDialog):
         layout.addStretch(1)
         return tab
 
-    def _create_track_group(self, track, idx: int) -> tuple[str, TrackWidgetControls]:
+    def _create_track_group(
+        self, spec: ChannelTrackSpec, track: PyQtGraphChannelTrack | None, idx: int
+    ) -> tuple[str, TrackWidgetControls]:
         """Create widgets for a single track row and register them."""
-        spec = track.spec
         y_min_spin = QDoubleSpinBox()
         y_min_spin.setRange(-10000, 10000)
         y_min_spin.setDecimals(2)
@@ -274,20 +277,23 @@ class PyQtGraphSettingsDialog(QDialog):
         y_max_spin.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
 
         try:
-            ylim = track.ax.get_ylim()
-            y_min_spin.setValue(ylim[0])
-            y_max_spin.setValue(ylim[1])
+            if track is not None:
+                ylim = track.ax.get_ylim()
+                y_min_spin.setValue(ylim[0])
+                y_max_spin.setValue(ylim[1])
+            else:
+                raise ValueError("missing track")
         except Exception:
             y_min_spin.setValue(0)
             y_max_spin.setValue(100)
 
         auto_scale_cb = QCheckBox()
         auto_scale_cb.setToolTip("Enable automatic Y scaling for this track")
-        auto_scale_cb.setChecked(track.view._autoscale_y)
+        auto_scale_cb.setChecked(track.view._autoscale_y if track is not None else True)
 
         visible_cb = QCheckBox()
         visible_cb.setToolTip("Show or hide this track")
-        visible_cb.setChecked(track.is_visible())
+        visible_cb.setChecked(self.plot_host.is_channel_visible(spec.track_id))
 
         widgets: TrackWidgetControls = {
             "y_min": y_min_spin,
@@ -1085,6 +1091,10 @@ class PyQtGraphSettingsDialog(QDialog):
                 tick_size = self.plot_host.tick_font_size()
                 self.tick_font_size.setValue(int(tick_size))
 
+            # Track visibility from host state
+            for track_id, (_track, widgets) in self.track_widgets.items():
+                widgets["visible"].setChecked(self.plot_host.is_channel_visible(track_id))
+
             # Load Y axis titles
             first_widgets = None
             for _track_id, (track, widgets) in self.y_axis_widgets.items():
@@ -1152,7 +1162,9 @@ class PyQtGraphSettingsDialog(QDialog):
             if self.plot_host is not None and hasattr(self.plot_host, "debug_dump_state"):
                 self.plot_host.debug_dump_state("pyqtgraph_settings_apply (before)")
             # Apply track settings
-            for _track_id, (track, widgets) in self.track_widgets.items():
+            for track_id, (track, widgets) in self.track_widgets.items():
+                if track is None:
+                    continue
                 # Y-axis limits
                 if not widgets["autoscale"].isChecked():
                     y_min = widgets["y_min"].value()
@@ -1164,7 +1176,7 @@ class PyQtGraphSettingsDialog(QDialog):
                         track.autoscale()
 
                 # Visibility
-                track.set_visible(widgets["visible"].isChecked())
+                self.plot_host.set_channel_visible(track_id, widgets["visible"].isChecked())
 
             # Apply axis titles
             self._apply_axis_titles()
@@ -1184,6 +1196,9 @@ class PyQtGraphSettingsDialog(QDialog):
             # Notify parent window
             if hasattr(self.parent_window, "on_plot_settings_changed"):
                 self.parent_window.on_plot_settings_changed()
+            if hasattr(self.parent_window, "_sync_track_visibility_from_host"):
+                with contextlib.suppress(Exception):
+                    self.parent_window._sync_track_visibility_from_host()
             if self.plot_host is not None and hasattr(self.plot_host, "debug_dump_state"):
                 self.plot_host.debug_dump_state("pyqtgraph_settings_apply (after)")
 

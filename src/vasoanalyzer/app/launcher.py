@@ -12,6 +12,7 @@ from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, 
 from PyQt5.QtWidgets import QApplication, QSplashScreen
 
 from utils.config import APP_VERSION
+from vasoanalyzer.ui import theme
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 from vasoanalyzer.ui.theme import apply_light_theme
 
@@ -71,6 +72,10 @@ class VasoAnalyzerLauncher:
         palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
         palette.setColor(QPalette.Button, QColor("#e0e0e0"))
         palette.setColor(QPalette.ButtonText, QColor("#222222"))
+        selection_bg = theme.CURRENT_THEME.get("selection_bg", "#CCE5FF")
+        selection_text = theme.CURRENT_THEME.get("table_text", "#000000")
+        palette.setColor(QPalette.Highlight, QColor(selection_bg))
+        palette.setColor(QPalette.HighlightedText, QColor(selection_text))
         self.app.setPalette(palette)
 
         if resource_path is not None:
