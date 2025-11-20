@@ -6066,17 +6066,25 @@ QPushButton[isGhost="true"]:hover {{
     def _on_edit_points_triggered(self) -> None:
         if self.trace_model is None:
             return
+
+        # Only offer channels that are currently visible
         channels: list[tuple[str, str]] = []
         has_outer = self.trace_model.outer_full is not None
-        if self.id_toggle_act is None or self.id_toggle_act.isChecked():
+        inner_visible = self.id_toggle_act is None or self.id_toggle_act.isChecked()
+        outer_visible = has_outer and (self.od_toggle_act is None or self.od_toggle_act.isChecked())
+
+        if inner_visible:
             channels.append(("inner", "Inner Diameter (ID)"))
-        if has_outer and (self.od_toggle_act is None or self.od_toggle_act.isChecked()):
+        if outer_visible:
             channels.append(("outer", "Outer Diameter (OD)"))
 
         if not channels:
-            channels.append(("inner", "Inner Diameter (ID)"))
-            if has_outer:
-                channels.append(("outer", "Outer Diameter (OD)"))
+            QMessageBox.information(
+                self,
+                "Edit Points",
+                "No visible channels to edit.\nTurn on a trace in the plot, then try again.",
+            )
+            return
 
         if len(channels) == 1:
             self._launch_point_editor(channels[0][0])
@@ -6094,6 +6102,14 @@ QPushButton[isGhost="true"]:hover {{
         window = None
         if hasattr(self, "plot_host") and self.plot_host is not None:
             window = self.plot_host.current_window()
+        if window is not None and not self._channel_has_data_in_window(channel, window):
+            QMessageBox.information(
+                self,
+                "No data in current window",
+                "There are no points in the currently visible time window.\n"
+                "Zoom into a region with data, or reset the view, then try again.",
+            )
+            return
         if window is None:
             window = self.trace_model.full_range
 
@@ -6128,6 +6144,32 @@ QPushButton[isGhost="true"]:hover {{
 
         command = PointEditCommand(self, actions, summary)
         self.undo_stack.push(command)
+
+    def _channel_has_data_in_window(self, channel: str, window: tuple[float, float]) -> bool:
+        """Return True if the channel has any samples inside the window."""
+        if self.trace_model is None:
+            return False
+        time_full = getattr(self.trace_model, "time_full", None)
+        if time_full is None:
+            return False
+
+        series = None
+        channel_key = str(channel).strip().lower()
+        if channel_key == "inner":
+            series = getattr(self.trace_model, "inner_full", None)
+        elif channel_key == "outer":
+            series = getattr(self.trace_model, "outer_full", None)
+        if series is None:
+            return False
+
+        x0, x1 = float(window[0]), float(window[1])
+        xmin, xmax = (x0, x1) if x0 <= x1 else (x1, x0)
+        mask = (time_full >= xmin) & (time_full <= xmax)
+        if not np.any(mask):
+            return False
+
+        window_values = series[mask]
+        return bool(np.any(np.isfinite(window_values)))
 
     def _update_window_title(self) -> None:
         base = f"VasoAnalyzer {APP_VERSION}"

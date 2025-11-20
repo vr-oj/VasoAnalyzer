@@ -262,8 +262,9 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     )
     window.actEditPoints.setToolTip(
         "<b>Edit Points</b><br><br>"
-        "Opens the Point Editor for manual trace correction.<br>"
-        "Edit raw data points in the current view."
+        "Edit data points in the current time window.<br>"
+        "Opens a point editor dialog where you can click or box-select points.<br>"
+        "Shift-click adds to selection; Ctrl/Cmd-click toggles. Changes apply when you press Apply."
     )
     window.actEditPoints.setEnabled(False)
     window.actEditPoints.triggered.connect(window._on_edit_points_triggered)

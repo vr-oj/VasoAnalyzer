@@ -401,10 +401,17 @@ class PointEditorDialog(QDialog):
         self._updating_table_selection = True
         try:
             self.table.clearSelection()
+            selected_rows: list[int] = []
             for idx in self.session.selection():
                 row = self._index_to_row.get(idx)
                 if row is not None:
+                    selected_rows.append(row)
                     self.table.selectRow(row)
+            if selected_rows:
+                anchor = selected_rows[-1]
+                model = self.table.model()
+                if model is not None:
+                    self.table.setCurrentIndex(model.index(anchor, 0))
         finally:
             self._updating_table_selection = False
 
