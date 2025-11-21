@@ -159,6 +159,7 @@ class _StyleHolder:
 
 
 class _SampleLoadSignals(QObject):
+    progressChanged = pyqtSignal(int, str)
     finished = pyqtSignal(object, object, object, object, object)
     error = pyqtSignal(object, object, str)
 
@@ -190,6 +191,12 @@ class _SampleLoadJob(QRunnable):
         self._load_results = load_results
         self._dataset_id = sample.dataset_id
         self._staging_db_path = staging_db_path
+        self._emit_progress(5, "Queued")
+
+    def _emit_progress(self, percent: int, label: str) -> None:
+        """Safely emit progress updates."""
+        with contextlib.suppress(RuntimeError):
+            self.signals.progressChanged.emit(percent, label)
 
     def run(self) -> None:  # type: ignore[override]
         trace_df = None
@@ -205,6 +212,7 @@ class _SampleLoadJob(QRunnable):
         thread_local_conn: sqlite3.Connection | None = None
 
         try:
+            self._emit_progress(10, "Opening storage")
             # If we have a staging DB path, create a thread-local connection
             if self._staging_db_path and repo is not None:
                 log.debug(
@@ -251,7 +259,9 @@ class _SampleLoadJob(QRunnable):
                 raise RuntimeError("Unable to obtain project repository")
 
             if self._load_trace:
+                self._emit_progress(40, "Loading trace")
                 trace_raw = repo.get_trace(self._dataset_id)  # type: ignore[call-arg]
+                self._emit_progress(55, "Formatting trace")
                 trace_df = project_module._format_trace_df(
                     trace_raw,
                     getattr(self._sample, "trace_column_labels", None),
@@ -262,16 +272,20 @@ class _SampleLoadJob(QRunnable):
                     trace_df.attrs["edit_log"] = history
 
             if self._load_events:
+                self._emit_progress(70, "Loading events")
                 log.debug("Background job: loading events for dataset_id=%s", self._dataset_id)
                 events_raw = repo.get_events(self._dataset_id)  # type: ignore[call-arg]
                 log.debug(
                     "Background job: loaded %d event rows",
                     len(events_raw) if events_raw is not None else 0,
                 )
+                self._emit_progress(80, "Formatting events")
                 events_df = project_module._format_events_df(events_raw)
 
             if self._load_results:
+                self._emit_progress(90, "Loading results")
                 analysis_results = project_module._load_sample_results(repo, self._dataset_id)
+            self._emit_progress(100, "Finalizing")
         except Exception as exc:  # pragma: no cover - defensive UI logging
             self.signals.error.emit(self._token, self._sample, str(exc))
             return
@@ -2304,6 +2318,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         load_async = bool((repo or project_path) and (needs_trace or needs_events or needs_results))
 
+        self._start_sample_load_progress(sample.name)
         self._prepare_sample_view(sample)
 
         if load_async:
@@ -2322,6 +2337,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self._log_sample_data_summary(sample)
         self._render_sample(sample)
+        self._finish_sample_load_progress()
 
     def _prepare_sample_view(self, sample: SampleN) -> None:
         self.show_analysis_workspace()
@@ -2374,6 +2390,7 @@ class VasoAnalyzerApp(QMainWindow):
         )
         job.signals.finished.connect(self._on_sample_load_finished)
         job.signals.error.connect(self._on_sample_load_error)
+        job.signals.progressChanged.connect(self._update_sample_load_progress)
         self._thread_pool.start(job)
 
     def _on_sample_load_finished(
@@ -2405,6 +2422,7 @@ class VasoAnalyzerApp(QMainWindow):
                 getattr(sample, "name", "<unknown>"),
                 getattr(sample, "dataset_id", None),
             )
+            self._finish_sample_load_progress()
             return
         if events_data is None:
             log.info(
@@ -2421,6 +2439,7 @@ class VasoAnalyzerApp(QMainWindow):
         )
         self.statusBar().showMessage(f"{sample.name} ready", 2000)
         self._render_sample(sample)
+        self._finish_sample_load_progress()
 
     def _on_sample_load_error(self, token: object, sample: SampleN, message: str) -> None:
         if token != self._current_sample_token or sample is not self.current_sample:
@@ -2431,6 +2450,7 @@ class VasoAnalyzerApp(QMainWindow):
             6000,
         )
         self._render_sample(sample)
+        self._finish_sample_load_progress()
         if self.trace_model is None:
             self._clear_pending_figure_state()
 
@@ -6096,6 +6116,33 @@ QPushButton[isGhost="true"]:hover {{
         """Hide progress bar."""
         self._progress_bar.hide()
         self._progress_bar.setValue(0)
+
+    def _start_sample_load_progress(self, sample_name: str) -> None:
+        """Begin status-bar progress indication for sample load."""
+        if self._progress_bar is None:
+            return
+        self._progress_bar.setRange(0, 0)
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setFormat(f"Loading {sample_name}…")
+        if self.statusBar() is not None:
+            self.statusBar().showMessage(f"Loading {sample_name}…")
+
+    def _update_sample_load_progress(self, percent: int, label: str) -> None:
+        """Update status-bar sample load progress."""
+        if self._progress_bar is None:
+            return
+        if self._progress_bar.minimum() == 0 and self._progress_bar.maximum() == 0:
+            self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(max(0, min(percent, 100)))
+        self._progress_bar.setFormat(f"{label}… %p%")
+
+    def _finish_sample_load_progress(self) -> None:
+        """Hide status-bar sample load progress."""
+        if self._progress_bar is None:
+            return
+        self._progress_bar.setVisible(False)
+        if self.statusBar() is not None:
+            self.statusBar().clearMessage()
 
     # ------------------------------------------------------------------ trace editing helpers
     def _prepare_trace_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:

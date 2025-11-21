@@ -1451,6 +1451,7 @@ def _load_project_bundle(path: str) -> Project:
 
     Automatically handles snapshot recovery if current snapshot is corrupted.
     """
+    t_start = time.perf_counter()
     from vasoanalyzer.services.project_service import SQLiteProjectRepository
     from vasoanalyzer.storage.sqlite_store import ProjectStore
 
@@ -1463,7 +1464,9 @@ def _load_project_bundle(path: str) -> Project:
     # Open using unified project storage (handles both bundles and containers)
     # NOTE: Open with readonly=False to ensure staging database is created
     # This allows background jobs to read embedded data from the staging DB
+    t_open_start = time.perf_counter()
     store = open_unified_project(path, readonly=False, auto_migrate=False)
+    t_open = time.perf_counter() - t_open_start
 
     # Wrap the UnifiedProjectStore as a ProjectStore for compatibility
     legacy_store = ProjectStore(path=store.path, conn=store.conn, dirty=store.dirty)
@@ -1489,6 +1492,7 @@ def _load_project_bundle(path: str) -> Project:
         experiments_map: dict[str, Experiment] = {}
         project_attachments: list[Attachment] = []
 
+        t_load_start = time.perf_counter()
         for record in repo.iter_datasets():
             dataset_id = record["id"]
             extra = record.get("extra") or {}
@@ -1528,6 +1532,7 @@ def _load_project_bundle(path: str) -> Project:
                 experiments_map[experiment_name] = experiment
 
             experiment.samples.append(sample)
+        t_load = time.perf_counter() - t_load_start
 
         project = Project(
             name=project_name,
@@ -1550,6 +1555,15 @@ def _load_project_bundle(path: str) -> Project:
         # 2. Save operations can reuse the same store (avoiding redundant unpack/pack)
         # 3. Store is properly cleaned up when project is closed
         project._attach_store(store)
+
+        t_total = time.perf_counter() - t_start
+        log.info(
+            "Project load (bundle): open=%.3fs, samples=%.3fs, total=%.3fs, path=%s",
+            t_open,
+            t_load,
+            t_total,
+            path,
+        )
 
         log.info(f"{format_name.capitalize()} loaded successfully: {path_obj}")
         return project
@@ -1663,6 +1677,7 @@ def _write_sqlite_project(
 def _populate_store_from_project(project: Project, repo: ProjectRepository, base_dir: Path) -> None:
     """Populate ``store`` with the contents of ``project``."""
 
+    t_start = time.perf_counter()
     base_dir = base_dir.resolve()
 
     # CRITICAL: Clear all existing datasets to avoid duplication
@@ -1741,6 +1756,14 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
     finally:
         if source_ctx is not None:
             close_project_ctx(source_ctx)
+        duration = time.perf_counter() - t_start
+        sample_count = sum(len(exp.samples) for exp in project.experiments)
+        log.info(
+            "Save: _populate_store_from_project path=%s samples=%d time=%.3fs",
+            getattr(project, "path", None),
+            sample_count,
+            duration,
+        )
 
 
 def _save_sample_to_store(
@@ -1753,6 +1776,7 @@ def _save_sample_to_store(
 ) -> None:
     """Serialize an individual ``sample`` into ``store``."""
 
+    t_start = time.perf_counter()
     trace_df = _resolve_trace_dataframe(sample, base_dir, source_repo)
     events_df = _resolve_events_dataframe(sample, base_dir, source_repo)
 
@@ -1801,6 +1825,14 @@ def _save_sample_to_store(
     sample.asset_roles = {asset["role"]: asset["id"] for asset in assets if asset.get("role")}
 
     repo.update_dataset_meta(dataset_id, extra_json=extra)
+    duration = time.perf_counter() - t_start
+    log.info(
+        "Save: sample '%s' (index=%s) dataset_id=%s time=%.3fs",
+        getattr(sample, "name", None),
+        sample_index,
+        dataset_id,
+        duration,
+    )
 
 
 def _resolve_trace_dataframe(
@@ -2011,6 +2043,7 @@ def _persist_sample_attachments(
     sample: SampleN,
     base_dir: Path,
 ) -> list[dict[str, Any]]:
+    t_start = time.perf_counter()
     payload: list[dict[str, Any]] = []
     for index, att in enumerate(sample.attachments or []):
         meta = att.to_metadata()
@@ -2022,6 +2055,15 @@ def _persist_sample_attachments(
 
         source = att.source_path or att.data_path
         path = _absolute_path(source, base_dir) if source else None
+        if source and source.lower().endswith((".tif", ".tiff")):
+            log.info(
+                "Save: skipping TIFF embedding for sample=%s role=%s path=%s "
+                "(temporary large-file limit)",
+                getattr(sample, "name", None),
+                role,
+                source,
+            )
+            continue
         if path and path.exists():
             try:
                 data = path.read_bytes()
@@ -2034,6 +2076,14 @@ def _persist_sample_attachments(
                 )
             except Exception:
                 log.debug("Failed to embed attachment %s", path, exc_info=True)
+    duration = time.perf_counter() - t_start
+    log.info(
+        "Save: attachments sample=%s dataset_id=%s count=%d time=%.3fs",
+        sample.name,
+        dataset_id,
+        len(sample.attachments or []),
+        duration,
+    )
     return payload
 
 
@@ -2044,6 +2094,7 @@ def _persist_sample_snapshots(
     base_dir: Path,
     source_repo: ProjectRepository | None = None,
 ) -> dict[str, Any]:
+    t_start = time.perf_counter()
     payload: dict[str, Any] = {}
 
     snapshot_role = sample.snapshot_role or "snapshot_stack"
@@ -2116,6 +2167,13 @@ def _persist_sample_snapshots(
                 sample.snapshot_tiff_role = "snapshot_tiff"
             except Exception:
                 log.debug("Failed to register snapshot TIFF %s", abs_path, exc_info=True)
+    duration = time.perf_counter() - t_start
+    log.info(
+        "Save: snapshots sample=%s dataset_id=%s time=%.3fs",
+        sample.name,
+        dataset_id,
+        duration,
+    )
     return payload
 
 
@@ -2794,6 +2852,7 @@ def _load_sample_attachments(
     tmp_root: Path,
     assets: dict[str, dict[str, Any]],
 ) -> list[Attachment]:
+    t_start = time.perf_counter()
     attachments: list[Attachment] = []
 
     for meta in extra.get("attachments", []) or []:
@@ -2820,6 +2879,13 @@ def _load_sample_attachments(
                     fh.write(data)
                 attachment.data_path = target_path.as_posix()
         attachments.append(attachment)
+    duration = time.perf_counter() - t_start
+    log.info(
+        "Loaded sample attachments dataset_id=%s count=%d time=%.3fs",
+        dataset_id,
+        len(attachments),
+        duration,
+    )
     return attachments
 
 
