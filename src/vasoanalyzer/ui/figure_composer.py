@@ -14,6 +14,7 @@ from matplotlib.backends.backend_qt5agg import (
 )
 from matplotlib.colors import to_hex
 from matplotlib.figure import Figure
+from PyQt5 import QtCore
 from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QGuiApplication
 from PyQt5.QtWidgets import (
@@ -22,6 +23,8 @@ from PyQt5.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -29,6 +32,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -83,6 +87,11 @@ class FigureComposerWindow(QMainWindow):
         self.figure_state: Any = None
         self._current_window: tuple[float, float] | None = None
         self._grid_enabled: bool = True
+        self._graph_width_in: float = 0.0
+        self._graph_height_in: float = 0.0
+        self._graph_aspect_ratio: float | None = None
+        self._graph_units: str = "mm"
+        self._is_updating_graph_size: bool = False
 
         self.x_label_edit: QLineEdit | None = None
         self.y_label_edit: QLineEdit | None = None
@@ -94,12 +103,6 @@ class FigureComposerWindow(QMainWindow):
         self.axis_label_fontsize_spin: QSpinBox | None = None
         self.trace_linewidth_spin: QDoubleSpinBox | None = None
         self._trace_lines: list = []
-        self.fig_width_spin: QDoubleSpinBox | None = None
-        self.fig_height_spin: QDoubleSpinBox | None = None
-        self.fig_units_combo: QComboBox | None = None
-        self.fig_pixels_label: QLabel | None = None
-        self._figure_width_in: float = 200.0 / 25.4
-        self._figure_height_in: float = 200.0 / 25.4
         self.tick_fontsize_spin: QSpinBox | None = None
         self.x_tick_rotation_combo: QComboBox | None = None
         self.max_xticks_spin: QSpinBox | None = None
@@ -124,6 +127,12 @@ class FigureComposerWindow(QMainWindow):
         self._is_rendering: bool = False
 
         self.figure, self.canvas, self.ax = self._build_canvas()
+        self.canvas_scroll = QScrollArea(self)
+        self.canvas_scroll.setWidgetResizable(False)
+        self.canvas_scroll.setFrameShape(QFrame.NoFrame)
+        self.canvas_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.canvas_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.canvas_scroll.setWidget(self.canvas)
         self._xlim_cid = self.ax.callbacks.connect(
             "xlim_changed", self._on_axes_limits_changed_from_matplotlib
         )
@@ -146,7 +155,8 @@ class FigureComposerWindow(QMainWindow):
         canvas_layout.setSpacing(0)
         self.toolbar = MinimalNavigationToolbar(self.canvas, canvas_container)
         canvas_layout.addWidget(self.toolbar)
-        canvas_layout.addWidget(self.canvas)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        canvas_layout.addWidget(self.canvas_scroll)
 
         splitter.addWidget(controls_scroll)
         splitter.addWidget(canvas_container)
@@ -160,6 +170,9 @@ class FigureComposerWindow(QMainWindow):
         central_layout.addWidget(splitter)
         self.setCentralWidget(central)
         splitter.setSizes([300, 900])
+
+        self._init_graph_size_state()
+        self._update_canvas_size_from_figure()
 
         # Give the composer a comfortable default size and keep it resizable
         self.resize(1500, 900)
@@ -260,10 +273,7 @@ class FigureComposerWindow(QMainWindow):
 
     # ------------------------------------------------------------------ internals
     def _build_canvas(self) -> tuple[Figure, FigureCanvasQTAgg, Any]:
-        width_in = float(self._figure_width_in) if self._figure_width_in else 1.0
-        height_in = float(self._figure_height_in) if self._figure_height_in else 1.0
-
-        figure = Figure(figsize=(width_in, height_in), facecolor="white")
+        figure = Figure(facecolor="white")
         canvas = FigureCanvasQTAgg(figure)
         ax = figure.add_subplot(111)
         figure.subplots_adjust(left=0.12, right=0.98, top=0.95, bottom=0.12)
@@ -276,6 +286,195 @@ class FigureComposerWindow(QMainWindow):
         layout.addWidget(canvas)
         # Legacy method retained; controls are now built in __init__ directly.
         return container
+
+    def _update_canvas_size_from_figure(self) -> None:
+        fig = getattr(self, "figure", None)
+        canvas = getattr(self, "canvas", None)
+        if fig is None or canvas is None:
+            return
+
+        width_in, height_in = fig.get_size_inches()
+        dpi = fig.get_dpi()
+        try:
+            width_px = int(round(width_in * dpi))
+            height_px = int(round(height_in * dpi))
+        except Exception:
+            return
+
+        width_px = max(1, width_px)
+        height_px = max(1, height_px)
+
+        canvas.setFixedSize(width_px, height_px)
+        canvas.updateGeometry()
+
+        scroll = getattr(self, "canvas_scroll", None)
+        if scroll is not None:
+            widget = scroll.widget()
+            if widget is not None:
+                widget.adjustSize()
+
+    def _init_graph_size_state(self) -> None:
+        if self.figure is None:
+            return
+        width_in, height_in = self.figure.get_size_inches()
+        self._graph_width_in = float(width_in)
+        self._graph_height_in = float(height_in)
+        if width_in > 0:
+            self._graph_aspect_ratio = float(height_in / width_in)
+        else:
+            self._graph_aspect_ratio = None
+
+        self._graph_units = "mm"
+        if getattr(self, "graph_units_combo", None) is not None:
+            with QtCore.QSignalBlocker(self.graph_units_combo):
+                self.graph_units_combo.setCurrentText("mm")
+
+        self._sync_graph_size_widgets_from_figure()
+
+    def _sync_graph_size_widgets_from_figure(self) -> None:
+        if self._is_updating_graph_size:
+            return
+        if self.figure is None:
+            return
+        if (
+            getattr(self, "graph_width_spin", None) is None
+            or getattr(self, "graph_height_spin", None) is None
+        ):
+            return
+
+        self._is_updating_graph_size = True
+        try:
+            width_in, height_in = self.figure.get_size_inches()
+            self._graph_width_in = float(width_in)
+            self._graph_height_in = float(height_in)
+
+            if (
+                getattr(self, "graph_aspect_lock_checkbox", None) is not None
+                and self.graph_aspect_lock_checkbox.isChecked()
+            ):
+                if width_in > 0:
+                    self._graph_aspect_ratio = float(height_in / width_in)
+                else:
+                    self._graph_aspect_ratio = None
+
+            if self._graph_units == "mm":
+                width_val = width_in * 25.4
+                height_val = height_in * 25.4
+            else:
+                width_val = width_in
+                height_val = height_in
+
+            with QtCore.QSignalBlocker(self.graph_width_spin):
+                self.graph_width_spin.setValue(width_val)
+            with QtCore.QSignalBlocker(self.graph_height_spin):
+                self.graph_height_spin.setValue(height_val)
+        finally:
+            self._is_updating_graph_size = False
+
+    def _on_graph_units_changed(self) -> None:
+        if (
+            getattr(self, "graph_units_combo", None) is None
+            or getattr(self, "graph_width_spin", None) is None
+            or getattr(self, "graph_height_spin", None) is None
+        ):
+            return
+        if self._is_updating_graph_size:
+            return
+
+        self._is_updating_graph_size = True
+        try:
+            text = self.graph_units_combo.currentText().lower().strip()
+            new_units = "mm" if text.startswith("mm") else "in"
+
+            width_in = self._graph_width_in
+            height_in = self._graph_height_in
+
+            if new_units == "mm":
+                width_val = width_in * 25.4
+                height_val = height_in * 25.4
+            else:
+                width_val = width_in
+                height_val = height_in
+
+            with QtCore.QSignalBlocker(self.graph_width_spin):
+                self.graph_width_spin.setValue(width_val)
+            with QtCore.QSignalBlocker(self.graph_height_spin):
+                self.graph_height_spin.setValue(height_val)
+
+            self._graph_units = new_units
+        finally:
+            self._is_updating_graph_size = False
+
+    def _on_graph_size_spin_changed(self) -> None:
+        if (
+            getattr(self, "graph_width_spin", None) is None
+            or getattr(self, "graph_height_spin", None) is None
+            or self.figure is None
+        ):
+            return
+        if self._is_updating_graph_size:
+            return
+
+        sender = self.sender()
+        if sender not in (self.graph_width_spin, self.graph_height_spin):
+            return
+
+        self._is_updating_graph_size = True
+        try:
+            units = self._graph_units
+            width_val = self.graph_width_spin.value()
+            height_val = self.graph_height_spin.value()
+
+            if units == "mm":
+                width_in = width_val / 25.4
+                height_in = height_val / 25.4
+            else:
+                width_in = width_val
+                height_in = height_val
+
+            ratio = self._graph_aspect_ratio
+            if (
+                getattr(self, "graph_aspect_lock_checkbox", None) is not None
+                and self.graph_aspect_lock_checkbox.isChecked()
+                and ratio is not None
+                and ratio != 0.0
+            ):
+                if sender is self.graph_width_spin and width_in > 0:
+                    height_in = width_in * ratio
+                    height_val = height_in * 25.4 if units == "mm" else height_in
+                    with QtCore.QSignalBlocker(self.graph_height_spin):
+                        self.graph_height_spin.setValue(height_val)
+                elif sender is self.graph_height_spin:
+                    width_in = height_in / ratio
+                    width_val = width_in * 25.4 if units == "mm" else width_in
+                    with QtCore.QSignalBlocker(self.graph_width_spin):
+                        self.graph_width_spin.setValue(width_val)
+
+            self._graph_width_in = float(width_in)
+            self._graph_height_in = float(height_in)
+
+            if (
+                getattr(self, "graph_aspect_lock_checkbox", None) is not None
+                and self.graph_aspect_lock_checkbox.isChecked()
+            ):
+                if width_in > 0:
+                    self._graph_aspect_ratio = float(height_in / width_in)
+                else:
+                    self._graph_aspect_ratio = None
+
+            self.figure.set_size_inches(width_in, height_in, forward=True)
+            self._update_canvas_size_from_figure()
+            self.canvas.draw_idle()
+        finally:
+            self._is_updating_graph_size = False
+
+    def _on_graph_aspect_lock_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        if self._graph_width_in > 0:
+            self._graph_aspect_ratio = float(self._graph_height_in / self._graph_width_in)
+        else:
+            self._graph_aspect_ratio = None
 
     def _render_trace(self) -> None:
         if getattr(self, "_is_rendering", False):
@@ -793,6 +992,41 @@ class FigureComposerWindow(QMainWindow):
         style_buttons_layout.addWidget(self.style_apply_button)
         style_layout.addLayout(style_buttons_layout)
 
+        # Graph size group
+        graph_group = QGroupBox("Graph size", self._controls_widget)
+        graph_layout = QGridLayout(graph_group)
+        graph_layout.setContentsMargins(8, 8, 8, 8)
+        graph_layout.setHorizontalSpacing(6)
+        graph_layout.setVerticalSpacing(4)
+
+        graph_units_label = QLabel("Units:", graph_group)
+        self.graph_units_combo = QComboBox(graph_group)
+        self.graph_units_combo.addItems(["mm", "in"])
+        self.graph_units_combo.setCurrentText("mm")
+
+        graph_width_label = QLabel("Width:", graph_group)
+        self.graph_width_spin = QDoubleSpinBox(graph_group)
+        self.graph_width_spin.setDecimals(1)
+        self.graph_width_spin.setSingleStep(1.0)
+        self.graph_width_spin.setRange(20.0, 400.0)
+
+        graph_height_label = QLabel("Height:", graph_group)
+        self.graph_height_spin = QDoubleSpinBox(graph_group)
+        self.graph_height_spin.setDecimals(1)
+        self.graph_height_spin.setSingleStep(1.0)
+        self.graph_height_spin.setRange(20.0, 400.0)
+
+        self.graph_aspect_lock_checkbox = QCheckBox("Lock aspect", graph_group)
+        self.graph_aspect_lock_checkbox.setChecked(True)
+
+        graph_layout.addWidget(graph_units_label, 0, 0)
+        graph_layout.addWidget(self.graph_units_combo, 0, 1)
+        graph_layout.addWidget(graph_width_label, 1, 0)
+        graph_layout.addWidget(self.graph_width_spin, 1, 1)
+        graph_layout.addWidget(graph_height_label, 2, 0)
+        graph_layout.addWidget(self.graph_height_spin, 2, 1)
+        graph_layout.addWidget(self.graph_aspect_lock_checkbox, 3, 0, 1, 2)
+
         # Wire signals
         self.x_label_edit.editingFinished.connect(self._on_axes_labels_changed)
         self.y_label_edit.editingFinished.connect(self._on_axes_labels_changed)
@@ -818,12 +1052,17 @@ class FigureComposerWindow(QMainWindow):
         self.event_fontsize_spin.valueChanged.connect(self._on_event_fontsize_changed)
         self.event_label_style_combo.currentIndexChanged.connect(self._on_event_label_style_changed)
         self.event_y_spin.valueChanged.connect(self._on_event_y_position_changed)
+        self.graph_units_combo.currentIndexChanged.connect(self._on_graph_units_changed)
+        self.graph_width_spin.valueChanged.connect(self._on_graph_size_spin_changed)
+        self.graph_height_spin.valueChanged.connect(self._on_graph_size_spin_changed)
+        self.graph_aspect_lock_checkbox.toggled.connect(self._on_graph_aspect_lock_toggled)
 
         controls_layout.addWidget(axes_group)
         controls_layout.addWidget(traces_group)
         controls_layout.addWidget(ticks_group)
         controls_layout.addWidget(events_group)
         controls_layout.addWidget(style_group)
+        controls_layout.addWidget(graph_group)
         controls_layout.addStretch(1)
 
     def _on_axes_labels_changed(self) -> None:
@@ -904,59 +1143,6 @@ class FigureComposerWindow(QMainWindow):
             return
         log.info("[FIGURE_COMPOSER][AXES] label_fontsize_changed: size=%d", size)
         self.canvas.draw_idle()
-
-    def _on_figure_units_changed(self, index: int) -> None:
-        del index  # unused
-        units_text = (
-            self.fig_units_combo.currentText().lower() if self.fig_units_combo is not None else "mm"
-        )
-        log.info("[FIGURE_COMPOSER][SIZE] units_changed: units=%s", units_text)
-        self._sync_figure_size_widgets_from_figure()
-
-    def _on_figure_size_changed(self) -> None:
-        """Update the matplotlib figure size from the spin boxes."""
-        fig = getattr(self, "figure", None)
-        if fig is None or self.canvas is None:
-            return
-        if not (self.fig_width_spin and self.fig_height_spin and self.fig_units_combo):
-            return
-
-        units_text = (
-            self.fig_units_combo.currentText().lower() if self.fig_units_combo is not None else "mm"
-        )
-        width_val = self.fig_width_spin.value()
-        height_val = self.fig_height_spin.value()
-
-        if units_text.startswith("mm"):
-            width_in = float(width_val) / 25.4
-            height_in = float(height_val) / 25.4
-        else:
-            width_in = float(width_val)
-            height_in = float(height_val)
-        log.info(
-            "[FIGURE_COMPOSER][SIZE] user_changed_size: units=%s width_val=%.3f height_val=%.3f "
-            "width_in=%.3f height_in=%.3f",
-            units_text,
-            width_val,
-            height_val,
-            width_in,
-            height_in,
-        )
-
-        min_in = 0.4
-        width_in = max(width_in, min_in)
-        height_in = max(height_in, min_in)
-
-        self._figure_width_in = width_in
-        self._figure_height_in = height_in
-
-        try:
-            fig.set_size_inches(width_in, height_in, forward=True)
-        except Exception:
-            return
-
-        self._sync_figure_size_widgets_from_figure()
-        self._render_trace()
 
     def _on_trace_linewidth_changed(self, value: float) -> None:
         lines = getattr(self, "_trace_lines", None)
@@ -1363,60 +1549,9 @@ class FigureComposerWindow(QMainWindow):
         # Apply axis limits now that spins are set
         self._on_axis_limits_changed()
 
-        # Apply figure size (this will trigger a render)
-        self._on_figure_size_changed()
-
-        # Re-apply limits after render to ensure they stick
+        # Re-render to apply style changes, then re-apply limits to ensure they stick
+        self._render_trace()
         self._on_axis_limits_changed()
-
-    def _sync_figure_size_widgets_from_figure(self) -> None:
-        """Sync the Figure panel widgets (width/height/pixels) from the current Matplotlib figure."""
-        fig = getattr(self, "figure", None)
-        if fig is None:
-            return
-
-        try:
-            width_in, height_in = fig.get_size_inches()
-            dpi = fig.get_dpi()
-        except Exception:
-            return
-        log.debug(
-            "[FIGURE_COMPOSER][SIZE] sync_from_figure: width_in=%.3f height_in=%.3f dpi=%.1f",
-            width_in,
-            height_in,
-            dpi,
-        )
-
-        self._figure_width_in = float(width_in)
-        self._figure_height_in = float(height_in)
-
-        units_text = "mm"
-        if self.fig_units_combo is not None:
-            try:
-                units_text = self.fig_units_combo.currentText().lower()
-            except Exception:
-                units_text = "mm"
-
-        if units_text.startswith("mm"):
-            width_val = self._figure_width_in * 25.4
-            height_val = self._figure_height_in * 25.4
-        else:
-            width_val = self._figure_width_in
-            height_val = self._figure_height_in
-
-        if self.fig_width_spin is not None:
-            blocker = QSignalBlocker(self.fig_width_spin)
-            self.fig_width_spin.setValue(width_val)
-            del blocker
-        if self.fig_height_spin is not None:
-            blocker = QSignalBlocker(self.fig_height_spin)
-            self.fig_height_spin.setValue(height_val)
-            del blocker
-
-        if self.fig_pixels_label is not None:
-            px_w = int(round(self._figure_width_in * dpi))
-            px_h = int(round(self._figure_height_in * dpi))
-            self.fig_pixels_label.setText(f"{px_w} × {px_h} px @ {int(round(dpi))} dpi")
 
     def _sync_limits_from_axes(self, xmin: float, xmax: float, ymin: float, ymax: float) -> None:
         if not (self.xmin_spin and self.xmax_spin and self.ymin_spin and self.ymax_spin):
@@ -1607,8 +1742,6 @@ class FigureComposerWindow(QMainWindow):
                 getattr(self, "_event_label_style", "side_h") in ("side_h", "side_v")
             )
             self.event_y_spin.blockSignals(False)
-
-        self._sync_figure_size_widgets_from_figure()
 
     # ------------------------------------------------------------------ Qt lifecycle
     def closeEvent(self, event) -> None:
