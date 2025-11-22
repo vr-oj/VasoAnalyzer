@@ -28,7 +28,9 @@ class PyQtGraphEventStripTrack:
 
         vb = self._plot_item.getViewBox()
         vb.setYRange(0.0, 1.0, padding=0.0)
+        vb.disableAutoRange(axis=pg.ViewBox.XAxis)
         vb.disableAutoRange(axis=pg.ViewBox.YAxis)
+        self._plot_item.hideButtons()
 
         self._plot_item.hideAxis("left")
         self._plot_item.hideAxis("bottom")

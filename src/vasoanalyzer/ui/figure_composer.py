@@ -1,2825 +1,1649 @@
-"""Figure Composer - Advanced figure styling and export workspace."""
+"""Minimal Figure Composer window for quick matplotlib preview."""
 
 from __future__ import annotations
 
 import contextlib
 import logging
-import uuid
-from collections.abc import Mapping, Sequence
-from functools import partial
-from typing import Any, cast
+from typing import Any
 
-from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QCloseEvent, QColor, QIcon, QKeySequence
+from matplotlib.backends.backend_qt5agg import (
+    FigureCanvasQTAgg,
+)
+from matplotlib.backends.backend_qt5agg import (
+    NavigationToolbar2QT as NavigationToolbar,
+)
+from matplotlib.colors import to_hex
+from matplotlib.figure import Figure
+from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QGuiApplication
 from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
-    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
-    QDialog,
     QDoubleSpinBox,
     QFormLayout,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
-    QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QSpinBox,
     QSplitter,
-    QToolBar,
-    QUndoCommand,
-    QUndoStack,
     QVBoxLayout,
     QWidget,
 )
 
 from vasoanalyzer.core.trace_model import TraceModel
-from vasoanalyzer.ui.builtin_presets import get_builtin_presets
-from vasoanalyzer.ui.constants import DEFAULT_STYLE
-from vasoanalyzer.ui.dialogs.unified_settings_dialog import UnifiedPlotSettingsDialog
-from vasoanalyzer.ui.manual_annotation_tool import ManualAnnotationController
-
-# NOTE: Old dock system imports removed - using fixed three-panel layout
-# from vasoanalyzer.ui.docks.advanced_style_dock import AdvancedStyleDock
-# from vasoanalyzer.ui.docks.export_queue_dock import ExportQueueDock, ExportStatus
-# from vasoanalyzer.ui.docks.layout_dock import LayoutDock
-# from vasoanalyzer.ui.docks.preset_library_dock import PresetLibraryDock
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
-from vasoanalyzer.ui.plots.plot_host import LayoutState, PlotHost
-from vasoanalyzer.ui.style_manager import PlotStyleManager
-from vasoanalyzer.ui.theme import CURRENT_THEME
-from vasoanalyzer.ui.widgets import CustomToolbar
+from vasoanalyzer.ui.plots.plot_host import LayoutState
 
 __all__ = ["FigureComposerWindow"]
 
 log = logging.getLogger(__name__)
 
+# Keep side event labels close to their dashed lines
+EVENT_LABEL_X_OFFSET_FRACTION = 0.005
 
-class StyleChangeCommand(QUndoCommand):
-    """Undo command for style changes."""
 
-    def __init__(
-        self,
-        studio: FigureComposerWindow,
-        old_style: dict[str, Any],
-        new_style: dict[str, Any],
-        description: str = "Change Style",
-    ) -> None:
-        super().__init__(description)
-        self.studio = studio
-        self.old_style = old_style.copy()
-        self.new_style = new_style.copy()
+class MinimalNavigationToolbar(NavigationToolbar):
+    """
+    Navigation toolbar variant that exposes only the core navigation tools.
+    """
 
-    def redo(self) -> None:
-        """Apply new style."""
-        if self.studio._style_manager:
-            self.studio._style_manager.replace(self.new_style)
-            self.studio._current_preset_name = None  # Custom style, no preset
-            self.studio._apply_style_to_plot()
-            self.studio._sync_canvas_size_to_figure()
-            self.studio.plot_host.canvas.draw_idle()
-
-    def undo(self) -> None:
-        """Revert to old style."""
-        if self.studio._style_manager:
-            self.studio._style_manager.replace(self.old_style)
-            self.studio._current_preset_name = None  # Custom style, no preset
-            self.studio._apply_style_to_plot()
-            self.studio._sync_canvas_size_to_figure()
-            self.studio.plot_host.canvas.draw_idle()
+    toolitems = [
+        item
+        for item in NavigationToolbar.toolitems
+        if item is not None and item[0] in ("Home", "Back", "Forward", "Pan", "Zoom")
+    ]
 
 
 class FigureComposerWindow(QMainWindow):
-    """
-    Dedicated workspace for creating publication-ready figures.
+    """Lightweight composer that previews the current trace in matplotlib."""
 
-    Provides:
-    - Live preview with embedded PlotHost
-    - Advanced styling controls (dockable panels)
-    - Style preset library management
-    - Batch export queue
-    - Undo/redo for styling operations
-    """
-
-    # Signal emitted when preset is saved (for main window sync)
     preset_saved = pyqtSignal(dict)
-
-    # Signal emitted when window closes
     studio_closed = pyqtSignal()
-
-    # Signal emitted when manual annotations change
     annotations_changed = pyqtSignal(list)
-
-    # Signal emitted when a slide/figure state is saved
     figure_state_saved = pyqtSignal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Figure Composer")
-        self.setObjectName("FigureComposerWindow")
 
-        # Core state
-        self._trace_model: TraceModel | None = None
-        self._event_times: list[float] = []
-        self._event_colors: list[str] | None = None
-        self._event_labels: list[str] = []
-        self._event_label_meta: list[dict[str, Any]] = []
-        self._channel_specs: list[ChannelTrackSpec] = []
-        self._layout_state: LayoutState | None = None
+        self.trace_model: TraceModel | None = None
+        self.event_colors: list[str] = []
+        self.event_times: list[float] = []
+        self.event_labels: list[str] = []
+        self.event_label_meta: list[dict[str, Any]] = []
+        self.channel_specs: list[ChannelTrackSpec] = []
+        self.layout_state: Any = None
+        self.style_dict: dict[str, Any] | None = None
+        self.annotations: Any = None
+        self.figure_state: Any = None
+        self._current_window: tuple[float, float] | None = None
+        self._grid_enabled: bool = True
 
-        # Manual annotation state
-        self._annotation_controller: ManualAnnotationController | None = None
-        self._annotation_state: list[dict[str, Any]] = []
-        self._annotation_selection: dict[str, Any] | None = None
-        self._annotation_controls_block = False
-        self._annotation_style_defaults: dict[str, Any] = {
-            "stroke": "#1D5CFF",
-            "fill": "#FFFFFF",
-            "line_width": 2.0,
-            "linestyle": "solid",
-            "font_size": 14.0,
-            "arrow_style": "arrow",
-            "text_color": "#1D5CFF",
-        }
-        self._current_slide_id: str | None = None
-        self._current_slide_name: str | None = None
-        self._slide_dirty: bool = False
-        self._loading_state: bool = False
+        self.x_label_edit: QLineEdit | None = None
+        self.y_label_edit: QLineEdit | None = None
+        self.grid_checkbox: QCheckBox | None = None
+        self.xmin_spin: QDoubleSpinBox | None = None
+        self.xmax_spin: QDoubleSpinBox | None = None
+        self.ymin_spin: QDoubleSpinBox | None = None
+        self.ymax_spin: QDoubleSpinBox | None = None
+        self.axis_label_fontsize_spin: QSpinBox | None = None
+        self.trace_linewidth_spin: QDoubleSpinBox | None = None
+        self._trace_lines: list = []
+        self.fig_width_spin: QDoubleSpinBox | None = None
+        self.fig_height_spin: QDoubleSpinBox | None = None
+        self.fig_units_combo: QComboBox | None = None
+        self.fig_pixels_label: QLabel | None = None
+        self._figure_width_in: float = 200.0 / 25.4
+        self._figure_height_in: float = 200.0 / 25.4
+        self.tick_fontsize_spin: QSpinBox | None = None
+        self.x_tick_rotation_combo: QComboBox | None = None
+        self.max_xticks_spin: QSpinBox | None = None
+        self.label_bold_checkbox: QCheckBox | None = None
+        self.label_italic_checkbox: QCheckBox | None = None
+        self.tick_bold_checkbox: QCheckBox | None = None
+        self.tick_italic_checkbox: QCheckBox | None = None
+        self.trace_selector: QComboBox | None = None
+        self._selected_track_id: str | None = None
+        self.style_copy_button: QPushButton | None = None
+        self.style_apply_button: QPushButton | None = None
+        self._style_clipboard: dict[str, Any] | None = None
+        self.trace_color_button: QPushButton | None = None
+        self._trace_color_overrides: dict[str, str] = {}
+        self.show_events_checkbox: QCheckBox | None = None
+        self.event_fontsize_spin: QSpinBox | None = None
+        self.event_y_spin: QDoubleSpinBox | None = None
+        self._show_events: bool = True
+        self.event_label_style_combo: QComboBox | None = None
+        self._event_label_style: str = "side_v"
+        self._event_y_position: float | None = None
+        self._is_rendering: bool = False
 
-        # Style management
-        self._style_manager: PlotStyleManager | None = None
-        self._current_preset_name: str | None = None
-        self.grid_visible: bool = True
-        self._event_highlight_color: str = DEFAULT_STYLE.get("event_highlight_color", "#1D5CFF")
-        self._event_highlight_alpha: float = float(DEFAULT_STYLE.get("event_highlight_alpha", 0.95))
-        self._event_highlight_duration_ms: int = int(
-            DEFAULT_STYLE.get("event_highlight_duration_ms", 2000)
+        self.figure, self.canvas, self.ax = self._build_canvas()
+        self._xlim_cid = self.ax.callbacks.connect(
+            "xlim_changed", self._on_axes_limits_changed_from_matplotlib
         )
-        self._initial_fit_applied: bool = False
+        self._ylim_cid = self.ax.callbacks.connect(
+            "ylim_changed", self._on_axes_limits_changed_from_matplotlib
+        )
+        self._controls_widget = QWidget(self)
+        self._build_controls_panel()
+        controls_scroll = QScrollArea(self)
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setFrameShape(QScrollArea.NoFrame)
+        controls_scroll.setWidget(self._controls_widget)
 
-        # Undo/redo stack for styling operations
-        self.undo_stack = QUndoStack(self)
+        splitter = QSplitter(self)
+        splitter.setOrientation(Qt.Horizontal)
 
-        # Canvas and zoom state
-        self._canvas_width_in: float = 10.0  # Canvas viewport (white rectangle) in inches
-        self._canvas_height_in: float = 7.5  # inches
-        self._canvas_dpi: int = 120
-        self._default_frame_width_in: float = self._canvas_width_in
-        self._default_frame_height_in: float = self._canvas_height_in
+        canvas_container = QWidget(splitter)
+        canvas_layout = QVBoxLayout(canvas_container)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+        self.toolbar = MinimalNavigationToolbar(self.canvas, canvas_container)
+        canvas_layout.addWidget(self.toolbar)
+        canvas_layout.addWidget(self.canvas)
 
-        # Figure size (matplotlib plot, can be smaller than canvas)
-        self._figure_width_in: float = 10.0  # Initially matches canvas
-        self._figure_height_in: float = 7.5  # inches
+        splitter.addWidget(controls_scroll)
+        splitter.addWidget(canvas_container)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
-        self._zoom_level: float = 1.0  # 1.0 = 100%
-        self._zoom_levels = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
-        self._geometry_sync_running = False
-        self._geometry_sync_pending = False
+        central = QWidget(self)
+        central_layout = QHBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(splitter)
+        self.setCentralWidget(central)
+        splitter.setSizes([300, 900])
 
-        # Load built-in presets
-        self._builtin_presets = get_builtin_presets()
+        # Give the composer a comfortable default size and keep it resizable
+        self.resize(1500, 900)
+        # Used to only center on the first show
+        self._first_show = True
+        log.info("[FIGURE_COMPOSER] window created")
 
-        # Build UI
-        self._build_ui()
-        self._create_menus()
-        # NOTE: Old dock system removed in favor of fixed three-panel layout
-        # self._create_dock_areas()
-
-        # Apply theme
-        self._apply_theme()
-
-        # Restore window geometry
-        self.resize(1400, 900)
-
-    # ------------------------------------------------------------------ Public API
-
-    def icon_path(self, filename: str) -> str:
-        """Return absolute path to an icon shipped with the application."""
-        from utils import resource_path
-
-        return str(resource_path("icons", filename))
-
+    # ------------------------------------------------------------------ public API
     def load_from_main_window(
         self,
         trace_model: TraceModel | None,
-        event_times: list[float],
-        event_colors: list[str] | None,
-        event_labels: list[str],
-        event_label_meta: list[dict[str, Any]],
-        channel_specs: list[ChannelTrackSpec],
-        layout_state: LayoutState | None,
-        style_dict: dict[str, Any] | None = None,
-        annotations: Sequence[Mapping[str, Any]] | None = None,
-        figure_state: Mapping[str, Any] | None = None,
+        event_times,
+        event_colors,
+        event_labels,
+        event_label_meta,
+        channel_specs,
+        layout_state,
+        style_dict,
+        annotations,
+        figure_state,
+        *,
+        current_window: tuple[float, float] | None = None,
     ) -> None:
-        """
-        Clone the current plot state from main window.
-
-        Args:
-            trace_model: The trace data model
-            event_times: Event time markers
-            event_colors: Event marker colors
-            event_labels: Event text labels
-            event_label_meta: Event metadata (priority, category, etc.)
-            channel_specs: Channel track specifications
-            layout_state: Channel layout configuration
-            style_dict: Optional initial style to apply
-            annotations: Optional serialized manual annotations to restore
-            figure_state: Optional saved figure slide payload to reopen
-        """
-        self._loading_state = True
-        try:
-            self._trace_model = trace_model
-            self._event_times = event_times.copy()
-            self._event_colors = event_colors.copy() if event_colors else None
-            self._event_labels = event_labels.copy()
-            self._event_label_meta = [meta.copy() for meta in event_label_meta]
-            self._channel_specs = [
-                ChannelTrackSpec(
-                    track_id=spec.track_id,
-                    label=spec.label,
-                    component=spec.component,
-                    height_ratio=spec.height_ratio,
-                )
-                for spec in channel_specs
-            ]
-            self._layout_state = layout_state
-            self._current_slide_id = None
-            self._current_slide_name = None
-            self._slide_dirty = False
-
-            # Initialize style manager
-            if style_dict:
-                self._style_manager = PlotStyleManager(style_dict)
-
-            # Populate plot host
-            self._populate_plot_host()
-
-            saved_payload = figure_state.get("payload") if figure_state else None
-            if saved_payload is None:
-                saved_payload = figure_state.get("data") if figure_state else None
-            if figure_state:
-                self._current_slide_id = str(figure_state.get("id") or "") or None
-                self._current_slide_name = figure_state.get("name") or None
-
-            # Restore manual annotations
-            payload_annotations: list[dict[str, Any]] = []
-            if saved_payload and "annotations" in saved_payload:
-                payload_annotations = [
-                    dict(entry) for entry in saved_payload.get("annotations") or []
-                ]
-            elif annotations:
-                payload_annotations = [dict(entry) for entry in annotations]
-
-            self._annotation_state = payload_annotations
-            if self._annotation_controller:
-                self._annotation_controller.load_annotations(payload_annotations)
-            self._annotation_selection = None
-            self._apply_annotation_controls_from_payload(None)
-
-            # Restore figure geometry + style if provided
-            if saved_payload:
-                self._apply_saved_figure_geometry(saved_payload.get("figure"))
-                saved_style = saved_payload.get("style")
-                if saved_style:
-                    self.apply_plot_style(saved_style, persist=False)
-            # Layout state is captured for future use but reapplication requires
-            # coordination with PlotHost; defer until a dedicated API exists.
-
-        finally:
-            self._loading_state = False
-            self._slide_dirty = False
-
-        # Clear undo stack (fresh start)
-        self.undo_stack.clear()
-
-    # ------------------------------------------------------------------ Exposed Event State
-
-    @property
-    def event_labels(self) -> list[str]:
-        """Expose current event labels for dialogs."""
-        return list(self._event_labels)
-
-    @property
-    def event_times(self) -> list[float]:
-        """Expose current event timestamps for dialogs."""
-        return list(self._event_times)
-
-    @property
-    def event_label_meta(self) -> list[dict[str, Any]]:
-        """Expose current event metadata for dialogs."""
-        return [meta.copy() for meta in self._event_label_meta]
-
-    @property
-    def event_text_objects(self) -> list[tuple[Any, float, str]]:
-        """Expose event annotation text artists for styling."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return []
-        objects = self.plot_host.annotation_text_objects()
-        return list(cast(Sequence[tuple[Any, float, str]], objects))
-
-    @property
-    def annotations(self) -> list[dict[str, Any]]:
-        """Return the current manual annotation payload."""
-        return [dict(entry) for entry in self._annotation_state]
-
-    def _mark_slide_dirty(self) -> None:
-        if not self._loading_state:
-            self._slide_dirty = True
-
-    # ------------------------------------------------------------------ Manual annotation handlers
-
-    def _on_annotations_payload_changed(self, payload: list[dict[str, Any]]) -> None:
-        self._annotation_state = [dict(entry) for entry in payload]
-        self.annotations_changed.emit(self.annotations)
-        self._mark_slide_dirty()
-
-    def _on_annotation_selection_changed(self, payload: Mapping[str, Any] | None) -> None:
-        self._annotation_selection = dict(payload) if payload else None
-        if hasattr(self, "annotation_delete_btn"):
-            self.annotation_delete_btn.setEnabled(payload is not None)
-        self._apply_annotation_controls_from_payload(payload)
-
-    def _on_annotation_edit_requested(self, annotation_id: str) -> None:
-        if not self._annotation_controller:
-            return
-        annotation_list = self._annotation_controller.serialize()
-        current_text = next(
+        """Clone state from the main window and render a simple preview."""
+        log.info(
+            "[FIGURE_COMPOSER] load_from_main_window: trace_model=%s n_events=%d "
+            "n_channel_specs=%d layout_visibility=%s",
+            type(trace_model).__name__ if trace_model is not None else None,
+            len(event_times) if event_times is not None else 0,
+            len(channel_specs) if channel_specs is not None else 0,
             (
-                entry.get("text", "")
-                for entry in annotation_list
-                if entry.get("id") == annotation_id
-            ),
-            "",
-        )
-        text, accepted = QInputDialog.getText(
-            self,
-            "Edit Annotation Label",
-            "Label:",
-            QLineEdit.Normal,
-            current_text,
-        )
-        if not accepted:
-            return
-        self._annotation_controller.update_annotation_text(annotation_id, text)
-
-    def _apply_annotation_controls_from_payload(self, payload: Mapping[str, Any] | None) -> None:
-        if not hasattr(self, "annotation_stroke_btn"):
-            return
-        self._annotation_controls_block = True
-        target = payload or self._annotation_style_defaults
-        stroke = target.get("stroke", self._annotation_style_defaults.get("stroke"))
-        fill = target.get("fill", self._annotation_style_defaults.get("fill"))
-        line_width = float(
-            target.get("line_width", self._annotation_style_defaults.get("line_width", 2.0))
-        )
-        font_size = int(
-            target.get("font_size", self._annotation_style_defaults.get("font_size", 14))
-        )
-        linestyle = target.get(
-            "linestyle", self._annotation_style_defaults.get("linestyle", "solid")
-        )
-        arrow_style = target.get(
-            "arrow_style", self._annotation_style_defaults.get("arrow_style", "arrow")
-        )
-
-        self._set_color_button(self.annotation_stroke_btn, stroke)
-        self._set_color_button(self.annotation_fill_btn, fill)
-        self.annotation_linewidth_spin.setValue(line_width)
-        idx = self.annotation_linestyle_combo.findData(linestyle)
-        if idx >= 0:
-            self.annotation_linestyle_combo.setCurrentIndex(idx)
-        self.annotation_fontsize_spin.setValue(font_size)
-        arrow_idx = self.annotation_arrow_combo.findData(arrow_style)
-        if arrow_idx >= 0:
-            self.annotation_arrow_combo.setCurrentIndex(arrow_idx)
-        self._annotation_controls_block = False
-
-    def _set_color_button(self, button: QPushButton, color: str | None) -> None:
-        if not color:
-            button.setText("None")
-            button.setStyleSheet(
-                "QPushButton { border: 1px dashed #777; background: transparent; color: #555; padding: 0 8px; }"
-            )
-        else:
-            button.setText("")
-            button.setStyleSheet(
-                f"QPushButton {{ border: 1px solid #444; border-radius: 4px; background-color: {color}; }}"
-            )
-        button.setProperty("color", color)
-
-    def _pick_color(self, current: str | None) -> str | None:
-        initial = QColor(current) if current else QColor("#000000")
-        color = QColorDialog.getColor(initial, self, "Select Color")
-        if color.isValid():
-            return color.name()
-        return None
-
-    def _on_annotation_color_pick(self, target: str) -> None:
-        button = self.annotation_stroke_btn if target == "stroke" else self.annotation_fill_btn
-        current = button.property("color")
-        new_color = self._pick_color(current)
-        if not new_color:
-            return
-        self._set_color_button(button, new_color)
-        if target == "stroke":
-            self._annotation_style_defaults["stroke"] = new_color
-            self._annotation_style_defaults["text_color"] = new_color
-            if self._annotation_controller:
-                self._annotation_controller.set_style_defaults(
-                    stroke=new_color,
-                    text_color=new_color,
+                getattr(layout_state, "visibility", None)
+                if isinstance(layout_state, LayoutState)
+                else (
+                    getattr(layout_state, "get", lambda *_: None)("visibility")
+                    if isinstance(layout_state, dict)
+                    else None
                 )
-        else:
-            self._annotation_style_defaults["fill"] = new_color
-            if self._annotation_controller:
-                self._annotation_controller.set_style_defaults(fill=new_color)
-
-    def _on_annotation_clear_fill(self) -> None:
-        self._set_color_button(self.annotation_fill_btn, None)
-        self._annotation_style_defaults["fill"] = None
-        if self._annotation_controller:
-            self._annotation_controller.set_style_defaults(fill=None)
-
-    def _on_annotation_linewidth_changed(self, value: float) -> None:
-        if self._annotation_controls_block:
-            return
-        self._annotation_style_defaults["line_width"] = float(value)
-        if self._annotation_controller:
-            self._annotation_controller.set_style_defaults(line_width=float(value))
-
-    def _on_annotation_linestyle_changed(self, index: int) -> None:
-        if self._annotation_controls_block:
-            return
-        style = self.annotation_linestyle_combo.itemData(index)
-        if not style:
-            return
-        self._annotation_style_defaults["linestyle"] = style
-        if self._annotation_controller:
-            self._annotation_controller.set_style_defaults(linestyle=style)
-
-    def _on_annotation_fontsize_changed(self, value: int) -> None:
-        if self._annotation_controls_block:
-            return
-        self._annotation_style_defaults["font_size"] = int(value)
-        if self._annotation_controller:
-            self._annotation_controller.set_style_defaults(font_size=int(value))
-
-    def _on_annotation_arrow_style_changed(self, index: int) -> None:
-        if self._annotation_controls_block:
-            return
-        style = self.annotation_arrow_combo.itemData(index)
-        if not style:
-            return
-        self._annotation_style_defaults["arrow_style"] = style
-        if self._annotation_controller:
-            self._annotation_controller.set_style_defaults(arrow_style=style)
-
-    def _on_annotation_delete_selected(self) -> None:
-        if self._annotation_controller:
-            self._annotation_controller.delete_selected()
-
-    def _on_annotation_clear_all(self) -> None:
-        if self._annotation_controller:
-            self._annotation_controller.clear()
-            self._annotation_state = []
-            self.annotations_changed.emit([])
-
-    def _on_annotation_tool_toggled(self, tool: str, checked: bool) -> None:
-        if not checked or not self._annotation_controller:
-            return
-        self._annotation_controller.set_tool(tool)
-
-    def get_current_style(self) -> dict[str, Any]:
-        """Snapshot current plot style from PlotHost artists."""
-        if self._style_manager:
-            return cast(dict[str, Any], self._style_manager.style())
-        return self._snapshot_style()
-
-    def _get_primary_axes(self) -> Any:
-        """Return the first track axes for applying shared updates."""
-        if not self.plot_host._tracks:
-            return None
-        # Get first visible track's axes
-        for track in self.plot_host._tracks.values():
-            if hasattr(track, "ax") and track.ax is not None:
-                return track.ax
-        return None
-
-    def _x_axis_for_style(self):
-        """Return the shared X axis used for applying style updates."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return None
-        axis = self.plot_host.bottom_axis()
-        if axis is None:
-            axis = self._get_primary_axes()
-        return axis
-
-    def _set_shared_xlabel(self, text: str) -> None:
-        """Update the shared X label across all stacked axes."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-        self.plot_host.set_shared_xlabel(text)
-
-    def apply_event_label_overrides(
-        self,
-        labels: Sequence[str],
-        metadata: Sequence[Mapping[str, Any]],
-    ) -> None:
-        """Apply label overrides coming from the unified settings dialog."""
-        if labels is None or metadata is None or not hasattr(self, "plot_host"):
-            return
-
-        new_labels = list(labels)
-        if not new_labels:
-            self._event_labels = []
-            self._event_label_meta = []
-            self.plot_host.set_events(
-                self._event_times,
-                self._event_colors,
-                [],
-                [],
-            )
-            self.plot_host.canvas.draw_idle()
-            return
-
-        if len(new_labels) != len(self._event_labels):
-            return
-
-        new_meta = [dict(entry or {}) for entry in metadata]
-        if len(new_meta) < len(new_labels):
-            new_meta.extend({} for _ in range(len(new_labels) - len(new_meta)))
-        elif len(new_meta) > len(new_labels):
-            new_meta = new_meta[: len(new_labels)]
-
-        self._event_labels = new_labels
-        self._event_label_meta = new_meta
-
-        self.plot_host.set_events(
-            self._event_times,
-            self._event_colors,
-            self._event_labels,
-            self._event_label_meta,
-        )
-        self.plot_host.canvas.draw_idle()
-
-    def apply_preset(self, preset: dict[str, Any], with_undo: bool = True) -> None:
-        """
-        Apply a style preset to the current figure.
-
-        Args:
-            preset: Preset dictionary (must contain "style" key)
-            with_undo: Whether to add to undo stack (default True)
-        """
-        if not self._style_manager:
-            self._style_manager = PlotStyleManager()
-
-        if with_undo:
-            # Create undo command for preset application
-            old_style = self._style_manager.style()
-            preset_style = preset.get("style", {})
-            preset_name = preset.get("name", "Unknown")
-            command = StyleChangeCommand(
-                self, old_style, preset_style, f"Apply Preset: {preset_name}"
-            )
-            self.undo_stack.push(command)
-        else:
-            # Direct application without undo
-            self._style_manager.from_preset(preset)
-            self._apply_style_to_plot()
-            self._sync_canvas_size_to_figure()
-            self._current_preset_name = preset.get("name")
-
-    def save_current_as_preset(
-        self, name: str, description: str = "", tags: list[str] | None = None
-    ) -> dict[str, Any]:
-        """
-        Save current style as a named preset.
-
-        Args:
-            name: Preset name
-            description: Optional description
-            tags: Optional tags (e.g., ["journal", "nature"])
-
-        Returns:
-            Preset dictionary with metadata
-        """
-        if not self._style_manager:
-            return {}
-
-        # Use PlotStyleManager's to_preset method
-        preset = cast(dict[str, Any], self._style_manager.to_preset(name, description, tags))
-        self._current_preset_name = name
-        self.preset_saved.emit(preset)
-        return preset
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if not self._initial_fit_applied:
-            self._initial_fit_applied = True
-            self._center_on_parent_screen()
-            QTimer.singleShot(0, self._apply_initial_canvas_fit)
-
-    def _apply_initial_canvas_fit(self) -> None:
-        """Apply initial zoom-to-fit when window first opens."""
-        # Directly call _zoom_to_fit to ensure canvas is visible and properly sized
-        if hasattr(self, "plot_host") and hasattr(self, "canvas_frame"):
-            self._zoom_to_fit()
-
-    def _center_on_parent_screen(self) -> None:
-        """Center window on the same screen as parent window."""
-        parent_widget = self.parentWidget()
-        screen = parent_widget.screen() if parent_widget else QApplication.primaryScreen()
-
-        if not screen:
-            return
-
-        available = screen.availableGeometry()
-        frame = self.frameGeometry()
-        frame.moveCenter(available.center())
-        self.move(frame.topLeft())
-
-    # ------------------------------------------------------------------ UI Construction
-
-    def _create_canvas_container(self) -> QWidget:
-        """Create styled container with visual canvas boundary (white rectangle on gray background)."""
-        # Container with gray background (PowerPoint-style workspace)
-        container = QWidget()
-        container.setStyleSheet("background-color: #F3F4F6;")  # Light gray background
-
-        # Layout with padding
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(40, 40, 40, 40)
-        container_layout.setAlignment(Qt.AlignCenter)
-
-        # Canvas frame (white rectangle with border - represents canvas boundary)
-        self.canvas_frame = QFrame()
-        self.canvas_frame.setObjectName("CanvasBoundary")
-        self.canvas_frame.setStyleSheet(
-            "QFrame#CanvasBoundary { "
-            "background-color: white; "
-            "border: 1px solid #cccccc; "
-            "border-radius: 4px; "
-            "}"
+            ),
         )
 
-        # Frame layout to hold matplotlib canvas (will center figure if smaller than canvas)
-        frame_layout = QVBoxLayout(self.canvas_frame)
-        frame_layout.setContentsMargins(0, 0, 0, 0)
-        frame_layout.setSpacing(0)
-        frame_layout.setAlignment(Qt.AlignCenter)
+        self.trace_model = trace_model
+        self.event_colors = list(event_colors or [])
+        self.event_times = list(event_times or [])
+        self.event_labels = list(event_labels or [])
+        self.event_label_meta = list(event_label_meta or [])
+        self.channel_specs = list(channel_specs or [])
+        self.layout_state = layout_state
+        self.style_dict = style_dict if isinstance(style_dict, dict) else None
+        self.annotations = annotations
+        self.figure_state = figure_state
+        self._current_window = current_window
+        if getattr(self, "_event_label_style", "side_v") == "top":
+            self._event_label_style = "side_v"
+        # Populate trace selector from main-window visibility
+        visible_specs = list(self._iter_visible_channel_specs())
+        if not visible_specs:
+            visible_specs = list(self.channel_specs or [])
+        valid_ids = {
+            getattr(spec, "track_id", None)
+            for spec in visible_specs
+            if getattr(spec, "track_id", None) is not None
+        }
+        if self.trace_selector is not None:
+            self.trace_selector.blockSignals(True)
+            self.trace_selector.clear()
+            for spec in visible_specs:
+                track_id = getattr(spec, "track_id", None)
+                if track_id is None:
+                    continue
+                label = getattr(spec, "label", str(track_id))
+                self.trace_selector.addItem(label, track_id)
 
-        # Create PlotHost with explicit DPI
-        self.plot_host = PlotHost(dpi=self._canvas_dpi)
-        self.plot_host.canvas.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            if not valid_ids:
+                self._selected_track_id = None
+            else:
+                if self._selected_track_id not in valid_ids:
+                    preferred = None
+                    for spec in visible_specs:
+                        if getattr(spec, "component", None) == "inner":
+                            preferred = getattr(spec, "track_id", None)
+                            break
+                    self._selected_track_id = preferred or next(iter(valid_ids))
 
-        # Get device pixel ratio for Retina display support
-        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
+                for idx in range(self.trace_selector.count()):
+                    if self.trace_selector.itemData(idx) == self._selected_track_id:
+                        self.trace_selector.setCurrentIndex(idx)
+                        break
+            self.trace_selector.blockSignals(False)
 
-        # Set canvas frame size to canvas dimensions (at base DPI, accounting for Retina)
-        canvas_width_px = int((self._canvas_width_in * self._canvas_dpi) / device_pixel_ratio)
-        canvas_height_px = int((self._canvas_height_in * self._canvas_dpi) / device_pixel_ratio)
-        self.canvas_frame.setFixedSize(canvas_width_px, canvas_height_px)
+        self._render_trace()
+        self._sync_widgets_from_axes()
 
-        # Set initial figure size (matplotlib plot, accounting for Retina)
-        fig_width_px = int((self._figure_width_in * self._canvas_dpi) / device_pixel_ratio)
-        fig_height_px = int((self._figure_height_in * self._canvas_dpi) / device_pixel_ratio)
-        self.plot_host.canvas.setFixedSize(fig_width_px, fig_height_px)
-        self.plot_host.figure.set_size_inches(self._figure_width_in, self._figure_height_in)
+    def maximize_figure_to_canvas(self, forward: bool = True) -> None:
+        """Placeholder to preserve compatibility with legacy calls."""
+        del forward  # unused
+        self.canvas.draw_idle()
 
-        # Add matplotlib canvas to frame
-        frame_layout.addWidget(self.plot_host.canvas)
+    # ------------------------------------------------------------------ internals
+    def _build_canvas(self) -> tuple[Figure, FigureCanvasQTAgg, Any]:
+        width_in = float(self._figure_width_in) if self._figure_width_in else 1.0
+        height_in = float(self._figure_height_in) if self._figure_height_in else 1.0
 
-        # Manual annotation controller overlays artists on top of the figure
-        self._annotation_controller = ManualAnnotationController(
-            self.plot_host.figure,
-            self.plot_host.canvas,
-            parent=self,
-        )
-        self._annotation_controller.annotations_changed.connect(
-            self._on_annotations_payload_changed
-        )
-        self._annotation_controller.selection_changed.connect(self._on_annotation_selection_changed)
-        self._annotation_controller.edit_requested.connect(self._on_annotation_edit_requested)
+        figure = Figure(figsize=(width_in, height_in), facecolor="white")
+        canvas = FigureCanvasQTAgg(figure)
+        ax = figure.add_subplot(111)
+        figure.subplots_adjust(left=0.12, right=0.98, top=0.95, bottom=0.12)
+        return figure, canvas, ax
 
-        # Add frame to container
-        container_layout.addWidget(self.canvas_frame)
-
+    def _wrap_canvas(self, canvas: FigureCanvasQTAgg) -> QWidget:
+        container = QWidget(self)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(canvas)
+        # Legacy method retained; controls are now built in __init__ directly.
         return container
 
-    def _build_ui(self) -> None:
-        """Build UI with PowerPoint-style canvas boundary."""
-        # Create main splitter (3-way: left | center | right)
-        main_splitter = QSplitter(Qt.Horizontal, self)
-
-        # ===================================================================
-        # LEFT PANEL: Publication Export Settings
-        # ===================================================================
-        self.left_panel = self._create_export_panel()
-
-        # ===================================================================
-        # CENTER PANEL: Canvas with visual boundary
-        # ===================================================================
-        # Create scroll area for canvas
-        self.canvas_scroll = QScrollArea(self)
-        self.canvas_scroll.setWidgetResizable(False)  # Keep canvas fixed size
-        self.canvas_scroll.setFrameShape(QScrollArea.NoFrame)  # No border on scroll area
-
-        # Create canvas container with visual boundary (white rectangle on gray background)
-        self.canvas_container = self._create_canvas_container()
-
-        # Add container to scroll area
-        self.canvas_scroll.setWidget(self.canvas_container)
-
-        # ===================================================================
-        # Add panels to splitter
-        # ===================================================================
-        main_splitter.addWidget(self.left_panel)
-        main_splitter.addWidget(self.canvas_scroll)
-
-        # Set initial splitter sizes (left:center = 1:3)
-        main_splitter.setSizes([400, 1000])
-        main_splitter.setStretchFactor(0, 0)  # Left doesn't stretch
-        main_splitter.setStretchFactor(1, 1)  # Center stretches
-
-        self.setCentralWidget(main_splitter)
-
-        # Create toolbar and status bar
-        self._create_tools_toolbar()
-        self._create_plot_toolbar()
-        self._create_status_bar()
-
-        # Populate preset combo with built-in presets
-        self._populate_preset_combo()
-
-    def _create_export_panel(self) -> QWidget:
-        """Create the left panel for publication-ready export settings."""
-        panel = QWidget()
-        panel.setMinimumWidth(300)
-        panel.setMaximumWidth(450)
-
-        # Create scroll area for the panel
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-
-        # Main content widget
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
-
-        # Title
-        title = QLabel("<b>Publication Export</b>")
-        title.setStyleSheet("font-size: 14px; padding: 4px;")
-        layout.addWidget(title)
-
-        # ===================================================================
-        # Export Format Group
-        # ===================================================================
-        format_group = QGroupBox("Export Format")
-        format_layout = QFormLayout()
-        format_layout.setSpacing(8)
-
-        # Format selection
-        self.export_format_combo = QComboBox()
-        self.export_format_combo.addItem("TIFF (Tagged Image)", "tiff")
-        self.export_format_combo.addItem("SVG (Vector Graphics)", "svg")
-        self.export_format_combo.addItem("PNG (Portable Network)", "png")
-        self.export_format_combo.addItem("PDF (Portable Document)", "pdf")
-        self.export_format_combo.addItem("EPS (Encapsulated PS)", "eps")
-        format_layout.addRow("Format:", self.export_format_combo)
-
-        # DPI setting
-        self.export_dpi_spin = QSpinBox()
-        self.export_dpi_spin.setRange(72, 1200)
-        self.export_dpi_spin.setValue(300)
-        self.export_dpi_spin.setSuffix(" DPI")
-        self.export_dpi_spin.setToolTip("Resolution for raster exports (TIFF, PNG)")
-        format_layout.addRow("Resolution:", self.export_dpi_spin)
-
-        # Transparent background
-        self.export_transparent_check = QCheckBox("Transparent background")
-        self.export_transparent_check.setToolTip("Use transparent background (PNG/SVG only)")
-        format_layout.addRow("", self.export_transparent_check)
-
-        format_group.setLayout(format_layout)
-        layout.addWidget(format_group)
-
-        # ===================================================================
-        # Journal Presets Group
-        # ===================================================================
-        journal_group = QGroupBox("Journal Presets")
-        journal_layout = QVBoxLayout()
-        journal_layout.setSpacing(8)
-
-        journal_label = QLabel("Quick settings for common journals:")
-        journal_label.setWordWrap(True)
-        journal_label.setStyleSheet("color: gray; font-size: 11px;")
-        journal_layout.addWidget(journal_label)
-
-        self.journal_preset_combo = QComboBox()
-        self.journal_preset_combo.addItem("(Select Journal Preset)")
-        self.journal_preset_combo.addItem("Nature (single column, 89mm)", "nature_single")
-        self.journal_preset_combo.addItem("Nature (double column, 183mm)", "nature_double")
-        self.journal_preset_combo.addItem("Science (3.3 in width)", "science")
-        self.journal_preset_combo.addItem("Cell (single column, 85mm)", "cell_single")
-        self.journal_preset_combo.addItem("Cell (double column, 174mm)", "cell_double")
-        self.journal_preset_combo.addItem("PNAS (single column, 8.7cm)", "pnas_single")
-        self.journal_preset_combo.addItem("PNAS (double column, 17.8cm)", "pnas_double")
-        self.journal_preset_combo.addItem("eLife (full width, 5.2 in)", "elife")
-        self.journal_preset_combo.currentIndexChanged.connect(self._on_journal_preset_changed)
-        journal_layout.addWidget(self.journal_preset_combo)
-
-        journal_group.setLayout(journal_layout)
-        layout.addWidget(journal_group)
-
-        # ===================================================================
-        # Color Settings Group
-        # ===================================================================
-        color_group = QGroupBox("Color & Fonts")
-        color_layout = QFormLayout()
-        color_layout.setSpacing(8)
-
-        # Color mode
-        self.color_mode_combo = QComboBox()
-        self.color_mode_combo.addItem("RGB (Screen)", "rgb")
-        self.color_mode_combo.addItem("CMYK (Print)", "cmyk")
-        self.color_mode_combo.setToolTip("Color space for export")
-        color_layout.addRow("Color Mode:", self.color_mode_combo)
-
-        # Font embedding
-        self.embed_fonts_check = QCheckBox("Embed fonts in PDF/EPS")
-        self.embed_fonts_check.setChecked(True)
-        self.embed_fonts_check.setToolTip("Ensures fonts render correctly everywhere")
-        color_layout.addRow("", self.embed_fonts_check)
-
-        color_group.setLayout(color_layout)
-        layout.addWidget(color_group)
-
-        # ===================================================================
-        # File Naming Group
-        # ===================================================================
-        naming_group = QGroupBox("File Naming")
-        naming_layout = QFormLayout()
-        naming_layout.setSpacing(8)
-
-        self.filename_prefix_edit = QLineEdit()
-        self.filename_prefix_edit.setPlaceholderText("figure")
-        self.filename_prefix_edit.setToolTip("Prefix for exported filenames")
-        naming_layout.addRow("Prefix:", self.filename_prefix_edit)
-
-        self.auto_numbering_check = QCheckBox("Auto-increment numbering")
-        self.auto_numbering_check.setChecked(True)
-        naming_layout.addRow("", self.auto_numbering_check)
-
-        naming_group.setLayout(naming_layout)
-        layout.addWidget(naming_group)
-
-        # ===================================================================
-        # Visibility Controls Group
-        # ===================================================================
-        visibility_group = QGroupBox("Figure Elements")
-        visibility_layout = QVBoxLayout()
-        visibility_layout.setSpacing(8)
-
-        visibility_hint = QLabel("Show/hide elements for publication:")
-        visibility_hint.setWordWrap(True)
-        visibility_hint.setStyleSheet("color: gray; font-size: 11px;")
-        visibility_layout.addWidget(visibility_hint)
-
-        # Event labels toggle
-        self.show_event_labels_check = QCheckBox("Show event labels")
-        self.show_event_labels_check.setChecked(True)
-        self.show_event_labels_check.setToolTip("Toggle event label visibility")
-        self.show_event_labels_check.stateChanged.connect(self._on_toggle_event_labels)
-        visibility_layout.addWidget(self.show_event_labels_check)
-
-        # Event lines toggle
-        self.show_event_lines_check = QCheckBox("Show event markers (dashed lines)")
-        self.show_event_lines_check.setChecked(True)
-        self.show_event_lines_check.setToolTip("Toggle event marker line visibility")
-        self.show_event_lines_check.stateChanged.connect(self._on_toggle_event_lines)
-        visibility_layout.addWidget(self.show_event_lines_check)
-
-        visibility_group.setLayout(visibility_layout)
-        layout.addWidget(visibility_group)
-
-        # ===================================================================
-        # Annotation Controls
-        # ===================================================================
-        layout.addWidget(self._create_annotation_panel())
-
-        # ===================================================================
-        # Export Actions
-        # ===================================================================
-        export_actions = QGroupBox("Export")
-        export_actions_layout = QVBoxLayout()
-        export_actions_layout.setSpacing(8)
-
-        # Export button
-        self.export_now_btn = QPushButton("Export Figure...")
-        # Simplified stylesheet to avoid PyInstaller bytecode issues on Windows
-        export_btn_style = (
-            "QPushButton { background-color: #0066CC; color: white; border: none; "
-            "border-radius: 6px; padding: 10px; font-weight: bold; font-size: 13px; } "
-            "QPushButton:hover { background-color: #0052A3; } "
-            "QPushButton:pressed { background-color: #003D7A; }"
-        )
-        self.export_now_btn.setStyleSheet(export_btn_style)
-        self.export_now_btn.clicked.connect(self._on_export_now)
-        export_actions_layout.addWidget(self.export_now_btn)
-
-        # Quick export button
-        self.quick_export_btn = QPushButton("Quick Export (Last Settings)")
-        self.quick_export_btn.clicked.connect(self._on_quick_export)
-        export_actions_layout.addWidget(self.quick_export_btn)
-
-        export_actions.setLayout(export_actions_layout)
-        layout.addWidget(export_actions)
-
-        # ===================================================================
-        # Validation Info
-        # ===================================================================
-        validation_group = QGroupBox("Figure Validation")
-        validation_layout = QVBoxLayout()
-        validation_layout.setSpacing(6)
-
-        validation_info = QLabel(
-            "Checks figure against publication requirements:\n"
-            "• Minimum DPI\n"
-            "• Color mode\n"
-            "• Font sizes\n"
-            "• Dimensions"
-        )
-        validation_info.setWordWrap(True)
-        validation_info.setStyleSheet("color: gray; font-size: 11px;")
-        validation_layout.addWidget(validation_info)
-
-        self.validate_btn = QPushButton("Validate Figure")
-        self.validate_btn.clicked.connect(self._on_validate_figure)
-        validation_layout.addWidget(self.validate_btn)
-
-        validation_group.setLayout(validation_layout)
-        layout.addWidget(validation_group)
-
-        # Add stretch to push everything to top
-        layout.addStretch()
-
-        # Set content to scroll area
-        scroll.setWidget(content)
-
-        # Set scroll area as panel content
-        panel_layout = QVBoxLayout(panel)
-        panel_layout.setContentsMargins(0, 0, 0, 0)
-        panel_layout.addWidget(scroll)
-
-        return panel
-
-    def _create_annotation_panel(self) -> QGroupBox:
-        """Controls for manual annotation styling."""
-
-        group = QGroupBox("Annotations")
-        form = QFormLayout()
-        form.setSpacing(8)
-
-        # Stroke color picker
-        self.annotation_stroke_btn = self._make_color_button(
-            self._annotation_style_defaults.get("stroke")
-        )
-        self.annotation_stroke_btn.clicked.connect(lambda: self._on_annotation_color_pick("stroke"))
-        form.addRow("Stroke:", self.annotation_stroke_btn)
-
-        # Fill color picker with "no fill" helper
-        self.annotation_fill_btn = self._make_color_button(
-            self._annotation_style_defaults.get("fill")
-        )
-        self.annotation_fill_btn.clicked.connect(lambda: self._on_annotation_color_pick("fill"))
-        fill_row = QHBoxLayout()
-        fill_row.setContentsMargins(0, 0, 0, 0)
-        fill_row.setSpacing(6)
-        fill_row.addWidget(self.annotation_fill_btn)
-        self.annotation_clear_fill_btn = QPushButton("No Fill")
-        self.annotation_clear_fill_btn.clicked.connect(self._on_annotation_clear_fill)
-        fill_row.addWidget(self.annotation_clear_fill_btn)
-        fill_container = QWidget()
-        fill_container.setLayout(fill_row)
-        form.addRow("Fill:", fill_container)
-
-        # Line width
-        self.annotation_linewidth_spin = QDoubleSpinBox()
-        self.annotation_linewidth_spin.setRange(0.2, 12.0)
-        self.annotation_linewidth_spin.setSingleStep(0.2)
-        self.annotation_linewidth_spin.setValue(
-            self._annotation_style_defaults.get("line_width", 2.0)
-        )
-        self.annotation_linewidth_spin.valueChanged.connect(self._on_annotation_linewidth_changed)
-        form.addRow("Line width:", self.annotation_linewidth_spin)
-
-        # Line style
-        self.annotation_linestyle_combo = QComboBox()
-        linestyle_options = [
-            ("Solid", "solid"),
-            ("Dashed", "dashed"),
-            ("Dotted", "dotted"),
-            ("Dash-dot", "dashdot"),
-        ]
-        for label, value in linestyle_options:
-            self.annotation_linestyle_combo.addItem(label, value)
-        default_style = self._annotation_style_defaults.get("linestyle", "solid")
-        default_index = next(
-            (i for i, (_, value) in enumerate(linestyle_options) if value == default_style),
-            0,
-        )
-        self.annotation_linestyle_combo.setCurrentIndex(default_index)
-        self.annotation_linestyle_combo.currentIndexChanged.connect(
-            self._on_annotation_linestyle_changed
-        )
-        form.addRow("Line style:", self.annotation_linestyle_combo)
-
-        # Font size
-        self.annotation_fontsize_spin = QSpinBox()
-        self.annotation_fontsize_spin.setRange(6, 72)
-        self.annotation_fontsize_spin.setValue(
-            int(self._annotation_style_defaults.get("font_size", 14))
-        )
-        self.annotation_fontsize_spin.valueChanged.connect(self._on_annotation_fontsize_changed)
-        form.addRow("Font size:", self.annotation_fontsize_spin)
-
-        # Arrow style
-        self.annotation_arrow_combo = QComboBox()
-        arrow_options = [
-            ("Arrow", "arrow"),
-            ("Bar", "bar"),
-            ("Fancy", "fancy"),
-            ("None", "none"),
-        ]
-        for label, value in arrow_options:
-            self.annotation_arrow_combo.addItem(label, value)
-        default_arrow = self._annotation_style_defaults.get("arrow_style", "arrow")
-        arrow_index = next(
-            (i for i, (_, value) in enumerate(arrow_options) if value == default_arrow),
-            0,
-        )
-        self.annotation_arrow_combo.setCurrentIndex(arrow_index)
-        self.annotation_arrow_combo.currentIndexChanged.connect(
-            self._on_annotation_arrow_style_changed
-        )
-        form.addRow("Arrow head:", self.annotation_arrow_combo)
-
-        # Delete button
-        self.annotation_delete_btn = QPushButton("Delete Selected")
-        self.annotation_delete_btn.setEnabled(False)
-        self.annotation_delete_btn.clicked.connect(self._on_annotation_delete_selected)
-        form.addRow("", self.annotation_delete_btn)
-
-        group.setLayout(form)
-        return group
-
-    def _make_color_button(self, color: str | None) -> QPushButton:
-        button = QPushButton()
-        button.setFixedHeight(24)
-        button.setMinimumWidth(56)
-        button.setCursor(Qt.PointingHandCursor)
-        self._set_color_button(button, color)
-        return button
-
-    def _populate_preset_combo(self) -> None:
-        """Populate the preset combo box with built-in presets."""
-        if not hasattr(self, "preset_combo"):
+    def _render_trace(self) -> None:
+        if getattr(self, "_is_rendering", False):
+            log.debug("[FIGURE_COMPOSER][RENDER] _render_trace skipped (re-entrant guard)")
             return
-
-        self.preset_combo.blockSignals(True)
-        # Clear existing items except the first "(Select Preset)" item
-        while self.preset_combo.count() > 1:
-            self.preset_combo.removeItem(1)
-
-        # Presets temporarily disabled; keeping placeholder only.
-
-        self.preset_combo.blockSignals(False)
-
-    def _sync_canvas_size_to_figure(self) -> None:
-        """Update status bar with current figure info."""
-        if hasattr(self, "_update_status_bar"):
-            self._update_status_bar()
-
-    def _apply_canvas_size(self) -> None:
-        """Apply canvas and figure sizes independently.
-
-        Canvas = white rectangle boundary
-        Figure = matplotlib plot (can be smaller, will be centered)
-        """
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-
-        if self._geometry_sync_running:
-            if not self._geometry_sync_pending:
-                self._geometry_sync_pending = True
-                QTimer.singleShot(0, self._apply_canvas_size)
-            return
-
-        self._geometry_sync_running = True
-        self._geometry_sync_pending = False
+        log.debug("[FIGURE_COMPOSER][RENDER] _render_trace start")
+        self._is_rendering = True
         try:
-            fig = self.plot_host.figure
-            fig.set_size_inches(self._figure_width_in, self._figure_height_in, forward=False)
-            self._apply_zoom()
-            self._sync_canvas_size_to_figure()
+            preserve_limits = False
+            prev_xlim = None
+            prev_ylim = None
+            if self.ax is not None and self.ax.lines and self._current_window is None:
+                try:
+                    prev_xlim = self.ax.get_xlim()
+                    prev_ylim = self.ax.get_ylim()
+                    preserve_limits = True
+                except Exception:
+                    preserve_limits = False
+
+            self.ax.clear()
+            self._trace_lines = []
+            model = self.trace_model
+
+            if model is None:
+                log.info("[FIGURE_COMPOSER][RENDER] no trace model available")
+                self.ax.text(
+                    0.5,
+                    0.5,
+                    "No trace loaded",
+                    ha="center",
+                    va="center",
+                    color="#666666",
+                    transform=self.ax.transAxes,
+                )
+                self.ax.set_axis_off()
+                self.canvas.draw_idle()
+                return
+
+            time = getattr(model, "time_full", None)
+            inner = getattr(model, "inner_full", None)
+            outer = getattr(model, "outer_full", None)
+            avg_pressure = getattr(model, "avg_pressure_full", None)
+            set_pressure = getattr(model, "set_pressure_full", None)
+
+            plotted = 0
+            active_spec = self._get_active_spec()
+            if active_spec is None:
+                log.info("[FIGURE_COMPOSER][RENDER] no active channel spec to plot")
+                self.ax.set_facecolor("white")
+                self.ax.grid(self._grid_enabled, alpha=0.25)
+                self.ax.set_xlim(0.0, 1.0)
+                self.ax.set_ylim(0.0, 1.0)
+                self.figure.tight_layout()
+                if self.canvas is not None:
+                    self.canvas.draw_idle()
+                return
+
+            component = getattr(active_spec, "component", "inner")
+            label = getattr(active_spec, "label", None)
+            track_id = getattr(active_spec, "track_id", None)
+            color = None
+            if track_id is not None:
+                color = self._trace_color_overrides.get(track_id)
+            if color is None:
+                color = "#000000"
+            if track_id is not None and track_id not in self._trace_color_overrides:
+                self._trace_color_overrides[track_id] = color
+            lw_value = 1.0
+            if self.trace_linewidth_spin is not None:
+                try:
+                    lw_value = float(self.trace_linewidth_spin.value() or 1.0)
+                except Exception:
+                    lw_value = 1.0
+            log.info(
+                "[FIGURE_COMPOSER][RENDER] plotting: track_id=%s component=%s color=%s "
+                "line_width=%.3f show_events=%s event_style=%s",
+                track_id,
+                component,
+                color,
+                lw_value,
+                getattr(self, "_show_events", True),
+                getattr(self, "_event_label_style", None),
+            )
+
+            if component in {"inner", "dual"} and inner is not None:
+                (line_inner,) = self.ax.plot(
+                    time,
+                    inner,
+                    color=color,
+                    linewidth=lw_value,
+                    label=label or "Inner Diameter",
+                )
+                self._trace_lines.append(line_inner)
+                plotted += 1
+
+            if component in {"outer", "dual"} and outer is not None:
+                (line_outer,) = self.ax.plot(
+                    time,
+                    outer,
+                    color=color,
+                    linewidth=lw_value,
+                    label=label or "Outer Diameter",
+                )
+                self._trace_lines.append(line_outer)
+                plotted += 1
+
+            if component == "avg_pressure" and avg_pressure is not None:
+                (line_avg,) = self.ax.plot(
+                    time,
+                    avg_pressure,
+                    color=color,
+                    linewidth=lw_value,
+                    label=label or "Avg Pressure",
+                )
+                self._trace_lines.append(line_avg)
+                plotted += 1
+
+            if component == "set_pressure" and set_pressure is not None:
+                (line_set,) = self.ax.plot(
+                    time,
+                    set_pressure,
+                    color=color,
+                    linewidth=lw_value,
+                    label=label or "Set Pressure",
+                )
+                self._trace_lines.append(line_set)
+                plotted += 1
+
+            self.ax.set_facecolor("white")
+            self.ax.grid(self._grid_enabled, alpha=0.25)
+
+            full_xmin = None
+            full_xmax = None
+            if time is not None:
+                try:
+                    if len(time) >= 2:
+                        full_xmin = float(time[0])
+                        full_xmax = float(time[-1])
+                except Exception:
+                    full_xmin = None
+                    full_xmax = None
+
+            if plotted == 0:
+                self.ax.set_xlim(0.0, 1.0)
+                self.ax.set_ylim(0.0, 1.0)
+                self.figure.tight_layout()
+                if self.canvas is not None:
+                    self.canvas.draw_idle()
+                return
+
+            applied_window = False
+            if full_xmin is not None and full_xmax is not None and self._current_window is not None:
+                x0, x1 = self._current_window
+                if x0 > x1:
+                    x0, x1 = x1, x0
+                x0 = max(full_xmin, min(x0, full_xmax))
+                x1 = max(full_xmin, min(x1, full_xmax))
+                if x1 > x0:
+                    try:
+                        self.ax.set_xlim(x0, x1)
+                        applied_window = True
+                    except Exception:
+                        pass
+                self._current_window = None
+
+            if applied_window:
+                log.debug(
+                    "[FIGURE_COMPOSER][RENDER] applied_window: x0=%.3f x1=%.3f",
+                    x0,
+                    x1,
+                )
+
+            if (
+                getattr(self, "_show_events", True)
+                and self.event_times
+                and self.event_labels
+                and self.ax is not None
+            ):
+                with contextlib.suppress(Exception):
+                    self._draw_events_on_axes()
+
+            default_y_label = getattr(active_spec, "label", None) or "Value"
+
+            if not self.ax.get_xlabel():
+                self.ax.set_xlabel("Time (s)")
+
+            if not self.ax.get_ylabel():
+                self.ax.set_ylabel(default_y_label)
+
+            if plotted > 1:
+                self.ax.legend(loc="best")
+
+            if (
+                preserve_limits
+                and not applied_window
+                and prev_xlim is not None
+                and prev_ylim is not None
+            ):
+                try:
+                    self.ax.set_xlim(prev_xlim)
+                    self.ax.set_ylim(prev_ylim)
+                except Exception:
+                    pass
+
+            self.figure.tight_layout()
+
+            self._sync_widgets_from_axes()
+            self.canvas.draw_idle()
         finally:
-            self._geometry_sync_running = False
+            self._is_rendering = False
+            log.debug("[FIGURE_COMPOSER][RENDER] _render_trace done")
 
-    def maximize_figure_to_canvas(self, forward: bool = False) -> None:
-        """Ensure the matplotlib figure fills the canvas viewport."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
+    def _on_axes_limits_changed_from_matplotlib(self, axes) -> None:
+        """Keep X/Y spin boxes in sync with the actual axes limits."""
+        if axes is not self.ax:
+            return
+        if not (self.xmin_spin and self.xmax_spin and self.ymin_spin and self.ymax_spin):
+            return
+        try:
+            xmin, xmax = self.ax.get_xlim()
+            ymin, ymax = self.ax.get_ylim()
+        except Exception:
+            return
+        self._sync_limits_from_axes(xmin, xmax, ymin, ymax)
+
+    def _draw_events_on_axes(self) -> None:
+        """Draw vertical event lines and stacked labels above the trace."""
+        if self.ax is None:
+            return
+        if not (self.event_times and self.event_labels):
             return
 
-        fig = self.plot_host.figure
-        target_width = float(self._canvas_width_in or self._default_frame_width_in or 0.0)
-        target_height = float(self._canvas_height_in or self._default_frame_height_in or 0.0)
-        if target_width <= 0 or target_height <= 0:
-            return
-
-        width_changed = abs(fig.get_figwidth() - target_width) > 0.01
-        height_changed = abs(fig.get_figheight() - target_height) > 0.01
-        if width_changed or height_changed:
-            fig.set_size_inches(target_width, target_height, forward=forward)
-
-        self._sync_plot_geometry_to_figure()
-
-    def _sync_plot_geometry_to_figure(self) -> None:
-        """Sync figure dimensions from matplotlib (after Plot Settings dialog changes)."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-
-        fig = self.plot_host.figure
-        fig_dpi = float(fig.get_dpi())
-        fig_width_in = float(fig.get_figwidth())
-        fig_height_in = float(fig.get_figheight())
-
-        # Update figure size from matplotlib (may have changed in Plot Settings dialog)
-        self._figure_width_in = fig_width_in
-        self._figure_height_in = fig_height_in
-
-        # Update base DPI (normalize zoom level to base DPI)
-        # If DPI changed due to zoom, extract the base DPI
-        if hasattr(self, "_zoom_level") and self._zoom_level > 0:
-            self._canvas_dpi = max(1, int(round(fig_dpi / self._zoom_level)))
-        else:
-            self._canvas_dpi = max(1, int(round(fig_dpi)))
-
-        # Canvas size stays unchanged (user sets explicitly)
-        # Reapply current zoom level to update widget sizes
-        self._apply_zoom()
-
-    def _create_tools_toolbar(self) -> None:
-        """Create toolbar with canvas size, presets, and zoom controls."""
-        toolbar = QToolBar("Figure Tools", self)
-        toolbar.setObjectName("FigureToolsToolbar")
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
-
-        # === Canvas Size Preset ===
-        toolbar.addWidget(QLabel("Canvas:"))
-        self.canvas_size_combo = QComboBox()
-        self.canvas_size_combo.setMinimumWidth(160)
-        self.canvas_size_combo.addItem("Default (10×7.5 in)", (10.0, 7.5))
-        # Additional presets temporarily disabled pending redesign:
-        # self.canvas_size_combo.addItem("Nature Single (3.5×3 in)", (3.5, 3.0))
-        # self.canvas_size_combo.addItem("Nature Double (7×5 in)", (7.0, 5.0))
-        # self.canvas_size_combo.addItem("Science (8×6 in)", (8.0, 6.0))
-        # self.canvas_size_combo.addItem("Letter (8.5×11 in)", (8.5, 11.0))
-        # self.canvas_size_combo.addItem("A4 (8.3×11.7 in)", (8.3, 11.7))
-        self.canvas_size_combo.setCurrentIndex(0)  # Default selection
-        self.canvas_size_combo.currentIndexChanged.connect(self._on_canvas_size_changed)
-        toolbar.addWidget(self.canvas_size_combo)
-
-        toolbar.addSeparator()
-
-        # === Style Presets ===
-        toolbar.addWidget(QLabel("Preset:"))
-        self.preset_combo = QComboBox()
-        self.preset_combo.setMinimumWidth(150)
-        self.preset_combo.addItem("(Select Preset)")
-        # Will be populated when presets are loaded
-        self.preset_combo.currentIndexChanged.connect(self._on_preset_combo_changed)
-        toolbar.addWidget(self.preset_combo)
-
-        toolbar.addSeparator()
-
-        # === Zoom Controls ===
-        toolbar.addWidget(QLabel("Zoom:"))
-
-        # Zoom out button
-        zoom_out_btn = QAction("−", self)
-        zoom_out_btn.setToolTip("Zoom Out")
-        zoom_out_btn.triggered.connect(self._on_zoom_out)
-        toolbar.addAction(zoom_out_btn)
-
-        # Zoom combo
-        self.zoom_combo = QComboBox()
-        self.zoom_combo.setMinimumWidth(80)
-        for zoom in self._zoom_levels:
-            self.zoom_combo.addItem(f"{int(zoom * 100)}%", zoom)
-        self.zoom_combo.addItem("Fit", "fit")
-        self.zoom_combo.setCurrentText("Fit")  # Default to Fit zoom
-        self.zoom_combo.currentIndexChanged.connect(
-            self._on_zoom_changed
-        )  # Connect after setting default
-        toolbar.addWidget(self.zoom_combo)
-
-        # Zoom in button
-        zoom_in_btn = QAction("+", self)
-        zoom_in_btn.setToolTip("Zoom In")
-        zoom_in_btn.triggered.connect(self._on_zoom_in)
-        toolbar.addAction(zoom_in_btn)
-
-        toolbar.addSeparator()
-
-        fit_action = QAction("Auto Fit", self)
-        fit_action.setToolTip("Auto-fit axes to data (Ctrl+F)")
-        fit_action.setShortcut("Ctrl+F")
-        fit_action.triggered.connect(self._on_fit_data)
-        toolbar.addAction(fit_action)
-
-    def _create_plot_toolbar(self) -> None:
-        """Create custom matplotlib navigation toolbar for plot interactions."""
-        # Create custom toolbar with styled icons
-        toolbar = CustomToolbar(self.plot_host.canvas, self, reset_callback=self._on_reset_view)
-        toolbar.setObjectName("PlotNavigationToolbar")
-        toolbar.setIconSize(QSize(22, 22))
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        toolbar.setFloatable(False)
-        toolbar.setMovable(False)
-        toolbar.setStyleSheet(
-            f"""
-            QToolBar {{
-                background: transparent;
-                border: none;
-                padding: 0px;
-                spacing: 0px;
-            }}
-            QToolBar > QToolButton {{
-                background: transparent;
-                border: none;
-                border-radius: 8px;
-                margin: 0px 5px;
-                padding: 6px 8px;
-                color: {CURRENT_THEME["text"]};
-            }}
-            QToolBar > QToolButton:hover {{
-                background: {CURRENT_THEME["button_hover_bg"]};
-            }}
-            QToolBar > QToolButton:checked {{
-                background: {CURRENT_THEME["button_active_bg"]};
-            }}
-        """
-        )
-
-        # Remove coordinate display
-        if hasattr(toolbar, "coordinates"):
-            toolbar.coordinates = lambda *args, **kwargs: None
-            for act in list(toolbar.actions()):
-                if isinstance(act, QAction) and act.text() == "":
-                    toolbar.removeAction(act)
-
-        # Get base matplotlib actions
-        base_actions = getattr(toolbar, "_actions", {})
-        home_act = base_actions.get("home")
-        back_act = base_actions.get("back")
-        forward_act = base_actions.get("forward")
-        pan_act = base_actions.get("pan")
-        zoom_act = base_actions.get("zoom")
-        subplots_act = base_actions.get("subplots")
-        save_act = base_actions.get("save")
-
-        # Remove all default actions
-        for action in list(toolbar.actions()):
-            toolbar.removeAction(action)
-
-        # Customize actions with icons and tooltips
-        if home_act:
-            home_act.setText("Reset view")
-            home_act.setShortcut(QKeySequence("R"))
-            home_act.setToolTip(
-                "<b>Reset View</b> <kbd>R</kbd><br><br>"
-                "Resets plot to show entire trace.<br>"
-                "Use to return to full time range."
-            )
-            home_act.setStatusTip("Reset the plot to the full time range.")
-            home_act.setIcon(QIcon(self.icon_path("Home.svg")))
-
-        if back_act:
-            back_act.setText("Back")
-            back_act.setToolTip(
-                "<b>Back</b><br><br>"
-                "Return to previous view in history.<br>"
-                "Navigate backward through zoom history."
-            )
-            back_act.setIcon(QIcon(self.icon_path("Back.svg")))
-
-        if forward_act:
-            forward_act.setText("Forward")
-            forward_act.setToolTip(
-                "<b>Forward</b><br><br>"
-                "Go to next view in history.<br>"
-                "Navigate forward through zoom history."
-            )
-            forward_act.setIcon(QIcon(self.icon_path("Forward.svg")))
-
-        if pan_act:
-            pan_act.setText("Pan")
-            pan_act.setToolTip(
-                "<b>Pan</b> <kbd>P</kbd><br><br>"
-                "Click and drag to move the view.<br>"
-                "Press <kbd>Esc</kbd> to exit pan mode."
-            )
-            pan_act.setStatusTip("Drag to move the view. Press Esc to exit.")
-            pan_act.setIcon(QIcon(self.icon_path("Pan.svg")))
-            pan_act.setShortcut(QKeySequence("P"))
-            pan_act.setCheckable(True)
-
-        if zoom_act:
-            zoom_act.setText("Zoom")
-            zoom_act.setToolTip(
-                "<b>Zoom</b> <kbd>Z</kbd><br><br>"
-                "Drag a rectangle to zoom in.<br>"
-                "Press <kbd>Esc</kbd> to exit zoom mode."
-            )
-            zoom_act.setStatusTip("Drag a rectangle to zoom in. Press Esc to exit.")
-            zoom_act.setIcon(QIcon(self.icon_path("Zoom.svg")))
-            zoom_act.setShortcut(QKeySequence("Z"))
-            zoom_act.setCheckable(True)
-
-        # Hide subplots action
-        if subplots_act:
-            subplots_act.setVisible(False)
-
-        # Remove save action
-        if save_act:
-            toolbar.removeAction(save_act)
-
-        # Store actions
-        self.actReset = home_act
-        self.actBack = back_act
-        self.actForward = forward_act
-        self.actPan = pan_act
-        self.actZoom = zoom_act
-
-        # Add navigation actions
-        if self.actReset:
-            toolbar.addAction(self.actReset)
-        if self.actBack:
-            toolbar.addAction(self.actBack)
-        if self.actForward:
-            toolbar.addAction(self.actForward)
-
-        toolbar.addSeparator()
-
-        if self.actPan:
-            toolbar.addAction(self.actPan)
-        if self.actZoom:
-            toolbar.addAction(self.actZoom)
-
-        # Handle mutual exclusivity for pan/zoom
-        self._nav_mode_actions = [act for act in (self.actPan, self.actZoom) if act is not None]
-        for action in self._nav_mode_actions:
-            with contextlib.suppress(Exception):
-                action.toggled.disconnect(self._handle_nav_mode_toggled)
-            action.toggled.connect(self._handle_nav_mode_toggled)
-
-        toolbar.addSeparator()
-
-        # Add Grid toggle
-        self.actGrid = QAction(QIcon(self.icon_path("Grid.svg")), "Grid", self)
-        self.actGrid.setCheckable(True)
-        self.actGrid.setChecked(self.grid_visible)
-        self.actGrid.setShortcut(QKeySequence("G"))
-        self.actGrid.setToolTip(
-            "<b>Toggle Grid</b> <kbd>G</kbd><br><br>"
-            "Shows/hides coordinate grid overlay.<br>"
-            "Use for precise alignment and measurements."
-        )
-        self.actGrid.triggered.connect(self._on_grid_toggled)
-        toolbar.addAction(self.actGrid)
-
-        # Add Style/Settings action
-        self.actStyle = QAction(QIcon(self.icon_path("plot-settings.svg")), "Style", self)
-        self.actStyle.setToolTip(
-            "<b>Plot Settings</b><br><br>"
-            "Open unified plot settings dialog.<br>"
-            "Customize canvas, layout, axes, style, and event labels."
-        )
-        self.actStyle.triggered.connect(lambda: self._open_plot_settings_dialog(tab_name="style"))
-        toolbar.addAction(self.actStyle)
-
-        toolbar.addSeparator()
-        self._init_annotation_toolbar_actions(toolbar)
-
-        # Add toolbar to window
-        self.plot_toolbar = toolbar
-        self.addToolBar(Qt.TopToolBarArea, toolbar)
-
-    def _init_annotation_toolbar_actions(self, toolbar: QToolBar) -> None:
-        """Add annotation drawing tools to the navigation toolbar."""
-
-        action_specs = [
-            ("Select", "Select and move annotations", "tour-camera.svg", "select"),
-            ("Line", "Draw manual line annotations", "tour-pencil.svg", "line"),
-            ("Box", "Draw rectangle annotations", "empty-box.svg", "box"),
-            ("Text Box", "Draw labeled boxes", "tour-header.svg", "textbox"),
-            ("Arrow", "Draw directional arrows", "tour-rocket.svg", "arrow"),
-            ("Text", "Place text labels", "Aa.svg", "text"),
+        events = [
+            (float(t), str(lbl))
+            for t, lbl in zip(self.event_times, self.event_labels, strict=False)
+            if t is not None and str(lbl).strip() != ""
         ]
-
-        self._annotation_tool_actions: dict[str, QAction] = {}
-        self._annotation_tool_group = QActionGroup(self)
-        self._annotation_tool_group.setExclusive(True)
-
-        for text, tooltip, icon_name, tool in action_specs:
-            icon = QIcon(self.icon_path(icon_name)) if icon_name else QIcon()
-            action = QAction(icon, text, self)
-            action.setCheckable(True)
-            action.setToolTip(tooltip)
-            action.toggled.connect(partial(self._on_annotation_tool_toggled, tool))
-            self._annotation_tool_group.addAction(action)
-            toolbar.addAction(action)
-            self._annotation_tool_actions[tool] = action
-
-        # Default to selection tool
-        if "select" in self._annotation_tool_actions:
-            self._annotation_tool_actions["select"].setChecked(True)
-
-    def _create_status_bar(self) -> None:
-        """Create status bar with figure info and hints."""
-        status_bar = self.statusBar()
-
-        # Figure size label
-        self._status_figure_size_label = QLabel("Figure: 0.0 × 0.0 in @ 0 DPI")
-        self._status_figure_size_label.setMinimumWidth(200)
-        status_bar.addWidget(self._status_figure_size_label)
-
-        # Separator
-        status_bar.addWidget(QLabel(" | "))
-
-        # Canvas dimensions label
-        self._status_dimensions_label = QLabel("Canvas: 0 × 0 px")
-        self._status_dimensions_label.setMinimumWidth(150)
-        status_bar.addWidget(self._status_dimensions_label)
-
-        # Stretch to push hint to right side
-        status_bar.addWidget(QLabel(), 1)
-
-        # Hint label (right-aligned)
-        self._status_hint_label = QLabel(
-            "Double-click axes to edit • Use preset library for quick styles"
-        )
-        self._status_hint_label.setStyleSheet("color: gray;")
-        status_bar.addPermanentWidget(self._status_hint_label)
-
-    def _update_status_bar(self) -> None:
-        """Update status bar with current figure information."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
+        if not events:
             return
+        events.sort(key=lambda e: e[0])
 
-        fig = self.plot_host.figure
-        canvas = self.plot_host.canvas
-
-        # Update canvas and figure size
-        if hasattr(self, "_status_figure_size_label"):
-            # Get actual figure dimensions from matplotlib
-            fig_width_in = fig.get_figwidth()
-            fig_height_in = fig.get_figheight()
-            dpi = int(fig.get_dpi())
-
-            # Show both canvas and figure dimensions
-            canvas_w = self._canvas_width_in
-            canvas_h = self._canvas_height_in
-            self._status_figure_size_label.setText(
-                f"Canvas: {canvas_w:.1f}×{canvas_h:.1f} in | "
-                f"Figure: {fig_width_in:.1f}×{fig_height_in:.1f} in @ {dpi} DPI"
-            )
-
-        # Update canvas dimensions
-        if hasattr(self, "_status_dimensions_label"):
-            width_px = canvas.width()
-            height_px = canvas.height()
-            self._status_dimensions_label.setText(f"Canvas: {width_px} × {height_px} px")
-
-    def _create_menus(self) -> None:
-        """Create menu bar."""
-        menubar = self.menuBar()
-
-        # File menu
-        file_menu = menubar.addMenu("&File")
-
-        export_action = QAction("&Export Figure...", self)
-        export_action.setShortcut("Ctrl+E")
-        export_action.triggered.connect(self._on_export)
-        file_menu.addAction(export_action)
-
-        save_state_action = QAction("&Save Figure State...", self)
-        save_state_action.setShortcut("Ctrl+S")
-        save_state_action.triggered.connect(self._on_save_figure_state)
-        file_menu.addAction(save_state_action)
-
-        file_menu.addSeparator()
-
-        close_action = QAction("&Close", self)
-        close_action.setShortcut("Ctrl+W")
-        close_action.triggered.connect(self.close)
-        file_menu.addAction(close_action)
-
-        # Edit menu
-        edit_menu = menubar.addMenu("&Edit")
-
-        undo_action = self.undo_stack.createUndoAction(self, "&Undo")
-        undo_action.setShortcut("Ctrl+Z")
-        edit_menu.addAction(undo_action)
-
-        redo_action = self.undo_stack.createRedoAction(self, "&Redo")
-        redo_action.setShortcut("Ctrl+Shift+Z")
-        edit_menu.addAction(redo_action)
-
-        # View menu
-        self._view_menu = menubar.addMenu("&View")
-        # NOTE: View menu currently empty - dock system removed
-
-        # Tools menu
-        tools_menu = menubar.addMenu("&Tools")
-
-        edit_axes_action = QAction("Edit &Axes...", self)
-        edit_axes_action.setShortcut("Ctrl+Shift+A")
-        edit_axes_action.triggered.connect(self._on_edit_axes)
-        tools_menu.addAction(edit_axes_action)
-
-        edit_traces_action = QAction("Edit &Traces...", self)
-        edit_traces_action.setShortcut("Ctrl+Shift+T")
-        edit_traces_action.triggered.connect(self._on_edit_traces)
-        tools_menu.addAction(edit_traces_action)
-
-        tools_menu.addSeparator()
-
-        reset_view_action = QAction("&Reset View", self)
-        reset_view_action.setShortcut("Ctrl+R")
-        reset_view_action.triggered.connect(self._on_reset_view)
-        tools_menu.addAction(reset_view_action)
-
-        fit_data_action = QAction("&Fit to Data", self)
-        fit_data_action.setShortcut("Ctrl+F")
-        fit_data_action.triggered.connect(self._on_fit_data)
-        tools_menu.addAction(fit_data_action)
-
-        # Annotation menu
-        annotations_menu = menubar.addMenu("&Annotations")
-
-        delete_annotation_action = QAction("&Delete Selected", self)
-        delete_annotation_action.setShortcut(QKeySequence.Delete)
-        delete_annotation_action.triggered.connect(self._on_annotation_delete_selected)
-        annotations_menu.addAction(delete_annotation_action)
-
-        clear_annotations_action = QAction("&Clear All", self)
-        clear_annotations_action.triggered.connect(self._on_annotation_clear_all)
-        annotations_menu.addAction(clear_annotations_action)
-
-        # Presets menu
-        presets_menu = menubar.addMenu("&Presets")
-
-        save_preset_action = QAction("&Save Current as Preset...", self)
-        save_preset_action.triggered.connect(self._on_save_preset)
-        presets_menu.addAction(save_preset_action)
-
-        load_preset_action = QAction("&Load Preset...", self)
-        load_preset_action.triggered.connect(self._on_load_preset)
-        presets_menu.addAction(load_preset_action)
-
-        # Help menu
-        help_menu = menubar.addMenu("&Help")
-
-        about_action = QAction("&About Figure Composer", self)
-        about_action.triggered.connect(self._on_about)
-        help_menu.addAction(about_action)
-
-    def _apply_theme(self) -> None:
-        """Apply current theme colors to window."""
-        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
-        text = CURRENT_THEME.get("text", "#000000")
-        self.setStyleSheet(f"""
-            QMainWindow {{
-                background-color: {bg};
-                color: {text};
-            }}
-            QMenuBar {{
-                background-color: {bg};
-                color: {text};
-            }}
-            QMenu {{
-                background-color: {bg};
-                color: {text};
-            }}
-        """)
-
-    # ------------------------------------------------------------------ Plot Management
-
-    def _populate_plot_host(self) -> None:
-        """Populate PlotHost with cloned trace data and events."""
-        if not self._trace_model:
-            return
-
-        # Set trace model
-        self.plot_host.set_trace_model(self._trace_model)
-
-        # Ensure channels
-        if self._channel_specs:
-            self.plot_host.ensure_channels(self._channel_specs)
-
-        # Set events
-        self.plot_host.set_events(
-            self._event_times,
-            self._event_colors,
-            self._event_labels,
-            self._event_label_meta,
+        style = getattr(self, "_event_label_style", "side_v") or "side_v"
+        if style == "top":
+            style = "side_v"
+        log.info(
+            "[FIGURE_COMPOSER][EVENTS] draw_events: style=%s n_events=%d y_pos=%s",
+            style,
+            len(events),
+            self._event_y_position,
         )
 
-        # Apply layout state
-        # Note: Layout is applied via channel specs - no dock needed
-
-        # Apply initial style
-        if self._style_manager:
-            self._apply_style_to_plot()
-
-        # Ensure figure starts maximized to current canvas viewport
-        self.maximize_figure_to_canvas(forward=False)
-        self._sync_canvas_size_to_figure()
-        # Update toolbar state
-        self._update_toolbar_state()
-
-    def _update_toolbar_state(self) -> None:
-        """Update toolbar button states based on current data."""
-        # Only grid toggle currently depends on trace availability
-        if hasattr(self, "actGrid"):
-            self.actGrid.setEnabled(self.plot_host is not None)
-
-    def _apply_style_to_plot(self) -> None:
-        """Apply current style manager settings to PlotHost."""
-        if not self._style_manager or not hasattr(self, "plot_host"):
-            return
-
-        style = self._style_manager.style()
-        defaults = DEFAULT_STYLE
-        plot_host = self.plot_host
-        if plot_host is None:
-            return
-
-        x_axis = self._x_axis_for_style()
-        v3_enabled = bool(
-            style.get("event_labels_v3_enabled", defaults.get("event_labels_v3_enabled", True))
-        )
-        event_objects = [] if v3_enabled else self.event_text_objects
-
-        remaining_event_objects = event_objects if event_objects else None
-        tracks = getattr(plot_host, "tracks", None)
-        track_iter = tracks() if callable(tracks) else list(plot_host._tracks.values())
-
-        for index, track in enumerate(track_iter):
-            ax = getattr(track, "ax", None)
-            if ax is None:
+        for t, _ in events:
+            try:
+                self.ax.axvline(
+                    t,
+                    linestyle="--",
+                    linewidth=1.0,
+                    color="0.5",
+                    alpha=0.8,
+                )
+            except Exception:
                 continue
 
-            if self.grid_visible:
-                ax.grid(True, color=CURRENT_THEME.get("grid_color", "#e0e0e0"))
-            else:
-                ax.grid(False)
+        fontsize = 10
+        if self.event_fontsize_spin is not None:
+            fontsize = int(self.event_fontsize_spin.value() or 10)
 
-            view = getattr(track, "view", track)
-            ax_secondary = getattr(view, "ax2", None)
-            main_line = getattr(view, "inner_line", None)
-            od_line = getattr(view, "outer_line", None)
+        if style == "side_h":
+            try:
+                x_min, x_max = self.ax.get_xlim()
+                y_min, y_max = self.ax.get_ylim()
+                span_x = abs(x_max - x_min)
+                span_y = abs(y_max - y_min)
+                dx = max(span_x * EVENT_LABEL_X_OFFSET_FRACTION, 1e-6)
+            except Exception:
+                dx = 1.0
+                span_y = 0.0
+                y_min = 0.0
 
-            self._style_manager.apply(
-                ax=ax,
-                ax_secondary=ax_secondary,
-                x_axis=x_axis,
-                event_text_objects=remaining_event_objects if index == 0 else None,
-                pinned_points=None,
-                main_line=main_line,
-                od_line=od_line,
-            )
+            y = self._event_y_position
+            if y is None:
+                y = y_min + 0.9 * span_y if span_y > 0 else y_min
+                self._event_y_position = y
+                if self.event_y_spin is not None:
+                    self.event_y_spin.blockSignals(True)
+                    self.event_y_spin.setValue(y)
+                    self.event_y_spin.blockSignals(False)
+            # Keep labels within current Y limits
+            with contextlib.suppress(Exception):
+                y = min(max(y, y_min), y_max)
 
-        plot_host.suspend_updates()
-        try:
-            with contextlib.suppress(Exception):
-                plot_host.set_event_labels_v3_enabled(v3_enabled)
-            with contextlib.suppress(Exception):
-                plot_host.set_event_label_mode(
-                    style.get("event_label_mode", defaults.get("event_label_mode", "vertical"))
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_max_labels_per_cluster(
-                    style.get(
-                        "event_label_max_per_cluster",
-                        defaults.get("event_label_max_per_cluster", 1),
+            for t, label in events:
+                try:
+                    self.ax.text(
+                        t + dx,
+                        y,
+                        label,
+                        ha="left",
+                        va="center",
+                        fontsize=fontsize,
+                        rotation=0,
+                        clip_on=True,
                     )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_cluster_style_policy(
-                    style.get(
-                        "event_label_style_policy",
-                        defaults.get("event_label_style_policy", "first"),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_label_lanes(
-                    style.get("event_label_lanes", defaults.get("event_label_lanes", 3))
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_belt_baseline(
-                    style.get(
-                        "event_label_belt_baseline",
-                        defaults.get("event_label_belt_baseline", True),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_event_label_span_siblings(
-                    style.get(
-                        "event_label_span_siblings",
-                        defaults.get("event_label_span_siblings", True),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_auto_event_label_mode(
-                    style.get(
-                        "event_label_auto_mode",
-                        defaults.get("event_label_auto_mode", False),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_label_density_thresholds(
-                    compact=style.get(
-                        "event_label_density_compact",
-                        defaults.get("event_label_density_compact", 0.8),
-                    ),
-                    belt=style.get(
-                        "event_label_density_belt",
-                        defaults.get("event_label_density_belt", 0.25),
-                    ),
-                )
-            outline_enabled = style.get(
-                "event_label_outline_enabled",
-                defaults.get("event_label_outline_enabled", True),
-            )
-            outline_width = style.get(
-                "event_label_outline_width",
-                defaults.get("event_label_outline_width", 2.0),
-            )
-            outline_color = style.get(
-                "event_label_outline_color",
-                defaults.get("event_label_outline_color", "#FFFFFFFF"),
-            )
-            with contextlib.suppress(Exception):
-                plot_host.set_label_outline_enabled(outline_enabled)
-            with contextlib.suppress(Exception):
-                plot_host.set_label_outline(outline_width, outline_color)
-            with contextlib.suppress(Exception):
-                plot_host.set_label_tooltips_enabled(
-                    style.get(
-                        "event_label_tooltips_enabled",
-                        defaults.get("event_label_tooltips_enabled", True),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_tooltip_proximity(
-                    style.get(
-                        "event_label_tooltip_proximity",
-                        defaults.get("event_label_tooltip_proximity", 10),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_compact_legend_enabled(
-                    style.get(
-                        "event_label_legend_enabled",
-                        defaults.get("event_label_legend_enabled", True),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_compact_legend_location(
-                    style.get(
-                        "event_label_legend_location",
-                        style.get(
-                            "event_label_legend_loc",
-                            defaults.get("event_label_legend_loc", "upper right"),
-                        ),
-                    )
-                )
-            with contextlib.suppress(Exception):
-                plot_host.set_event_base_style(
-                    font_family=style.get(
-                        "event_font_family", defaults.get("event_font_family", "Arial")
-                    ),
-                    font_size=style.get("event_font_size", defaults.get("event_font_size", 15)),
-                    bold=style.get("event_bold", defaults.get("event_bold", False)),
-                    italic=style.get("event_italic", defaults.get("event_italic", False)),
-                    color=style.get("event_color", defaults.get("event_color", "#000000")),
-                )
-            highlight_color = style.get(
-                "event_highlight_color",
-                self._event_highlight_color,
-            )
-            highlight_alpha = float(style.get("event_highlight_alpha", self._event_highlight_alpha))
-            with contextlib.suppress(Exception):
-                plot_host.set_event_highlight_style(color=highlight_color, alpha=highlight_alpha)
-            self._event_highlight_color = str(highlight_color)
-            self._event_highlight_alpha = float(highlight_alpha)
-            self._event_highlight_duration_ms = int(
-                style.get(
-                    "event_highlight_duration_ms",
-                    self._event_highlight_duration_ms,
-                )
-            )
-        finally:
-            plot_host.resume_updates()
-        self._mark_slide_dirty()
+                except Exception:
+                    continue
 
-    def apply_plot_style(self, style: dict[str, Any] | None, persist: bool = False) -> None:
-        """Apply a new style dictionary to the publication plot."""
-        incoming = style or {}
-        if self._style_manager is None:
-            base = DEFAULT_STYLE.copy()
-            base.update(incoming)
-            self._style_manager = PlotStyleManager(base)
+        elif style == "side_v":
+            try:
+                x_min, x_max = self.ax.get_xlim()
+                y_min, y_max = self.ax.get_ylim()
+                span_x = abs(x_max - x_min)
+                span_y = abs(y_max - y_min)
+                dx = max(span_x * EVENT_LABEL_X_OFFSET_FRACTION, 1e-6)
+            except Exception:
+                dx = 1.0
+                span_y = 0.0
+                y_min = 0.0
+
+            y = self._event_y_position
+            if y is None:
+                y = y_min + 0.5 * span_y if span_y > 0 else y_min
+                self._event_y_position = y
+                if self.event_y_spin is not None:
+                    self.event_y_spin.blockSignals(True)
+                    self.event_y_spin.setValue(y)
+                    self.event_y_spin.blockSignals(False)
+            # Keep labels within current Y limits
+            with contextlib.suppress(Exception):
+                y = min(max(y, y_min), y_max)
+
+            for t, label in events:
+                try:
+                    self.ax.text(
+                        t + dx,
+                        y,
+                        label,
+                        ha="left",
+                        va="center",
+                        fontsize=fontsize,
+                        rotation=90,
+                        clip_on=True,
+                    )
+                except Exception:
+                    continue
+
+    def _get_active_spec(self) -> ChannelTrackSpec | None:
+        visible_specs = list(self._iter_visible_channel_specs())
+        if not visible_specs:
+            return None
+        if self._selected_track_id is not None:
+            for spec in visible_specs:
+                if getattr(spec, "track_id", None) == self._selected_track_id:
+                    return spec
+        return visible_specs[0]
+
+    def _iter_visible_channel_specs(self):
+        """Yield channel specs that were visible in the main plot."""
+
+        visibility_map = {}
+        order = []
+        layout = self.layout_state
+        if isinstance(layout, LayoutState):
+            visibility_map = layout.visibility or {}
+            order = list(layout.order or [])
         else:
-            self._style_manager.update(incoming)
+            # Best-effort map if layout_state is a plain dict-like
+            if isinstance(layout, dict):
+                visibility_map = layout.get("visibility", {}) or {}
+                order = list(layout.get("order", []) or [])
 
-        if persist:
-            self._current_preset_name = None
-
-        self._apply_style_to_plot()
-        if hasattr(self, "plot_host") and self.plot_host is not None:
-            self._sync_plot_geometry_to_figure()
-        self._sync_canvas_size_to_figure()
-
-        if hasattr(self, "plot_host") and self.plot_host is not None:
-            self.plot_host.canvas.draw_idle()
-
-    def _snapshot_style(
-        self,
-        ax=None,
-        ax2=None,
-        event_text_objects=None,
-        pinned_points=None,
-        od_line=None,
-    ) -> dict[str, Any]:
-        """Capture the current style from the active plot."""
-        style: dict[str, Any] = dict(DEFAULT_STYLE)
-        primary_ax = ax or self._get_primary_axes()
-        if primary_ax is None:
-            return style
-
-        track_for_ax = None
-        if hasattr(self, "plot_host") and self.plot_host is not None:
-            for track in self.plot_host.tracks():
-                if getattr(track, "ax", None) is primary_ax:
-                    track_for_ax = track
-                    break
-
-        view = getattr(track_for_ax, "view", None)
-        secondary_ax = ax2 or (getattr(view, "ax2", None) if view else None)
-        x_axis = self._x_axis_for_style() or primary_ax
-
-        x_label = x_axis.xaxis.label
-        y_label = primary_ax.yaxis.label
-        style["axis_font_size"] = x_label.get_fontsize()
-        style["axis_font_family"] = x_label.get_fontname()
-        style["axis_bold"] = str(x_label.get_fontweight()).lower() == "bold"
-        style["axis_italic"] = x_label.get_fontstyle() == "italic"
-        style["axis_color"] = x_label.get_color()
-        style["x_axis_color"] = x_label.get_color()
-        style["y_axis_color"] = y_label.get_color()
-
-        x_tick_labels = x_axis.get_xticklabels()
-        y_tick_labels = primary_ax.get_yticklabels()
-        tick_font_size = (
-            x_tick_labels[0].get_fontsize()
-            if x_tick_labels
-            else (y_tick_labels[0].get_fontsize() if y_tick_labels else style["tick_font_size"])
-        )
-        style["tick_font_size"] = tick_font_size
-
-        x_tick_color = x_tick_labels[0].get_color() if x_tick_labels else style["x_tick_color"]
-        y_tick_color = y_tick_labels[0].get_color() if y_tick_labels else style["y_tick_color"]
-        style["tick_color"] = x_tick_color
-        style["x_tick_color"] = x_tick_color
-        style["y_tick_color"] = y_tick_color
-
-        try:
-            major_ticks = x_axis.xaxis.get_major_ticks()
-            if major_ticks:
-                style["tick_length"] = float(major_ticks[0].tick1line.get_markersize())
-                style["tick_width"] = float(major_ticks[0].tick1line.get_linewidth())
-        except Exception:
-            pass
-
-        if view is not None and getattr(view, "inner_line", None) is not None:
-            inner_line = view.inner_line
-            style["line_width"] = inner_line.get_linewidth()
-            style["line_color"] = inner_line.get_color()
-            style["line_style"] = inner_line.get_linestyle()
-        elif primary_ax.lines:
-            line = primary_ax.lines[0]
-            style["line_width"] = line.get_linewidth()
-            style["line_color"] = line.get_color()
-            style["line_style"] = line.get_linestyle()
-
-        event_objects = event_text_objects
-        if event_objects is None:
-            event_objects = self.event_text_objects
-        if event_objects:
-            txt = event_objects[0][0]
-            style["event_font_size"] = txt.get_fontsize()
-            style["event_font_family"] = txt.get_fontname()
-            style["event_bold"] = str(txt.get_fontweight()).lower() == "bold"
-            style["event_italic"] = txt.get_fontstyle() == "italic"
-            style["event_color"] = txt.get_color()
-
-        if secondary_ax is not None:
-            y2_label = secondary_ax.yaxis.label
-            style["right_axis_color"] = y2_label.get_color()
-            y2_ticks = secondary_ax.get_yticklabels()
-            if y2_ticks:
-                style["right_tick_color"] = y2_ticks[0].get_color()
-            od_artist = od_line
-            if od_artist is None and view is not None:
-                od_artist = getattr(view, "outer_line", None)
-            if od_artist is not None:
-                style["outer_line_width"] = od_artist.get_linewidth()
-                style["outer_line_color"] = od_artist.get_color()
-                style["outer_line_style"] = od_artist.get_linestyle()
-
-        style["event_highlight_color"] = self._event_highlight_color
-        style["event_highlight_alpha"] = self._event_highlight_alpha
-        style["event_highlight_duration_ms"] = self._event_highlight_duration_ms
-
-        plot_host = getattr(self, "plot_host", None)
-        if plot_host is not None:
-            style["event_labels_v3_enabled"] = plot_host.event_labels_v3_enabled()
-            style["event_label_max_per_cluster"] = plot_host.max_labels_per_cluster()
-            style["event_label_style_policy"] = plot_host.cluster_style_policy()
-            style["event_label_lanes"] = plot_host.event_label_lanes()
-            style["event_label_belt_baseline"] = plot_host.belt_baseline_enabled()
-            style["event_label_span_siblings"] = plot_host.span_event_lines_across_siblings()
-            style["event_label_auto_mode"] = plot_host.auto_event_label_mode()
-            compact_thr, belt_thr = plot_host.label_density_thresholds()
-            style["event_label_density_compact"] = compact_thr
-            style["event_label_density_belt"] = belt_thr
-            outline_enabled, outline_width, outline_color = plot_host.label_outline_settings()
-            style["event_label_outline_enabled"] = outline_enabled
-            style["event_label_outline_width"] = outline_width
-            style["event_label_outline_color"] = outline_color or DEFAULT_STYLE.get(
-                "event_label_outline_color", "#FFFFFFFF"
-            )
-            style["event_label_tooltips_enabled"] = plot_host.label_tooltips_enabled()
-            style["event_label_tooltip_proximity"] = plot_host.tooltip_proximity()
-            style["event_label_legend_enabled"] = plot_host.compact_legend_enabled()
-            style["event_label_legend_location"] = plot_host.compact_legend_location()
+        ordered_specs = []
+        if order:
+            spec_lookup = {spec.track_id: spec for spec in self.channel_specs}
+            ordered_specs = [spec_lookup[track_id] for track_id in order if track_id in spec_lookup]
         else:
-            style.setdefault(
-                "event_labels_v3_enabled",
-                DEFAULT_STYLE.get("event_labels_v3_enabled", True),
-            )
-            style.setdefault(
-                "event_label_max_per_cluster",
-                DEFAULT_STYLE.get("event_label_max_per_cluster", 1),
-            )
-            style.setdefault(
-                "event_label_style_policy",
-                DEFAULT_STYLE.get("event_label_style_policy", "first"),
-            )
-            style.setdefault(
-                "event_label_lanes",
-                DEFAULT_STYLE.get("event_label_lanes", 3),
-            )
-            style.setdefault(
-                "event_label_belt_baseline",
-                DEFAULT_STYLE.get("event_label_belt_baseline", True),
-            )
-            style.setdefault(
-                "event_label_span_siblings",
-                DEFAULT_STYLE.get("event_label_span_siblings", True),
-            )
-            style.setdefault(
-                "event_label_auto_mode",
-                DEFAULT_STYLE.get("event_label_auto_mode", False),
-            )
-            style.setdefault(
-                "event_label_density_compact",
-                DEFAULT_STYLE.get("event_label_density_compact", 0.8),
-            )
-            style.setdefault(
-                "event_label_density_belt",
-                DEFAULT_STYLE.get("event_label_density_belt", 0.25),
-            )
-            style.setdefault(
-                "event_label_outline_enabled",
-                DEFAULT_STYLE.get("event_label_outline_enabled", True),
-            )
-            style.setdefault(
-                "event_label_outline_width",
-                DEFAULT_STYLE.get("event_label_outline_width", 2.0),
-            )
-            style.setdefault(
-                "event_label_outline_color",
-                DEFAULT_STYLE.get("event_label_outline_color", "#FFFFFFFF"),
-            )
+            ordered_specs = list(self.channel_specs)
 
-        return style
+        for spec in ordered_specs:
+            track_id = getattr(spec, "track_id", None)
+            visible = visibility_map.get(track_id, True)
+            if visible:
+                yield spec
 
-    # ------------------------------------------------------------------ Actions
+    def _build_controls_panel(self) -> None:
+        """Build the grouped controls on the left panel."""
+        controls_layout = QVBoxLayout(self._controls_widget)
+        controls_layout.setContentsMargins(8, 8, 8, 8)
+        controls_layout.setSpacing(8)
 
-    def _on_export(self, checked: bool = False) -> None:
-        """Export current figure to file.
+        # Axes group
+        axes_group = QGroupBox("Axes", self._controls_widget)
+        axes_form = QFormLayout(axes_group)
+        axes_form.setContentsMargins(8, 8, 8, 8)
+        axes_form.setSpacing(6)
 
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
+        self.x_label_edit = QLineEdit(self._controls_widget)
+        self.y_label_edit = QLineEdit(self._controls_widget)
+        self.grid_checkbox = QCheckBox("Show grid", self._controls_widget)
+        self.grid_checkbox.setChecked(self._grid_enabled)
+        self.xmin_spin = QDoubleSpinBox(self._controls_widget)
+        self.xmax_spin = QDoubleSpinBox(self._controls_widget)
+        self.ymin_spin = QDoubleSpinBox(self._controls_widget)
+        self.ymax_spin = QDoubleSpinBox(self._controls_widget)
+        for spin in (self.xmin_spin, self.xmax_spin, self.ymin_spin, self.ymax_spin):
+            spin.setDecimals(3)
+            spin.setRange(-1e9, 1e9)
+            spin.setSingleStep(1.0)
+        self.axis_label_fontsize_spin = QSpinBox(self._controls_widget)
+        self.axis_label_fontsize_spin.setRange(6, 48)
+        self.axis_label_fontsize_spin.setSingleStep(1)
 
-        from PyQt5.QtWidgets import QFileDialog
+        axes_form.addRow("X axis label", self.x_label_edit)
+        axes_form.addRow("Y axis label", self.y_label_edit)
+        axes_form.addRow(self.grid_checkbox)
+        axes_form.addRow("X min", self.xmin_spin)
+        axes_form.addRow("X max", self.xmax_spin)
+        axes_form.addRow("Y min", self.ymin_spin)
+        axes_form.addRow("Y max", self.ymax_spin)
+        axes_form.addRow("Axis label font size", self.axis_label_fontsize_spin)
+        self.label_bold_checkbox = QCheckBox("Bold labels", axes_group)
+        self.label_italic_checkbox = QCheckBox("Italic labels", axes_group)
+        axes_form.addRow(self.label_bold_checkbox)
+        axes_form.addRow(self.label_italic_checkbox)
 
-        # Get export format and path
-        file_filter = "TIFF Files (*.tiff);;SVG Files (*.svg);;PNG Files (*.png);;PDF Files (*.pdf)"
-        output_path, selected_filter = QFileDialog.getSaveFileName(
-            self,
-            "Export Figure",
-            "figure.tiff",
-            file_filter,
+        # Traces group
+        traces_group = QGroupBox("Traces", self._controls_widget)
+        traces_layout = QVBoxLayout(traces_group)
+        traces_layout.setContentsMargins(8, 8, 8, 8)
+        traces_layout.setSpacing(6)
+
+        self.trace_selector = QComboBox(self._controls_widget)
+        self.trace_linewidth_spin = QDoubleSpinBox(self._controls_widget)
+        self.trace_linewidth_spin.setDecimals(1)
+        self.trace_linewidth_spin.setRange(0.1, 10.0)
+        self.trace_linewidth_spin.setSingleStep(0.1)
+        self.trace_linewidth_spin.setValue(1.0)
+        self.trace_color_button = QPushButton("Select…", self._controls_widget)
+        self.trace_color_button.setStyleSheet("background-color: #000000")
+
+        trace_form = QFormLayout()
+        trace_form.setContentsMargins(0, 0, 0, 0)
+        trace_form.setSpacing(6)
+        trace_form.addRow("Trace to display", self.trace_selector)
+        trace_form.addRow("Trace line width", self.trace_linewidth_spin)
+        trace_form.addRow("Trace color", self.trace_color_button)
+        traces_layout.addLayout(trace_form)
+
+        traces_layout.addStretch(1)
+
+        # Ticks group
+        ticks_group = QGroupBox("Ticks", self._controls_widget)
+        ticks_form = QFormLayout(ticks_group)
+        ticks_form.setContentsMargins(8, 8, 8, 8)
+        ticks_form.setSpacing(6)
+
+        self.tick_fontsize_spin = QSpinBox(self._controls_widget)
+        self.tick_fontsize_spin.setRange(6, 48)
+        self.tick_fontsize_spin.setSingleStep(1)
+        self.x_tick_rotation_combo = QComboBox(self._controls_widget)
+        self.x_tick_rotation_combo.addItem("Horizontal (0°)", 0)
+        self.x_tick_rotation_combo.addItem("Slanted (45°)", 45)
+        self.x_tick_rotation_combo.addItem("Vertical (90°)", 90)
+        self.max_xticks_spin = QSpinBox(self._controls_widget)
+        self.max_xticks_spin.setRange(3, 20)
+        self.max_xticks_spin.setSingleStep(1)
+        self.max_xticks_spin.setValue(10)
+
+        ticks_form.addRow("Tick label font size", self.tick_fontsize_spin)
+        ticks_form.addRow("X tick rotation", self.x_tick_rotation_combo)
+        ticks_form.addRow("Max X ticks", self.max_xticks_spin)
+        self.tick_bold_checkbox = QCheckBox("Tick labels bold", ticks_group)
+        self.tick_italic_checkbox = QCheckBox("Tick labels italic", ticks_group)
+        ticks_form.addRow(self.tick_bold_checkbox)
+        ticks_form.addRow(self.tick_italic_checkbox)
+
+        # Events group
+        events_group = QGroupBox("Events", self._controls_widget)
+        events_form = QFormLayout(events_group)
+        events_form.setContentsMargins(8, 8, 8, 8)
+        events_form.setSpacing(6)
+
+        self.show_events_checkbox = QCheckBox("Show events", self._controls_widget)
+        self.show_events_checkbox.setChecked(True)
+        self.event_fontsize_spin = QSpinBox(self._controls_widget)
+        self.event_fontsize_spin.setRange(6, 36)
+        self.event_fontsize_spin.setSingleStep(1)
+        self.event_fontsize_spin.setValue(10)
+        self.event_label_style_combo = QComboBox(self._controls_widget)
+        self.event_label_style_combo.addItem("Side (horizontal)", "side_h")
+        self.event_label_style_combo.addItem("Side (vertical)", "side_v")
+        self.event_label_style_combo.setCurrentIndex(1)
+        self.event_y_spin = QDoubleSpinBox(self._controls_widget)
+        self.event_y_spin.setDecimals(3)
+        self.event_y_spin.setRange(-1e9, 1e9)
+        self.event_y_spin.setSingleStep(1.0)
+        self.event_y_spin.setEnabled(False)
+
+        events_form.addRow(self.show_events_checkbox)
+        events_form.addRow("Label font size", self.event_fontsize_spin)
+        events_form.addRow("Label style", self.event_label_style_combo)
+        events_form.addRow("Label Y (data units)", self.event_y_spin)
+
+        # Style presets group
+        style_group = QGroupBox("Style", self._controls_widget)
+        style_layout = QVBoxLayout(style_group)
+        style_layout.setContentsMargins(8, 8, 8, 8)
+        style_layout.setSpacing(6)
+        self.style_copy_button = QPushButton("Copy style", self._controls_widget)
+        self.style_apply_button = QPushButton("Apply style", self._controls_widget)
+        self.style_apply_button.setEnabled(False)
+        style_buttons_layout = QHBoxLayout()
+        style_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        style_buttons_layout.setSpacing(6)
+        style_buttons_layout.addWidget(self.style_copy_button)
+        style_buttons_layout.addWidget(self.style_apply_button)
+        style_layout.addLayout(style_buttons_layout)
+
+        # Wire signals
+        self.x_label_edit.editingFinished.connect(self._on_axes_labels_changed)
+        self.y_label_edit.editingFinished.connect(self._on_axes_labels_changed)
+        self.grid_checkbox.toggled.connect(self._on_grid_toggled)
+        self.xmin_spin.valueChanged.connect(self._on_axis_limits_changed)
+        self.xmax_spin.valueChanged.connect(self._on_axis_limits_changed)
+        self.ymin_spin.valueChanged.connect(self._on_axis_limits_changed)
+        self.ymax_spin.valueChanged.connect(self._on_axis_limits_changed)
+        self.axis_label_fontsize_spin.valueChanged.connect(self._on_axis_label_fontsize_changed)
+        self.trace_linewidth_spin.valueChanged.connect(self._on_trace_linewidth_changed)
+        self.tick_fontsize_spin.valueChanged.connect(self._on_tick_fontsize_changed)
+        self.x_tick_rotation_combo.currentIndexChanged.connect(self._on_x_tick_rotation_changed)
+        self.max_xticks_spin.valueChanged.connect(self._on_max_xticks_changed)
+        self.label_bold_checkbox.toggled.connect(self._on_label_bold_toggled)
+        self.label_italic_checkbox.toggled.connect(self._on_label_italic_toggled)
+        self.tick_bold_checkbox.toggled.connect(self._on_tick_bold_toggled)
+        self.tick_italic_checkbox.toggled.connect(self._on_tick_italic_toggled)
+        self.trace_selector.currentIndexChanged.connect(self._on_trace_selection_changed)
+        self.style_copy_button.clicked.connect(self._on_copy_style_clicked)
+        self.style_apply_button.clicked.connect(self._on_apply_style_clicked)
+        self.trace_color_button.clicked.connect(self._on_trace_color_clicked)
+        self.show_events_checkbox.toggled.connect(self._on_show_events_toggled)
+        self.event_fontsize_spin.valueChanged.connect(self._on_event_fontsize_changed)
+        self.event_label_style_combo.currentIndexChanged.connect(self._on_event_label_style_changed)
+        self.event_y_spin.valueChanged.connect(self._on_event_y_position_changed)
+
+        controls_layout.addWidget(axes_group)
+        controls_layout.addWidget(traces_group)
+        controls_layout.addWidget(ticks_group)
+        controls_layout.addWidget(events_group)
+        controls_layout.addWidget(style_group)
+        controls_layout.addStretch(1)
+
+    def _on_axes_labels_changed(self) -> None:
+        if self.ax is None:
+            return
+        if self.x_label_edit is not None:
+            self.ax.set_xlabel(self.x_label_edit.text())
+        if self.y_label_edit is not None:
+            self.ax.set_ylabel(self.y_label_edit.text())
+        log.info(
+            "[FIGURE_COMPOSER][AXES] labels_changed: xlabel=%r ylabel=%r",
+            self.x_label_edit.text() if self.x_label_edit is not None else None,
+            self.y_label_edit.text() if self.y_label_edit is not None else None,
         )
-
-        if not output_path:
-            return
-
-        # Determine DPI based on format
-        dpi = 300  # Default high-quality DPI
-
-        try:
-            # Export figure
-            self.plot_host.figure.savefig(
-                output_path,
-                dpi=dpi,
-                bbox_inches="tight",
-                pad_inches=0.1,
-            )
-
-            QMessageBox.information(
-                self,
-                "Export Successful",
-                f"Figure exported successfully to:\n{output_path}",
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Export Failed",
-                f"Failed to export figure:\n{str(e)}",
-            )
-
-    def _on_save_preset(self, checked: bool = False) -> None:
-        """Save current style as preset.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        # TODO: Implement preset save dialog when preset system is integrated
-        QMessageBox.information(
-            self,
-            "Save Preset",
-            "Preset save functionality will be available in the Inspector panel.",
-        )
-
-    def _on_load_preset(self, checked: bool = False) -> None:
-        """Load a preset.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        # Use the preset combo in the toolbar
-        QMessageBox.information(
-            self,
-            "Load Preset",
-            "Please use the Preset dropdown in the toolbar to select and apply presets.",
-        )
-
-    def _on_about(self, checked: bool = False) -> None:
-        """Show about dialog.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        QMessageBox.about(
-            self,
-            "About Figure Composer",
-            "<h3>Figure Composer</h3>"
-            "<p>Advanced figure styling and export workspace for VasoAnalyzer.</p>"
-            "<p>Features:</p>"
-            "<ul>"
-            "<li>Live preview with embedded PlotHost</li>"
-            "<li>Advanced styling controls</li>"
-            "<li>Style preset library</li>"
-            "<li>Batch export queue</li>"
-            "<li>Undo/redo for styling operations</li>"
-            "<li>Manual annotation tools (lines, boxes, arrows)</li>"
-            "</ul>"
-            "<p><b>Version:</b> 1.0.0-alpha</p>",
-        )
-
-    def _open_plot_settings_dialog(self, *, tab_name: str | None = None) -> None:
-        """Open the unified plot settings dialog focused on an optional tab."""
-        primary_ax = self._get_primary_axes()
-        if primary_ax is None:
-            QMessageBox.information(
-                self,
-                "No Plot Available",
-                "Load a trace before editing plot settings.",
-            )
-            return
-
-        secondary_ax = None
-        for track in self.plot_host.tracks():
-            view = getattr(track, "view", None)
-            candidate = getattr(view, "ax2", None)
-            if candidate is not None:
-                secondary_ax = candidate
-                break
-
-        dialog = UnifiedPlotSettingsDialog(
-            self,
-            primary_ax,
-            self.plot_host.canvas,
-            ax2=secondary_ax,
-            event_text_objects=self.event_text_objects,
-            pinned_points=None,
-        )
-        dialog.set_event_update_callback(self.apply_event_label_overrides)
-
-        if tab_name:
-            mapping = {
-                "canvas": 0,
-                "frame": 0,
-                "layout": 0,
-                "axis": 1,
-                "axes": 1,
-                "style": 2,
-                "event_labels": 3,
-            }
-            idx = mapping.get(str(tab_name).lower(), 0)
-            with contextlib.suppress(Exception):
-                dialog.tabs.setCurrentIndex(idx)
-
-        old_style = self.get_current_style()
-        result = dialog.exec_()
-        self._sync_plot_geometry_to_figure()
-        self._sync_canvas_size_to_figure()
-
-        if result == QDialog.Accepted:
-            new_style = self.get_current_style()
-            if new_style != old_style and self._style_manager is not None:
-                command = StyleChangeCommand(self, old_style, new_style, "Adjust Plot Settings")
-                self.undo_stack.push(command)
-
-    def _on_edit_axes(self, checked: bool = False) -> None:
-        """Open axis editor dialog.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        self._open_plot_settings_dialog(tab_name="axis")
-
-    def _on_edit_traces(self, checked: bool = False) -> None:
-        """Open trace editor dialog.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        self._open_plot_settings_dialog(tab_name="style")
-
-    def _on_reset_view(self, checked: bool = False) -> None:
-        """Reset view to full data range.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        if self._trace_model is None:
-            return
-
-        # Reset to full time range
-        t_min, t_max = self._trace_model.full_range
-        self.plot_host.set_time_window(t_min, t_max)
-
-        # Reset Y-axes to autoscale
-        for track in self.plot_host._tracks.values():
-            if hasattr(track, "ax") and track.ax is not None:
-                track.ax.autoscale(axis="y")
-
-        self.plot_host.canvas.draw_idle()
-
-    def _on_fit_data(self, checked: bool = False) -> None:
-        """Auto-fit all axes to data range.
-
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        # Autoscale all axes
-        for track in self.plot_host._tracks.values():
-            if hasattr(track, "ax") and track.ax is not None:
-                track.ax.autoscale()
-
-        self.plot_host.canvas.draw_idle()
-
-    def _on_canvas_size_changed(self, index: int) -> None:
-        """Handle canvas size preset change."""
-        if index < 0:
-            return
-
-        size_data = self.canvas_size_combo.itemData(index)
-        if size_data:
-            self._canvas_width_in, self._canvas_height_in = size_data
-            self._default_frame_width_in = self._canvas_width_in
-            self._default_frame_height_in = self._canvas_height_in
-            self._apply_canvas_size()
-
-    def _on_preset_combo_changed(self, index: int) -> None:
-        """Handle style preset selection from combo box."""
-        if index <= 0:  # Skip "(Select Preset)" item
-            return
-
-        preset_name = self.preset_combo.itemText(index)
-        # Find preset by name in built-in presets
-        for preset in self._builtin_presets:
-            if preset.get("name") == preset_name:
-                self.apply_preset(preset)
-                break
-
-        # Reset combo to placeholder
-        self.preset_combo.blockSignals(True)
-        self.preset_combo.setCurrentIndex(0)
-        self.preset_combo.blockSignals(False)
-
-    def _on_zoom_in(self, checked: bool = False) -> None:
-        """Zoom in to the next zoom level."""
-        current_idx = self.zoom_combo.currentIndex()
-
-        # If on "Fit", switch to 100% first
-        if self.zoom_combo.itemData(current_idx) == "fit":
-            # Find 100% (1.0) zoom level
-            for i in range(self.zoom_combo.count()):
-                if self.zoom_combo.itemData(i) == 1.0:
-                    self.zoom_combo.setCurrentIndex(i)
-                    return
-
-        # Otherwise, go to next zoom level (don't include "Fit" in the range)
-        if current_idx < len(self._zoom_levels) - 1:
-            self.zoom_combo.setCurrentIndex(current_idx + 1)
-
-    def _on_zoom_out(self, checked: bool = False) -> None:
-        """Zoom out to the previous zoom level."""
-        current_idx = self.zoom_combo.currentIndex()
-
-        # If on "Fit", switch to 100% first
-        if self.zoom_combo.itemData(current_idx) == "fit":
-            # Find 100% (1.0) zoom level
-            for i in range(self.zoom_combo.count()):
-                if self.zoom_combo.itemData(i) == 1.0:
-                    self.zoom_combo.setCurrentIndex(i)
-                    return
-
-        # Otherwise, go to previous zoom level
-        if current_idx > 0:
-            self.zoom_combo.setCurrentIndex(current_idx - 1)
-
-    def _on_zoom_changed(self, index: int) -> None:
-        """Handle zoom level change from combo box."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-
-        zoom_value = self.zoom_combo.itemData(index)
-
-        if zoom_value == "fit":
-            # Fit to scroll area size
-            self._zoom_to_fit()
-        else:
-            # Zoom to specific level
-            self._zoom_level = float(zoom_value)
-            self._apply_zoom()
-
-    def _zoom_to_fit(self) -> None:
-        """Calculate zoom level to fit canvas in scroll area."""
-        if not hasattr(self, "canvas_scroll") or not hasattr(self, "canvas_frame"):
-            return
-
-        # Get scroll area viewport size
-        viewport = self.canvas_scroll.viewport()
-        viewport_width = viewport.width()
-        viewport_height = viewport.height()
-
-        # Calculate base canvas frame size (canvas size + no extra padding since frame has 0 margins)
-        base_width_px = self._canvas_width_in * self._canvas_dpi
-        base_height_px = self._canvas_height_in * self._canvas_dpi
-
-        # Account for container padding (40px on each side = 80px total)
-        container_padding = 80
-        available_width = viewport_width - container_padding
-        available_height = viewport_height - container_padding
-
-        # Calculate zoom factors to fit
-        zoom_width = available_width / base_width_px if base_width_px > 0 else 1.0
-        zoom_height = available_height / base_height_px if base_height_px > 0 else 1.0
-
-        # Use smaller zoom to fit entirely (cap at 4x, minimum 0.1)
-        self._zoom_level = max(0.1, min(zoom_width, zoom_height, 4.0))
-        self._apply_zoom()
-
-    def _apply_zoom(self) -> None:
-        """Apply current zoom level using DPI scaling (keeps figure at same logical size)."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-        if not hasattr(self, "canvas_frame"):
-            return
-
-        # Calculate effective DPI for zoom (zoom via DPI, not widget resize)
-        # This keeps figure at same logical size (inches) but renders at higher/lower resolution
-        effective_dpi = self._canvas_dpi * self._zoom_level
-        log.debug(
-            "Applying zoom level %.2f (base_dpi=%s, effective_dpi=%s)",
-            self._zoom_level,
-            self._canvas_dpi,
-            effective_dpi,
-        )
-
-        # Set figure DPI (this changes render resolution but not logical inch size)
-        self.plot_host.figure.set_dpi(effective_dpi)
-
-        # Get device pixel ratio for Retina display support
-        device_pixel_ratio = self.plot_host.canvas.devicePixelRatioF()
-
-        # Calculate canvas frame size (white rectangle boundary) at zoomed DPI
-        # Divide by devicePixelRatio so Qt widgets show at correct physical size
-        canvas_frame_width_px = int((self._canvas_width_in * effective_dpi) / device_pixel_ratio)
-        canvas_frame_height_px = int((self._canvas_height_in * effective_dpi) / device_pixel_ratio)
-
-        # Calculate figure size (matplotlib widget) at zoomed DPI
-        # Also divide by devicePixelRatio to prevent doubling
-        figure_width_px = int((self._figure_width_in * effective_dpi) / device_pixel_ratio)
-        figure_height_px = int((self._figure_height_in * effective_dpi) / device_pixel_ratio)
-
-        # Resize canvas frame (white rectangle boundary - represents canvas dimensions)
-        self.canvas_frame.setFixedSize(canvas_frame_width_px, canvas_frame_height_px)
-
-        # Set figure size in inches (don't use forward=True to avoid resize events)
-        self.plot_host.figure.set_size_inches(
-            self._figure_width_in, self._figure_height_in, forward=False
-        )
-
-        # Now set widget size accounting for devicePixelRatio
-        self.plot_host.canvas.setFixedSize(figure_width_px, figure_height_px)
-
-        # Resize container to accommodate zoomed canvas + padding (80px total for each dimension)
-        # This is crucial for scrollbars to appear when zoomed content exceeds viewport
-        if hasattr(self, "canvas_container"):
-            container_width = canvas_frame_width_px + 80
-            container_height = canvas_frame_height_px + 80
-            self.canvas_container.setMinimumSize(container_width, container_height)
-            self.canvas_container.updateGeometry()
-
-        # Trigger redraw at new DPI
-        self.plot_host.canvas.draw_idle()
-
-    def _apply_saved_figure_geometry(self, payload: Mapping[str, Any] | None) -> None:
-        """Restore figure/canvas size settings from persisted state."""
-        if not payload:
-            return
-        with contextlib.suppress(Exception):
-            self._canvas_width_in = float(payload.get("canvas_width_in", self._canvas_width_in))
-            self._canvas_height_in = float(payload.get("canvas_height_in", self._canvas_height_in))
-            self._figure_width_in = float(payload.get("figure_width_in", self._figure_width_in))
-            self._figure_height_in = float(payload.get("figure_height_in", self._figure_height_in))
-            if "zoom_level" in payload:
-                self._zoom_level = float(payload.get("zoom_level", self._zoom_level))
-            if "canvas_dpi" in payload:
-                self._canvas_dpi = int(payload.get("canvas_dpi", self._canvas_dpi))
-        self._apply_canvas_size()
-
-    def _serialize_slide_payload(self) -> dict[str, Any]:
-        """Capture the current slide configuration for persistence."""
-        figure_payload = {
-            "canvas_width_in": self._canvas_width_in,
-            "canvas_height_in": self._canvas_height_in,
-            "figure_width_in": self._figure_width_in,
-            "figure_height_in": self._figure_height_in,
-            "zoom_level": self._zoom_level,
-            "canvas_dpi": self._canvas_dpi,
-        }
-        layout_payload = None
-        if hasattr(self, "plot_host") and self.plot_host is not None:
-            with contextlib.suppress(Exception):
-                layout_payload = self.plot_host.layout_state()
-        return {
-            "figure": figure_payload,
-            "style": self.get_current_style(),
-            "layout_state": layout_payload,
-            "annotations": self.annotations,
-        }
-
-    def _emit_slide_state(self, name: str | None = None, *, auto: bool) -> None:
-        """Emit the current slide state to the host window."""
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-        slide_name = (
-            name or self._current_slide_name or "Untitled Figure"
-        ).strip() or "Untitled Figure"
-        slide_id = self._current_slide_id or str(uuid.uuid4())
-        payload = self._serialize_slide_payload()
-        self._current_slide_id = slide_id
-        self._current_slide_name = slide_name
-        state = {
-            "id": slide_id,
-            "name": slide_name,
-            "payload": payload,
-            "auto": auto,
-        }
-        self.figure_state_saved.emit(state)
-        self._slide_dirty = False
-
-    def _handle_nav_mode_toggled(self, checked: bool) -> None:
-        """Handle mutual exclusivity between pan and zoom modes."""
-        if not checked:
-            return
-
-        sender = self.sender()
-        if sender is None:
-            return
-
-        # Uncheck all other navigation mode actions
-        for action in self._nav_mode_actions:
-            if action is not sender and action.isChecked():
-                action.blockSignals(True)
-                action.setChecked(False)
-                action.blockSignals(False)
+        self.canvas.draw_idle()
 
     def _on_grid_toggled(self, checked: bool) -> None:
-        """Handle grid toggle action."""
-        self.grid_visible = checked
-        # Update grid visibility on all axes
-        for track in self.plot_host._tracks.values():
-            ax = getattr(track, "ax", None)
-            if ax is not None:
-                if self.grid_visible:
-                    ax.grid(True, color=CURRENT_THEME.get("grid_color", "#e0e0e0"))
-                else:
-                    ax.grid(False)
-        self.plot_host.canvas.draw_idle()
+        self._grid_enabled = bool(checked)
+        if self.ax is None:
+            return
+        self.ax.grid(self._grid_enabled)
+        log.info("[FIGURE_COMPOSER][AXES] grid_toggled: checked=%s", checked)
+        self.canvas.draw_idle()
 
-    def _on_edit_points_triggered(self, checked: bool = False) -> None:
-        """Handle edit points action - opens point editor for manual trace correction."""
-        if not self._trace_model:
-            QMessageBox.information(
-                self,
-                "No Trace Data",
-                "Please load trace data before using the point editor.",
-            )
+    def _on_axis_limits_changed(self) -> None:
+        if self.ax is None:
+            return
+        if not (self.xmin_spin and self.xmax_spin and self.ymin_spin and self.ymax_spin):
             return
 
-        # TODO: Implement point editor integration
-        QMessageBox.information(
-            self,
-            "Edit Points",
-            "Point editor integration coming soon.\n\n"
-            "This feature will allow manual correction of trace data points.",
+        xmin = self.xmin_spin.value()
+        xmax = self.xmax_spin.value()
+        ymin = self.ymin_spin.value()
+        ymax = self.ymax_spin.value()
+
+        if xmin > xmax:
+            xmin, xmax = xmax, xmin
+        if ymin > ymax:
+            ymin, ymax = ymax, ymin
+        if xmin == xmax:
+            delta = abs(xmin) * 0.01 or 1.0
+            xmin -= delta
+            xmax += delta
+            self.xmin_spin.blockSignals(True)
+            self.xmax_spin.blockSignals(True)
+            self.xmin_spin.setValue(xmin)
+            self.xmax_spin.setValue(xmax)
+            self.xmin_spin.blockSignals(False)
+            self.xmax_spin.blockSignals(False)
+        if ymin == ymax:
+            delta = abs(ymin) * 0.01 or 1.0
+            ymin -= delta
+            ymax += delta
+            self.ymin_spin.blockSignals(True)
+            self.ymax_spin.blockSignals(True)
+            self.ymin_spin.setValue(ymin)
+            self.ymax_spin.setValue(ymax)
+            self.ymin_spin.blockSignals(False)
+            self.ymax_spin.blockSignals(False)
+        self.ax.set_xlim(xmin, xmax)
+        self.ax.set_ylim(ymin, ymax)
+        log.info(
+            "[FIGURE_COMPOSER][AXES] limits_changed: x_min=%.3f x_max=%.3f y_min=%.3f y_max=%.3f",
+            xmin,
+            xmax,
+            ymin,
+            ymax,
         )
+        self.canvas.draw_idle()
 
-    def _on_journal_preset_changed(self, index: int) -> None:
-        """Handle journal preset selection."""
-        if index <= 0:  # Skip placeholder
+    def _on_axis_label_fontsize_changed(self, size: int) -> None:
+        if self.ax is None:
             return
-
-        preset_key = self.journal_preset_combo.itemData(index)
-
-        # Journal dimension presets (width, height in inches, DPI, format)
-        presets = {
-            "nature_single": (89 / 25.4, 6.0, 300, "tiff"),  # 89mm to inches
-            "nature_double": (183 / 25.4, 6.0, 300, "tiff"),  # 183mm to inches
-            "science": (3.3, 2.5, 300, "tiff"),
-            "cell_single": (85 / 25.4, 6.0, 300, "tiff"),  # 85mm to inches
-            "cell_double": (174 / 25.4, 6.0, 300, "tiff"),  # 174mm to inches
-            "pnas_single": (8.7 / 2.54, 6.0, 300, "tiff"),  # 8.7cm to inches
-            "pnas_double": (17.8 / 2.54, 6.0, 300, "tiff"),  # 17.8cm to inches
-            "elife": (5.2, 4.0, 300, "tiff"),
-        }
-
-        if preset_key in presets:
-            width, height, dpi, fmt = presets[preset_key]
-
-            # Update canvas size
-            self._canvas_width_in = width
-            self._canvas_height_in = height
-            self._canvas_dpi = dpi
-            self._default_frame_width_in = width
-            self._default_frame_height_in = height
-            self._apply_canvas_size()
-
-            # Update export settings
-            self.export_dpi_spin.setValue(dpi)
-
-            # Find and select format
-            for i in range(self.export_format_combo.count()):
-                if self.export_format_combo.itemData(i) == fmt:
-                    self.export_format_combo.setCurrentIndex(i)
-                    break
-
-            preset_name = self.journal_preset_combo.currentText()
-            QMessageBox.information(
-                self,
-                "Journal Preset Applied",
-                ("Canvas dimensions and export settings updated for " f"{preset_name}"),
-            )
-
-        # Reset combo to placeholder
-        self.journal_preset_combo.blockSignals(True)
-        self.journal_preset_combo.setCurrentIndex(0)
-        self.journal_preset_combo.blockSignals(False)
-
-    def _on_export_now(self, checked: bool = False) -> None:
-        """Handle export button click with publication settings."""
-
-        from PyQt5.QtWidgets import QFileDialog
-
-        # Get current export settings
-        export_format = self.export_format_combo.currentData()
-        export_dpi = self.export_dpi_spin.value()
-        transparent = self.export_transparent_check.isChecked()
-        prefix = self.filename_prefix_edit.text() or "figure"
-
-        # Format mapping
-        format_extensions = {
-            "tiff": ".tiff",
-            "svg": ".svg",
-            "png": ".png",
-            "pdf": ".pdf",
-            "eps": ".eps",
-        }
-
-        extension = format_extensions.get(export_format, ".tiff")
-
-        # File filter based on format
-        file_filters = {
-            "tiff": "TIFF Files (*.tiff *.tif)",
-            "svg": "SVG Files (*.svg)",
-            "png": "PNG Files (*.png)",
-            "pdf": "PDF Files (*.pdf)",
-            "eps": "EPS Files (*.eps)",
-        }
-        file_filter = file_filters.get(export_format, "All Files (*.*)")
-
-        # Get save path
-        default_name = f"{prefix}{extension}"
-        output_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Figure for Publication",
-            default_name,
-            file_filter,
-        )
-
-        if not output_path:
-            return
-
         try:
-            # Prepare export parameters
-            export_params = {
-                "dpi": export_dpi,
-                "bbox_inches": "tight",
-                "pad_inches": 0.1,
-            }
-
-            # Handle transparent background for PNG/SVG
-            if transparent and export_format in ["png", "svg"]:
-                export_params["transparent"] = True
-
-            # Export the figure
-            self.plot_host.figure.savefig(output_path, **export_params)
-
-            QMessageBox.information(
-                self,
-                "Export Successful",
-                f"Figure exported for publication:\n{output_path}\n\n"
-                f"Format: {export_format.upper()}\n"
-                f"DPI: {export_dpi}\n"
-                f"Size: {self.plot_host.figure.get_figwidth():.2f} × "
-                f"{self.plot_host.figure.get_figheight():.2f} in",
-            )
-
-            # Store last export path for quick export
-            self._last_export_path = output_path
-            self._last_export_params = export_params
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Export Failed",
-                f"Failed to export figure:\n{str(e)}",
-            )
-
-    def _on_quick_export(self, checked: bool = False) -> None:
-        """Quick export using last settings."""
-        if not hasattr(self, "_last_export_path"):
-            QMessageBox.information(
-                self,
-                "No Previous Export",
-                "Please use 'Export Figure...' first to set export location and settings.",
-            )
+            self.ax.xaxis.label.set_fontsize(size)
+            self.ax.yaxis.label.set_fontsize(size)
+        except Exception:
             return
+        log.info("[FIGURE_COMPOSER][AXES] label_fontsize_changed: size=%d", size)
+        self.canvas.draw_idle()
 
-        try:
-            # Export with last parameters
-            self.plot_host.figure.savefig(self._last_export_path, **self._last_export_params)
-
-            QMessageBox.information(
-                self,
-                "Quick Export Successful",
-                f"Figure re-exported to:\n{self._last_export_path}",
-            )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Quick Export Failed",
-                f"Failed to export figure:\n{str(e)}",
-            )
-
-    def _on_save_figure_state(self, checked: bool = False) -> None:
-        """Persist the current slide configuration with a user-provided name."""
-        del checked
-        default_name = self._current_slide_name or "Untitled Figure"
-        name, ok = QInputDialog.getText(
-            self,
-            "Save Figure State",
-            "Figure name:",
-            QLineEdit.Normal,
-            default_name,
+    def _on_figure_units_changed(self, index: int) -> None:
+        del index  # unused
+        units_text = (
+            self.fig_units_combo.currentText().lower() if self.fig_units_combo is not None else "mm"
         )
-        if not ok:
+        log.info("[FIGURE_COMPOSER][SIZE] units_changed: units=%s", units_text)
+        self._sync_figure_size_widgets_from_figure()
+
+    def _on_figure_size_changed(self) -> None:
+        """Update the matplotlib figure size from the spin boxes."""
+        fig = getattr(self, "figure", None)
+        if fig is None or self.canvas is None:
             return
-        final_name = name.strip() or default_name
-        self._emit_slide_state(final_name, auto=False)
+        if not (self.fig_width_spin and self.fig_height_spin and self.fig_units_combo):
+            return
 
-    def _on_validate_figure(self, checked: bool = False) -> None:
-        """Validate figure against publication requirements."""
-        # Get current figure properties
-        dpi = int(self.plot_host.figure.get_dpi())
-        width_in = self.plot_host.figure.get_figwidth()
-        height_in = self.plot_host.figure.get_figheight()
+        units_text = (
+            self.fig_units_combo.currentText().lower() if self.fig_units_combo is not None else "mm"
+        )
+        width_val = self.fig_width_spin.value()
+        height_val = self.fig_height_spin.value()
 
-        # Validation checks
-        issues = []
-        warnings = []
-        passes = []
-
-        # DPI check
-        if dpi < 300:
-            issues.append(f"DPI too low: {dpi} (minimum 300 recommended)")
-        elif dpi >= 300:
-            passes.append(f"✓ DPI: {dpi} (meets minimum 300)")
-
-        # Dimension check
-        if width_in < 3.0:
-            warnings.append(f"Figure width: {width_in:.2f} in (may be too small for single column)")
+        if units_text.startswith("mm"):
+            width_in = float(width_val) / 25.4
+            height_in = float(height_val) / 25.4
         else:
-            passes.append(f"✓ Dimensions: {width_in:.2f} × {height_in:.2f} in")
+            width_in = float(width_val)
+            height_in = float(height_val)
+        log.info(
+            "[FIGURE_COMPOSER][SIZE] user_changed_size: units=%s width_val=%.3f height_val=%.3f "
+            "width_in=%.3f height_in=%.3f",
+            units_text,
+            width_val,
+            height_val,
+            width_in,
+            height_in,
+        )
 
-        # Font size check (sample from axes)
-        primary_ax = self._get_primary_axes()
-        if primary_ax:
+        min_in = 0.4
+        width_in = max(width_in, min_in)
+        height_in = max(height_in, min_in)
+
+        self._figure_width_in = width_in
+        self._figure_height_in = height_in
+
+        try:
+            fig.set_size_inches(width_in, height_in, forward=True)
+        except Exception:
+            return
+
+        self._sync_figure_size_widgets_from_figure()
+        self._render_trace()
+
+    def _on_trace_linewidth_changed(self, value: float) -> None:
+        lines = getattr(self, "_trace_lines", None)
+        if not lines:
+            return
+        for line in lines:
             try:
-                tick_labels = primary_ax.get_xticklabels()
-                if tick_labels:
-                    font_size = tick_labels[0].get_fontsize()
-                    if font_size < 6:
-                        issues.append(f"Tick label font too small: {font_size} pt (minimum 6 pt)")
-                    elif font_size < 8:
-                        warnings.append(f"Tick label font: {font_size} pt (8-10 pt recommended)")
-                    else:
-                        passes.append(f"✓ Font sizes: {font_size} pt (readable)")
+                line.set_linewidth(value)
+            except Exception:
+                continue
+        log.info("[FIGURE_COMPOSER][TRACE] linewidth_changed: value=%.3f", value)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_tick_fontsize_changed(self, size: int) -> None:
+        if self.ax is None:
+            return
+        try:
+            for tick in self.ax.get_xticklabels():
+                tick.set_fontsize(size)
+            for tick in self.ax.get_yticklabels():
+                tick.set_fontsize(size)
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][TICKS] fontsize_changed: size=%d", size)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_x_tick_rotation_changed(self, index: int) -> None:
+        if self.ax is None or self.x_tick_rotation_combo is None:
+            return
+        angle = self.x_tick_rotation_combo.itemData(index)
+        if angle is None:
+            angle = 0
+        try:
+            for label in self.ax.get_xticklabels():
+                label.set_rotation(angle)
+                if angle == 0:
+                    label.set_ha("center")
+                    label.set_va("top")
+                elif angle == 45:
+                    label.set_ha("right")
+                    label.set_va("top")
+                elif angle == 90:
+                    label.set_ha("right")
+                    label.set_va("center")
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][TICKS] x_tick_rotation_changed: angle=%s", angle)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_max_xticks_changed(self, value: int) -> None:
+        if self.ax is None:
+            return
+        try:
+            self.ax.locator_params(axis="x", nbins=value)
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][TICKS] max_xticks_changed: nbins=%d", value)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_label_bold_toggled(self, checked: bool) -> None:
+        if self.ax is None:
+            return
+        weight = "bold" if checked else "normal"
+        try:
+            self.ax.xaxis.label.set_fontweight(weight)
+            self.ax.yaxis.label.set_fontweight(weight)
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][AXES] label_bold_toggled: checked=%s", checked)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_label_italic_toggled(self, checked: bool) -> None:
+        if self.ax is None:
+            return
+        style = "italic" if checked else "normal"
+        try:
+            self.ax.xaxis.label.set_fontstyle(style)
+            self.ax.yaxis.label.set_fontstyle(style)
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][AXES] label_italic_toggled: checked=%s", checked)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_tick_bold_toggled(self, checked: bool) -> None:
+        if self.ax is None:
+            return
+        weight = "bold" if checked else "normal"
+        try:
+            for tick in self.ax.get_xticklabels():
+                tick.set_fontweight(weight)
+            for tick in self.ax.get_yticklabels():
+                tick.set_fontweight(weight)
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][TICKS] bold_toggled: checked=%s", checked)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_tick_italic_toggled(self, checked: bool) -> None:
+        if self.ax is None:
+            return
+        style = "italic" if checked else "normal"
+        try:
+            for tick in self.ax.get_xticklabels():
+                tick.set_fontstyle(style)
+            for tick in self.ax.get_yticklabels():
+                tick.set_fontstyle(style)
+        except Exception:
+            return
+        log.info("[FIGURE_COMPOSER][TICKS] italic_toggled: checked=%s", checked)
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_trace_color_clicked(self) -> None:
+        """Let the user pick a color for the currently selected trace."""
+        if self.trace_selector is None:
+            return
+        track_id = getattr(self, "_selected_track_id", None)
+        if track_id is None:
+            return
+
+        current_hex = self._trace_color_overrides.get(track_id)
+        if current_hex is None and self._trace_lines:
+            try:
+                current_hex = to_hex(self._trace_lines[0].get_color())
+            except Exception:
+                current_hex = None
+        if current_hex is None:
+            current_hex = "#1f77b4"
+
+        initial_color = QColor(current_hex)
+        color = QColorDialog.getColor(initial_color, self, "Select trace color")
+        if not color.isValid():
+            return
+
+        hex_color = color.name()
+        log.info(
+            "[FIGURE_COMPOSER][TRACE] color_changed: track_id=%s color=%s",
+            track_id,
+            hex_color,
+        )
+        self._trace_color_overrides[track_id] = hex_color
+
+        for line in self._trace_lines:
+            with contextlib.suppress(Exception):
+                line.set_color(hex_color)
+
+        if self.trace_color_button is not None:
+            self.trace_color_button.setStyleSheet(f"background-color: {hex_color}")
+
+        if self.canvas is not None:
+            self.canvas.draw_idle()
+
+    def _on_trace_selection_changed(self, index: int) -> None:
+        if self.trace_selector is None:
+            return
+        track_id = self.trace_selector.itemData(index)
+        self._selected_track_id = str(track_id) if track_id is not None else None
+        log.info(
+            "[FIGURE_COMPOSER][TRACE] trace_selected: index=%d text=%s track_id=%s",
+            index,
+            self.trace_selector.itemText(index) if index >= 0 else None,
+            self._selected_track_id,
+        )
+        if self._selected_track_id is not None:
+            color = self._trace_color_overrides.get(self._selected_track_id)
+            if color and self.trace_color_button is not None:
+                self.trace_color_button.setStyleSheet(f"background-color: {color}")
+        self._render_trace()
+
+    def _on_show_events_toggled(self, checked: bool) -> None:
+        """Toggle visibility of event lines/labels."""
+        self._show_events = bool(checked)
+        log.info("[FIGURE_COMPOSER][EVENTS] show_events_toggled: checked=%s", checked)
+        self._render_trace()
+
+    def _on_event_fontsize_changed(self, size: int) -> None:
+        """Update event label font size."""
+        del size  # unused; redraw uses current spin value
+        current_size = None
+        if self.event_fontsize_spin is not None:
+            try:
+                current_size = int(self.event_fontsize_spin.value())
+            except Exception:
+                current_size = None
+        log.info("[FIGURE_COMPOSER][EVENTS] fontsize_changed: size=%s", current_size)
+        self._render_trace()
+
+    def _on_event_label_style_changed(self, index: int) -> None:
+        """Update the event label style and re-render."""
+        if self.event_label_style_combo is None:
+            return
+        style = self.event_label_style_combo.itemData(index)
+        if style not in ("side_h", "side_v"):
+            style = "side_v"
+        self._event_label_style = style
+        if self.event_y_spin is not None:
+            self.event_y_spin.setEnabled(style in ("side_h", "side_v"))
+        log.info("[FIGURE_COMPOSER][EVENTS] label_style_changed: style=%s", style)
+        self._render_trace()
+
+    def _on_event_y_position_changed(self, value: float) -> None:
+        """User-set Y position for side event label styles."""
+        if getattr(self, "_event_label_style", "side_v") not in ("side_h", "side_v"):
+            return
+        try:
+            self._event_y_position = float(value)
+        except Exception:
+            self._event_y_position = None
+            return
+        log.info("[FIGURE_COMPOSER][EVENTS] y_position_changed: value=%.3f", value)
+        self._render_trace()
+
+    def _on_copy_style_clicked(self) -> None:
+        style: dict[str, Any] = {}
+
+        style["grid_enabled"] = bool(self._grid_enabled)
+
+        if self.x_label_edit is not None:
+            style["x_label_text"] = self.x_label_edit.text()
+        if self.y_label_edit is not None:
+            style["y_label_text"] = self.y_label_edit.text()
+        if self.xmin_spin is not None:
+            style["x_min"] = self.xmin_spin.value()
+        if self.xmax_spin is not None:
+            style["x_max"] = self.xmax_spin.value()
+        if self.ymin_spin is not None:
+            style["y_min"] = self.ymin_spin.value()
+        if self.ymax_spin is not None:
+            style["y_max"] = self.ymax_spin.value()
+
+        if self.axis_label_fontsize_spin is not None:
+            style["axis_label_fontsize"] = self.axis_label_fontsize_spin.value()
+        if self.label_bold_checkbox is not None:
+            style["label_bold"] = self.label_bold_checkbox.isChecked()
+        if self.label_italic_checkbox is not None:
+            style["label_italic"] = self.label_italic_checkbox.isChecked()
+
+        if self.tick_fontsize_spin is not None:
+            style["tick_fontsize"] = self.tick_fontsize_spin.value()
+        if self.x_tick_rotation_combo is not None:
+            style["x_tick_rotation"] = self.x_tick_rotation_combo.currentData()
+        if self.tick_bold_checkbox is not None:
+            style["tick_bold"] = self.tick_bold_checkbox.isChecked()
+        if self.tick_italic_checkbox is not None:
+            style["tick_italic"] = self.tick_italic_checkbox.isChecked()
+        if self.max_xticks_spin is not None:
+            style["max_xticks"] = self.max_xticks_spin.value()
+
+        if self.trace_linewidth_spin is not None:
+            style["trace_linewidth"] = self.trace_linewidth_spin.value()
+        trace_color = None
+        if self._trace_lines:
+            try:
+                trace_color = to_hex(self._trace_lines[0].get_color())
+            except Exception:
+                trace_color = None
+        if trace_color:
+            style["trace_color"] = trace_color
+
+        if self.show_events_checkbox is not None:
+            style["show_events"] = self.show_events_checkbox.isChecked()
+        if self.event_fontsize_spin is not None:
+            style["event_fontsize"] = self.event_fontsize_spin.value()
+        if self.event_label_style_combo is not None:
+            style["event_label_style"] = self.event_label_style_combo.currentData()
+        if self.event_y_spin is not None:
+            style["event_y"] = self.event_y_spin.value()
+
+        self._style_clipboard = style
+        if self.style_apply_button is not None:
+            self.style_apply_button.setEnabled(True)
+        log.info(
+            "[FIGURE_COMPOSER][STYLE] copy_style: keys=%s",
+            sorted(self._style_clipboard.keys()) if self._style_clipboard else [],
+        )
+
+    def _on_apply_style_clicked(self) -> None:
+        style = self._style_clipboard
+        if not style:
+            return
+        log.info(
+            "[FIGURE_COMPOSER][STYLE] apply_style: keys=%s",
+            sorted(style.keys()),
+        )
+
+        # Grid and labels
+        if self.grid_checkbox is not None and "grid_enabled" in style:
+            blocker = QSignalBlocker(self.grid_checkbox)
+            self.grid_checkbox.setChecked(bool(style["grid_enabled"]))
+            del blocker
+
+        if self.x_label_edit is not None and "x_label_text" in style:
+            blocker = QSignalBlocker(self.x_label_edit)
+            self.x_label_edit.setText(style["x_label_text"])
+            del blocker
+        if self.y_label_edit is not None and "y_label_text" in style:
+            blocker = QSignalBlocker(self.y_label_edit)
+            self.y_label_edit.setText(style["y_label_text"])
+            del blocker
+
+        if self.xmin_spin is not None and "x_min" in style:
+            self.xmin_spin.blockSignals(True)
+            self.xmin_spin.setValue(float(style["x_min"]))
+            self.xmin_spin.blockSignals(False)
+        if self.xmax_spin is not None and "x_max" in style:
+            self.xmax_spin.blockSignals(True)
+            self.xmax_spin.setValue(float(style["x_max"]))
+            self.xmax_spin.blockSignals(False)
+        if self.ymin_spin is not None and "y_min" in style:
+            self.ymin_spin.blockSignals(True)
+            self.ymin_spin.setValue(float(style["y_min"]))
+            self.ymin_spin.blockSignals(False)
+        if self.ymax_spin is not None and "y_max" in style:
+            self.ymax_spin.blockSignals(True)
+            self.ymax_spin.setValue(float(style["y_max"]))
+            self.ymax_spin.blockSignals(False)
+
+        if self.axis_label_fontsize_spin is not None and "axis_label_fontsize" in style:
+            blocker = QSignalBlocker(self.axis_label_fontsize_spin)
+            self.axis_label_fontsize_spin.setValue(int(style["axis_label_fontsize"]))
+            del blocker
+        if self.label_bold_checkbox is not None and "label_bold" in style:
+            blocker = QSignalBlocker(self.label_bold_checkbox)
+            self.label_bold_checkbox.setChecked(bool(style["label_bold"]))
+            del blocker
+        if self.label_italic_checkbox is not None and "label_italic" in style:
+            blocker = QSignalBlocker(self.label_italic_checkbox)
+            self.label_italic_checkbox.setChecked(bool(style["label_italic"]))
+            del blocker
+
+        if self.tick_fontsize_spin is not None and "tick_fontsize" in style:
+            blocker = QSignalBlocker(self.tick_fontsize_spin)
+            self.tick_fontsize_spin.setValue(int(style["tick_fontsize"]))
+            del blocker
+        if self.x_tick_rotation_combo is not None and "x_tick_rotation" in style:
+            target_angle = style["x_tick_rotation"]
+            for idx in range(self.x_tick_rotation_combo.count()):
+                if self.x_tick_rotation_combo.itemData(idx) == target_angle:
+                    blocker = QSignalBlocker(self.x_tick_rotation_combo)
+                    self.x_tick_rotation_combo.setCurrentIndex(idx)
+                    del blocker
+                    break
+        if self.tick_bold_checkbox is not None and "tick_bold" in style:
+            blocker = QSignalBlocker(self.tick_bold_checkbox)
+            self.tick_bold_checkbox.setChecked(bool(style["tick_bold"]))
+            del blocker
+        if self.tick_italic_checkbox is not None and "tick_italic" in style:
+            blocker = QSignalBlocker(self.tick_italic_checkbox)
+            self.tick_italic_checkbox.setChecked(bool(style["tick_italic"]))
+            del blocker
+        if self.max_xticks_spin is not None and "max_xticks" in style:
+            blocker = QSignalBlocker(self.max_xticks_spin)
+            self.max_xticks_spin.setValue(int(style["max_xticks"]))
+            del blocker
+
+        if self.trace_linewidth_spin is not None and "trace_linewidth" in style:
+            blocker = QSignalBlocker(self.trace_linewidth_spin)
+            self.trace_linewidth_spin.setValue(float(style["trace_linewidth"]))
+            del blocker
+
+        color = style.get("trace_color")
+        if color:
+            track_id = getattr(self, "_selected_track_id", None)
+            if track_id is not None:
+                self._trace_color_overrides[track_id] = color
+            if self.trace_color_button is not None:
+                self.trace_color_button.setStyleSheet(f"background-color: {color}")
+            for line in self._trace_lines:
+                with contextlib.suppress(Exception):
+                    line.set_color(color)
+        if self.show_events_checkbox is not None and "show_events" in style:
+            blocker = QSignalBlocker(self.show_events_checkbox)
+            self.show_events_checkbox.setChecked(bool(style["show_events"]))
+            del blocker
+        if self.event_fontsize_spin is not None and "event_fontsize" in style:
+            blocker = QSignalBlocker(self.event_fontsize_spin)
+            self.event_fontsize_spin.setValue(int(style["event_fontsize"]))
+            del blocker
+        if self.event_label_style_combo is not None and "event_label_style" in style:
+            target = style["event_label_style"]
+            for idx in range(self.event_label_style_combo.count()):
+                if self.event_label_style_combo.itemData(idx) == target:
+                    blocker = QSignalBlocker(self.event_label_style_combo)
+                    self.event_label_style_combo.setCurrentIndex(idx)
+                    del blocker
+                    break
+            self._event_label_style = (
+                target if target in ("side_h", "side_v") else self._event_label_style
+            )
+        if self.event_y_spin is not None and "event_y" in style:
+            blocker = QSignalBlocker(self.event_y_spin)
+            self.event_y_spin.setValue(float(style["event_y"]))
+            del blocker
+            with contextlib.suppress(Exception):
+                self._event_y_position = float(style["event_y"])
+
+        # Apply axis limits now that spins are set
+        self._on_axis_limits_changed()
+
+        # Apply figure size (this will trigger a render)
+        self._on_figure_size_changed()
+
+        # Re-apply limits after render to ensure they stick
+        self._on_axis_limits_changed()
+
+    def _sync_figure_size_widgets_from_figure(self) -> None:
+        """Sync the Figure panel widgets (width/height/pixels) from the current Matplotlib figure."""
+        fig = getattr(self, "figure", None)
+        if fig is None:
+            return
+
+        try:
+            width_in, height_in = fig.get_size_inches()
+            dpi = fig.get_dpi()
+        except Exception:
+            return
+        log.debug(
+            "[FIGURE_COMPOSER][SIZE] sync_from_figure: width_in=%.3f height_in=%.3f dpi=%.1f",
+            width_in,
+            height_in,
+            dpi,
+        )
+
+        self._figure_width_in = float(width_in)
+        self._figure_height_in = float(height_in)
+
+        units_text = "mm"
+        if self.fig_units_combo is not None:
+            try:
+                units_text = self.fig_units_combo.currentText().lower()
+            except Exception:
+                units_text = "mm"
+
+        if units_text.startswith("mm"):
+            width_val = self._figure_width_in * 25.4
+            height_val = self._figure_height_in * 25.4
+        else:
+            width_val = self._figure_width_in
+            height_val = self._figure_height_in
+
+        if self.fig_width_spin is not None:
+            blocker = QSignalBlocker(self.fig_width_spin)
+            self.fig_width_spin.setValue(width_val)
+            del blocker
+        if self.fig_height_spin is not None:
+            blocker = QSignalBlocker(self.fig_height_spin)
+            self.fig_height_spin.setValue(height_val)
+            del blocker
+
+        if self.fig_pixels_label is not None:
+            px_w = int(round(self._figure_width_in * dpi))
+            px_h = int(round(self._figure_height_in * dpi))
+            self.fig_pixels_label.setText(f"{px_w} × {px_h} px @ {int(round(dpi))} dpi")
+
+    def _sync_limits_from_axes(self, xmin: float, xmax: float, ymin: float, ymax: float) -> None:
+        if not (self.xmin_spin and self.xmax_spin and self.ymin_spin and self.ymax_spin):
+            return
+        for spin, value in (
+            (self.xmin_spin, xmin),
+            (self.xmax_spin, xmax),
+            (self.ymin_spin, ymin),
+            (self.ymax_spin, ymax),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+
+    def _sync_widgets_from_axes(self) -> None:
+        """Sync widget state from the current axes/figure without triggering handlers."""
+        if self.ax is None:
+            return
+
+        if self.x_label_edit is not None:
+            self.x_label_edit.blockSignals(True)
+            self.x_label_edit.setText(self.ax.get_xlabel() or "")
+            self.x_label_edit.blockSignals(False)
+        if self.y_label_edit is not None:
+            self.y_label_edit.blockSignals(True)
+            self.y_label_edit.setText(self.ax.get_ylabel() or "")
+            self.y_label_edit.blockSignals(False)
+
+        if self.grid_checkbox is not None:
+            self.grid_checkbox.blockSignals(True)
+            self.grid_checkbox.setChecked(self._grid_enabled)
+            self.grid_checkbox.blockSignals(False)
+
+        if self.xmin_spin and self.xmax_spin and self.ymin_spin and self.ymax_spin:
+            try:
+                xmin, xmax = self.ax.get_xlim()
+                ymin, ymax = self.ax.get_ylim()
+                self._sync_limits_from_axes(xmin, xmax, ymin, ymax)
             except Exception:
                 pass
 
-        # Build validation report
-        report = "<h3>Figure Validation Report</h3>"
+        if self.axis_label_fontsize_spin is not None:
+            try:
+                size = self.ax.xaxis.label.get_fontsize()
+                if size:
+                    self.axis_label_fontsize_spin.blockSignals(True)
+                    self.axis_label_fontsize_spin.setValue(int(size))
+                    self.axis_label_fontsize_spin.blockSignals(False)
+            except Exception:
+                pass
+        if self.label_bold_checkbox is not None or self.label_italic_checkbox is not None:
+            x_label = self.ax.xaxis.label
+            weight = x_label.get_fontweight() if x_label is not None else None
+            style = x_label.get_fontstyle() if x_label is not None else None
+            if self.label_bold_checkbox is not None:
+                is_bold = False
+                if isinstance(weight, str):
+                    is_bold = weight.lower() == "bold"
+                elif isinstance(weight, int | float):
+                    is_bold = weight >= 600
+                self.label_bold_checkbox.blockSignals(True)
+                self.label_bold_checkbox.setChecked(is_bold)
+                self.label_bold_checkbox.blockSignals(False)
+            if self.label_italic_checkbox is not None:
+                is_italic = False
+                if isinstance(style, str):
+                    is_italic = style.lower() in ("italic", "oblique")
+                self.label_italic_checkbox.blockSignals(True)
+                self.label_italic_checkbox.setChecked(is_italic)
+                self.label_italic_checkbox.blockSignals(False)
 
-        if passes:
-            report += "<p><b style='color: green;'>Passed:</b></p><ul>"
-            for p in passes:
-                report += f"<li>{p}</li>"
-            report += "</ul>"
+        if self.trace_linewidth_spin is not None:
+            lw = 1.5
+            if self._trace_lines:
+                try:
+                    lw = self._trace_lines[0].get_linewidth()
+                except Exception:
+                    lw = 1.5
+            self.trace_linewidth_spin.blockSignals(True)
+            self.trace_linewidth_spin.setValue(lw)
+            self.trace_linewidth_spin.blockSignals(False)
 
-        if warnings:
-            report += "<p><b style='color: orange;'>Warnings:</b></p><ul>"
-            for w in warnings:
-                report += f"<li>{w}</li>"
-            report += "</ul>"
+        active_spec = self._get_active_spec()
+        if active_spec is not None and self._trace_lines:
+            track_id = getattr(active_spec, "track_id", None)
+            current_color = None
+            try:
+                current_color = to_hex(self._trace_lines[0].get_color())
+            except Exception:
+                current_color = None
+            if track_id is not None and current_color:
+                if track_id not in self._trace_color_overrides:
+                    self._trace_color_overrides[track_id] = current_color
+                if self.trace_color_button is not None:
+                    self.trace_color_button.setStyleSheet(f"background-color: {current_color}")
 
-        if issues:
-            report += "<p><b style='color: red;'>Issues:</b></p><ul>"
-            for i in issues:
-                report += f"<li>{i}</li>"
-            report += "</ul>"
+        if self.tick_fontsize_spin is not None:
+            xticks = self.ax.get_xticklabels()
+            yticks = self.ax.get_yticklabels()
+            size = None
+            if xticks:
+                try:
+                    size = xticks[0].get_fontsize()
+                except Exception:
+                    size = None
+            if size is None and yticks:
+                try:
+                    size = yticks[0].get_fontsize()
+                except Exception:
+                    size = None
+            if size is not None:
+                self.tick_fontsize_spin.blockSignals(True)
+                self.tick_fontsize_spin.setValue(int(size))
+                self.tick_fontsize_spin.blockSignals(False)
 
-        if not issues and not warnings:
-            report += (
-                "<p style='color: green;'><b>All checks passed!</b> "
-                "Figure meets publication standards.</p>"
+        if self.x_tick_rotation_combo is not None:
+            angle = 0.0
+            xticks = self.ax.get_xticklabels()
+            if xticks:
+                try:
+                    angle = float(xticks[0].get_rotation() or 0.0)
+                except Exception:
+                    angle = 0.0
+            candidates = [0, 45, 90]
+            nearest = min(candidates, key=lambda a: abs(a - angle))
+            for idx in range(self.x_tick_rotation_combo.count()):
+                if self.x_tick_rotation_combo.itemData(idx) == nearest:
+                    self.x_tick_rotation_combo.blockSignals(True)
+                    self.x_tick_rotation_combo.setCurrentIndex(idx)
+                    self.x_tick_rotation_combo.blockSignals(False)
+                    break
+
+        if self.max_xticks_spin is not None and self.max_xticks_spin.value() <= 0:
+            self.max_xticks_spin.blockSignals(True)
+            self.max_xticks_spin.setValue(10)
+            self.max_xticks_spin.blockSignals(False)
+
+        xticks = self.ax.get_xticklabels()
+        tick_weight = None
+        tick_style = None
+        if xticks:
+            try:
+                tick_weight = xticks[0].get_fontweight()
+                tick_style = xticks[0].get_fontstyle()
+            except Exception:
+                tick_weight = None
+                tick_style = None
+        if self.tick_bold_checkbox is not None:
+            tick_is_bold = False
+            if isinstance(tick_weight, str):
+                tick_is_bold = tick_weight.lower() == "bold"
+            elif isinstance(tick_weight, int | float):
+                tick_is_bold = tick_weight >= 600
+            self.tick_bold_checkbox.blockSignals(True)
+            self.tick_bold_checkbox.setChecked(tick_is_bold)
+            self.tick_bold_checkbox.blockSignals(False)
+        if self.tick_italic_checkbox is not None:
+            tick_is_italic = False
+            if isinstance(tick_style, str):
+                tick_is_italic = tick_style.lower() in ("italic", "oblique")
+            self.tick_italic_checkbox.blockSignals(True)
+            self.tick_italic_checkbox.setChecked(tick_is_italic)
+            self.tick_italic_checkbox.blockSignals(False)
+
+        if self.show_events_checkbox is not None:
+            self.show_events_checkbox.blockSignals(True)
+            self.show_events_checkbox.setChecked(self._show_events)
+            self.show_events_checkbox.blockSignals(False)
+        if self.event_fontsize_spin is not None:
+            self.event_fontsize_spin.blockSignals(True)
+            self.event_fontsize_spin.setValue(int(self.event_fontsize_spin.value() or 10))
+            self.event_fontsize_spin.blockSignals(False)
+        if self.event_label_style_combo is not None:
+            current_style = getattr(self, "_event_label_style", "side_v") or "side_v"
+            if current_style == "top":
+                current_style = "side_v"
+            for idx in range(self.event_label_style_combo.count()):
+                if self.event_label_style_combo.itemData(idx) == current_style:
+                    self.event_label_style_combo.blockSignals(True)
+                    self.event_label_style_combo.setCurrentIndex(idx)
+                    self.event_label_style_combo.blockSignals(False)
+                    break
+        if self.event_y_spin is not None:
+            self.event_y_spin.blockSignals(True)
+            if self._event_y_position is not None:
+                self.event_y_spin.setValue(self._event_y_position)
+            self.event_y_spin.setEnabled(
+                getattr(self, "_event_label_style", "side_h") in ("side_h", "side_v")
             )
+            self.event_y_spin.blockSignals(False)
 
-        # Show validation dialog
-        msg = QMessageBox(self)
-        msg.setWindowTitle("Figure Validation")
-        msg.setTextFormat(Qt.RichText)
-        msg.setText(report)
-        msg.setIcon(QMessageBox.Information if not issues else QMessageBox.Warning)
-        msg.exec_()
+        self._sync_figure_size_widgets_from_figure()
 
-    def _on_toggle_event_labels(self, state: int) -> None:
-        """Toggle event label visibility."""
-        visible = state == Qt.Checked
+    # ------------------------------------------------------------------ Qt lifecycle
+    def closeEvent(self, event) -> None:
+        try:
+            self.studio_closed.emit()
+        finally:
+            super().closeEvent(event)
 
-        if not hasattr(self, "plot_host") or self.plot_host is None:
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if getattr(self, "_first_show", False):
+            self._first_show = False
+            self._center_on_parent_or_screen()
+
+    def _center_on_parent_or_screen(self) -> None:
+        """
+        Center this window over its parent if possible; otherwise center on the active screen.
+        Intended to run only on first show.
+        """
+        parent = self.parent()
+        try:
+            if parent is not None and hasattr(parent, "frameGeometry"):
+                parent_geom = parent.frameGeometry()
+                self_geom = self.frameGeometry()
+                self_geom.moveCenter(parent_geom.center())
+                self.move(self_geom.topLeft())
+                return
+
+            screen = self.screen()
+            if screen is None:
+                screen = QGuiApplication.primaryScreen()
+            if screen is not None:
+                screen_geom = screen.availableGeometry()
+                self_geom = self.frameGeometry()
+                self_geom.moveCenter(screen_geom.center())
+                self.move(self_geom.topLeft())
+        except Exception:
             return
-
-        # Get all axes and toggle event label visibility
-        for track in self.plot_host._tracks.values():
-            ax = getattr(track, "ax", None)
-            if ax is None:
-                continue
-
-            # Hide/show all text annotations (event labels)
-            for text in ax.texts:
-                text.set_visible(visible)
-
-        self.plot_host.canvas.draw_idle()
-
-    def _on_toggle_event_lines(self, state: int) -> None:
-        """Toggle event marker line visibility."""
-        visible = state == Qt.Checked
-
-        if not hasattr(self, "plot_host") or self.plot_host is None:
-            return
-
-        # Get all axes and toggle event line visibility
-        for track in self.plot_host._tracks.values():
-            ax = getattr(track, "ax", None)
-            if ax is None:
-                continue
-
-            # Hide/show vertical lines (event markers)
-            for line in ax.lines:
-                # Check if this is a vertical event line (has same x coordinates)
-                xdata = line.get_xdata()
-                if len(xdata) == 2 and abs(xdata[0] - xdata[1]) < 0.001:
-                    # This is likely a vertical event line
-                    line.set_visible(visible)
-
-        self.plot_host.canvas.draw_idle()
-
-    # ------------------------------------------------------------------ Dock Signal Handlers
-    # NOTE: Old dock signal handlers removed - functionality will be moved to panels
-
-    # def _on_preset_load_requested(self, preset: dict[str, Any]) -> None:
-    #     """Handle preset load request."""
-    #     self.apply_preset(preset)
-    #
-    # def _on_preset_save_requested(self, name: str, description: str, tags: list[str]) -> None:
-    #     """Handle preset save request."""
-    #     preset = self.save_current_as_preset(name, description, tags)
-    #
-    # def _on_style_changed(self, style: dict[str, Any]) -> None:
-    #     """Handle style change."""
-    #     if self._style_manager:
-    #         self._style_manager.update(style)
-    #
-    # def _on_layout_changed(self, layout_state: LayoutState) -> None:
-    #     """Handle layout change."""
-    #     pass
-    #
-    # def _on_export_requested(self, jobs: list) -> None:
-    #     """Handle batch export request."""
-    #     pass
-
-    # ------------------------------------------------------------------ Event Handlers
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        """Handle window close event."""
-        if self._slide_dirty or self._current_slide_id is not None:
-            self._emit_slide_state(self._current_slide_name, auto=True)
-        self.studio_closed.emit()
-        super().closeEvent(event)

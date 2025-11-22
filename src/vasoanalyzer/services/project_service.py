@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shutil
 import sqlite3
 import warnings
 from collections.abc import Callable, Mapping, Sequence
@@ -174,6 +175,64 @@ def open_project_file(path: str) -> Project:
     return project
 
 
+def _cleanup_project_sidecars(project_path: Path | str) -> None:
+    """
+    Best-effort cleanup of project sidecar artifacts.
+
+    Removes:
+    - <project>.vaso.autosave
+    - project-local cache directory (<stem>.vaso.cache or .vaso_cache inside a folder project)
+    """
+
+    try:
+        project_path = Path(project_path)
+    except Exception:
+        log.warning("cleanup_project_sidecars: invalid project_path %r", project_path)
+        return
+
+    # Remove autosave file
+    try:
+        autosave = autosave_path_for(project_path)
+    except Exception:
+        autosave = None
+        log.exception("Failed to compute autosave path for %s", project_path)
+
+    if autosave:
+        autosave_path = Path(autosave)
+        if autosave_path.exists():
+            try:
+                autosave_path.unlink()
+                log.debug("Removed autosave snapshot: %s", autosave_path)
+            except Exception:
+                log.exception("Failed to remove autosave snapshot: %s", autosave_path)
+
+    # Remove project-local cache directory (skip system-level caches)
+    try:
+        from vasoanalyzer.services.cache_service import cache_dir_for_project
+
+        cache_dir = Path(cache_dir_for_project(project_path))
+    except Exception:
+        cache_dir = None
+        log.exception("Failed to compute cache dir for project: %s", project_path)
+
+    if cache_dir is not None and cache_dir.exists():
+        project_dir = project_path.parent
+        project_stem = project_path.stem
+        is_sibling_cache = cache_dir.parent == project_dir and cache_dir.name.startswith(
+            project_stem
+        )
+        is_inside_project_dir = cache_dir.parent == project_path
+
+        if is_sibling_cache or is_inside_project_dir:
+            try:
+                shutil.rmtree(cache_dir)
+                log.debug("Removed project cache directory: %s", cache_dir)
+            except Exception:
+                log.exception("Failed to remove project cache directory: %s", cache_dir)
+        else:
+            log.debug("Skipping non-local cache dir during cleanup: %s", cache_dir)
+
+
 def save_project_file(
     project: Project, path: str | None = None, *, skip_optimize: bool = False
 ) -> None:
@@ -219,6 +278,8 @@ def save_project_file(
         log.info("Project: Created new project at %s (format=%s)", path_obj, format_hint)
     else:
         log.debug("Project saved successfully: %s", path_obj.name)
+
+    _cleanup_project_sidecars(path_obj)
 
 
 def is_valid_autosave_snapshot(path: str | Path) -> bool:

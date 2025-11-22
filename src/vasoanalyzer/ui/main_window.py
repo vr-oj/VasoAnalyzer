@@ -5730,8 +5730,21 @@ class VasoAnalyzerApp(QMainWindow):
         if not hasattr(self, "plot_host"):
             return
         specs_map = {spec.track_id: spec for spec in self.plot_host.channel_specs()}
-        order = layout.get("order") or list(specs_map.keys())
-        height_ratios = layout.get("height_ratios", {}) or {}
+        order = None
+        height_ratios = None
+        visibility = None
+        if isinstance(layout, dict):
+            order = layout.get("order")
+            height_ratios = layout.get("height_ratios", {}) or {}
+            visibility = layout.get("visibility")
+        else:
+            order = getattr(layout, "order", None)
+            height_ratios = getattr(layout, "height_ratios", {}) or {}
+            visibility = getattr(layout, "visibility", None)
+        if not order:
+            order = list(specs_map.keys())
+        if height_ratios is None:
+            height_ratios = {}
         new_specs: list[ChannelTrackSpec] = []
         added_ids: set[str] = set()
         for track_id in order:
@@ -5761,6 +5774,22 @@ class VasoAnalyzerApp(QMainWindow):
             )
         if new_specs:
             self.plot_host.ensure_channels(new_specs)
+        if visibility and isinstance(visibility, Mapping):
+            for track_id, visible in visibility.items():
+                applied = False
+                with contextlib.suppress(Exception):
+                    self.plot_host.set_channel_visible(track_id, bool(visible))
+                    applied = True
+                if applied:
+                    continue
+                if hasattr(self.plot_host, "track"):
+                    track = None
+                    with contextlib.suppress(Exception):
+                        track = self.plot_host.track(track_id)
+                    if track is not None:
+                        with contextlib.suppress(Exception):
+                            track.set_visible(bool(visible))
+            self._sync_track_visibility_from_host()
         self._pending_plot_layout = None
 
     def _build_data_header(self):
@@ -9612,6 +9641,14 @@ QPushButton[isGhost="true"]:hover {{
             if cancelled:
                 return
 
+        current_window = None
+        try:
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "current_window"):
+                current_window = plot_host.current_window()
+        except Exception:
+            current_window = None
+
         # Populate with current data
         self.figure_composer.load_from_main_window(
             trace_model=self.trace_model,
@@ -9624,6 +9661,7 @@ QPushButton[isGhost="true"]:hover {{
             style_dict=current_style,
             annotations=None,
             figure_state=figure_state_payload,
+            current_window=current_window,
         )
         if hasattr(self.figure_composer, "maximize_figure_to_canvas"):
             self.figure_composer.maximize_figure_to_canvas(forward=False)
@@ -10695,6 +10733,7 @@ QPushButton[isGhost="true"]:hover {{
             "geometry": self.saveGeometry().data().hex(),
             "window_state": self.saveState().data().hex(),
         }
+        self._sync_track_visibility_from_host()
         state.update(self._collect_plot_view_state())
         layout_state = self._serialize_plot_layout()
         if layout_state:
@@ -10770,6 +10809,7 @@ QPushButton[isGhost="true"]:hover {{
         state["style_settings"] = prev
         if self.ax2 is not None:
             state["axis_settings"]["y_outer"] = {"label": self.ax2.get_ylabel()}
+        self._sync_track_visibility_from_host()
         layout_state = self._serialize_plot_layout()
         if layout_state:
             state["plot_layout"] = layout_state
@@ -10924,6 +10964,8 @@ QPushButton[isGhost="true"]:hover {{
                 self.ax.set_ylabel(y_label)
             if y_outer_label and self.ax2 is not None:
                 self.ax2.set_ylabel(y_outer_label)
+        self._apply_pending_plot_layout()
+        self._apply_pending_pyqtgraph_track_state()
         self.canvas.draw_idle()
 
     def restore_last_selection(self) -> bool:
