@@ -34,6 +34,8 @@ class TraceModel:
         *,
         inner_raw: np.ndarray | None = None,
         outer_raw: np.ndarray | None = None,
+        avg_pressure: np.ndarray | None = None,
+        set_pressure: np.ndarray | None = None,
         base_factor: int = 4,
         max_points_per_level: int = 4096,
         edit_actions: Sequence[EditAction] | None = None,
@@ -44,6 +46,10 @@ class TraceModel:
             raise ValueError("time and inner arrays must have the same length")
         if outer is not None and outer.shape != inner.shape:
             raise ValueError("outer array must match inner shape")
+        if avg_pressure is not None and avg_pressure.shape != inner.shape:
+            raise ValueError("avg_pressure array must match inner shape")
+        if set_pressure is not None and set_pressure.shape != inner.shape:
+            raise ValueError("set_pressure array must match inner shape")
 
         order = np.argsort(time)
         self._time_full = np.ascontiguousarray(time[order])
@@ -70,6 +76,10 @@ class TraceModel:
         if self._outer_clean is None and self._outer_raw is not None:
             # Raw provided but no active outer channel -> treat raw as clean baseline.
             self._outer_clean = self._outer_raw.copy()
+
+        # Store pressure data (not editable, so no raw/clean distinction needed)
+        self._avg_pressure = None if avg_pressure is None else ensure_float_array(avg_pressure)[order]
+        self._set_pressure = None if set_pressure is None else ensure_float_array(set_pressure)[order]
 
         self._base_factor = max(int(base_factor), 2)
         self._max_points_per_level = max(int(max_points_per_level), 64)
@@ -106,6 +116,14 @@ class TraceModel:
     @property
     def outer_raw(self) -> np.ndarray | None:
         return self._outer_raw
+
+    @property
+    def avg_pressure_full(self) -> np.ndarray | None:
+        return self._avg_pressure
+
+    @property
+    def set_pressure_full(self) -> np.ndarray | None:
+        return self._set_pressure
 
     @property
     def full_range(self) -> tuple[float, float]:
@@ -150,6 +168,8 @@ class TraceModel:
         time = self._time_full
         inner = self._inner_clean
         outer = self._outer_clean
+        avg_pressure = self._avg_pressure
+        set_pressure = self._set_pressure
         n = time.size
         if bucket_size <= 1:
             return LODLevel(
@@ -162,6 +182,12 @@ class TraceModel:
                 outer_mean=None if outer is None else outer.copy(),
                 outer_min=None if outer is None else outer.copy(),
                 outer_max=None if outer is None else outer.copy(),
+                avg_pressure_mean=None if avg_pressure is None else avg_pressure.copy(),
+                avg_pressure_min=None if avg_pressure is None else avg_pressure.copy(),
+                avg_pressure_max=None if avg_pressure is None else avg_pressure.copy(),
+                set_pressure_mean=None if set_pressure is None else set_pressure.copy(),
+                set_pressure_min=None if set_pressure is None else set_pressure.copy(),
+                set_pressure_max=None if set_pressure is None else set_pressure.copy(),
             )
 
         starts = np.arange(0, n, bucket_size, dtype=int)
@@ -185,6 +211,22 @@ class TraceModel:
         else:
             outer_mean = outer_min = outer_max = None
 
+        avg_pressure_mean: np.ndarray | None
+        avg_pressure_min: np.ndarray | None
+        avg_pressure_max: np.ndarray | None
+        if avg_pressure is not None:
+            avg_pressure_mean, avg_pressure_min, avg_pressure_max = reduce_series(avg_pressure)
+        else:
+            avg_pressure_mean = avg_pressure_min = avg_pressure_max = None
+
+        set_pressure_mean: np.ndarray | None
+        set_pressure_min: np.ndarray | None
+        set_pressure_max: np.ndarray | None
+        if set_pressure is not None:
+            set_pressure_mean, set_pressure_min, set_pressure_max = reduce_series(set_pressure)
+        else:
+            set_pressure_mean = set_pressure_min = set_pressure_max = None
+
         return LODLevel(
             factor=factor,
             bucket_size=bucket_size,
@@ -195,12 +237,44 @@ class TraceModel:
             outer_mean=outer_mean,
             outer_min=outer_min,
             outer_max=outer_max,
+            avg_pressure_mean=avg_pressure_mean,
+            avg_pressure_min=avg_pressure_min,
+            avg_pressure_max=avg_pressure_max,
+            set_pressure_mean=set_pressure_mean,
+            set_pressure_min=set_pressure_min,
+            set_pressure_max=set_pressure_max,
         )
 
     def best_level_for_window(self, x0: float, x1: float, pixel_width: int) -> int:
-        # Always return Level 0 (raw data, no aggregation)
-        # Users should see their data exactly as loaded
-        return 0
+        """Select LOD level to ensure ~2-3 points per pixel for optimal rendering.
+
+        This balances visual quality (shows all features) with performance
+        (doesn't render invisible detail). The min/max envelope ensures no
+        data is lost even when downsampled.
+        """
+        if pixel_width <= 0 or not self._levels:
+            return 0
+
+        # Calculate approximate points in window from full dataset
+        time = self._time_full
+        mask = (time >= x0) & (time <= x1)
+        points_in_window = np.count_nonzero(mask)
+
+        # If very few points, always use raw data
+        if points_in_window < pixel_width:
+            return 0
+
+        # Target: 2.5 points per pixel for smooth rendering without overdraw
+        # This provides good visual quality while avoiding wasted GPU/CPU work
+        target_points = pixel_width * 2.5
+
+        # Select the coarsest LOD level that still meets our target
+        for i, level in enumerate(self._levels):
+            if level.time_centers.size <= target_points:
+                return i
+
+        # If all levels have too many points, use the coarsest available
+        return len(self._levels) - 1
 
     def window(self, level_index: int, x0: float, x1: float) -> TraceWindow:
         key = (level_index, float(x0), float(x1))
@@ -383,6 +457,17 @@ class TraceModel:
             )
             outer_raw = df[outer_raw_col].to_numpy(dtype=float) if outer_raw_col else None
 
+        # Extract pressure columns if available
+        avg_pressure = None
+        avg_pressure_col = _prefer_column(df, ("Avg Pressure (mmHg)",))
+        if avg_pressure_col is not None:
+            avg_pressure = df[avg_pressure_col].to_numpy(dtype=float)
+
+        set_pressure = None
+        set_pressure_col = _prefer_column(df, ("Set Pressure (mmHg)",))
+        if set_pressure_col is not None:
+            set_pressure = df[set_pressure_col].to_numpy(dtype=float)
+
         if edit_actions is None:
             attrs = getattr(df, "attrs", None)
             if isinstance(attrs, dict):
@@ -396,6 +481,8 @@ class TraceModel:
             outer_clean,
             inner_raw=inner_raw,
             outer_raw=outer_raw,
+            avg_pressure=avg_pressure,
+            set_pressure=set_pressure,
             base_factor=base_factor,
             max_points_per_level=max_points_per_level,
             edit_actions=edit_actions,
@@ -431,6 +518,8 @@ def save_lod(path: Path, model: TraceModel) -> None:
     payload = {
         "signature": _signature(model.time_full, model.inner_full),
         "has_outer": np.array([model.outer_full is not None], dtype=np.int8),
+        "has_avg_pressure": np.array([model.avg_pressure_full is not None], dtype=np.int8),
+        "has_set_pressure": np.array([model.set_pressure_full is not None], dtype=np.int8),
         "level_count": np.array([len(model.levels)], dtype=np.int64),
     }
     for idx, level in enumerate(model.levels):
@@ -446,6 +535,18 @@ def save_lod(path: Path, model: TraceModel) -> None:
             payload[f"{prefix}outer_min"] = level.outer_min
         if level.outer_max is not None:
             payload[f"{prefix}outer_max"] = level.outer_max
+        if level.avg_pressure_mean is not None:
+            payload[f"{prefix}avg_pressure_mean"] = level.avg_pressure_mean
+        if level.avg_pressure_min is not None:
+            payload[f"{prefix}avg_pressure_min"] = level.avg_pressure_min
+        if level.avg_pressure_max is not None:
+            payload[f"{prefix}avg_pressure_max"] = level.avg_pressure_max
+        if level.set_pressure_mean is not None:
+            payload[f"{prefix}set_pressure_mean"] = level.set_pressure_mean
+        if level.set_pressure_min is not None:
+            payload[f"{prefix}set_pressure_min"] = level.set_pressure_min
+        if level.set_pressure_max is not None:
+            payload[f"{prefix}set_pressure_max"] = level.set_pressure_max
     np.savez_compressed(path, **cast(dict[str, Any], payload))
 
 
@@ -474,6 +575,8 @@ def load_lod(
             return None
         level_count = int(level_count_arr[0])
         has_outer = bool(data.get("has_outer", np.array([0]))[0])
+        has_avg_pressure = bool(data.get("has_avg_pressure", np.array([0]))[0])
+        has_set_pressure = bool(data.get("has_set_pressure", np.array([0]))[0])
         levels = []
         for idx in range(level_count):
             prefix = f"l{idx}_"
@@ -493,6 +596,16 @@ def load_lod(
                 outer_max = data.get(f"{prefix}outer_max")
                 if outer_mean is None:
                     return None
+            avg_pressure_mean = avg_pressure_min = avg_pressure_max = None
+            if has_avg_pressure:
+                avg_pressure_mean = data.get(f"{prefix}avg_pressure_mean")
+                avg_pressure_min = data.get(f"{prefix}avg_pressure_min")
+                avg_pressure_max = data.get(f"{prefix}avg_pressure_max")
+            set_pressure_mean = set_pressure_min = set_pressure_max = None
+            if has_set_pressure:
+                set_pressure_mean = data.get(f"{prefix}set_pressure_mean")
+                set_pressure_min = data.get(f"{prefix}set_pressure_min")
+                set_pressure_max = data.get(f"{prefix}set_pressure_max")
             levels.append(
                 LODLevel(
                     factor=factor,
@@ -504,6 +617,12 @@ def load_lod(
                     outer_mean=outer_mean,
                     outer_min=outer_min,
                     outer_max=outer_max,
+                    avg_pressure_mean=avg_pressure_mean,
+                    avg_pressure_min=avg_pressure_min,
+                    avg_pressure_max=avg_pressure_max,
+                    set_pressure_mean=set_pressure_mean,
+                    set_pressure_min=set_pressure_min,
+                    set_pressure_max=set_pressure_max,
                 )
             )
     if not levels:

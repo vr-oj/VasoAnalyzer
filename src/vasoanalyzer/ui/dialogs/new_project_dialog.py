@@ -145,23 +145,20 @@ class NewProjectDialog(QDialog):
             self,
             "Create Project",
             self.project_path_edit.text() or self._default_dir,
-            "Vaso Bundles (*.vasopack);;Vaso Files (*.vaso)",
+            "VasoAnalyzer Projects (*.vaso);;Folder Bundles (*.vasopack)",
         )
         if not filename:
             return
         path = Path(filename).expanduser()
 
-        # Apply appropriate extension based on selected filter
-        if selected_filter and "*.vasopack" in selected_filter:
+        # Enforce extension based on selected filter
+        if "Folder Bundles" in selected_filter:
             if path.suffix.lower() != ".vasopack":
                 path = path.with_suffix(".vasopack")
-        elif selected_filter and "*.vaso" in selected_filter:
+        else:
+            # Default to .vaso (single-file container)
             if path.suffix.lower() != ".vaso":
                 path = path.with_suffix(".vaso")
-        else:
-            # Default to .vasopack if no clear filter selected
-            if path.suffix.lower() not in [".vaso", ".vasopack"]:
-                path = path.with_suffix(".vasopack")
 
         self.project_path_edit.setText(str(path))
         self._path_edited_manually = True
@@ -194,9 +191,9 @@ class NewProjectDialog(QDialog):
                 return
 
         project_path = Path(path_text).expanduser()
-        # Ensure valid extension (default to .vasopack for new projects)
+        # Ensure valid extension (default to .vaso for new projects)
         if project_path.suffix.lower() not in [".vaso", ".vasopack"]:
-            project_path = project_path.with_suffix(".vasopack")
+            project_path = project_path.with_suffix(".vaso")
 
         try:
             project_path.parent.mkdir(parents=True, exist_ok=True)

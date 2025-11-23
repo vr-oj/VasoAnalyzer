@@ -16,14 +16,15 @@ The adapter automatically handles:
 from __future__ import annotations
 
 import atexit
+import contextlib
 import logging
 import sqlite3
+import time
 import weakref
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
-from .migration import auto_migrate_if_needed, detect_project_format, is_legacy_project
+from .migration import auto_migrate_if_needed, detect_project_format
 from .snapshots import (
     BundleInfo,
     cleanup_staging_dbs,
@@ -69,41 +70,64 @@ class ProjectHandle:
         staging_path: Path to staging database (bundle only)
         staging_conn: Connection to staging database
         snapshot_on_save: If True, create snapshot on each save
+        is_container: True if opened from a ZIP container
+        container_path: Path to original container file (if is_container)
+        temp_bundle_root: Path to temp unpacked bundle (if is_container)
     """
 
     path: Path
     format: str
     is_bundle: bool
     readonly: bool
-    bundle_info: Optional[BundleInfo]
-    staging_path: Optional[Path]
-    staging_conn: Optional[sqlite3.Connection]
+    bundle_info: BundleInfo | None
+    staging_path: Path | None
+    staging_conn: sqlite3.Connection | None
     snapshot_on_save: bool = True
+    is_container: bool = False
+    container_path: Path | None = None
+    temp_bundle_root: Path | None = None
 
     def __post_init__(self):
         # Register cleanup on process exit
-        weakref.finalize(self, _cleanup_handle, self.path, self.staging_path)
+        weakref.finalize(
+            self,
+            _cleanup_handle,
+            self.path,
+            self.staging_path,
+            self.temp_bundle_root,
+            self.is_container,
+        )
 
 
 # Global registry of open handles for cleanup
 _open_handles: weakref.WeakValueDictionary = weakref.WeakValueDictionary()
 
 
-def _cleanup_handle(bundle_path: Path, staging_path: Optional[Path]):
+def _cleanup_handle(
+    bundle_path: Path, staging_path: Path | None, temp_bundle_root: Path | None, is_container: bool
+):
     """Cleanup function called on handle destruction or process exit."""
     try:
         if staging_path and staging_path.exists():
             log.debug(f"Cleaning up staging database: {staging_path}")
             # Close any open connections (best effort)
-            try:
+            with contextlib.suppress(Exception):
                 # The connection should already be closed, but just in case
-                pass
-            except Exception:
                 pass
 
         # Release lock on bundle
         if bundle_path and bundle_path.is_dir():
             release_lock(bundle_path)
+
+        # Clean up temp bundle root if container
+        if is_container and temp_bundle_root and temp_bundle_root.exists():
+            try:
+                import shutil
+
+                log.debug(f"Cleaning up temp bundle root: {temp_bundle_root}")
+                shutil.rmtree(temp_bundle_root, ignore_errors=True)
+            except Exception as e:
+                log.warning(f"Could not remove temp bundle root: {e}")
 
     except Exception as e:
         log.warning(f"Error during handle cleanup: {e}")
@@ -175,11 +199,30 @@ def open_project_handle(
 
     # Detect format
     fmt = detect_project_format(path)
-    is_bundle = fmt == "bundle-v1"
+    is_bundle = fmt in ("bundle-v1", "zip-bundle-v1")
+    is_container = fmt == "zip-bundle-v1"
 
     log.info(f"Opening project ({fmt}): {path}")
 
-    if is_bundle:
+    # Handle container format: unpack to temp first
+    if is_container:
+        from .container_fs import unpack_container_to_temp
+
+        log.info(f"Unpacking container to temp directory: {path}")
+        bundle_root = unpack_container_to_temp(path)
+        temp_root = bundle_root.parent  # Get the temp directory root
+
+        # Open the unpacked bundle
+        handle, conn = _open_bundle_handle(bundle_root, readonly=readonly)
+
+        # Update handle to track container info
+        handle.is_container = True
+        handle.container_path = path
+        handle.temp_bundle_root = temp_root
+
+        return handle, conn
+
+    elif is_bundle:
         return _open_bundle_handle(path, readonly=readonly)
     else:
         return _open_legacy_handle(path, readonly=readonly, fmt=fmt)
@@ -189,13 +232,16 @@ def create_project_handle(
     path: str | Path,
     *,
     use_bundle_format: bool = True,
+    use_container_format: bool = True,
 ) -> tuple[ProjectHandle, sqlite3.Connection]:
     """
     Create a new project.
 
     Args:
         path: Path for new project
-        use_bundle_format: If True, create bundle; if False, create legacy file
+        use_bundle_format: If True, create bundle-based project; if False, create legacy file
+        use_container_format: If True, create single-file container (.vaso);
+            if False, create folder bundle (.vasopack)
 
     Returns:
         Tuple of (ProjectHandle, sqlite3.Connection)
@@ -208,18 +254,85 @@ def create_project_handle(
     if path.exists():
         raise FileExistsError(f"Project already exists: {path}")
 
-    log.info(f"Creating new project ({'bundle' if use_bundle_format else 'legacy'}): {path}")
+    format_name = (
+        "container" if use_container_format else ("bundle" if use_bundle_format else "legacy")
+    )
+    log.info(f"Creating new project ({format_name}): {path}")
 
     if use_bundle_format:
-        # Ensure path has .vasopack extension
-        if path.suffix != ".vasopack":
-            path = path.with_suffix(".vasopack")
+        if use_container_format:
+            # Create container format: temp bundle + pack to .vaso
+            import tempfile
 
-        # Create bundle
-        create_bundle(path)
+            from .container_fs import pack_temp_bundle_to_container
 
-        # Open the bundle (will create staging DB)
-        return _open_bundle_handle(path, readonly=False)
+            # Ensure path has .vaso extension
+            if path.suffix != ".vaso":
+                path = path.with_suffix(".vaso")
+
+            # Create temp bundle
+            with tempfile.TemporaryDirectory(prefix="VasoAnalyzer-create-") as temp_dir:
+                temp_path = Path(temp_dir)
+                bundle_root = temp_path / "bundle"
+
+                # Create bundle in temp location
+                create_bundle(bundle_root)
+
+                # Initialize schema in bundle
+                staging_path, staging_conn = open_staging_db(bundle_root)
+                try:
+                    from ..storage.sqlite import projects as _projects
+
+                    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    _projects.ensure_schema(staging_conn, schema_version=3, now=now)
+                    staging_conn.commit()
+
+                    # Checkpoint WAL to ensure all data is in main database file
+                    staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    staging_conn.commit()
+                finally:
+                    staging_conn.close()
+
+                # Create initial snapshot (after connection is closed and WAL checkpointed)
+                snapshot_info = create_snapshot(bundle_root, staging_path)
+                log.debug(f"Initial snapshot created: {snapshot_info.number}")
+
+                # Pack to container file
+                pack_temp_bundle_to_container(bundle_root, path)
+                log.info(f"Container created: {path}")
+
+            # Now open the container normally
+            return open_project_handle(path, readonly=False, auto_migrate=False)
+
+        else:
+            # Create folder bundle (.vasopack)
+            # Ensure path has .vasopack extension
+            if path.suffix != ".vasopack":
+                path = path.with_suffix(".vasopack")
+
+            # Create bundle
+            create_bundle(path)
+
+            # Initialize schema in new bundle
+            staging_path, staging_conn = open_staging_db(path)
+            try:
+                from ..storage.sqlite import projects as _projects
+
+                now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _projects.ensure_schema(staging_conn, schema_version=3, now=now)
+                staging_conn.commit()
+
+                # Checkpoint WAL to ensure all data is in main database file
+                staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                staging_conn.commit()
+            finally:
+                staging_conn.close()
+
+            # Create initial snapshot (after connection is closed and WAL checkpointed)
+            create_snapshot(path, staging_path)
+
+            # Open the bundle (will have existing staging DB and snapshot)
+            return _open_bundle_handle(path, readonly=False)
     else:
         # Create legacy single-file project
         # Ensure path has .vaso extension
@@ -232,7 +345,8 @@ def create_project_handle(
         # Initialize schema (this is normally done by the ProjectRepository)
         from ..storage.sqlite import projects as _projects
 
-        _projects.ensure_schema(conn, schema_version=3, initialize_if_empty=True)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        _projects.ensure_schema(conn, schema_version=3, now=now)
 
         handle = ProjectHandle(
             path=path,
@@ -263,14 +377,12 @@ def _open_bundle_handle(
     # Get current snapshot
     current_snapshot = get_current_snapshot(bundle_path)
 
-    if readonly or current_snapshot is None:
+    if readonly:
         # Read-only mode: open snapshot directly
         if current_snapshot is None:
             raise ValueError(f"Bundle has no snapshots: {bundle_path}")
 
-        conn = sqlite3.connect(
-            f"file:{current_snapshot.path}?mode=ro", uri=True, timeout=10.0
-        )
+        conn = sqlite3.connect(f"file:{current_snapshot.path}?mode=ro", uri=True, timeout=10.0)
 
         handle = ProjectHandle(
             path=bundle_path,
@@ -282,12 +394,20 @@ def _open_bundle_handle(
             staging_conn=conn,
             snapshot_on_save=False,
         )
+        connection = conn
 
     else:
-        # Write mode: create staging database from current snapshot
-        staging_path, staging_conn = open_staging_db(
-            bundle_path, initialize_from=current_snapshot.path
-        )
+        # Write mode: create staging database from current snapshot (or empty if new)
+        init_from = current_snapshot.path if current_snapshot is not None else None
+        staging_path, staging_conn = open_staging_db(bundle_path, initialize_from=init_from)
+
+        # If this is a brand new bundle (no snapshots), initialize the schema
+        if current_snapshot is None:
+            log.info(f"Initializing schema for new bundle: {bundle_path}")
+            from ..storage.sqlite import projects as _projects
+
+            now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            _projects.ensure_schema(staging_conn, schema_version=3, now=now)
 
         handle = ProjectHandle(
             path=bundle_path,
@@ -299,9 +419,10 @@ def _open_bundle_handle(
             staging_conn=staging_conn,
             snapshot_on_save=True,
         )
+        connection = staging_conn
 
     _open_handles[id(handle)] = handle
-    return handle, handle.staging_conn
+    return handle, connection
 
 
 def _open_legacy_handle(
@@ -347,6 +468,9 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
     - Updates HEAD to point to new snapshot
     - Optionally prunes old snapshots
 
+    For container projects:
+    - Does everything above, then packs bundle back to container file
+
     For legacy projects:
     - Commits any pending transactions
 
@@ -365,26 +489,62 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
         if not skip_snapshot and handle.snapshot_on_save:
             log.info(f"Creating snapshot for bundle: {handle.path}")
 
-            # Ensure staging connection is committed
+            # Ensure staging connection is committed and WAL is checkpointed
             if handle.staging_conn:
                 handle.staging_conn.commit()
+                # Checkpoint WAL to ensure all data is in main database file
+                # TRUNCATE mode forces complete checkpoint and clears WAL
+                handle.staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                handle.staging_conn.commit()
+                log.debug("WAL checkpointed successfully before snapshot")
+            else:
+                log.error("No staging connection available for bundle save")
+                raise RuntimeError("Cannot save bundle: no staging connection")
 
-            # Create snapshot from staging database
+            # Verify staging path exists
+            if not handle.staging_path:
+                log.error("No staging database path available for bundle save")
+                raise RuntimeError("Cannot save bundle: no staging database path")
+
+            if not handle.staging_path.exists():
+                log.error(f"Staging database does not exist: {handle.staging_path}")
+                raise RuntimeError(
+                    f"Cannot save bundle: staging database not found at {handle.staging_path}"
+                )
+
+            # Create snapshot from staging database (will convert to DELETE mode)
+            # WAL has been checkpointed, so snapshot will be complete
+            # Connection stays open - snapshot creation opens its own connection
+            log.debug(f"Creating snapshot from staging DB: {handle.staging_path}")
             snapshot_info = create_snapshot(handle.path, handle.staging_path)
             log.info(
                 f"Snapshot created: {snapshot_info.number} "
                 f"({snapshot_info.size_bytes / 1024 / 1024:.1f} MB)"
             )
 
+            # NOTE: We do NOT refresh staging here to avoid breaking connection references
+            # Staging will be refreshed when project is next opened (from snapshot)
+            # This keeps the file portable while avoiding mid-save connection issues
+
             # Prune old snapshots (keep last 50)
             pruned = prune_old_snapshots(handle.path, keep_count=50)
             if pruned > 0:
                 log.info(f"Pruned {pruned} old snapshots")
 
+            # If this is a container, pack it back to .vaso file
+            if handle.is_container and handle.container_path:
+                from .container_fs import pack_temp_bundle_to_container
+
+                log.info(f"Packing bundle back to container: {handle.container_path}")
+                pack_temp_bundle_to_container(handle.path, handle.container_path)
+                log.info("Container updated successfully")
+
         else:
             # Just commit staging database
             if handle.staging_conn:
                 handle.staging_conn.commit()
+            else:
+                log.warning("No staging connection to commit for bundle")
 
     else:
         # Legacy format: just commit
@@ -403,7 +563,13 @@ def close_project_handle(handle: ProjectHandle, *, save_before_close: bool = Tru
     Raises:
         RuntimeError: If close fails
     """
+    import traceback
+
     log.debug(f"Closing project handle: {handle.path}")
+
+    # DIAGNOSTIC: Log stack trace to understand who's calling close
+    stack_trace = "".join(traceback.format_stack())
+    log.info(f"🔍 DIAGNOSTIC - Project close called from:\n{stack_trace}")
 
     try:
         # Save if requested
@@ -416,27 +582,37 @@ def close_project_handle(handle: ProjectHandle, *, save_before_close: bool = Tru
             handle.staging_conn = None
 
         # Clean up staging database (bundle only)
-        if handle.is_bundle and handle.staging_path:
-            if handle.staging_path.exists():
-                try:
-                    # Remove staging DB and WAL files
-                    handle.staging_path.unlink()
-                    log.debug(f"Removed staging database: {handle.staging_path}")
+        if handle.is_bundle and handle.staging_path and handle.staging_path.exists():
+            try:
+                # Remove staging DB and WAL files
+                handle.staging_path.unlink()
+                log.debug(f"Removed staging database: {handle.staging_path}")
 
-                    # Remove WAL and SHM files if they exist
-                    wal_file = handle.staging_path.with_suffix(".sqlite-wal")
-                    shm_file = handle.staging_path.with_suffix(".sqlite-shm")
-                    if wal_file.exists():
-                        wal_file.unlink()
-                    if shm_file.exists():
-                        shm_file.unlink()
+                # Remove WAL and SHM files if they exist
+                wal_file = handle.staging_path.with_suffix(".sqlite-wal")
+                shm_file = handle.staging_path.with_suffix(".sqlite-shm")
+                if wal_file.exists():
+                    wal_file.unlink()
+                if shm_file.exists():
+                    shm_file.unlink()
 
-                except Exception as e:
-                    log.warning(f"Could not remove staging files: {e}")
+            except Exception as e:
+                log.warning(f"Could not remove staging files: {e}")
 
         # Release bundle lock
         if handle.is_bundle:
             release_lock(handle.path)
+
+        # Clean up temp bundle root if container
+        if handle.is_container and handle.temp_bundle_root and handle.temp_bundle_root.exists():
+            try:
+                import shutil
+
+                log.debug(f"Removing temp bundle root: {handle.temp_bundle_root}")
+                shutil.rmtree(handle.temp_bundle_root, ignore_errors=True)
+                log.info(f"Temp directory cleaned up: {handle.temp_bundle_root}")
+            except Exception as e:
+                log.warning(f"Could not remove temp bundle root: {e}")
 
         # Remove from registry
         if id(handle) in _open_handles:
@@ -492,7 +668,7 @@ def is_bundle_format(path: str | Path) -> bool:
     return fmt == "bundle-v1"
 
 
-def force_snapshot_now(handle: ProjectHandle) -> Optional[int]:
+def force_snapshot_now(handle: ProjectHandle) -> int | None:
     """
     Force creation of snapshot immediately (manual snapshot).
 

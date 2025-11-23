@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -24,6 +25,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 from vasoanalyzer.storage.sqlite import assets as _assets
 from vasoanalyzer.storage.sqlite import events as _events
@@ -145,11 +148,13 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
 
     fmt = get_project_format(project_path)
 
-    if fmt == "bundle-v1":
+    if fmt in ("bundle-v1", "zip-bundle-v1"):
         # Open as bundle and return wrapped ProjectStore
         unified_store = open_unified_project(project_path, readonly=False, auto_migrate=False)
         # Return the unified store (which is already a ProjectStore-compatible object)
-        return ProjectStore(path=unified_store.path, conn=unified_store.conn, dirty=unified_store.dirty)
+        return ProjectStore(
+            path=unified_store.path, conn=unified_store.conn, dirty=unified_store.dirty
+        )
 
     # Legacy format: open directly
     conn = open_db(project_path.as_posix(), apply_pragmas=False)
@@ -265,7 +270,22 @@ def add_dataset(
 
     metadata = metadata or {}
     now = _utc_now()
-    extra_json = json.dumps(metadata.get("extra_json", {})) if metadata.get("extra_json") else None
+
+    # Safely serialize extra_json with proper UTF-8 encoding
+    extra_json = None
+    if metadata.get("extra_json"):
+        try:
+            # Use ensure_ascii=False to properly handle Unicode paths,
+            # but JSON will be stored as UTF-8 text in SQLite
+            extra_json = json.dumps(metadata["extra_json"], ensure_ascii=False)
+        except (TypeError, ValueError) as e:
+            import logging
+
+            logging.getLogger(__name__).error(
+                f"Failed to serialize extra_json for dataset '{name}': {e}", exc_info=True
+            )
+            # Continue with None rather than failing the entire operation
+            extra_json = None
 
     with store.conn:
         dataset_sql = (
@@ -301,7 +321,9 @@ def add_dataset(
 
         if events_df is not None and not events_df.empty:
             event_rows = list(_events.prepare_event_rows(dataset_id, events_df))
+            log.debug("Prepared %d event rows for dataset_id=%s", len(event_rows), dataset_id)
             if event_rows:
+                log.debug("Executing SQL INSERT for %d events", len(event_rows))
                 store.conn.executemany(
                     (
                         "INSERT INTO event("
@@ -309,6 +331,18 @@ def add_dataset(
                         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     ),
                     event_rows,
+                )
+                log.debug("SQL INSERT completed for %d events", len(event_rows))
+
+                # DEBUG: Verify the data was written
+                cursor = store.conn.execute(
+                    "SELECT COUNT(*) FROM event WHERE dataset_id = ?", (dataset_id,)
+                )
+                count = cursor.fetchone()[0]
+                log.debug(
+                    "Verification: %d events now in database for dataset_id=%s",
+                    count,
+                    dataset_id,
                 )
 
         if thumbnail_png:
@@ -346,7 +380,19 @@ def update_dataset_meta(store: ProjectStore, dataset_id: int, **fields) -> None:
 
     if extra is not None:
         assignments = f"{assignments}, extra_json = ?" if assignments else "extra_json = ?"
-        params.append(json.dumps(extra) if isinstance(extra, dict) else extra)
+        # Safely serialize extra JSON
+        if isinstance(extra, dict):
+            try:
+                params.append(json.dumps(extra, ensure_ascii=False))
+            except (TypeError, ValueError) as e:
+                import logging
+
+                logging.getLogger(__name__).error(
+                    f"Failed to serialize extra_json for dataset {dataset_id}: {e}", exc_info=True
+                )
+                params.append(None)
+        else:
+            params.append(extra)
 
     params.extend([dataset_id])
     store.conn.execute(f"UPDATE dataset SET {assignments} WHERE id = ?", params)
@@ -545,8 +591,30 @@ def iter_datasets(store: ProjectStore) -> Iterator[dict[str, Any]]:
          ORDER BY id ASC
         """
     )
+
+    import logging
+
+    log = logging.getLogger(__name__)
+
     for row in cursor:
-        extra = json.loads(row[7]) if row[7] else None
+        extra = None
+        extra_json_str = row[7]
+
+        if extra_json_str:
+            try:
+                extra = json.loads(extra_json_str)
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+                # Corrupted JSON - log error with diagnostic info
+                truncated = extra_json_str[:200] if len(extra_json_str) > 200 else extra_json_str
+                log.error(
+                    f"Could not decode to UTF-8 column 'extra_json' with text '{truncated}...'. "
+                    f"Dataset ID: {row[0]}, Name: '{row[1]}'. "
+                    f"Error: {e}. This dataset's metadata will be skipped.",
+                    exc_info=True,
+                )
+                # Continue with None - don't fail the entire load
+                extra = None
+
         yield {
             "id": row[0],
             "name": row[1],
@@ -572,6 +640,24 @@ def get_dataset_meta(store: ProjectStore, dataset_id: int) -> dict | None:
     ).fetchone()
     if row is None:
         return None
+
+    # Safely decode extra_json with error recovery
+    extra = None
+    extra_json_str = row[7]
+    if extra_json_str:
+        try:
+            extra = json.loads(extra_json_str)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as e:
+            import logging
+
+            log = logging.getLogger(__name__)
+            truncated = extra_json_str[:200] if len(extra_json_str) > 200 else extra_json_str
+            log.error(
+                f"Could not decode extra_json for dataset {dataset_id}: {truncated}...Error: {e}",
+                exc_info=True,
+            )
+            extra = None
+
     return {
         "id": row[0],
         "name": row[1],
@@ -580,7 +666,7 @@ def get_dataset_meta(store: ProjectStore, dataset_id: int) -> dict | None:
         "fps": row[4],
         "pixel_size_um": row[5],
         "t0_seconds": row[6],
-        "extra": json.loads(row[7]) if row[7] else None,
+        "extra": extra,
     }
 
 

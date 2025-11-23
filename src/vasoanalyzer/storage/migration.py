@@ -13,7 +13,6 @@ import shutil
 import sqlite3
 import time
 from pathlib import Path
-from typing import Optional
 
 from .snapshots import (
     atomic_write_text,
@@ -43,10 +42,18 @@ def detect_project_format(path: Path) -> str:
         path: Path to project file or bundle
 
     Returns:
-        Format string: "bundle-v1", "sqlite-v3", "sqlite-v2", "sqlite-v1", or "unknown"
+        Format string: "zip-bundle-v1", "bundle-v1", "sqlite-v3", "sqlite-v2",
+        "sqlite-v1", or "unknown"
     """
     if not path.exists():
         return "unknown"
+
+    # Check if ZIP container (new single-file format)
+    if path.is_file() and path.suffix == ".vaso":
+        from .container_fs import is_vaso_container
+
+        if is_vaso_container(path):
+            return "zip-bundle-v1"
 
     # Check if bundle
     if path.is_dir():
@@ -80,14 +87,8 @@ def detect_project_format(path: Path) -> str:
                         pass
 
                 # Fallback to user_version
-                if version == 3:
-                    return "sqlite-v3"
-                elif version == 2:
-                    return "sqlite-v2"
-                elif version == 1:
-                    return "sqlite-v1"
-                else:
-                    return "unknown"
+                version_map = {3: "sqlite-v3", 2: "sqlite-v2", 1: "sqlite-v1"}
+                return version_map.get(version, "unknown")
 
         except Exception as e:
             log.debug(f"Could not detect format for {path}: {e}")
@@ -118,7 +119,7 @@ def is_legacy_project(path: Path) -> bool:
 def migrate_to_bundle(
     legacy_path: Path,
     *,
-    bundle_path: Optional[Path] = None,
+    bundle_path: Path | None = None,
     keep_legacy: bool = True,
     validate: bool = True,
 ) -> Path:
@@ -287,6 +288,12 @@ def auto_migrate_if_needed(path: Path, *, keep_legacy: bool = True) -> tuple[Pat
         if fmt == "bundle-v1":
             return path, False
 
+    # Check if it's already a ZIP container (new format)
+    fmt = detect_project_format(path)
+    if fmt == "zip-bundle-v1":
+        # Already in container format, no migration needed
+        return path, False
+
     # Check if bundle already exists
     bundle_path = path.with_suffix(".vasopack")
     if bundle_path.exists():
@@ -314,7 +321,7 @@ def auto_migrate_if_needed(path: Path, *, keep_legacy: bool = True) -> tuple[Pat
 # =============================================================================
 
 
-def export_to_legacy(bundle_path: Path, output_path: Optional[Path] = None) -> Path:
+def export_to_legacy(bundle_path: Path, output_path: Path | None = None) -> Path:
     """
     Export current bundle snapshot to legacy single-file format.
 

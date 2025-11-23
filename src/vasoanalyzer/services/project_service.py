@@ -5,8 +5,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import shutil
+import sqlite3
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -166,7 +169,68 @@ def manifest_to_project(manifest: dict[str, Any], state: dict[str, Any], path: s
 def open_project_file(path: str) -> Project:
     """Open ``path`` and return a fully populated :class:`Project`."""
 
-    return load_project(path)
+    log.info(f"📂 Opening project: {path}")
+    project = load_project(path)
+    log.info(f"✓ Project loaded successfully: {Path(path).name}")
+    return project
+
+
+def _cleanup_project_sidecars(project_path: Path | str) -> None:
+    """
+    Best-effort cleanup of project sidecar artifacts.
+
+    Removes:
+    - <project>.vaso.autosave
+    - project-local cache directory (<stem>.vaso.cache or .vaso_cache inside a folder project)
+    """
+
+    try:
+        project_path = Path(project_path)
+    except Exception:
+        log.warning("cleanup_project_sidecars: invalid project_path %r", project_path)
+        return
+
+    # Remove autosave file
+    try:
+        autosave = autosave_path_for(project_path)
+    except Exception:
+        autosave = None
+        log.exception("Failed to compute autosave path for %s", project_path)
+
+    if autosave:
+        autosave_path = Path(autosave)
+        if autosave_path.exists():
+            try:
+                autosave_path.unlink()
+                log.debug("Removed autosave snapshot: %s", autosave_path)
+            except Exception:
+                log.exception("Failed to remove autosave snapshot: %s", autosave_path)
+
+    # Remove project-local cache directory (skip system-level caches)
+    try:
+        from vasoanalyzer.services.cache_service import cache_dir_for_project
+
+        cache_dir = Path(cache_dir_for_project(project_path))
+    except Exception:
+        cache_dir = None
+        log.exception("Failed to compute cache dir for project: %s", project_path)
+
+    if cache_dir is not None and cache_dir.exists():
+        project_dir = project_path.parent
+        project_stem = project_path.stem
+        is_sibling_cache = cache_dir.parent == project_dir and cache_dir.name.startswith(
+            project_stem
+        )
+        is_inside_project_dir = cache_dir.parent == project_path
+
+        if is_sibling_cache or is_inside_project_dir:
+            try:
+                shutil.rmtree(cache_dir)
+                log.debug("Removed project cache directory: %s", cache_dir)
+            except Exception:
+                log.exception("Failed to remove project cache directory: %s", cache_dir)
+        else:
+            log.debug("Skipping non-local cache dir during cleanup: %s", cache_dir)
 
 
 def save_project_file(
@@ -185,7 +249,111 @@ def save_project_file(
     if not project.path:
         raise ValueError("Project path is not set")
 
+    _sync_events_from_ui_state(project)
+    for experiment in project.experiments:
+        for sample in experiment.samples:
+            df = getattr(sample, "events_data", None)
+            row_count = len(df.index) if isinstance(df, pd.DataFrame) else None
+            first_label = (
+                df.iloc[0]["Event"]
+                if isinstance(df, pd.DataFrame) and not df.empty and "Event" in df.columns
+                else None
+            )
+            log.info(
+                "DEBUG save: sample '%s' final events_data rows=%s first_label=%r",
+                sample.name,
+                row_count,
+                first_label,
+            )
+
+    path_obj = Path(project.path).expanduser()
+    project.path = str(path_obj)
+    was_new_file = not path_obj.exists()
+
+    log.debug("Saving project to %s", path_obj)
     save_project(project, project.path, skip_optimize=skip_optimize)
+
+    if was_new_file:
+        format_hint = path_obj.suffix.lstrip(".") or "directory"
+        log.info("Project: Created new project at %s (format=%s)", path_obj, format_hint)
+    else:
+        log.debug("Project saved successfully: %s", path_obj.name)
+
+    _cleanup_project_sidecars(path_obj)
+
+
+def is_valid_autosave_snapshot(path: str | Path) -> bool:
+    """Return True when ``path`` looks like a readable SQLite autosave."""
+
+    autosave = Path(path)
+    try:
+        if not autosave.exists():
+            return False
+        if autosave.stat().st_size < 1024:
+            return False
+    except OSError:
+        return False
+
+    try:
+        conn = sqlite3.connect(f"file:{autosave.as_posix()}?mode=ro", uri=True)
+        try:
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        return False
+    return True
+
+
+def quarantine_autosave_snapshot(path: str | Path) -> Path | None:
+    """Rename or delete a corrupt autosave so it will not be offered again."""
+
+    autosave = Path(path)
+    if not autosave.exists():
+        return None
+
+    target = autosave.with_suffix(autosave.suffix + ".corrupt")
+    counter = 1
+    while target.exists():
+        counter += 1
+        target = autosave.with_suffix(autosave.suffix + f".corrupt{counter}")
+
+    try:
+        autosave.rename(target)
+        log.warning("Autosave snapshot quarantined: %s → %s", autosave, target)
+        return target
+    except OSError:
+        with contextlib.suppress(OSError):
+            autosave.unlink()
+        log.warning("Autosave snapshot %s removed after failed quarantine", autosave)
+        return None
+
+
+def _sync_events_from_ui_state(project: Project | None) -> None:
+    """Copy per-sample event rows from UI state into ``events_data`` before persisting."""
+
+    if project is None:
+        return
+    for experiment in project.experiments:
+        for sample in experiment.samples:
+            state = getattr(sample, "ui_state", None)
+            if not isinstance(state, dict) or "event_table_data" not in state:
+                continue
+            rows = normalize_event_table_rows(state.get("event_table_data"))
+            row_count = len(rows or [])
+            if row_count:
+                df = events_dataframe_from_rows(rows)
+                sample.events_data = df
+                first_label = rows[0][0] if rows and len(rows[0]) > 0 else None
+            else:
+                sample.events_data = None
+                first_label = None
+            log.info(
+                "Project save: synced %d UI events into sample '%s' (first=%r)",
+                row_count,
+                sample.name,
+                first_label,
+            )
 
 
 def autosave_project(project: Project, autosave_path: str | None = None) -> str | None:
@@ -193,6 +361,8 @@ def autosave_project(project: Project, autosave_path: str | None = None) -> str 
 
     if project is None or not project.path:
         return None
+
+    _sync_events_from_ui_state(project)
     return cast(str | None, write_project_autosave(project, autosave_path))
 
 
@@ -209,7 +379,12 @@ def restore_autosave(project_path: str) -> Project:
     autosave = autosave_path_for(project_path)
     if not os.path.exists(autosave):
         raise FileNotFoundError(autosave)
-    return restore_project_from_autosave(autosave, project_path)
+    try:
+        return restore_project_from_autosave(autosave, project_path)
+    except sqlite3.DatabaseError as exc:
+        log.warning("Could not restore autosave '%s': %s", autosave, exc)
+        quarantine_autosave_snapshot(autosave)
+        raise
 
 
 # ---------------------------------------------------------------------------

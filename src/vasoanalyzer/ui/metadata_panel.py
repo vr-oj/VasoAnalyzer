@@ -13,6 +13,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QDockWidget,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -25,6 +26,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from vasoanalyzer.core.audit import EditAction
 from vasoanalyzer.core.project import Attachment, Experiment, Project, SampleN
 
 
@@ -214,6 +216,14 @@ class _SampleMetadataForm(_BaseForm):
         self.notes_edit.textChanged.connect(self._on_notes_changed)
         form.addRow("Notes", self.notes_edit)
 
+        self.edit_history_group = QGroupBox("Edit History")
+        self.edit_history_text = QPlainTextEdit()
+        self.edit_history_text.setReadOnly(True)
+        edit_layout = QVBoxLayout(self.edit_history_group)
+        edit_layout.setContentsMargins(6, 6, 6, 6)
+        edit_layout.addWidget(self.edit_history_text)
+        layout.addWidget(self.edit_history_group)
+
         self.analysis_label = QLabel("Analysis Results")
         self.analysis_summary = QPlainTextEdit()
         self.analysis_summary.setReadOnly(True)
@@ -258,11 +268,13 @@ class _SampleMetadataForm(_BaseForm):
             self.analysis_summary.clear()
             self.figure_summary.clear()
             self.attachments_list.clear()
+            self._set_edit_history(None)
         else:
             self.notes_edit.setPlainText(sample.notes or "")
             self._populate_analysis(sample)
             self._populate_figures(sample.figure_configs)
             self._populate_attachments(sample.attachments)
+            self._set_edit_history(sample)
         self._on_attachment_selection(self.attachments_list.currentRow())
         self._unblock()
 
@@ -307,6 +319,35 @@ class _SampleMetadataForm(_BaseForm):
 
     def _current_index(self) -> int:
         return self.attachments_list.currentRow()
+
+    def _set_edit_history(self, sample: SampleN | None) -> None:
+        if sample is None:
+            self.edit_history_text.clear()
+            self.edit_history_group.setEnabled(False)
+            return
+
+        history = getattr(sample, "edit_history", None)
+        if not history:
+            self.edit_history_text.setPlainText("No edit history.")
+            self.edit_history_group.setEnabled(False)
+            return
+
+        lines: list[str] = []
+        for entry in history:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                action = EditAction.from_dict(entry)
+                lines.append(action.summary())
+            except Exception:
+                continue
+
+        if not lines:
+            self.edit_history_text.setPlainText("No edit history.")
+            self.edit_history_group.setEnabled(False)
+        else:
+            self.edit_history_text.setPlainText("\n".join(lines))
+            self.edit_history_group.setEnabled(True)
 
     def _on_notes_changed(self) -> None:
         if self._block_updates:

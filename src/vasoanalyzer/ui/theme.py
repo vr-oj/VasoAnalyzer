@@ -142,6 +142,19 @@ QTableWidget {{
 }}
 QTableWidget::item:selected {{
     background-color: {theme["selection_bg"]};
+    color: {theme["table_text"]};
+}}
+QTableWidget::item:selected:!active {{
+    background-color: {theme["selection_bg"]};
+    color: {theme["table_text"]};
+}}
+QTableView::item:selected {{
+    background-color: {theme["selection_bg"]};
+    color: {theme["table_text"]};
+}}
+QTableView::item:selected:!active {{
+    background-color: {theme["selection_bg"]};
+    color: {theme["table_text"]};
 }}
 QHeaderView::section {{
     background-color: {theme["button_bg"]};

@@ -39,7 +39,7 @@ def load_trace(file_path, *, cache: Any | None = None):
         pandas.errors.ParserError: If the CSV cannot be parsed.
     """
 
-    log.info("Loading trace from %s", file_path)
+    log.debug("Loading trace from %s", file_path)
 
     # Auto-detect delimiter using the CSV sniffer
     with open(file_path, encoding="utf-8-sig") as f:
@@ -98,9 +98,13 @@ def load_trace(file_path, *, cache: Any | None = None):
     time_col = None
     diam_col = None
     outer_col = None
+    avg_pressure_col = None
+    set_pressure_col = None
     inner_candidates = []
     diam_candidates = []
     outer_candidates = []
+    avg_pressure_candidates = []
+    set_pressure_candidates: list[str] = []
 
     for c in df.columns:
         norm = _normalize(c)
@@ -114,6 +118,15 @@ def load_trace(file_path, *, cache: Any | None = None):
         elif "diam" in norm or norm in {"id", "diameter"}:
             diam_candidates.append(c)
 
+        # Detect pressure columns
+        if "avg" in norm and "pressure" in norm:
+            avg_pressure_candidates.append(c)
+        elif "set" in norm and "pressure" in norm:
+            if c in ("Set Pressure (mmHg)", "Set P (mmHg)"):
+                set_pressure_candidates.insert(0, c)
+            else:
+                set_pressure_candidates.append(c)
+
     if inner_candidates:
         diam_col = inner_candidates[0]
     elif diam_candidates:
@@ -122,6 +135,12 @@ def load_trace(file_path, *, cache: Any | None = None):
     if outer_candidates:
         outer_col = outer_candidates[0]
 
+    if avg_pressure_candidates:
+        avg_pressure_col = avg_pressure_candidates[0]
+
+    if set_pressure_candidates:
+        set_pressure_col = set_pressure_candidates[0]
+
     if time_col is None or diam_col is None or time_col == diam_col:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")
 
@@ -129,6 +148,10 @@ def load_trace(file_path, *, cache: Any | None = None):
     rename_map = {time_col: "Time (s)", diam_col: "Inner Diameter"}
     if outer_col:
         rename_map[outer_col] = "Outer Diameter"
+    if avg_pressure_col:
+        rename_map[avg_pressure_col] = "Avg Pressure (mmHg)"
+    if set_pressure_col:
+        rename_map[set_pressure_col] = "Set Pressure (mmHg)"
     df = df.rename(columns=rename_map)
     df = df.loc[:, ~df.columns.duplicated()]
 
@@ -137,6 +160,10 @@ def load_trace(file_path, *, cache: Any | None = None):
     df["Inner Diameter"] = pd.to_numeric(df["Inner Diameter"], errors="coerce")
     if "Outer Diameter" in df.columns:
         df["Outer Diameter"] = pd.to_numeric(df["Outer Diameter"], errors="coerce")
+    if "Avg Pressure (mmHg)" in df.columns:
+        df["Avg Pressure (mmHg)"] = pd.to_numeric(df["Avg Pressure (mmHg)"], errors="coerce")
+    if "Set Pressure (mmHg)" in df.columns:
+        df["Set Pressure (mmHg)"] = pd.to_numeric(df["Set Pressure (mmHg)"], errors="coerce")
 
     neg_inner = int((df["Inner Diameter"] < 0).sum())
     if neg_inner:
@@ -153,5 +180,18 @@ def load_trace(file_path, *, cache: Any | None = None):
     else:
         df.attrs["negative_outer_diameters"] = 0
 
-    log.info("Loaded trace with %d rows", len(df))
+    # Pressure values can be negative (e.g., vacuum), so we don't filter them out
+    # Just log if pressure columns were found
+    if "Avg Pressure (mmHg)" in df.columns:
+        log.debug(
+            "Loaded Avg Pressure column with %d valid values",
+            df["Avg Pressure (mmHg)"].notna().sum(),
+        )
+    if "Set Pressure (mmHg)" in df.columns:
+        log.debug(
+            "Loaded Set Pressure column with %d valid values",
+            df["Set Pressure (mmHg)"].notna().sum(),
+        )
+
+    log.debug("Loaded trace with %d rows", len(df))
     return df

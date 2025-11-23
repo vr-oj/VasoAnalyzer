@@ -147,11 +147,11 @@ def load_events(file_path, *, cache: Any | None = None):
     """Return event labels, times and optional frames from a table file or DataFrame."""
 
     if isinstance(file_path, pd.DataFrame):
-        log.info("Loading events from DataFrame")
+        log.debug("Loading events from DataFrame")
         df = file_path.copy()
         delimiter = ","
     else:
-        log.info("Loading events from %s", file_path)
+        log.debug("Loading events from %s", file_path)
         with open(file_path, encoding="utf-8-sig") as handle:
             sample = handle.read(1024)
             try:
@@ -247,7 +247,7 @@ def load_events(file_path, *, cache: Any | None = None):
         frame_series = df[frame_col].reset_index(drop=True)
         frames = frame_series.tolist()
 
-    log.info("Loaded %d events", len(labels))
+    log.debug("Loaded %d events", len(labels))
     return labels, times, frames
 
 

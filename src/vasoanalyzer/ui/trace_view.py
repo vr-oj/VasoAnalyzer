@@ -34,7 +34,7 @@ class TraceView:
         mode: str = "dual",
         y_label: str | None = None,
     ) -> None:
-        if mode not in {"inner", "outer", "dual"}:
+        if mode not in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}:
             raise ValueError(f"Unsupported trace view mode: {mode}")
         self.ax = ax
         self.canvas = canvas
@@ -55,9 +55,23 @@ class TraceView:
         self._ensure_base_artists()
 
     def _ensure_base_artists(self) -> None:
+        # Set different colors for different modes
+        if self._mode == "avg_pressure":
+            line_color = "tab:blue"
+        elif self._mode == "set_pressure":
+            line_color = "tab:purple"
+        elif self._mode == "outer":
+            line_color = "tab:orange"
+        else:
+            line_color = "k"  # black for inner
+
         if self.inner_line is None:
-            self.inner_line = Line2D([], [], color="k", linewidth=1.5, animated=True)
+            self.inner_line = Line2D([], [], color=line_color, linewidth=1.5, animated=True)
             self.ax.add_line(self.inner_line)
+        else:
+            # Update color if mode changed
+            self.inner_line.set_color(line_color)
+
         if self.inner_band is None:
             band = PolyCollection(
                 [],
@@ -175,6 +189,10 @@ class TraceView:
     def _default_ylabel(self) -> str:
         if self._mode == "outer":
             return "Outer Diameter (µm)"
+        elif self._mode == "avg_pressure":
+            return "Avg Pressure (mmHg)"
+        elif self._mode == "set_pressure":
+            return "Set Pressure (mmHg)"
         return "Inner Diameter (µm)"
 
     def _primary_series(
@@ -184,6 +202,14 @@ class TraceView:
             if window.outer_mean is None or window.outer_min is None or window.outer_max is None:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
+        elif self._mode == "avg_pressure":
+            if window.avg_pressure_mean is None or window.avg_pressure_min is None or window.avg_pressure_max is None:
+                return None
+            return window.avg_pressure_mean, window.avg_pressure_min, window.avg_pressure_max
+        elif self._mode == "set_pressure":
+            if window.set_pressure_mean is None or window.set_pressure_min is None or window.set_pressure_max is None:
+                return None
+            return window.set_pressure_mean, window.set_pressure_min, window.set_pressure_max
         return window.inner_mean, window.inner_min, window.inner_max
 
     def _secondary_series(
@@ -279,6 +305,12 @@ class TraceView:
         if self._mode == "outer":
             series_min = window.outer_min
             series_max = window.outer_max
+        elif self._mode == "avg_pressure":
+            series_min = window.avg_pressure_min
+            series_max = window.avg_pressure_max
+        elif self._mode == "set_pressure":
+            series_min = window.set_pressure_min
+            series_max = window.set_pressure_max
         elif self._mode == "dual":
             parts = []
             if window.inner_min is not None and window.inner_max is not None:

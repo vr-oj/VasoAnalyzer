@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QDialog,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -114,7 +115,13 @@ class PointEditorDialog(QDialog):
             times, clean, color=preview_color, linewidth=1.8, label="Preview"
         )[0]
         self._selected_scatter = self.ax.scatter(
-            [], [], s=36, color=selection_color, edgecolors="#333333", linewidths=0.6, zorder=5
+            [],
+            [],
+            s=36,
+            color=selection_color,
+            edgecolors="#333333",
+            linewidths=0.6,
+            zorder=5,
         )
 
         self.ax.legend(loc="upper right", frameon=False)
@@ -140,6 +147,9 @@ class PointEditorDialog(QDialog):
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        header = self.table.horizontalHeader()
+        for col in range(self.table.columnCount()):
+            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
         grid.addWidget(self.table, 0, 0, 1, 3)
 
         method_label = QLabel("Connect Method", container)

@@ -17,6 +17,14 @@ if TYPE_CHECKING:  # pragma: no cover
 def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     """Construct the Matplotlib navigation toolbar with VasoAnalyzer styling."""
 
+    # Detect backend type
+    plot_host = getattr(window, "plot_host", None)
+    is_pyqtgraph = (
+        plot_host is not None
+        and hasattr(plot_host, "get_render_backend")
+        and plot_host.get_render_backend() == "pyqtgraph"
+    )
+
     toolbar = CustomToolbar(canvas, window, reset_callback=window.reset_to_full_view)
     toolbar.setIconSize(QSize(22, 22))
     toolbar.setContentsMargins(0, 0, 0, 0)
@@ -37,6 +45,7 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
             border-radius: 8px;
             margin: 0px 5px;
             padding: 6px 8px;
+            min-width: 52px;
             color: {CURRENT_THEME["text"]};
         }}
         QToolBar > QToolButton:hover {{
@@ -131,27 +140,85 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     window.actPan = pan_act
     window.actZoom = zoom_act
 
-    if window.actReset:
-        toolbar.addAction(window.actReset)
-    if window.actBack:
-        toolbar.addAction(window.actBack)
-    if window.actForward:
-        toolbar.addAction(window.actForward)
+    # For PyQtGraph, Back/Forward don't work (no view history), and Reset View is redundant with Autoscale
+    if not is_pyqtgraph:
+        if window.actReset:
+            toolbar.addAction(window.actReset)
+        if window.actBack:
+            toolbar.addAction(window.actBack)
+        if window.actForward:
+            toolbar.addAction(window.actForward)
 
-    toolbar.addSeparator()
+        toolbar.addSeparator()
 
-    if window.actPan:
-        toolbar.addAction(window.actPan)
-    if window.actZoom:
-        toolbar.addAction(window.actZoom)
+    # PyQtGraph has built-in mouse interaction - pan/zoom buttons not needed
+    if not is_pyqtgraph:
+        if window.actPan:
+            toolbar.addAction(window.actPan)
+        if window.actZoom:
+            toolbar.addAction(window.actZoom)
 
-    window._nav_mode_actions = [act for act in (window.actPan, window.actZoom) if act is not None]
-    for action in window._nav_mode_actions:
-        with contextlib.suppress(Exception):
-            action.toggled.disconnect(window._handle_nav_mode_toggled)
-        action.toggled.connect(window._handle_nav_mode_toggled)
+        window._nav_mode_actions = [
+            act for act in (window.actPan, window.actZoom) if act is not None
+        ]
+        for action in window._nav_mode_actions:
+            with contextlib.suppress(Exception):
+                action.toggled.disconnect(window._handle_nav_mode_toggled)
+            action.toggled.connect(window._handle_nav_mode_toggled)
 
-    toolbar.addSeparator()
+        toolbar.addSeparator()
+
+    # Add zoom in/out/autoscale buttons for PyQtGraph
+    if is_pyqtgraph:
+        window.actZoomIn = QAction(QIcon(window.icon_path("Zoom.svg")), "Zoom In", window)
+        window.actZoomIn.setShortcut(QKeySequence("+"))
+        window.actZoomIn.setToolTip(
+            "<b>Zoom In</b> <kbd>+</kbd><br><br>"
+            "Zoom in to see more detail.<br>"
+            "Increases magnification 2x."
+        )
+        window.actZoomIn.triggered.connect(window._on_zoom_in_triggered)
+        toolbar.addAction(window.actZoomIn)
+
+        window.actZoomOut = QAction(QIcon(window.icon_path("ZoomOut.svg")), "Zoom Out", window)
+        window.actZoomOut.setShortcut(QKeySequence("-"))
+        window.actZoomOut.setToolTip(
+            "<b>Zoom Out</b> <kbd>-</kbd><br><br>"
+            "Zoom out to see more time range.<br>"
+            "Decreases magnification 2x."
+        )
+        window.actZoomOut.triggered.connect(window._on_zoom_out_triggered)
+        toolbar.addAction(window.actZoomOut)
+
+        window.actAutoscale = QAction(QIcon(window.icon_path("Home.svg")), "Autoscale", window)
+        window.actAutoscale.setShortcut(QKeySequence("A"))
+        window.actAutoscale.setToolTip(
+            "<b>Autoscale</b> <kbd>A</kbd><br><br>"
+            "Reset to full time range and autoscale Y axes.<br>"
+            "Shows all data in view."
+        )
+        window.actAutoscale.triggered.connect(window._on_autoscale_triggered)
+        toolbar.addAction(window.actAutoscale)
+
+        toolbar.addSeparator()
+
+        # Add Y-axis autoscale toggle
+        window.actAutoscaleY = QAction(
+            QIcon(window.icon_path("Grid.svg")), "Y-Axis Autoscale", window
+        )
+        window.actAutoscaleY.setCheckable(True)
+        window.actAutoscaleY.setChecked(True)  # Enabled by default
+        window.actAutoscaleY.setShortcut(QKeySequence("Y"))
+        window.actAutoscaleY.setToolTip(
+            "<b>Y-Axis Autoscale</b> <kbd>Y</kbd><br><br>"
+            "Toggle Y-axis autoscaling.<br>"
+            "When checked: Y-axis rescales as you pan.<br>"
+            "When unchecked: Y-axis stays locked at current range."
+        )
+        window.actAutoscaleY.triggered.connect(window._on_autoscale_y_triggered)
+        # NOTE: Do not add actAutoscaleY to the toolbar. Per-track autoscale is
+        # controlled from the Plot Settings dialog's Tracks tab, and exposing a
+        # second global toggle caused conflicting state.
 
     window.actGrid = QAction(QIcon(window.icon_path("Grid.svg")), "Grid", window)
     window.actGrid.setCheckable(True)
@@ -168,14 +235,24 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     toolbar.addAction(window.actGrid)
 
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
-    window.actStyle.setToolTip(
-        "<b>Plot Settings</b><br><br>"
-        "Open unified plot settings dialog.<br>"
-        "Customize canvas, layout, axes, style, and event labels."
-    )
-    with contextlib.suppress(Exception):
-        window.actStyle.triggered.disconnect()
-    window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
+    if is_pyqtgraph:
+        window.actStyle.setToolTip(
+            "<b>Plot Settings</b><br><br>"
+            "Open PyQtGraph plot settings dialog.<br>"
+            "Customize tracks, event labels, and appearance."
+        )
+        with contextlib.suppress(Exception):
+            window.actStyle.triggered.disconnect()
+        window.actStyle.triggered.connect(lambda: window.open_pyqtgraph_settings_dialog())
+    else:
+        window.actStyle.setToolTip(
+            "<b>Plot Settings</b><br><br>"
+            "Open unified plot settings dialog.<br>"
+            "Customize canvas, layout, axes, style, and event labels."
+        )
+        with contextlib.suppress(Exception):
+            window.actStyle.triggered.disconnect()
+        window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
     toolbar.addAction(window.actStyle)
 
     window.actEditPoints = QAction(
@@ -185,8 +262,9 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     )
     window.actEditPoints.setToolTip(
         "<b>Edit Points</b><br><br>"
-        "Opens the Point Editor for manual trace correction.<br>"
-        "Edit raw data points in the current view."
+        "Edit data points in the current time window.<br>"
+        "Opens a point editor dialog where you can click or box-select points.<br>"
+        "Shift-click adds to selection; Ctrl/Cmd-click toggles. Changes apply when you press Apply."
     )
     window.actEditPoints.setEnabled(False)
     window.actEditPoints.triggered.connect(window._on_edit_points_triggered)

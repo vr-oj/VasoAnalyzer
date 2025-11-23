@@ -113,12 +113,17 @@ class InteractionController:
         return (x_coord < left + margin_px) or (x_coord > right - margin_px)
 
     def _scroll_factor(self, event) -> float:
+        """Calculate zoom factor for scroll events.
+
+        Uses gentler zoom factors (0.9/1.11 vs 0.8/1.25) for better
+        trackpad control and less sensitive zooming.
+        """
         step = getattr(event, "step", None)
         if step is not None:
             direction = 1 if step > 0 else -1
         else:
             direction = 1 if getattr(event, "button", "") == "up" else -1
-        return 0.8 if direction > 0 else 1.25
+        return 0.9 if direction > 0 else 1.11
 
     def _active_track(self) -> ChannelTrack | None:
         if self._hover_track is not None:
@@ -128,22 +133,38 @@ class InteractionController:
 
     # ------------------------------------------------------------------ handlers
     def _on_scroll(self, event) -> None:
+        """Handle scroll events - horizontal panning only (like LabChart).
+
+        Simple and reliable:
+        - Two-finger scroll = pan left/right
+        - No modifiers, no complexity
+        - Zoom via toolbar buttons instead
+        """
+        import logging
+
+        log = logging.getLogger(__name__)
+
         if self._nav_active():
             return
-        modifiers = _parse_modifiers(getattr(event, "key", None))
-        factor = self._scroll_factor(event)
-        track = self._track_from_event(event)
 
-        if "shift" in modifiers and track is not None:
-            if event.ydata is None:
-                return
-            track.zoom_y(event.ydata, factor)
-            self.canvas.draw_idle()
+        # Get current time window
+        window = self.plot_host.current_window()
+        if window is None:
             return
 
-        if event.xdata is None:
-            return
-        self.plot_host.zoom_at(event.xdata, factor)
+        # Get scroll direction
+        step = getattr(event, "step", None)
+        if step is not None:
+            direction = 1 if step > 0 else -1
+        else:
+            direction = 1 if getattr(event, "button", "") == "up" else -1
+
+        # Pan amount: 10% of visible window
+        window_span = window[1] - window[0]
+        pan_amount = direction * window_span * 0.1
+
+        log.info(f"📜 Scroll pan: direction={direction}, amount={pan_amount:.2f}s")
+        self.plot_host.scroll_by(pan_amount)
 
     def _on_press(self, event) -> None:
         if self._nav_active():
@@ -237,6 +258,10 @@ class InteractionController:
             self.canvas.draw_idle()
 
     def _on_key_press(self, event) -> None:
+        import logging
+
+        log = logging.getLogger(__name__)
+
         key = getattr(event, "key", None)
         if key is None:
             return
@@ -283,4 +308,32 @@ class InteractionController:
 
         if base == "0" and "alt" in modifiers:
             self.plot_host.autoscale_all()
+            return
+
+        # Zoom in/out with +/- keys (LabChart-style)
+        if base in {"equal", "+", "minus", "-"} and window is not None:
+            # Determine zoom direction
+            zoom_in = base in {"equal", "+"}
+            zoom_factor = 0.5 if zoom_in else 2.0  # 0.5 = zoom in, 2.0 = zoom out
+
+            span = window[1] - window[0]
+            new_span = span * zoom_factor
+
+            # Center zoom on hover position if available, otherwise center of view
+            center = (
+                self._hover_time if self._hover_time is not None else (window[0] + window[1]) / 2.0
+            )
+
+            # Calculate new window bounds
+            new_start = center - new_span / 2.0
+            new_end = center + new_span / 2.0
+
+            log.debug(
+                "Zoom %s: %.2fs \u2192 %.2fs (center %.2fs)",
+                "in" if zoom_in else "out",
+                span,
+                new_span,
+                center,
+            )
+            self.plot_host.set_time_window(new_start, new_end)
             return

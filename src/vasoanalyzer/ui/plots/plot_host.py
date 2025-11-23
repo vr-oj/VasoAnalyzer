@@ -11,7 +11,6 @@ from dataclasses import dataclass, replace
 from typing import Any, cast
 
 from matplotlib.axes import Axes
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.text import Annotation, Text
@@ -26,6 +25,7 @@ from vasoanalyzer.ui.event_labels_v3 import (
     LayoutOptionsV3,
 )
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack, ChannelTrackSpec
+from vasoanalyzer.ui.plots.gesture_canvas import GestureCanvas
 from vasoanalyzer.ui.plots.overlays import (
     AnnotationLane,
     AnnotationSpec,
@@ -57,7 +57,7 @@ class PlotHost:
             dpi=dpi,
             constrained_layout=False,
         )
-        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas = GestureCanvas(self.figure)
         self.figure.subplots_adjust(left=0.12, right=0.96, top=0.96, bottom=0.12)
         self._channel_specs: list[ChannelTrackSpec] = []
         self._tracks: dict[str, ChannelTrack] = {}
@@ -180,8 +180,8 @@ class PlotHost:
         specs = self._channel_specs
         height_ratios: list[float] = [max(spec.height_ratio, 0.05) for spec in specs]
         row_count = len(height_ratios)
-        # Add vertical gap between tracks (diameter traces) when stacked
-        hspace = 0.05 if row_count > 1 else 0.0
+        # Eliminate gap between tracks for cleaner appearance - dividers provide separation
+        hspace = 0.0
         gs = self.figure.add_gridspec(
             nrows=row_count,
             ncols=1,
@@ -197,11 +197,32 @@ class PlotHost:
                 shared_ax = ax
             else:
                 ax.tick_params(labelbottom=False)
+                ax.set_xlabel("")  # Clear xlabel for non-bottom tracks
             ax.tick_params(colors=CURRENT_THEME["text"])
             ax.yaxis.label.set_color(CURRENT_THEME["text"])
             ax.xaxis.label.set_color(CURRENT_THEME["text"])
             ax.title.set_color(CURRENT_THEME["text"])
             ax.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
+
+            # Configure tick label and axis title font sizes based on number of visible tracks
+            # These sizes scale with available vertical space
+            if row_count == 1:
+                tick_fontsize = 14
+                ylabel_fontsize = 24
+            elif row_count == 2:
+                tick_fontsize = 14
+                ylabel_fontsize = 22
+            elif row_count == 3:
+                tick_fontsize = 14
+                ylabel_fontsize = 20
+            else:  # 4 or more tracks
+                tick_fontsize = 14
+                ylabel_fontsize = 16
+
+            # Set tick label and Y-axis title font sizes
+            ax.tick_params(labelsize=tick_fontsize)
+            ax.yaxis.label.set_fontsize(ylabel_fontsize)
+
             spine_color = CURRENT_THEME.get(
                 "border_soft", CURRENT_THEME.get("grid_color", "#CCCCCC")
             )
@@ -279,6 +300,10 @@ class PlotHost:
         self._event_highlight_overlay.refresh()
         self._redraw_event_labels()
         self._schedule_draw()
+
+    def is_user_range_change_active(self) -> bool:
+        """Return True if the current time-window change was initiated by the user."""
+        return False
 
     def set_events(
         self,
@@ -665,10 +690,24 @@ class PlotHost:
         visible_tracks = [track for track in channel_tracks if track.is_visible()]
         layout_tracks = visible_tracks if visible_tracks else channel_tracks
         bottom_track = layout_tracks[-1]
+
+        # Determine X-axis title font size based on number of visible tracks
+        num_visible = len(layout_tracks)
+        if num_visible == 1:
+            xlabel_fontsize = 24
+        elif num_visible == 2:
+            xlabel_fontsize = 22
+        elif num_visible == 3:
+            xlabel_fontsize = 20
+        else:  # 4 or more tracks
+            xlabel_fontsize = 20
+
         for track in channel_tracks:
             ax = track.ax
             if track is bottom_track:
                 ax.tick_params(bottom=True, labelbottom=True)
+                # Set X-axis title font size on bottom track only
+                ax.xaxis.label.set_fontsize(xlabel_fontsize)
             else:
                 ax.tick_params(bottom=False, labelbottom=False)
                 ax.set_xlabel("")

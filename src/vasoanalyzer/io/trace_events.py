@@ -82,8 +82,14 @@ def load_trace_and_events(
         ``None`` if unavailable), the inner and outer diameter at each event time,
         and a metadata dictionary describing any adjustments applied during import.
     """
-    log.info("Loading trace and events for %s", trace_path)
+    log.debug("Loading trace and events for %s", trace_path)
     df = load_trace(trace_path, cache=cache)
+    log.info(
+        "Import: Loaded trace CSV %s with %d rows and columns=%s",
+        trace_path,
+        len(df.index),
+        list(df.columns),
+    )
 
     extras: dict[str, object] = {
         "event_file": None,
@@ -98,23 +104,40 @@ def load_trace_and_events(
     events_df: pd.DataFrame | None = None
     ev_path: str | None = None
 
+    event_source_label: str | None = None
     if isinstance(events_path, pd.DataFrame):
         events_df = _standardize_headers(events_path.copy())
+        event_source_label = "<DataFrame>"
     else:
         ev_path = events_path
+        if ev_path:
+            event_source_label = ev_path
 
     if ev_path is None and events_df is None:
         ev_path = find_matching_event_file(trace_path)
         if ev_path:
             extras["auto_detected"] = True
+            event_source_label = ev_path
 
     if ev_path and os.path.exists(ev_path):
-        log.info("Found event file: %s", ev_path)
         extras["event_file"] = ev_path
         events_df = _read_event_dataframe(ev_path, cache=cache)
+        log.info(
+            "Import: Loaded events CSV %s with %d rows (columns=%s)",
+            ev_path,
+            len(events_df.index),
+            list(events_df.columns),
+        )
     elif events_df is None:
-        log.info("No event file found for %s", trace_path)
+        log.info("Import: No separate events file for %s (using trace-only)", trace_path)
         return df, [], [], None, [], [], extras
+    else:
+        log.info(
+            "Import: Loaded inline events table %s with %d rows (columns=%s)",
+            event_source_label or "(embedded)",
+            len(events_df.index),
+            list(events_df.columns),
+        )
 
     labels: list[str] = []
     times: list[float] = []
@@ -298,7 +321,30 @@ def load_trace_and_events(
             for idx, frame in enumerate(raw_frames)
         ]
 
-    log.info("Trace and events loaded: %d events", len(labels))
+    set_p_col = None
+    for candidate in ("Set Pressure (mmHg)", "Set P (mmHg)", "Pressure 2 (mmHg)"):
+        if candidate in df.columns:
+            set_p_col = candidate
+            break
+    if set_p_col is not None:
+        col = df[set_p_col]
+        log.info(
+            "Import: Set-pressure snapshot (%s) non_null=%d of %d, head=%s",
+            set_p_col,
+            int(col.notna().sum()),
+            len(col),
+            col.head(5).tolist(),
+        )
+    else:
+        log.info(
+            "Import: No set-pressure-like column found in trace_df columns=%s", list(df.columns)
+        )
+    log.info(
+        "Import: Prepared %d normalised events for %s (source=%s)",
+        len(labels),
+        trace_path,
+        extras.get("event_file") or "trace-only",
+    )
     return df, labels, times, frames, diam, od_diam, extras
 
 

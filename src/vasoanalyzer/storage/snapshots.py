@@ -35,7 +35,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import cast
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class BundleInfo:
     """Information about a project bundle."""
 
     bundle_path: Path
-    current_snapshot: Optional[SnapshotInfo]
+    current_snapshot: SnapshotInfo | None
     total_snapshots: int
     total_size_bytes: int
 
@@ -198,7 +198,9 @@ def open_bundle(bundle_path: Path, *, readonly: bool = False) -> BundleInfo:
                 # Check if lock is stale (older than 1 hour)
                 lock_age = time.time() - lock_path.stat().st_mtime
                 if lock_age < 3600:
-                    log.warning(f"Bundle is locked by another process (opened read-only): {bundle_path}")
+                    log.warning(
+                        f"Bundle is locked by another process (opened read-only): {bundle_path}"
+                    )
                     readonly = True
                 else:
                     log.info("Removing stale lock file")
@@ -282,15 +284,43 @@ def create_snapshot(bundle_path: Path, staging_db: Path) -> SnapshotInfo:
     dest = Path(str(dest_tmp)[:-4])  # Remove .tmp
 
     try:
-        # Use SQLite backup API for consistent copy
-        with sqlite3.connect(f"file:{staging_db}?immutable=0", uri=True) as src, sqlite3.connect(
-            dest_tmp
-        ) as dst:
-            src.backup(dst)  # Atomic consistent copy
+        # CRITICAL FIX: Checkpoint WAL to ensure all data is in the main database file
+        # Before creating snapshot, we must flush all pending writes from WAL to main DB
+        log.debug("Checkpointing WAL before snapshot creation")
+        try:
+            with sqlite3.connect(staging_db) as conn:
+                # PRAGMA wal_checkpoint(FULL) ensures:
+                # 1. All WAL frames are written to main database
+                # 2. WAL file is reset/truncated
+                # 3. Checkpoint completes even if database is busy
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                conn.commit()
+                log.debug("WAL checkpoint completed successfully")
+        except Exception as e:
+            log.warning(f"WAL checkpoint failed (will try backup anyway): {e}")
 
-            # Optimize the snapshot
-            log.debug("Optimizing snapshot database")
+        # Verify WAL/SHM files are gone or minimal after checkpoint
+        wal_file = staging_db.with_suffix(".sqlite-wal")
+        shm_file = staging_db.with_suffix(".sqlite-shm")
+        if wal_file.exists():
+            wal_size = wal_file.stat().st_size
+            if wal_size > 0:
+                log.warning(f"WAL file still exists with {wal_size} bytes: {wal_file}")
+        if shm_file.exists():
+            log.debug(f"SHM file exists (normal for WAL mode): {shm_file}")
+
+        # Use simple file copy now that WAL has been checkpointed
+        # This avoids potential locking issues with SQLite backup API
+        log.debug("Copying staging database to snapshot")
+        shutil.copy2(staging_db, dest_tmp)
+
+        # Convert snapshot to non-WAL mode and optimize
+        log.debug("Converting snapshot to DELETE journal mode and optimizing")
+        with sqlite3.connect(dest_tmp) as dst:
+            # Disable WAL mode for snapshots (they're read-only anyway)
+            dst.execute("PRAGMA journal_mode=DELETE")
             dst.execute("PRAGMA optimize")
+            dst.commit()
 
         # Fsync the snapshot file
         fsync_file(dest_tmp)
@@ -327,7 +357,7 @@ def snapshot_from_staging(bundle_path: Path, staging_db: Path) -> SnapshotInfo:
     return create_snapshot(bundle_path, staging_db)
 
 
-def get_current_snapshot(bundle_path: Path) -> Optional[SnapshotInfo]:
+def get_current_snapshot(bundle_path: Path) -> SnapshotInfo | None:
     """
     Get the current snapshot referenced by HEAD.json.
 
@@ -472,7 +502,8 @@ def validate_snapshot(snap_path: Path) -> bool:
 
     try:
         with sqlite3.connect(f"file:{snap_path}?mode=ro", uri=True, timeout=5) as db:
-            (status,) = db.execute("PRAGMA quick_check").fetchone()
+            result = db.execute("PRAGMA quick_check").fetchone()
+            status = cast(str | None, result[0] if result else None)
             return status == "ok"
     except Exception as e:
         log.debug(f"Snapshot validation failed for {snap_path}: {e}")
@@ -484,7 +515,9 @@ def validate_snapshot(snap_path: Path) -> bool:
 # =============================================================================
 
 
-def open_staging_db(bundle_path: Path, *, initialize_from: Optional[Path] = None) -> tuple[Path, sqlite3.Connection]:
+def open_staging_db(
+    bundle_path: Path, *, initialize_from: Path | None = None
+) -> tuple[Path, sqlite3.Connection]:
     """
     Create or open staging database for active session.
 
@@ -566,7 +599,7 @@ def prune_old_snapshots(bundle_path: Path, keep_count: int = 50) -> int:
 
     # Keep only the oldest (total - keep_count) snapshots
     to_delete = []
-    for snap in candidates[: -keep_count]:
+    for snap in candidates[:-keep_count]:
         # Don't delete current snapshot
         if snap.number not in current_nums:
             to_delete.append(snap)

@@ -13,6 +13,8 @@ import sys
 import time
 from pathlib import Path
 
+STALE_LOCK_AGE_SECONDS = 2 * 60 * 60  # 2 hours
+
 log = logging.getLogger(__name__)
 
 
@@ -45,8 +47,9 @@ class ProjectFileLock:
         """
         self.project_path = Path(project_path)
         self.lock_path = self.project_path.with_suffix(self.project_path.suffix + ".lock")
-        self.lock_file = None
+        self.lock_file: int | None = None
         self._acquired = False
+        self._owns_lockfile = False
 
     def acquire(self, timeout: float = 5.0) -> bool:
         """
@@ -62,26 +65,34 @@ class ProjectFileLock:
             RuntimeError: If lock cannot be acquired within timeout
         """
         start_time = time.time()
+        logged_waiting = False
 
         while True:
             try:
                 # Try to create lock file exclusively (atomic operation)
-                fd = os.open(
-                    self.lock_path,
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                    0o644
-                )
+                fd = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
 
                 # Write lock metadata (PID and timestamp for debugging)
                 lock_info = f"{os.getpid()}\n{time.time()}\n"
-                os.write(fd, lock_info.encode('utf-8'))
+                os.write(fd, lock_info.encode("utf-8"))
 
                 self.lock_file = fd
                 self._acquired = True
+                self._owns_lockfile = True
                 log.info(f"Acquired project lock: {self.lock_path}")
                 return True
 
-            except FileExistsError:
+            except FileExistsError as exc:
+                if self._is_held_by_current_process():
+                    self._acquired = True
+                    self._owns_lockfile = False
+                    log.info(
+                        "Reusing project lock for current process path=%s lock=%s pid=%s",
+                        self.project_path,
+                        self.lock_path,
+                        os.getpid(),
+                    )
+                    return True
                 # Lock file exists - check if it's stale
                 if self._is_stale_lock():
                     log.warning(f"Removing stale lock file: {self.lock_path}")
@@ -90,17 +101,35 @@ class ProjectFileLock:
                         continue  # Try to acquire again
                     except Exception as e:
                         log.error(f"Failed to remove stale lock: {e}")
+                        raise RuntimeError(f"Failed to clean up stale lock: {e}") from e
+
+                if not logged_waiting:
+                    holder_info = self._get_lock_holder_info()
+                    log.info(
+                        "Project lock busy path=%s lock=%s holder=%s",
+                        self.project_path,
+                        self.lock_path,
+                        holder_info,
+                    )
+                    logged_waiting = True
 
                 # Check timeout
                 elapsed = time.time() - start_time
                 if elapsed >= timeout:
                     lock_holder = self._get_lock_holder_info()
+                    log.error(
+                        "Timeout acquiring project lock path=%s lock=%s holder=%s",
+                        self.project_path,
+                        self.lock_path,
+                        lock_holder,
+                    )
                     raise RuntimeError(
                         f"Project is already open in another instance.\n\n"
                         f"Lock file: {self.lock_path}\n"
                         f"{lock_holder}\n\n"
-                        f"If you're certain no other instance is running, delete the lock file manually."
-                    )
+                        f"If you're certain no other instance is running, "
+                        f"delete the lock file manually."
+                    ) from exc
 
                 # Wait a bit before retrying
                 time.sleep(0.1)
@@ -125,14 +154,16 @@ class ProjectFileLock:
                     self.lock_file = None
 
             # Remove lock file
-            try:
-                self.lock_path.unlink(missing_ok=True)
-                log.info(f"Released project lock: {self.lock_path}")
-            except Exception as e:
-                log.error(f"Failed to remove lock file: {e}")
+            if self._owns_lockfile:
+                try:
+                    self.lock_path.unlink(missing_ok=True)
+                    log.info(f"Released project lock: {self.lock_path}")
+                except Exception as e:
+                    log.error(f"Failed to remove lock file: {e}")
 
         finally:
             self._acquired = False
+            self._owns_lockfile = False
 
     def is_locked(self) -> bool:
         """Check if a lock file exists (doesn't verify if it's stale)."""
@@ -146,26 +177,79 @@ class ProjectFileLock:
             True if lock is stale and should be removed
         """
         try:
-            # Read PID from lock file
-            with open(self.lock_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                if not lines:
-                    return True  # Empty lock file is stale
+            metadata = self._read_lock_metadata()
+            if metadata is None:
+                return False
 
-                pid_str = lines[0].strip()
-                try:
-                    pid = int(pid_str)
-                except ValueError:
-                    log.warning(f"Invalid PID in lock file: {pid_str}")
-                    return True  # Malformed lock file
+            pid, timestamp = metadata
+            if pid is not None:
+                if not self._process_exists(pid):
+                    log.warning(
+                        "Lock pid %s is not running; treating %s as stale", pid, self.lock_path
+                    )
+                    return True
+                return False
 
-            # Check if process exists
-            return not self._process_exists(pid)
+            if timestamp is not None:
+                age = time.time() - timestamp
+                if age >= STALE_LOCK_AGE_SECONDS:
+                    log.warning(
+                        "Lock has no PID and is %ds old; treating %s as stale",
+                        int(age),
+                        self.lock_path,
+                    )
+                    return True
+                return False
 
+            log.warning("Lock metadata missing for %s; treating as stale", self.lock_path)
+            return True
         except Exception as e:
             log.debug(f"Error checking stale lock: {e}")
             # If we can't read it, assume it might be valid to be safe
             return False
+
+    def _is_held_by_current_process(self) -> bool:
+        """Return True when the lock metadata references this PID."""
+        metadata = self._read_lock_metadata()
+        if metadata is None:
+            return False
+        pid, _ = metadata
+        return pid == os.getpid()
+
+    def _read_lock_metadata(self) -> tuple[int | None, float | None] | None:
+        """Return (pid, timestamp) tuple from lock file when available."""
+        try:
+            with open(self.lock_path, encoding="utf-8") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            log.debug("Unable to read lock metadata for %s: %s", self.lock_path, exc)
+            return None
+
+        if not lines:
+            return None
+
+        pid: int | None = None
+        timestamp: float | None = None
+
+        pid_str = lines[0].strip()
+        if pid_str:
+            try:
+                pid = int(pid_str)
+            except ValueError:
+                log.debug("Invalid PID entry in %s: %r", self.lock_path, pid_str)
+                pid = None
+
+        if len(lines) >= 2:
+            ts_str = lines[1].strip()
+            try:
+                timestamp = float(ts_str)
+            except ValueError:
+                log.debug("Invalid timestamp entry in %s: %r", self.lock_path, ts_str)
+                timestamp = None
+
+        return pid, timestamp
 
     def _process_exists(self, pid: int) -> bool:
         """
@@ -181,6 +265,7 @@ class ProjectFileLock:
             if sys.platform == "win32":
                 # Windows: Use ctypes to check process existence
                 import ctypes
+
                 kernel32 = ctypes.windll.kernel32
                 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
@@ -207,19 +292,20 @@ class ProjectFileLock:
 
     def _get_lock_holder_info(self) -> str:
         """Get information about the process holding the lock."""
-        try:
-            with open(self.lock_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                if len(lines) >= 2:
-                    pid = lines[0].strip()
-                    timestamp = float(lines[1].strip())
-                    lock_age = time.time() - timestamp
-                    return f"Locked by PID {pid} (lock age: {lock_age:.0f}s)"
-                elif len(lines) == 1:
-                    return f"Locked by PID {lines[0].strip()}"
-        except Exception:
-            pass
-        return "Lock holder information unavailable"
+        metadata = self._read_lock_metadata()
+        if metadata is None:
+            return "Lock holder information unavailable"
+
+        pid, timestamp = metadata
+        if pid is not None and timestamp is not None:
+            lock_age = time.time() - timestamp
+            return f"Locked by PID {pid} (lock age: {lock_age:.0f}s)"
+        if pid is not None:
+            return f"Locked by PID {pid}"
+        if timestamp is not None:
+            lock_age = time.time() - timestamp
+            return f"Lock age {lock_age:.0f}s (no PID recorded)"
+        return "Lock metadata missing"
 
     def __enter__(self) -> ProjectFileLock:
         """Context manager entry: acquire lock."""

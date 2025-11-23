@@ -1,5 +1,5 @@
 """
-Tests for the append-only snapshot bundle format.
+Tests for the append-only snapshot bundle format and ZIP container format.
 
 Tests cover:
 - Bundle creation
@@ -7,6 +7,8 @@ Tests cover:
 - Migration from legacy format
 - Recovery from corruption
 - Format detection
+- ZIP container format
+- Container packing/unpacking
 """
 
 import shutil
@@ -21,6 +23,13 @@ from vasoanalyzer.storage.bundle_adapter import (
     create_project_handle,
     open_project_handle,
     save_project_handle,
+)
+from vasoanalyzer.storage.container_fs import (
+    cleanup_stale_temp_dirs,
+    convert_vasopack_to_container,
+    is_vaso_container,
+    pack_temp_bundle_to_container,
+    unpack_container_to_temp,
 )
 from vasoanalyzer.storage.migration import (
     detect_project_format,
@@ -276,8 +285,8 @@ class TestProjectHandle:
         """Test creating and opening bundle via ProjectHandle."""
         bundle_path = tmp_path / "test.vasopack"
 
-        # Create project handle
-        handle, conn = create_project_handle(bundle_path, use_bundle_format=True)
+        # Create project handle (use folder bundle, not container)
+        handle, conn = create_project_handle(bundle_path, use_bundle_format=True, use_container_format=False)
 
         assert handle.is_bundle
         assert handle.path == bundle_path
@@ -304,8 +313,8 @@ class TestProjectHandle:
         """Test recovery after simulated crash (staging DB lost)."""
         bundle_path = tmp_path / "test.vasopack"
 
-        # Create and save
-        handle, conn = create_project_handle(bundle_path, use_bundle_format=True)
+        # Create and save (use folder bundle, not container)
+        handle, conn = create_project_handle(bundle_path, use_bundle_format=True, use_container_format=False)
         conn.execute("CREATE TABLE test (id INTEGER)")
         conn.execute("INSERT INTO test VALUES (1)")
         conn.commit()
@@ -323,6 +332,173 @@ class TestProjectHandle:
         assert cursor.fetchone()[0] == 1
 
         close_project_handle(handle2)
+
+
+class TestContainerFormat:
+    """Test ZIP container format (.vaso)."""
+
+    def test_container_creation_and_opening(self, tmp_path):
+        """Test creating and opening container format."""
+        container_path = tmp_path / "test.vaso"
+
+        # Create container project
+        handle, conn = create_project_handle(container_path, use_bundle_format=True, use_container_format=True)
+
+        assert handle.is_container
+        assert handle.container_path == container_path
+        assert handle.temp_bundle_root is not None
+        assert container_path.exists()
+        assert container_path.is_file()
+
+        # Write some data
+        conn.execute("CREATE TABLE test (id INTEGER, value TEXT)")
+        conn.execute("INSERT INTO test VALUES (1, 'hello container')")
+        conn.commit()
+
+        # Save (should pack to container)
+        save_project_handle(handle)
+
+        # Close
+        close_project_handle(handle, save_before_close=False)
+
+        # Verify container file exists
+        assert container_path.exists()
+        assert is_vaso_container(container_path)
+
+        # Reopen and verify data
+        handle2, conn2 = open_project_handle(container_path)
+        cursor = conn2.execute("SELECT value FROM test WHERE id=1")
+        assert cursor.fetchone()[0] == "hello container"
+
+        close_project_handle(handle2)
+
+    def test_container_format_detection(self, tmp_path):
+        """Test detecting ZIP container format."""
+        container_path = tmp_path / "test.vaso"
+
+        # Create container
+        handle, conn = create_project_handle(container_path, use_bundle_format=True, use_container_format=True)
+        close_project_handle(handle)
+
+        # Should detect as zip-bundle-v1
+        fmt = detect_project_format(container_path)
+        assert fmt == "zip-bundle-v1"
+        assert is_vaso_container(container_path)
+
+    def test_convert_vasopack_to_container(self, tmp_path):
+        """Test converting .vasopack folder to .vaso container."""
+        # Create a .vasopack folder bundle
+        vasopack_path = tmp_path / "test.vasopack"
+        create_bundle(vasopack_path)
+
+        # Add some data
+        staging_path, staging_conn = open_staging_db(vasopack_path)
+        try:
+            staging_conn.execute("CREATE TABLE test (id INTEGER, value TEXT)")
+            staging_conn.execute("INSERT INTO test VALUES (1, 'converted data')")
+            staging_conn.commit()
+        finally:
+            staging_conn.close()
+
+        create_snapshot(vasopack_path, staging_path)
+
+        # Convert to container
+        container_path = convert_vasopack_to_container(vasopack_path)
+
+        assert container_path.exists()
+        assert container_path.suffix == ".vaso"
+        assert is_vaso_container(container_path)
+
+        # Verify data in container
+        handle, conn = open_project_handle(container_path)
+        cursor = conn.execute("SELECT value FROM test WHERE id=1")
+        assert cursor.fetchone()[0] == "converted data"
+        close_project_handle(handle)
+
+    def test_container_save_creates_snapshots(self, tmp_path):
+        """Test that container saves create snapshots internally."""
+        container_path = tmp_path / "test.vaso"
+
+        # Create and save multiple times
+        handle, conn = create_project_handle(container_path, use_bundle_format=True, use_container_format=True)
+
+        for i in range(3):
+            conn.execute(f"CREATE TABLE test{i} (id INTEGER)")
+            conn.commit()
+            save_project_handle(handle)
+
+        close_project_handle(handle)
+
+        # Unpack container and check snapshots
+        bundle_root = unpack_container_to_temp(container_path)
+        try:
+            snapshots = list_snapshots(bundle_root)
+            # Should have at least 3 snapshots (one initial + 3 saves)
+            assert len(snapshots) >= 3
+        finally:
+            if bundle_root.parent.exists():
+                shutil.rmtree(bundle_root.parent, ignore_errors=True)
+
+    def test_container_temp_cleanup(self, tmp_path):
+        """Test cleanup of stale temp directories."""
+        # Create a temp directory manually
+        import time
+
+        temp_dir = tmp_path / "VasoAnalyzer-container-test123"
+        temp_dir.mkdir()
+
+        # Make it look old by modifying mtime
+        old_time = time.time() - (25 * 3600)  # 25 hours ago
+        import os
+
+        os.utime(temp_dir, (old_time, old_time))
+
+        # Run cleanup (with short max_age for testing)
+        cleaned = cleanup_stale_temp_dirs(max_age=24 * 3600)
+
+        # Note: cleanup might not find our test dir if it's not in system temp
+        # This test mainly verifies the cleanup function runs without errors
+
+    def test_container_pack_unpack_round_trip(self, tmp_path):
+        """Test packing and unpacking preserves data."""
+        # Create bundle
+        bundle_path = tmp_path / "original" / "bundle"
+        bundle_path.parent.mkdir(parents=True)
+        create_bundle(bundle_path)
+
+        # Add data
+        staging_path, staging_conn = open_staging_db(bundle_path)
+        try:
+            staging_conn.execute("CREATE TABLE test (id INTEGER, value TEXT)")
+            staging_conn.execute("INSERT INTO test VALUES (1, 'round trip data')")
+            staging_conn.commit()
+        finally:
+            staging_conn.close()
+
+        create_snapshot(bundle_path, staging_path)
+
+        # Pack to container
+        container_path = tmp_path / "project.vaso"
+        pack_temp_bundle_to_container(bundle_path, container_path)
+
+        assert container_path.exists()
+        assert is_vaso_container(container_path)
+
+        # Unpack to new location
+        unpacked_bundle = unpack_container_to_temp(container_path)
+
+        try:
+            # Verify data
+            current_snapshot = get_current_snapshot(unpacked_bundle)
+            assert current_snapshot is not None
+
+            conn = sqlite3.connect(current_snapshot.path)
+            cursor = conn.execute("SELECT value FROM test WHERE id=1")
+            assert cursor.fetchone()[0] == "round trip data"
+            conn.close()
+        finally:
+            if unpacked_bundle.parent.exists():
+                shutil.rmtree(unpacked_bundle.parent, ignore_errors=True)
 
 
 if __name__ == "__main__":

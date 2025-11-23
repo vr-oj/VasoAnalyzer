@@ -117,6 +117,37 @@ class EditAction:
     def last_index(self) -> int:
         return max(self.indices) if self.indices else -1
 
+    def summary(self) -> str:
+        """Return a concise, user-facing description of the edit."""
+
+        channel_label = _channel_label(self.channel)
+        op_labels = {
+            "delete_points": "Delete",
+            "restore_points": "Restore",
+            "connect_across": "Connect",
+        }
+        op_label = op_labels.get(self.op, self.op)
+
+        t0, t1 = self.t_bounds
+        ts = _ensure_utc(self.timestamp)
+        ts_str = ts.strftime("%Y-%m-%d %H:%M:%SZ")
+
+        parts = [
+            ts_str,
+            f"{channel_label} {op_label}",
+            f"{self.count} pts",
+            f"{t0:.3f}–{t1:.3f} s",
+        ]
+
+        method = self.params.get("method")
+        if method:
+            parts.append(f"method={method}")
+        fallback = self.params.get("fallback")
+        if fallback:
+            parts.append(f"fallback={fallback}")
+
+        return " — ".join(parts)
+
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "channel": _channel_label(self.channel),

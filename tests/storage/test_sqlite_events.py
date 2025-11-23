@@ -25,6 +25,20 @@ def test_prepare_event_rows_handles_extra_columns():
     assert first[-1] == '{"Custom": "x"}'
 
 
+def test_prepare_event_rows_parses_hms_strings():
+    df = pd.DataFrame(
+        {
+            "Time": ["00:00:05", "00:01:10"],
+            "Label": ["start", "end"],
+        }
+    )
+    rows = list(events.prepare_event_rows(3, df))
+    assert len(rows) == 2
+    assert rows[0][1] == 5.0
+    # 1 minute 10 seconds -> 70 seconds
+    assert rows[1][1] == 70.0
+
+
 def test_fetch_events_dataframe_roundtrip(tmp_path):
     db_path = tmp_path / "events.db"
     conn = open_db(db_path.as_posix())

@@ -13,7 +13,9 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
-def setup_production_logging(app_name: str = "VasoAnalyzer", console_level: int = logging.WARNING) -> Path:
+def setup_production_logging(
+    app_name: str = "VasoAnalyzer", console_level: int = logging.INFO
+) -> Path:
     """
     Configure production-grade logging with file rotation.
 
@@ -34,32 +36,35 @@ def setup_production_logging(app_name: str = "VasoAnalyzer", console_level: int 
 
     # Configure root logger
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)  # Capture everything, handlers will filter
+    root_logger.setLevel(logging.INFO)
 
     # Remove any existing handlers (in case this is called multiple times)
     root_logger.handlers.clear()
 
     # Create formatters
     detailed_formatter = logging.Formatter(
-        '%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    simple_formatter = logging.Formatter(
-        '%(levelname)-8s | %(name)s | %(message)s'
-    )
+    simple_formatter = logging.Formatter("%(levelname)-8s | %(name)s | %(message)s")
 
-    # Main application log (INFO and above)
+    # Main vasoanalyzer logger captures all package logs
+    vaso_logger = logging.getLogger("vasoanalyzer")
+    vaso_logger.setLevel(logging.DEBUG)
+    vaso_logger.handlers.clear()
+
+    # Main application log (DEBUG and above)
     app_log_path = log_dir / "vasoanalyzer.log"
     app_handler = RotatingFileHandler(
         app_log_path,
         maxBytes=10 * 1024 * 1024,  # 10 MB
         backupCount=5,
-        encoding="utf-8"
+        encoding="utf-8",
     )
-    app_handler.setLevel(logging.INFO)
+    app_handler.setLevel(logging.DEBUG)
     app_handler.setFormatter(detailed_formatter)
-    root_logger.addHandler(app_handler)
+    vaso_logger.addHandler(app_handler)
 
     # Error-only log (easier to scan for problems)
     error_log_path = log_dir / "errors.log"
@@ -67,17 +72,37 @@ def setup_production_logging(app_name: str = "VasoAnalyzer", console_level: int 
         error_log_path,
         maxBytes=5 * 1024 * 1024,  # 5 MB
         backupCount=3,
-        encoding="utf-8"
+        encoding="utf-8",
     )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(error_handler)
 
-    # Console output (configurable level, default WARNING+)
+    # Console output (configurable level, default INFO+)
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(console_level)
     console_handler.setFormatter(simple_formatter)
-    root_logger.addHandler(console_handler)
+    vaso_logger.addHandler(console_handler)
+
+    # Reduce console noise from chatty modules; DEBUG still goes to file
+    noisy_modules = [
+        "vasoanalyzer.storage.project_storage",
+        "vasoanalyzer.storage.bundle_adapter",
+        "vasoanalyzer.storage.snapshots",
+        "vasoanalyzer.storage.container_fs",
+        "vasoanalyzer.storage.sqlite_store",
+        "vasoanalyzer.core.project",
+        "vasoanalyzer.core.file_lock",
+    ]
+    for name in noisy_modules:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+    # Ensure plotting modules emit DEBUG logs (e.g., [RANGE DEBUG] helpers)
+    plot_logger = logging.getLogger("vasoanalyzer.ui.plots")
+    plot_logger.setLevel(logging.DEBUG)
+
+    trace_view_logger = logging.getLogger("vasoanalyzer.ui.trace_view")
+    trace_view_logger.setLevel(logging.DEBUG)
 
     # Log startup message
     log = logging.getLogger(__name__)

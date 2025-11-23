@@ -15,8 +15,22 @@
             <string>VasoAnalyzerIcon.icns</string>
             <key>LSHandlerRank</key>
             <string>Owner</string>
-            <key>LSIsPackage</key>
-            <true/>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>VasoAnalyzer Project Bundle</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>org.vasoanalyzer.vasopack</string>
+            </array>
+            <key>CFBundleTypeIconFile</key>
+            <string>VasoAnalyzerIcon.icns</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
         </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>
@@ -25,17 +39,39 @@
             <key>UTTypeIdentifier</key>
             <string>org.vasoanalyzer.vaso</string>
             <key>UTTypeDescription</key>
-            <string>VasoAnalyzer Project Archive</string>
+            <string>VasoAnalyzer Project</string>
+            <key>UTTypeIconFile</key>
+            <string>VasoAnalyzerIcon</string>
             <key>UTTypeConformsTo</key>
             <array>
-                <string>com.apple.package</string>
-                <string>public.zip-archive</string>
+                <string>public.data</string>
+                <string>public.archive</string>
             </array>
             <key>UTTypeTagSpecification</key>
             <dict>
                 <key>public.filename-extension</key>
                 <array>
                     <string>vaso</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>org.vasoanalyzer.vasopack</string>
+            <key>UTTypeDescription</key>
+            <string>VasoAnalyzer Project Bundle</string>
+            <key>UTTypeIconFile</key>
+            <string>VasoAnalyzerIcon</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.folder</string>
+                <string>com.apple.package</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>vasopack</string>
                 </array>
             </dict>
         </dict>

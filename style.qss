@@ -45,3 +45,56 @@ QMenu {
   background: #ffffff;
   border: 1px solid #ccc;
 }
+
+/* ----- Buttons and dropdowns hover/press feedback ----- */
+QToolButton,
+QPushButton {
+  border-radius: 4px;
+}
+
+QToolButton:hover,
+QPushButton:hover {
+  background-color: #e9f1fb; /* subtle tint */
+  border: 1px solid #b0c4de;
+}
+
+QToolButton:pressed,
+QPushButton:pressed {
+  background-color: #d7e5fb;
+}
+
+QComboBox {
+  border-radius: 4px;
+}
+
+QComboBox:hover {
+  background-color: #e9f1fb;
+  border: 1px solid #b0c4de;
+}
+
+QFrame#ProjectCard {
+  background: #ffffff;
+  border: 1px solid #d7d7d7;
+  border-radius: 12px;
+}
+
+QLabel#ProjectHeaderLabel {
+  font-weight: 600;
+  font-size: 11pt;
+  color: #333333;
+}
+
+QTreeWidget#ProjectTree {
+  background: transparent;
+  border: none;
+  padding: 4px 0 0 0;
+}
+
+QTreeWidget#ProjectTree::item:selected {
+  background: #e0f0ff;
+  color: #000000;
+}
+
+QTreeWidget#ProjectTree::item:hover {
+  background: #f5f5f5;
+}

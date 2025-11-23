@@ -9,11 +9,13 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from utils.config import APP_VERSION
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -42,7 +44,6 @@ class HomePage(QWidget):
         root.addStretch()
 
         self._apply_stylesheet()
-        window._refresh_home_recent()
 
     # ---- layout helpers -------------------------------------------------
     def _build_hero_section(self) -> QFrame:
@@ -68,11 +69,22 @@ class HomePage(QWidget):
         title = QLabel("Welcome to VasoAnalyzer", hero)
         title.setObjectName("HeroTitle")
 
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
+        title_row.addWidget(title)
+
+        badge = QLabel(APP_VERSION, hero)
+        badge.setObjectName("BetaBadgeLabel")
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedHeight(24)
+        badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        badge.setToolTip("Current release")
+        title_row.addWidget(badge, 0, Qt.AlignVCenter)
+        title_row.addStretch(1)
+
         subtitle = QLabel(
-            (
-                "Follow the buttons below to import traces, continue a project, "
-                "or review the welcome guide."
-            ),
+            "Import traces, manage projects, and continue your vessel analyses.",
             hero,
         )
         subtitle.setWordWrap(True)
@@ -81,9 +93,10 @@ class HomePage(QWidget):
         # Cloud storage warning
         cloud_warning = QLabel(
             (
-                "📁 <b>Storage Recommendation:</b> Store active projects on your <b>local drive</b> "
-                "(Documents, Desktop) for best reliability. Cloud storage sync can interrupt database "
-                "writes, potentially causing corruption. Use .vasopack exports for cloud backup and sharing."
+                "<b>Storage recommendation</b><br><br>"
+                "Store active projects on your local drive (Documents, Desktop) for best reliability. "
+                "Cloud storage sync can interrupt database writes, potentially causing corruption. "
+                "Use .vasopack exports for cloud backup and sharing."
             ),
             hero,
         )
@@ -99,7 +112,7 @@ class HomePage(QWidget):
             }}
         """)
 
-        text_column.addWidget(title)
+        text_column.addLayout(title_row)
         text_column.addWidget(subtitle)
         text_column.addWidget(cloud_warning)
         text_column.addLayout(self._build_primary_actions())
@@ -125,15 +138,15 @@ class HomePage(QWidget):
 
         row.addWidget(
             window._make_home_button(
-                "Load trace & events",
-                "folder-open.svg",
-                lambda: window._handle_load_trace(),
+                "Create new project…",
+                "folder-plus.svg",
+                lambda: window.new_project(),
                 primary=True,
             )
         )
         row.addWidget(
             window._make_home_button(
-                "Open Project",
+                "Open project…",
                 "folder-open.svg",
                 lambda: window.open_project_file(),
                 secondary=True,
@@ -148,15 +161,15 @@ class HomePage(QWidget):
 
         row.addWidget(
             window._make_home_button(
-                "Create Project",
-                "folder-plus.svg",
-                lambda: window.new_project(),
+                "Import trace/events file…",
+                "folder-open.svg",
+                lambda: window._handle_load_trace(),
                 secondary=True,
             )
         )
         row.addWidget(
             window._make_home_button(
-                "Welcome guide",
+                "Open welcome guide",
                 "info-circle.svg",
                 lambda: window.show_welcome_guide(modal=False),
                 secondary=True,
@@ -168,6 +181,7 @@ class HomePage(QWidget):
         window = self._window
         card = QFrame(self)
         card.setObjectName("HomeCard")
+        card.setProperty("variant", "sessions")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
@@ -196,6 +210,7 @@ class HomePage(QWidget):
         window = self._window
         card = QFrame(self)
         card.setObjectName("HomeCard")
+        card.setProperty("variant", "projects")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
@@ -224,6 +239,8 @@ class HomePage(QWidget):
         button = QToolButton(self)
         button.setObjectName("HomeClearButton")
         button.setText(text)
+        button.setAutoRaise(True)
+        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(callback)
         return button
@@ -235,7 +252,6 @@ class HomePage(QWidget):
         window_bg: str = CURRENT_THEME["window_bg"]
         hero_bg: str = CURRENT_THEME.get("button_bg", window_bg)
         card_bg: str = CURRENT_THEME.get("table_bg", window_bg)
-        hover_bg: str = CURRENT_THEME.get("button_hover_bg", border_color)
 
         def rgba_from_hex(color: str, alpha: float) -> str:
             color = color.strip()
@@ -255,6 +271,7 @@ class HomePage(QWidget):
         card_title_color = rgba_from_hex(text_color, 0.86)
         placeholder_color = rgba_from_hex(text_color, 0.55)
         muted_action_color = rgba_from_hex(text_color, 0.68)
+        row_hover_color = rgba_from_hex(text_color, 0.08)
 
         self.setStyleSheet(
             window._shared_button_css()
@@ -279,6 +296,14 @@ QLabel#HeroTitle {{
 QLabel#HeroSubtitle {{
     color: {subtitle_color};
 }}
+QLabel#BetaBadgeLabel {{
+    font-size: 12px;
+    font-weight: 600;
+    color: {card_title_color};
+    background: {rgba_from_hex(text_color, 0.08)};
+    border-radius: 12px;
+    padding: 2px 10px;
+}}
 QLabel#CardTitle {{
     font-size: 16px;
     font-weight: 600;
@@ -292,14 +317,20 @@ QToolButton#HomeRemoveButton {{
     background: transparent;
     color: {muted_action_color};
     border: none;
-    padding: 4px 6px;
+    padding: 0 4px;
     font-weight: 500;
 }}
 QToolButton#HomeClearButton:hover,
 QToolButton#HomeRemoveButton:hover {{
     color: {card_title_color};
-    background: {hover_bg};
-    border-radius: 6px;
+    text-decoration: underline;
+}}
+#CloudStorageWarning {{
+    padding-top: 4px;
+    padding-bottom: 4px;
+}}
+QWidget#HomeRecentRow {{
+    border-radius: 10px;
 }}
 """
         )
