@@ -139,6 +139,9 @@ class PyQtGraphPlotHost:
         if track is not None:
             track.set_visible(bool(visible))
 
+        # Reassign bottom X-axis ownership based on updated visibility.
+        self._update_bottom_axis_assignments()
+
     def is_channel_visible(self, channel_kind: str) -> bool:
         """Return visibility flag for a channel kind (defaults to True)."""
 
@@ -314,6 +317,16 @@ class PyQtGraphPlotHost:
 
         plot_items = []
 
+        # Determine which track should own the bottom X-axis.
+        # Prefer the lowest visible track; if none are visible, fall back to the last spec.
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        if visible_specs:
+            bottom_visible_id = visible_specs[-1].track_id
+        else:
+            bottom_visible_id = self._channel_specs[-1].track_id
+
         for idx, spec in enumerate(self._channel_specs):
             track = self._tracks.get(spec.track_id)
             if track is None:
@@ -334,8 +347,8 @@ class PyQtGraphPlotHost:
             plot_item = track.view.get_widget().getPlotItem()
             plot_items.append(plot_item)
 
-            # Configure X-axis visibility: only show labels on bottom track
-            is_bottom_track = idx == len(self._channel_specs) - 1
+            # Configure X-axis visibility: only show labels on the bottom-visible track
+            is_bottom_track = spec.track_id == bottom_visible_id
             self._configure_bottom_axis(plot_item, is_bottom_track=is_bottom_track)
 
             # Add subtle border around each plot's ViewBox for visual separation
@@ -458,6 +471,35 @@ class PyQtGraphPlotHost:
             with contextlib.suppress(AttributeError):
                 bottom_axis.label.hide()
                 bottom_axis.showLabel(False)
+
+    def _update_bottom_axis_assignments(self) -> None:
+        """Reapply bottom X-axis ownership based on current visibility.
+
+        Ensures that the lowest visible channel track owns the X-axis labels.
+        If no tracks are currently visible, falls back to the last spec so that
+        styling stays consistent once a track is shown again.
+        """
+
+        if not self._tracks or not self._channel_specs:
+            return
+
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        if visible_specs:
+            bottom_visible_id = visible_specs[-1].track_id
+        else:
+            bottom_visible_id = self._channel_specs[-1].track_id
+
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            plot_item = track.view.get_widget().getPlotItem()
+            self._configure_bottom_axis(
+                plot_item,
+                is_bottom_track=(spec.track_id == bottom_visible_id),
+            )
 
     def _apply_event_label_options(self) -> None:
         if not self._tracks:

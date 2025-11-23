@@ -100,6 +100,10 @@ class NewFigureComposerWindow(QMainWindow):
         self.config = self._get_default_config()
         self.plot_axes = None
         self._layout_dirty = True
+        # Track Matplotlib view/limit sync state
+        self._view_sync_in_progress = False
+        self._xlim_cid = None
+        self._ylim_cid = None
 
         # Initialize annotation tools
         self.text_tool = None
@@ -245,28 +249,38 @@ class NewFigureComposerWindow(QMainWindow):
         self.plot_axes = self.page_figure.add_axes([left, bottom, fig_width_frac, fig_height_frac])
         self.plot_axes.set_facecolor("white")
 
-        # Visual border around the plot area
-        border = plt.Rectangle(
-            (left, bottom),
-            fig_width_frac,
-            fig_height_frac,
-            transform=self.page_figure.transFigure,
-            fill=False,
-            edgecolor="#888888",
-            linewidth=1,
-            linestyle="--",
-            zorder=10,
-        )
-        self.page_figure.patches.append(border)
-
-        # Dimension labels
-        self._add_dimension_labels(left, bottom, fig_width_frac, fig_height_frac)
-
         # Share axes with renderer and tools
         self.renderer.set_axes(self.plot_axes)
         self.page_figure.plot_axes = self.plot_axes
+
+        # Connect Matplotlib view events (zoom/pan) to our config/state
+        self._connect_axes_view_events()
+
         self._sync_position_controls()
         self._layout_dirty = False
+
+    def _connect_axes_view_events(self) -> None:
+        """Connect Matplotlib view limit events so zoom/pan updates our config.
+
+        Safe to call multiple times; it will disconnect previous handlers.
+        """
+        if self.plot_axes is None:
+            return
+
+        # Disconnect previous callbacks if they exist
+        with contextlib.suppress(Exception):
+            if self._xlim_cid is not None:
+                self.plot_axes.callbacks.disconnect(self._xlim_cid)
+            if self._ylim_cid is not None:
+                self.plot_axes.callbacks.disconnect(self._ylim_cid)
+
+        # Connect new callbacks
+        self._xlim_cid = self.plot_axes.callbacks.connect(
+            "xlim_changed", self._on_view_limits_changed
+        )
+        self._ylim_cid = self.plot_axes.callbacks.connect(
+            "ylim_changed", self._on_view_limits_changed
+        )
 
     def _add_dimension_labels(self, left, bottom, width, height):
         """Add dimension annotations on the page."""
@@ -1004,6 +1018,60 @@ class NewFigureComposerWindow(QMainWindow):
             self.config["y_label"] = "Diameter (μm)"
         self._render()
 
+    def _on_view_limits_changed(self, ax) -> None:
+        """Sync zoom/pan changes from the Matplotlib axes back to config/UI."""
+        if self.plot_axes is None or ax is not self.plot_axes:
+            return
+        if getattr(self, "_view_sync_in_progress", False):
+            return
+
+        # Read current view limits
+        x_min, x_max = self.plot_axes.get_xlim()
+        y_min, y_max = self.plot_axes.get_ylim()
+
+        # Treat this as a user-defined view: disable autoscale and store limits
+        self.config["x_auto"] = False
+        self.config["y_auto"] = False
+        self.config["x_min"] = float(x_min)
+        self.config["x_max"] = float(x_max)
+        self.config["y_min"] = float(y_min)
+        self.config["y_max"] = float(y_max)
+
+        # Update axis controls without triggering another render
+        self._view_sync_in_progress = True
+        try:
+            if hasattr(self, "x_auto_check"):
+                self.x_auto_check.blockSignals(True)
+                self.x_auto_check.setChecked(False)
+                self.x_auto_check.blockSignals(False)
+            if hasattr(self, "y_auto_check"):
+                self.y_auto_check.blockSignals(True)
+                self.y_auto_check.setChecked(False)
+                self.y_auto_check.blockSignals(False)
+
+            if hasattr(self, "x_min_spin"):
+                self.x_min_spin.setEnabled(True)
+                self.x_min_spin.blockSignals(True)
+                self.x_min_spin.setValue(self.config["x_min"])
+                self.x_min_spin.blockSignals(False)
+            if hasattr(self, "x_max_spin"):
+                self.x_max_spin.setEnabled(True)
+                self.x_max_spin.blockSignals(True)
+                self.x_max_spin.setValue(self.config["x_max"])
+                self.x_max_spin.blockSignals(False)
+            if hasattr(self, "y_min_spin"):
+                self.y_min_spin.setEnabled(True)
+                self.y_min_spin.blockSignals(True)
+                self.y_min_spin.setValue(self.config["y_min"])
+                self.y_min_spin.blockSignals(False)
+            if hasattr(self, "y_max_spin"):
+                self.y_max_spin.setEnabled(True)
+                self.y_max_spin.blockSignals(True)
+                self.y_max_spin.setValue(self.config["y_max"])
+                self.y_max_spin.blockSignals(False)
+        finally:
+            self._view_sync_in_progress = False
+
     def _on_axis_changed(self):
         """Handle axis control changes."""
         self.config["x_label"] = self.x_label_edit.text()
@@ -1015,21 +1083,33 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["show_grid"] = self.grid_check.isChecked()
         self.config["show_top_spine"] = self.show_top_spine_check.isChecked()
         self.config["show_right_spine"] = self.show_right_spine_check.isChecked()
-        self._render()
+        self._view_sync_in_progress = True
+        try:
+            self._render()
+        finally:
+            self._view_sync_in_progress = False
 
     def _on_x_auto_toggled(self, checked):
         """Handle X auto toggle."""
         self.config["x_auto"] = checked
         self.x_min_spin.setEnabled(not checked)
         self.x_max_spin.setEnabled(not checked)
-        self._render()
+        self._view_sync_in_progress = True
+        try:
+            self._render()
+        finally:
+            self._view_sync_in_progress = False
 
     def _on_y_auto_toggled(self, checked):
         """Handle Y auto toggle."""
         self.config["y_auto"] = checked
         self.y_min_spin.setEnabled(not checked)
         self.y_max_spin.setEnabled(not checked)
-        self._render()
+        self._view_sync_in_progress = True
+        try:
+            self._render()
+        finally:
+            self._view_sync_in_progress = False
 
     def _on_style_changed(self):
         """Handle style control changes."""
@@ -1061,19 +1141,24 @@ class NewFigureComposerWindow(QMainWindow):
 
     def _render(self):
         """Render with current settings."""
-        if self._layout_dirty or self.plot_axes is None:
-            self._apply_page_layout()
+        prev_sync_state = self._view_sync_in_progress
+        self._view_sync_in_progress = True
+        try:
+            if self._layout_dirty or self.plot_axes is None:
+                self._apply_page_layout()
 
-        self.renderer.render(
-            trace_model=self.trace_model,
-            config=self.config,
-            event_times=self.event_times,
-            event_labels=self.event_labels,
-            event_colors=self.event_colors,
-            axes=self.plot_axes,
-        )
-        self.canvas.draw_idle()
-        self._update_info_bar()
+            self.renderer.render(
+                trace_model=self.trace_model,
+                config=self.config,
+                event_times=self.event_times,
+                event_labels=self.event_labels,
+                event_colors=self.event_colors,
+                axes=self.plot_axes,
+            )
+            self.canvas.draw_idle()
+            self._update_info_bar()
+        finally:
+            self._view_sync_in_progress = prev_sync_state
 
     def _export(self, format_type: str):
         """Export with EXACT dimensions in specified format.
