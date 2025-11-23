@@ -22,8 +22,8 @@ from matplotlib.backends.backend_qt5agg import (
     NavigationToolbar2QT,
 )
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -91,6 +91,9 @@ class NewFigureComposerWindow(QMainWindow):
         )
         self.canvas = FigureCanvasQTAgg(self.page_figure)
         self.canvas.setStyleSheet("background-color: #ffffff;")  # White canvas
+        self._canvas_release_cid = self.canvas.mpl_connect(
+            "button_release_event", self._on_canvas_mouse_release
+        )
         self.renderer = SimpleRenderer(self.page_figure)
 
         # Alias for any code that still references self.figure
@@ -100,8 +103,6 @@ class NewFigureComposerWindow(QMainWindow):
         self.config = self._get_default_config()
         self.plot_axes = None
         self._layout_dirty = True
-        # Track Matplotlib view/limit sync state
-        self._view_sync_in_progress = False
         self._xlim_cid = None
         self._ylim_cid = None
 
@@ -130,12 +131,12 @@ class NewFigureComposerWindow(QMainWindow):
         """Get default configuration."""
         return {
             # Figure size on the page
-            "width_mm": 170,
-            "height_mm": 42,
-            "dpi": 300,
+            "width_mm": 150,
+            "height_mm": 75,
+            "dpi": 600,
             # Position on page (fractions of page width/height)
             "fig_left": 0.15,
-            "fig_top": 0.70,
+            "fig_top": 0.63,
             # Data
             "trace": "inner",  # 'inner', 'outer', 'both', 'avg_pressure', 'set_pressure'
             # Axes
@@ -149,18 +150,24 @@ class NewFigureComposerWindow(QMainWindow):
             "y_max": 200.0,
             "show_grid": True,
             # Style
-            "line_width": 1.5,
-            "inner_color": "#0000FF",
+            "line_width": 1.0,
+            "inner_color": "#000000",
             "outer_color": "#FF0000",
             "pressure_color": "#00AA00",
             # Events
             "show_events": True,
             "event_style": "lines",  # 'lines', 'markers', 'both'
             "event_label_pos": "top",  # 'top', 'bottom', 'none'
+            "event_font_size": 10,
+            "event_visible_indices": None,  # None = all
             # Fonts
             "axis_label_size": 12,
             "tick_label_size": 10,
-            "font_family": "sans-serif",
+            "font_family": "Arial",
+            "axis_label_bold": False,
+            "axis_label_italic": False,
+            "tick_label_bold": False,
+            "tick_label_italic": False,
             # Time
             "time_unit": "Seconds",  # 'Seconds', 'Minutes', 'Hours'
             "time_divisor": 1.0,  # Conversion factor
@@ -320,7 +327,8 @@ class NewFigureComposerWindow(QMainWindow):
 
     def _apply_stylesheet(self):
         """Apply stylesheet for better control panel visibility."""
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QGroupBox {
                 font-weight: bold;
                 border: 1px solid #cccccc;
@@ -351,7 +359,8 @@ class NewFigureComposerWindow(QMainWindow):
             QPushButton {
                 min-height: 25px;
             }
-        """)
+        """
+        )
 
     def _setup_shortcuts(self):
         """Setup keyboard shortcuts."""
@@ -418,12 +427,14 @@ class NewFigureComposerWindow(QMainWindow):
         self.canvas_scroll.setWidget(self.canvas)
         self.canvas_scroll.setWidgetResizable(False)  # Keep canvas at its natural size
         self.canvas_scroll.setAlignment(Qt.AlignCenter)
-        self.canvas_scroll.setStyleSheet("""
+        self.canvas_scroll.setStyleSheet(
+            """
             QScrollArea {
                 background-color: #e8e8e8;
                 border: 1px solid #cccccc;
             }
-        """)
+        """
+        )
         canvas_layout.addWidget(self.canvas_scroll)
 
         # Info bar showing dimensions
@@ -650,6 +661,74 @@ class NewFigureComposerWindow(QMainWindow):
         group.setLayout(layout)
         return group
 
+    def _populate_event_filter(self):
+        """Populate the event selector with checkable items."""
+        if not hasattr(self, "event_filter_model"):
+            return
+
+        self.event_filter_model.blockSignals(True)
+        self.event_filter_model.clear()
+
+        count = len(self.event_times)
+        labels = (
+            self.event_labels
+            if self.event_labels and len(self.event_labels) == count
+            else [f"E{i+1}" for i in range(count)]
+        )
+        selected = self.config.get("event_visible_indices")
+        selected_set = None if selected is None else set(selected)
+
+        for idx, label in enumerate(labels):
+            item = QStandardItem(f"{idx + 1}: {label}")
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+            checked = Qt.Checked if selected_set is None or idx in selected_set else Qt.Unchecked
+            item.setData(checked, Qt.CheckStateRole)
+            self.event_filter_model.appendRow(item)
+
+        self.event_filter_model.blockSignals(False)
+        self.event_filter_combo.setEnabled(count > 0)
+        self._update_event_filter_summary()
+
+    def _update_event_filter_summary(self):
+        """Update the summary text for the event selector."""
+        if not hasattr(self, "event_filter_combo") or not self.event_filter_combo.isEditable():
+            return
+
+        total = self.event_filter_model.rowCount()
+        if total == 0:
+            self.event_filter_combo.lineEdit().setText("No events")
+            return
+
+        checked = 0
+        for i in range(total):
+            item = self.event_filter_model.item(i)
+            if item.checkState() == Qt.Checked:
+                checked += 1
+
+        summary = f"All events ({total})" if checked == total else f"{checked}/{total} events"
+
+        self.event_filter_combo.lineEdit().setText(summary)
+
+    def _on_event_filter_changed(self, item):
+        """Handle selection changes in the event filter dropdown."""
+        if item is None:
+            return
+
+        total = self.event_filter_model.rowCount()
+        selected = []
+        for i in range(total):
+            it = self.event_filter_model.item(i)
+            if it.checkState() == Qt.Checked:
+                selected.append(i)
+
+        if len(selected) == total:
+            self.config["event_visible_indices"] = None  # all
+        else:
+            self.config["event_visible_indices"] = selected
+
+        self._update_event_filter_summary()
+        self._render()
+
     def _create_size_group(self) -> QGroupBox:
         """Create figure size controls with better layout."""
         group = QGroupBox("Figure Size")
@@ -821,29 +900,32 @@ class NewFigureComposerWindow(QMainWindow):
         self.line_width_spin.setValue(self.config["line_width"])
         self.line_width_spin.valueChanged.connect(self._on_style_changed)
 
-        # Color buttons
-        self.inner_color_btn = QPushButton("Inner Color")
+        # Color buttons (labels outside the swatch; smaller swatches)
+        self.inner_color_btn = QPushButton()
+        self.inner_color_btn.setFixedSize(80, 26)
         self.inner_color_btn.setStyleSheet(f"background-color: {self.config['inner_color']}")
         self.inner_color_btn.clicked.connect(
             lambda: self._pick_color("inner_color", self.inner_color_btn)
         )
 
-        self.outer_color_btn = QPushButton("Outer Color")
+        self.outer_color_btn = QPushButton()
+        self.outer_color_btn.setFixedSize(80, 26)
         self.outer_color_btn.setStyleSheet(f"background-color: {self.config['outer_color']}")
         self.outer_color_btn.clicked.connect(
             lambda: self._pick_color("outer_color", self.outer_color_btn)
         )
 
-        self.pressure_color_btn = QPushButton("Pressure Color")
+        self.pressure_color_btn = QPushButton()
+        self.pressure_color_btn.setFixedSize(80, 26)
         self.pressure_color_btn.setStyleSheet(f"background-color: {self.config['pressure_color']}")
         self.pressure_color_btn.clicked.connect(
             lambda: self._pick_color("pressure_color", self.pressure_color_btn)
         )
 
         layout.addRow("Line Width:", self.line_width_spin)
-        layout.addRow(self.inner_color_btn)
-        layout.addRow(self.outer_color_btn)
-        layout.addRow(self.pressure_color_btn)
+        layout.addRow("Inner Color:", self.inner_color_btn)
+        layout.addRow("Outer Color:", self.outer_color_btn)
+        layout.addRow("Pressure Color:", self.pressure_color_btn)
 
         return group
 
@@ -868,14 +950,28 @@ class NewFigureComposerWindow(QMainWindow):
         self.event_label_combo.addItem("None", "none")
         self.event_label_combo.currentIndexChanged.connect(self._on_events_changed)
 
+        self.event_font_size_spin = QSpinBox()
+        self.event_font_size_spin.setRange(6, 24)
+        self.event_font_size_spin.setValue(self.config.get("event_font_size", 10))
+        self.event_font_size_spin.valueChanged.connect(self._on_events_changed)
+
+        # Event selection dropdown with checkable items
+        self.event_filter_model = QStandardItemModel()
+        self.event_filter_model.itemChanged.connect(self._on_event_filter_changed)
+
+        self.event_filter_combo = QComboBox()
+        self.event_filter_combo.setModel(self.event_filter_model)
+        self.event_filter_combo.setEditable(True)
+        self.event_filter_combo.lineEdit().setReadOnly(True)
+        self.event_filter_combo.lineEdit().setAlignment(Qt.AlignLeft)
+        self.event_filter_combo.setInsertPolicy(QComboBox.NoInsert)
+        self._populate_event_filter()
+
         layout.addRow(self.show_events_check)
         layout.addRow("Style:", self.event_style_combo)
         layout.addRow("Labels:", self.event_label_combo)
-
-        # Show event count
-        event_count = len(self.event_times)
-        count_label = QLabel(f"{event_count} events available")
-        layout.addRow(count_label)
+        layout.addRow("Font Size:", self.event_font_size_spin)
+        layout.addRow("Events:", self.event_filter_combo)
 
         return group
 
@@ -898,8 +994,42 @@ class NewFigureComposerWindow(QMainWindow):
         self.font_combo.setCurrentFont(QFont(self.config["font_family"]))
         self.font_combo.currentFontChanged.connect(self._on_font_changed)
 
-        layout.addRow("Axis Labels:", self.axis_label_size_spin)
-        layout.addRow("Tick Labels:", self.tick_label_size_spin)
+        self.axis_label_bold_check = QCheckBox("Bold")
+        self.axis_label_bold_check.setChecked(self.config.get("axis_label_bold", False))
+        self.axis_label_bold_check.toggled.connect(self._on_font_changed)
+
+        self.axis_label_italic_check = QCheckBox("Italic")
+        self.axis_label_italic_check.setChecked(self.config.get("axis_label_italic", False))
+        self.axis_label_italic_check.toggled.connect(self._on_font_changed)
+
+        self.tick_label_bold_check = QCheckBox("Bold")
+        self.tick_label_bold_check.setChecked(self.config.get("tick_label_bold", False))
+        self.tick_label_bold_check.toggled.connect(self._on_font_changed)
+
+        self.tick_label_italic_check = QCheckBox("Italic")
+        self.tick_label_italic_check.setChecked(self.config.get("tick_label_italic", False))
+        self.tick_label_italic_check.toggled.connect(self._on_font_changed)
+
+        # Inline bold/italic controls for axis labels
+        axis_label_row = QWidget()
+        axis_label_layout = QHBoxLayout(axis_label_row)
+        axis_label_layout.setContentsMargins(0, 0, 0, 0)
+        axis_label_layout.addWidget(self.axis_label_size_spin)
+        axis_label_layout.addWidget(self.axis_label_bold_check)
+        axis_label_layout.addWidget(self.axis_label_italic_check)
+        axis_label_layout.addStretch()
+
+        # Inline bold/italic controls for tick labels
+        tick_label_row = QWidget()
+        tick_label_layout = QHBoxLayout(tick_label_row)
+        tick_label_layout.setContentsMargins(0, 0, 0, 0)
+        tick_label_layout.addWidget(self.tick_label_size_spin)
+        tick_label_layout.addWidget(self.tick_label_bold_check)
+        tick_label_layout.addWidget(self.tick_label_italic_check)
+        tick_label_layout.addStretch()
+
+        layout.addRow("Axis Labels:", axis_label_row)
+        layout.addRow("Tick Labels:", tick_label_row)
         layout.addRow("Font Family:", self.font_combo)
 
         return group
@@ -1019,17 +1149,23 @@ class NewFigureComposerWindow(QMainWindow):
         self._render()
 
     def _on_view_limits_changed(self, ax) -> None:
-        """Sync zoom/pan changes from the Matplotlib axes back to config/UI."""
-        if self.plot_axes is None or ax is not self.plot_axes:
+        """Sync zoom/pan changes from the Matplotlib axes back to config/UI.
+
+        Whenever the Matplotlib toolbar changes the view (zoom/pan), we treat
+        that as a user-defined window and copy the current limits into the
+        composer config. This also turns off autoscale and updates the axis
+        controls to match.
+        """
+        if self.plot_axes is None:
             return
-        if getattr(self, "_view_sync_in_progress", False):
+        if ax is not None and ax is not self.plot_axes:
             return
 
-        # Read current view limits
+        # Read current view limits from the plot axes
         x_min, x_max = self.plot_axes.get_xlim()
         y_min, y_max = self.plot_axes.get_ylim()
 
-        # Treat this as a user-defined view: disable autoscale and store limits
+        # Store limits in config and disable autoscale
         self.config["x_auto"] = False
         self.config["y_auto"] = False
         self.config["x_min"] = float(x_min)
@@ -1037,40 +1173,36 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["y_min"] = float(y_min)
         self.config["y_max"] = float(y_max)
 
-        # Update axis controls without triggering another render
-        self._view_sync_in_progress = True
-        try:
-            if hasattr(self, "x_auto_check"):
-                self.x_auto_check.blockSignals(True)
-                self.x_auto_check.setChecked(False)
-                self.x_auto_check.blockSignals(False)
-            if hasattr(self, "y_auto_check"):
-                self.y_auto_check.blockSignals(True)
-                self.y_auto_check.setChecked(False)
-                self.y_auto_check.blockSignals(False)
+        # Update axis controls without emitting valueChanged/toggled signals
+        if hasattr(self, "x_auto_check"):
+            self.x_auto_check.blockSignals(True)
+            self.x_auto_check.setChecked(False)
+            self.x_auto_check.blockSignals(False)
+        if hasattr(self, "y_auto_check"):
+            self.y_auto_check.blockSignals(True)
+            self.y_auto_check.setChecked(False)
+            self.y_auto_check.blockSignals(False)
 
-            if hasattr(self, "x_min_spin"):
-                self.x_min_spin.setEnabled(True)
-                self.x_min_spin.blockSignals(True)
-                self.x_min_spin.setValue(self.config["x_min"])
-                self.x_min_spin.blockSignals(False)
-            if hasattr(self, "x_max_spin"):
-                self.x_max_spin.setEnabled(True)
-                self.x_max_spin.blockSignals(True)
-                self.x_max_spin.setValue(self.config["x_max"])
-                self.x_max_spin.blockSignals(False)
-            if hasattr(self, "y_min_spin"):
-                self.y_min_spin.setEnabled(True)
-                self.y_min_spin.blockSignals(True)
-                self.y_min_spin.setValue(self.config["y_min"])
-                self.y_min_spin.blockSignals(False)
-            if hasattr(self, "y_max_spin"):
-                self.y_max_spin.setEnabled(True)
-                self.y_max_spin.blockSignals(True)
-                self.y_max_spin.setValue(self.config["y_max"])
-                self.y_max_spin.blockSignals(False)
-        finally:
-            self._view_sync_in_progress = False
+        if hasattr(self, "x_min_spin"):
+            self.x_min_spin.setEnabled(True)
+            self.x_min_spin.blockSignals(True)
+            self.x_min_spin.setValue(self.config["x_min"])
+            self.x_min_spin.blockSignals(False)
+        if hasattr(self, "x_max_spin"):
+            self.x_max_spin.setEnabled(True)
+            self.x_max_spin.blockSignals(True)
+            self.x_max_spin.setValue(self.config["x_max"])
+            self.x_max_spin.blockSignals(False)
+        if hasattr(self, "y_min_spin"):
+            self.y_min_spin.setEnabled(True)
+            self.y_min_spin.blockSignals(True)
+            self.y_min_spin.setValue(self.config["y_min"])
+            self.y_min_spin.blockSignals(False)
+        if hasattr(self, "y_max_spin"):
+            self.y_max_spin.setEnabled(True)
+            self.y_max_spin.blockSignals(True)
+            self.y_max_spin.setValue(self.config["y_max"])
+            self.y_max_spin.blockSignals(False)
 
     def _on_axis_changed(self):
         """Handle axis control changes."""
@@ -1083,33 +1215,44 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["show_grid"] = self.grid_check.isChecked()
         self.config["show_top_spine"] = self.show_top_spine_check.isChecked()
         self.config["show_right_spine"] = self.show_right_spine_check.isChecked()
-        self._view_sync_in_progress = True
-        try:
-            self._render()
-        finally:
-            self._view_sync_in_progress = False
+        self._render()
 
     def _on_x_auto_toggled(self, checked):
         """Handle X auto toggle."""
         self.config["x_auto"] = checked
         self.x_min_spin.setEnabled(not checked)
         self.x_max_spin.setEnabled(not checked)
-        self._view_sync_in_progress = True
-        try:
-            self._render()
-        finally:
-            self._view_sync_in_progress = False
+        self._render()
 
     def _on_y_auto_toggled(self, checked):
         """Handle Y auto toggle."""
         self.config["y_auto"] = checked
         self.y_min_spin.setEnabled(not checked)
         self.y_max_spin.setEnabled(not checked)
-        self._view_sync_in_progress = True
-        try:
-            self._render()
-        finally:
-            self._view_sync_in_progress = False
+        self._render()
+
+    def _on_canvas_mouse_release(self, event):
+        """After zoom/pan completes, sync the current view into config/UI."""
+        if event.inaxes is self.plot_axes and self._nav_mode_active():
+            # Defer to after Matplotlib applies the new limits
+            QTimer.singleShot(0, lambda: self._on_view_limits_changed(self.plot_axes))
+
+    def _nav_mode_active(self) -> bool:
+        """Return True if the Matplotlib toolbar is in zoom or pan mode."""
+        toolbar = getattr(self, "nav_toolbar", None)
+        if toolbar is None:
+            return False
+
+        active = getattr(toolbar, "_active", None)
+        if active in ("ZOOM", "PAN"):
+            return True
+
+        # Fallback: check checked actions by text label
+        for action in toolbar.actions():
+            if action.text() in ["Zoom", "Pan"] and action.isChecked():
+                return True
+
+        return False
 
     def _on_style_changed(self):
         """Handle style control changes."""
@@ -1130,6 +1273,7 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["show_events"] = self.show_events_check.isChecked()
         self.config["event_style"] = self.event_style_combo.currentData()
         self.config["event_label_pos"] = self.event_label_combo.currentData()
+        self.config["event_font_size"] = self.event_font_size_spin.value()
         self._render()
 
     def _on_font_changed(self):
@@ -1137,28 +1281,27 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["axis_label_size"] = self.axis_label_size_spin.value()
         self.config["tick_label_size"] = self.tick_label_size_spin.value()
         self.config["font_family"] = self.font_combo.currentFont().family()
+        self.config["axis_label_bold"] = self.axis_label_bold_check.isChecked()
+        self.config["axis_label_italic"] = self.axis_label_italic_check.isChecked()
+        self.config["tick_label_bold"] = self.tick_label_bold_check.isChecked()
+        self.config["tick_label_italic"] = self.tick_label_italic_check.isChecked()
         self._render()
 
     def _render(self):
         """Render with current settings."""
-        prev_sync_state = self._view_sync_in_progress
-        self._view_sync_in_progress = True
-        try:
-            if self._layout_dirty or self.plot_axes is None:
-                self._apply_page_layout()
+        if self._layout_dirty or self.plot_axes is None:
+            self._apply_page_layout()
 
-            self.renderer.render(
-                trace_model=self.trace_model,
-                config=self.config,
-                event_times=self.event_times,
-                event_labels=self.event_labels,
-                event_colors=self.event_colors,
-                axes=self.plot_axes,
-            )
-            self.canvas.draw_idle()
-            self._update_info_bar()
-        finally:
-            self._view_sync_in_progress = prev_sync_state
+        self.renderer.render(
+            trace_model=self.trace_model,
+            config=self.config,
+            event_times=self.event_times,
+            event_labels=self.event_labels,
+            event_colors=self.event_colors,
+            axes=self.plot_axes,
+        )
+        self.canvas.draw_idle()
+        self._update_info_bar()
 
     def _export(self, format_type: str):
         """Export with EXACT dimensions in specified format.
@@ -1244,6 +1387,16 @@ class NewFigureComposerWindow(QMainWindow):
             # Clean up export figure
             plt.close(export_fig)
 
+    def _set_tick_label_style(self, ax, config: dict[str, Any]) -> None:
+        """Apply tick label weight/style/family to the given axes."""
+        weight = "bold" if config.get("tick_label_bold") else "normal"
+        style = "italic" if config.get("tick_label_italic") else "normal"
+        family = config.get("font_family", "Arial")
+        for label in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
+            label.set_fontweight(weight)
+            label.set_fontstyle(style)
+            label.set_fontfamily(family)
+
     def _copy_plot_to_axes(self, source_ax, target_ax):
         """Copy the visible plot (lines, labels, limits) to a new axes."""
         if source_ax is None or target_ax is None:
@@ -1300,12 +1453,14 @@ class NewFigureComposerWindow(QMainWindow):
             )
 
         # Axis labels and limits
-        target_ax.set_xlabel(
-            source_ax.get_xlabel(), fontsize=self.config.get("axis_label_size", 12)
-        )
-        target_ax.set_ylabel(
-            source_ax.get_ylabel(), fontsize=self.config.get("axis_label_size", 12)
-        )
+        axis_label_kwargs = {
+            "fontsize": self.config.get("axis_label_size", 12),
+            "fontweight": "bold" if self.config.get("axis_label_bold") else "normal",
+            "fontstyle": "italic" if self.config.get("axis_label_italic") else "normal",
+            "fontfamily": self.config.get("font_family", "Arial"),
+        }
+        target_ax.set_xlabel(source_ax.get_xlabel(), **axis_label_kwargs)
+        target_ax.set_ylabel(source_ax.get_ylabel(), **axis_label_kwargs)
         target_ax.set_xlim(source_ax.get_xlim())
         target_ax.set_ylim(source_ax.get_ylim())
         target_ax.set_xscale(source_ax.get_xscale())
@@ -1314,6 +1469,7 @@ class NewFigureComposerWindow(QMainWindow):
         # Grid, ticks, and spines
         target_ax.grid(self.config.get("show_grid", True), alpha=0.3)
         target_ax.tick_params(labelsize=self.config.get("tick_label_size", 10))
+        self._set_tick_label_style(target_ax, self.config)
         target_ax.spines["top"].set_visible(self.config.get("show_top_spine", False))
         target_ax.spines["right"].set_visible(self.config.get("show_right_spine", False))
         target_ax.spines["left"].set_visible(True)
@@ -1479,13 +1635,19 @@ class SimpleRenderer:
             )
 
         # Apply axis settings
+        axis_label_kwargs = {
+            "fontsize": config.get("axis_label_size", 12),
+            "fontweight": "bold" if config.get("axis_label_bold") else "normal",
+            "fontstyle": "italic" if config.get("axis_label_italic") else "normal",
+            "fontfamily": config.get("font_family", "Arial"),
+        }
         ax.set_xlabel(
             config.get("x_label", "Time (min)"),
-            fontsize=config.get("axis_label_size", 12),
+            **axis_label_kwargs,
         )
         ax.set_ylabel(
             config.get("y_label", "Diameter (μm)"),
-            fontsize=config.get("axis_label_size", 12),
+            **axis_label_kwargs,
         )
 
         # Set axis limits
@@ -1494,11 +1656,15 @@ class SimpleRenderer:
         if not config.get("y_auto", True):
             ax.set_ylim(config.get("y_min", 0), config.get("y_max", 200))
 
-        # Grid
-        ax.grid(config.get("show_grid", True), alpha=0.3)
+        # Grid - explicitly toggle to ensure state matches checkbox
+        show_grid = config.get("show_grid", True)
+        ax.grid(False)
+        if show_grid:
+            ax.grid(True, which="both", axis="both", alpha=0.3)
 
         # Tick label size
         ax.tick_params(labelsize=config.get("tick_label_size", 10))
+        self._set_tick_label_style(ax, config)
 
         # Spine visibility (publication style - hide top/right by default)
         ax.spines["top"].set_visible(config.get("show_top_spine", False))
@@ -1533,11 +1699,18 @@ class SimpleRenderer:
             i for i, t in enumerate(event_times_converted) if xlim[0] <= t <= xlim[1]
         ]
 
+        # Apply manual selection filter
+        selected_indices = config.get("event_visible_indices")
+        if selected_indices is not None:
+            selected_set = set(selected_indices)
+            visible_indices = [i for i in visible_indices if i in selected_set]
+
         if not visible_indices:
             return  # No events in visible range
 
         event_style = config.get("event_style", "lines")
         label_pos = config.get("event_label_pos", "top")
+        event_font_size = config.get("event_font_size", config.get("tick_label_size", 10))
 
         # Default colors if not provided
         if event_colors is None or len(event_colors) == 0:
@@ -1552,25 +1725,55 @@ class SimpleRenderer:
             for i in visible_indices:
                 time = event_times_converted[i]
                 color = event_colors[i]
-                ax.axvline(time, color=color, linestyle="--", linewidth=1, alpha=0.7, clip_on=True)
+                ax.axvline(
+                    time,
+                    color=color,
+                    linestyle="--",
+                    linewidth=1,
+                    alpha=0.7,
+                    clip_on=True,
+                )
 
         # Draw markers if needed
         if event_style in ["markers", "both"]:
             ylim = ax.get_ylim()
-            y_marker = ylim[0] + (ylim[1] - ylim[0]) * 0.05  # 5% from bottom
+            span = ylim[1] - ylim[0]
+            y_offset = span * 0.02  # nudge markers a bit above the trace point
+            primary_line = None
+            for line in ax.get_lines():
+                xdata = line.get_xdata()
+                ydata = line.get_ydata()
+                if len(xdata) > 0 and len(ydata) == len(xdata):
+                    primary_line = line
+                    break
+
             for i in visible_indices:
                 time = event_times_converted[i]
                 color = event_colors[i]
+                y_marker = None
+                if primary_line is not None:
+                    xdata = np.asarray(primary_line.get_xdata())
+                    ydata = np.asarray(primary_line.get_ydata())
+                    if xdata.size > 0:
+                        idx = int(np.argmin(np.abs(xdata - time)))
+                        if 0 <= idx < ydata.size:
+                            y_marker = float(ydata[idx]) + y_offset
+                if y_marker is None:
+                    y_marker = ylim[0] + span * 0.05  # fallback near bottom
+
                 ax.plot(time, y_marker, "v", color=color, markersize=8, clip_on=True)
 
         # Draw labels if needed
         if label_pos != "none":
             ylim = ax.get_ylim()
+            span = ylim[1] - ylim[0]
+            pix_offset = 5.0 / max(ax.bbox.height, 1.0)  # convert ~5px to data fraction
+            data_offset = span * pix_offset
             if label_pos == "top":
-                y_text = ylim[1] - (ylim[1] - ylim[0]) * 0.02  # 2% from top
+                y_text = ylim[1] - data_offset  # a bit below the top limit
                 va = "top"
             else:  # bottom
-                y_text = ylim[0] + (ylim[1] - ylim[0]) * 0.02  # 2% from bottom
+                y_text = ylim[0] + data_offset  # a bit above the bottom limit
                 va = "bottom"
 
             for i in visible_indices:
@@ -1584,10 +1787,20 @@ class SimpleRenderer:
                     rotation=90,
                     ha="right",
                     va=va,
-                    fontsize=config.get("tick_label_size", 10),
+                    fontsize=event_font_size,
                     color=color,
                     clip_on=True,  # Keep text within plot area
                 )
+
+    def _set_tick_label_style(self, ax, config: dict[str, Any]) -> None:
+        """Apply tick label weight/style/family to the given axes."""
+        weight = "bold" if config.get("tick_label_bold") else "normal"
+        style = "italic" if config.get("tick_label_italic") else "normal"
+        family = config.get("font_family", "Arial")
+        for label in list(ax.get_xticklabels()) + list(ax.get_yticklabels()):
+            label.set_fontweight(weight)
+            label.set_fontstyle(style)
+            label.set_fontfamily(family)
 
 
 # ============================================================================
