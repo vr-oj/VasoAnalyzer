@@ -121,6 +121,7 @@ from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
 from vasoanalyzer.ui.figure_composer import FigureComposerWindow
+from vasoanalyzer.ui.figure_composer_new import NewFigureComposerWindow
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
@@ -3728,10 +3729,15 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
-        self.action_figure_composer = QAction("Figure Composer…", self)
+        self.action_figure_composer = QAction("Figure Composer (Legacy)…", self)
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
         self.action_figure_composer.triggered.connect(self.open_figure_composer)
         tools_menu.addAction(self.action_figure_composer)
+
+        self.action_new_composer = QAction("Figure Composer (New)…", self)
+        self.action_new_composer.setShortcut("Ctrl+Shift+N")
+        self.action_new_composer.triggered.connect(self.open_new_figure_composer)
+        tools_menu.addAction(self.action_new_composer)
 
         tools_menu.addSeparator()
 
@@ -9675,6 +9681,25 @@ QPushButton[isGhost="true"]:hover {{
         self.figure_composer.show()
         self.figure_composer.raise_()
         self.figure_composer.activateWindow()
+
+    def open_new_figure_composer(self):
+        """Launch the new Figure Composer window."""
+        # Check if trace is loaded
+        if self.trace_model is None:
+            from PyQt5.QtWidgets import QMessageBox
+
+            QMessageBox.information(
+                self,
+                "No Trace Loaded",
+                "Please load a trace file before opening Figure Composer.",
+            )
+            return
+
+        # Create and show new composer
+        new_composer = NewFigureComposerWindow(trace_model=self.trace_model, parent=self)
+        new_composer.show()
+        new_composer.raise_()
+        new_composer.activateWindow()
 
     def _on_figure_composer_preset_saved(self, preset):
         """Handle preset save from Figure Composer."""
