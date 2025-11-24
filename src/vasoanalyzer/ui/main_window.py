@@ -726,7 +726,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.itemClicked.connect(self.on_tree_item_clicked)
         self.project_tree.itemChanged.connect(self.on_tree_item_changed)
         self.project_tree.itemSelectionChanged.connect(self.on_tree_selection_changed)
-        # Single-click opens a sample; double-click is reserved for editing
+        self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
+        log.info("Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked")
+        # Single-click opens a sample; double-click is reserved for editing or opening figures
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_tree.customContextMenuRequested.connect(self.show_project_context_menu)
         self.project_tree.setAlternatingRowColors(True)
@@ -1693,9 +1695,23 @@ class VasoAnalyzerApp(QMainWindow):
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
                 exp_item.addChild(item)
+
+                # Check for NEW figure composer figures (figure_configs)
+                has_new_figures = s.figure_configs and len(s.figure_configs) > 0
+                log.info(
+                    f"Checking new figures for sample '{s.name}': figure_configs={s.figure_configs}"
+                )
+
+                # Check for OLD figure composer figures (slides)
                 slides = self._get_sample_figure_slides(s, create=False)
-                if slides:
-                    figures_root = QTreeWidgetItem(["Figures"])
+                has_old_figures = slides and len(slides) > 0
+
+                # If sample has either type of figure, create Figures folder
+                if has_new_figures or has_old_figures:
+                    log.info(
+                        f"Sample '{s.name}' has figures: new={has_new_figures}, old={has_old_figures}"
+                    )
+                    figures_root = QTreeWidgetItem(["📊 Figures"])
                     figures_root.setData(
                         0,
                         Qt.UserRole,
@@ -1703,26 +1719,48 @@ class VasoAnalyzerApp(QMainWindow):
                     )
                     figures_root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
                     item.addChild(figures_root)
-                    for idx, slide in enumerate(slides, start=1):
-                        slide_name = slide.get("name") or f"Figure {idx}"
-                        timestamp = slide.get("updated_at") or slide.get("created_at")
-                        slide_label = f"{slide_name} ({timestamp})" if timestamp else slide_name
-                        slide_item = QTreeWidgetItem([slide_label])
-                        slide_item.setData(
-                            0,
-                            Qt.UserRole,
-                            {
-                                "type": "figure_slide",
-                                "sample": s,
-                                "experiment": exp,
-                                "slide": slide,
-                            },
-                        )
-                        slide_item.setIcon(
-                            0,
-                            self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
-                        )
-                        figures_root.addChild(slide_item)
+
+                    # Add NEW figure composer figures
+                    if has_new_figures:
+                        log.info(f"Adding {len(s.figure_configs)} new figure(s) to tree")
+                        for fig_id, fig_data in s.figure_configs.items():
+                            fig_name = fig_data.get("figure_name", fig_id)
+                            log.info(f"Adding new figure: {fig_name} (ID: {fig_id})")
+                            fig_item = QTreeWidgetItem([f"{fig_name} [New]"])
+                            fig_item.setData(0, Qt.UserRole, ("figure", s, fig_id, fig_data))
+                            # Make figure items NOT editable so double-click works
+                            fig_item.setFlags(fig_item.flags() & ~Qt.ItemIsEditable)
+                            fig_item.setIcon(
+                                0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+                            )
+                            fig_item.setToolTip(
+                                0,
+                                f"New Figure Composer\nCreated: {fig_data.get('metadata', {}).get('created', 'Unknown')}",
+                            )
+                            figures_root.addChild(fig_item)
+
+                    # Add OLD figure composer figures (slides)
+                    if has_old_figures:
+                        for idx, slide in enumerate(slides, start=1):
+                            slide_name = slide.get("name") or f"Figure {idx}"
+                            timestamp = slide.get("updated_at") or slide.get("created_at")
+                            slide_label = f"{slide_name} ({timestamp})" if timestamp else slide_name
+                            slide_item = QTreeWidgetItem([f"{slide_label} [Legacy]"])
+                            slide_item.setData(
+                                0,
+                                Qt.UserRole,
+                                {
+                                    "type": "figure_slide",
+                                    "sample": s,
+                                    "experiment": exp,
+                                    "slide": slide,
+                                },
+                            )
+                            slide_item.setIcon(
+                                0,
+                                self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
+                            )
+                            figures_root.addChild(slide_item)
         self.project_tree.expandAll()
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()
@@ -1859,6 +1897,37 @@ class VasoAnalyzerApp(QMainWindow):
 
     def on_tree_item_clicked(self, item, _):
         obj = item.data(0, Qt.UserRole)
+
+        # Debug: Log all clicks
+        if isinstance(obj, tuple) and len(obj) >= 1:
+            log.info(f"Single-clicked tree item: {obj[0]} (tuple with {len(obj)} elements)")
+
+        # Handle figure items - open in composer with single-click
+        if isinstance(obj, tuple) and len(obj) >= 4 and obj[0] == "figure":
+            log.info(f"Figure clicked, opening in composer")
+            _, sample, fig_id, fig_data = obj
+
+            # Make sure the sample is activated first
+            if isinstance(sample, SampleN):
+                # Find parent experiment
+                experiment = None
+                parent = item.parent()
+                if parent:
+                    grandparent = parent.parent()
+                    if grandparent:
+                        grandparent_obj = grandparent.data(0, Qt.UserRole)
+                        if isinstance(grandparent_obj, Experiment):
+                            experiment = grandparent_obj
+
+                # Activate the sample to load its trace data
+                log.info(f"Activating sample: {sample.name}")
+                self._activate_sample(sample, experiment)
+
+                # Open the figure in composer
+                log.info(f"Opening figure in composer: {fig_id}")
+                self.open_new_figure_composer(figure_id=fig_id, figure_data=fig_data)
+                return
+
         if isinstance(obj, SampleN):
             experiment = None
             parent = item.parent()
@@ -1892,6 +1961,39 @@ class VasoAnalyzerApp(QMainWindow):
                     self._maybe_launch_pending_figure()
                 return
         self._update_metadata_panel(obj)
+
+    def on_tree_item_double_clicked(self, item, column):
+        """Handle double-click on tree items - open figures."""
+        obj = item.data(0, Qt.UserRole)
+        log.info(f"Double-clicked tree item, obj type: {type(obj)}, obj: {obj}")
+
+        # Check if this is a figure item (tuple with "figure" as first element)
+        if isinstance(obj, tuple) and len(obj) >= 4 and obj[0] == "figure":
+            log.info(f"Detected figure item, opening in composer")
+            _, sample, fig_id, fig_data = obj
+
+            # Make sure the sample is activated first
+            if isinstance(sample, SampleN):
+                # Find parent experiment
+                experiment = None
+                parent = item.parent()
+                if parent:
+                    grandparent = parent.parent()
+                    if grandparent:
+                        grandparent_obj = grandparent.data(0, Qt.UserRole)
+                        if isinstance(grandparent_obj, Experiment):
+                            experiment = grandparent_obj
+
+                # Activate the sample to load its trace data
+                log.info(f"Activating sample: {sample.name}")
+                self._activate_sample(sample, experiment)
+
+                # Open the figure in composer
+                log.info(f"Opening figure in composer: {fig_id}")
+                self.open_new_figure_composer(figure_id=fig_id, figure_data=fig_data)
+                return
+        else:
+            log.info(f"Not a figure item, obj is: {type(obj)}")
 
     def _activate_sample(
         self,
@@ -2932,6 +3034,22 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_new_windows(selected_samples)
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
+        elif isinstance(obj, tuple) and len(obj) == 4 and obj[0] == "figure":
+            _, sample, fig_id, fig_data = obj
+            open_fig = menu.addAction("Open Figure")
+            rename_fig = menu.addAction("Rename Figure…")
+            delete_fig = menu.addAction("Delete Figure")
+            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            if action == open_fig:
+                self.open_new_figure_composer(figure_id=fig_id, figure_data=fig_data)
+            elif action == rename_fig:
+                self._rename_project_figure(sample, fig_id, fig_data)
+            elif action == delete_fig:
+                self._delete_project_figure(sample, fig_id, fig_data)
+            elif action == open_act:
+                self.open_samples_in_new_windows(selected_samples)
+            elif action == dual_act:
+                self.open_samples_in_dual_view(selected_samples)
 
     def add_experiment(self, checked: bool = False):
         """Add a new experiment to the current project.
@@ -2947,6 +3065,57 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_project.experiments.append(exp)
             self.current_experiment = exp
             self.refresh_project_tree()
+
+    def _rename_project_figure(self, sample: SampleN, figure_id: str, fig_data: dict) -> None:
+        """Rename a saved figure from the project tree."""
+        if sample is None or not getattr(sample, "figure_configs", None):
+            return
+
+        current_name = (fig_data or {}).get("figure_name", figure_id)
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename Figure",
+            "Figure name:",
+            QLineEdit.Normal,
+            current_name,
+        )
+        if not ok or not new_name.strip():
+            return
+
+        updated = copy.deepcopy(fig_data) if fig_data else {}
+        updated["figure_name"] = new_name.strip()
+        meta = updated.get("metadata") or {}
+        if isinstance(meta, dict):
+            meta["modified"] = datetime.now().isoformat()
+            updated["metadata"] = meta
+        sample.figure_configs[figure_id] = updated
+        self.mark_session_dirty(reason="figure renamed")
+        self.refresh_project_tree()
+
+    def _delete_project_figure(
+        self, sample: SampleN, figure_id: str, fig_data: dict | None = None
+    ) -> None:
+        """Delete a saved figure from the project tree."""
+        if sample is None or not getattr(sample, "figure_configs", None):
+            return
+        if figure_id not in sample.figure_configs:
+            return
+
+        fig_name = (fig_data or sample.figure_configs.get(figure_id, {})).get(
+            "figure_name", figure_id
+        )
+        confirm = QMessageBox.question(
+            self,
+            "Delete Figure",
+            f"Delete figure '{fig_name}' from sample '{sample.name}'?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        sample.figure_configs.pop(figure_id, None)
+        self.mark_session_dirty(reason="figure deleted")
+        self.refresh_project_tree()
 
     def delete_experiment(self, experiment: Experiment) -> None:
         if not self.current_project or experiment not in self.current_project.experiments:
@@ -3729,15 +3898,11 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
-        self.action_figure_composer = QAction("Figure Composer (Legacy)…", self)
+        # Figure Composer - New version only
+        self.action_figure_composer = QAction("Figure Composer…", self)
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
-        self.action_figure_composer.triggered.connect(self.open_figure_composer)
+        self.action_figure_composer.triggered.connect(self.open_new_figure_composer)
         tools_menu.addAction(self.action_figure_composer)
-
-        self.action_new_composer = QAction("Figure Composer (New)…", self)
-        self.action_new_composer.setShortcut("Ctrl+Shift+N")
-        self.action_new_composer.triggered.connect(self.open_new_figure_composer)
-        tools_menu.addAction(self.action_new_composer)
 
         tools_menu.addSeparator()
 
@@ -9682,8 +9847,13 @@ QPushButton[isGhost="true"]:hover {{
         self.figure_composer.raise_()
         self.figure_composer.activateWindow()
 
-    def open_new_figure_composer(self):
-        """Launch the new Figure Composer window."""
+    def open_new_figure_composer(self, figure_id: str = None, figure_data: dict = None):
+        """Launch the new Figure Composer window.
+
+        Args:
+            figure_id: Optional ID of existing figure to load
+            figure_data: Optional figure data to load
+        """
         # Check if trace is loaded
         if self.trace_model is None:
             from PyQt5.QtWidgets import QMessageBox
@@ -9697,9 +9867,37 @@ QPushButton[isGhost="true"]:hover {{
 
         # Create and show new composer
         new_composer = NewFigureComposerWindow(trace_model=self.trace_model, parent=self)
+
+        # Load existing figure if provided
+        if figure_id and figure_data:
+            new_composer.load_from_project(figure_id, figure_data)
+
+        # Connect signal to handle figure saves
+        new_composer.figure_saved.connect(self._on_figure_saved_to_project)
+
         new_composer.show()
         new_composer.raise_()
         new_composer.activateWindow()
+
+    def _on_figure_saved_to_project(self, figure_id: str, figure_data: dict):
+        """Handle when a figure is saved to the project.
+
+        Args:
+            figure_id: The unique ID of the saved figure
+            figure_data: The complete figure data
+        """
+        log.info(f"_on_figure_saved_to_project called: {figure_id}")
+
+        # The figure is already saved to current_sample.figure_configs by the composer
+        # Refresh the tree to show the new/updated figure
+        if self.current_project:
+            log.info(f"Refreshing project tree for project: {self.current_project.name}")
+            self.refresh_project_tree()
+            log.info(
+                f"Figure '{figure_data.get('figure_name', figure_id)}' saved and tree refreshed"
+            )
+        else:
+            log.warning("No current_project found when trying to refresh tree")
 
     def _on_figure_composer_preset_saved(self, preset):
         """Handle preset save from Figure Composer."""

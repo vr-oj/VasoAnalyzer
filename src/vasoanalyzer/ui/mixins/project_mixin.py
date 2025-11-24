@@ -623,6 +623,39 @@ class ProjectMixin:
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
                 item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
                 exp_item.addChild(item)
+
+                # Add figures folder if sample has figures
+                import logging
+
+                log = logging.getLogger(__name__)
+                log.info(
+                    f"Checking figures for sample '{s.name}': figure_configs={s.figure_configs}"
+                )
+
+                if s.figure_configs and len(s.figure_configs) > 0:
+                    log.info(
+                        f"Sample '{s.name}' has {len(s.figure_configs)} figure(s), adding to tree"
+                    )
+                    figures_folder = QTreeWidgetItem(["📊 Figures"])
+                    figures_folder.setData(0, Qt.UserRole, ("figures_folder", s))
+                    figures_folder.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    item.addChild(figures_folder)
+
+                    # Add each figure
+                    for fig_id, fig_data in s.figure_configs.items():
+                        fig_name = fig_data.get("figure_name", fig_id)
+                        log.info(f"Adding figure to tree: {fig_name} (ID: {fig_id})")
+                        fig_item = QTreeWidgetItem([fig_name])
+                        fig_item.setData(0, Qt.UserRole, ("figure", s, fig_id, fig_data))
+                        fig_item.setIcon(
+                            0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+                        )
+                        fig_item.setToolTip(
+                            0, f"Created: {fig_data.get('metadata', {}).get('created', 'Unknown')}"
+                        )
+                        figures_folder.addChild(fig_item)
+                else:
+                    log.info(f"Sample '{s.name}' has no figures or figure_configs is None/empty")
         self.project_tree.expandAll()
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()

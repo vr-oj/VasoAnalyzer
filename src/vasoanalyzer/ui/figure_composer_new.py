@@ -12,21 +12,23 @@ Phase 1 Implementation:
 from __future__ import annotations
 
 import contextlib
+import copy
 import logging
+import uuid
+from datetime import datetime
 from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import transforms as mtransforms
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg,
     NavigationToolbar2QT,
 )
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -41,11 +43,11 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
     QSplitter,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -62,6 +64,9 @@ class NewFigureComposerWindow(QMainWindow):
 
     Architecture: Config dict → SimpleRenderer → Shared Figure ← Canvas
     """
+
+    # Signal emitted when figure is saved to project (figure_id, figure_data)
+    figure_saved = pyqtSignal(str, dict)
 
     def __init__(self, trace_model: TraceModel | None = None, parent=None):
         super().__init__(parent)
@@ -105,13 +110,17 @@ class NewFigureComposerWindow(QMainWindow):
         self._layout_dirty = True
         self._xlim_cid = None
         self._ylim_cid = None
-
-        # Initialize annotation tools
-        self.text_tool = None
-        self.box_tool = None
-        self.line_tool = None
-        self.arrow_tool = None
-        self.current_tool = None
+        self.figure_id: str | None = None
+        self.figure_name: str = "Untitled Figure"
+        self.figure_metadata: dict[str, Any] = {
+            "created": datetime.now().isoformat(),
+            "modified": datetime.now().isoformat(),
+        }
+        # Zoom drag state (Matplotlib canvas)
+        self._auto_zoom_active = False
+        self._zoom_press_cid = None
+        self._zoom_motion_cid = None
+        self._zoom_release_cid = None
 
         # Apply initial page sizing before creating the UI
         self._apply_page_canvas_size()
@@ -123,6 +132,7 @@ class NewFigureComposerWindow(QMainWindow):
 
         # Setup keyboard shortcuts
         self._setup_shortcuts()
+        self._setup_zoom_drag()
 
         # Initial render after page layout is configured
         self._render()
@@ -160,6 +170,12 @@ class NewFigureComposerWindow(QMainWindow):
             "event_label_pos": "top",  # 'top', 'bottom', 'none'
             "event_font_size": 10,
             "event_visible_indices": None,  # None = all
+            # Layout padding (space for labels/annotations inside figure box)
+            "axes_pad_left_mm": 6.0,
+            "axes_pad_right_mm": 4.0,
+            "axes_pad_top_mm": 4.0,
+            "axes_pad_bottom_mm": 6.0,
+            "export_margin_in": 0.5,  # extra blank space around figure when exporting
             # Fonts
             "axis_label_size": 12,
             "tick_label_size": 10,
@@ -252,8 +268,20 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["fig_left"] = left
         self.config["fig_top"] = bottom + fig_height_frac
 
+        # Inset the drawing axes to leave room for labels/annotations within the figure box
+        pad_left, pad_right, pad_top, pad_bottom = self._get_axes_padding_fracs(
+            base_width_in=self.page_width_in,
+            base_height_in=self.page_height_in,
+        )
+        axes_left = left + pad_left
+        axes_bottom = bottom + pad_bottom
+        axes_width = max(fig_width_frac - (pad_left + pad_right), 0.02)
+        axes_height = max(fig_height_frac - (pad_top + pad_bottom), 0.02)
+
         # Axes where the actual data is drawn
-        self.plot_axes = self.page_figure.add_axes([left, bottom, fig_width_frac, fig_height_frac])
+        self.plot_axes = self.page_figure.add_axes(
+            [axes_left, axes_bottom, axes_width, axes_height]
+        )
         self.plot_axes.set_facecolor("white")
 
         # Share axes with renderer and tools
@@ -265,6 +293,20 @@ class NewFigureComposerWindow(QMainWindow):
 
         self._sync_position_controls()
         self._layout_dirty = False
+
+    def _get_axes_padding_fracs(
+        self, base_width_in: float, base_height_in: float
+    ) -> tuple[float, float, float, float]:
+        """Return padding fractions (left, right, top, bottom) for the given base size."""
+        pad_left_frac = (self.config.get("axes_pad_left_mm", 6.0) / 25.4) / max(base_width_in, 1e-6)
+        pad_right_frac = (self.config.get("axes_pad_right_mm", 4.0) / 25.4) / max(
+            base_width_in, 1e-6
+        )
+        pad_top_frac = (self.config.get("axes_pad_top_mm", 4.0) / 25.4) / max(base_height_in, 1e-6)
+        pad_bottom_frac = (self.config.get("axes_pad_bottom_mm", 6.0) / 25.4) / max(
+            base_height_in, 1e-6
+        )
+        return pad_left_frac, pad_right_frac, pad_top_frac, pad_bottom_frac
 
     def _connect_axes_view_events(self) -> None:
         """Connect Matplotlib view limit events so zoom/pan updates our config.
@@ -367,6 +409,20 @@ class NewFigureComposerWindow(QMainWindow):
         # Note: Undo/redo would require state management - placeholder for now
         pass
 
+    def _setup_zoom_drag(self):
+        """Enable box-zoom by click-drag on the plot (no toolbar toggle needed)."""
+        # Disconnect old handlers if re-run
+        for cid_attr in ["_zoom_press_cid", "_zoom_motion_cid", "_zoom_release_cid"]:
+            cid = getattr(self, cid_attr, None)
+            if cid:
+                self.canvas.mpl_disconnect(cid)
+                setattr(self, cid_attr, None)
+        self._zoom_press_cid = self.canvas.mpl_connect("button_press_event", self._on_zoom_press)
+        self._zoom_motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_zoom_motion)
+        self._zoom_release_cid = self.canvas.mpl_connect(
+            "button_release_event", self._on_zoom_release
+        )
+
     def _update_info_bar(self):
         """Update info bar with current figure dimensions."""
         width_mm = self.config["width_mm"]
@@ -417,10 +473,6 @@ class NewFigureComposerWindow(QMainWindow):
             if action.text() in ["Subplots", "Customize", "Save"]:
                 self.nav_toolbar.removeAction(action)
         canvas_layout.addWidget(self.nav_toolbar)
-
-        # Annotation toolbar
-        self.annotation_toolbar = self._create_annotation_toolbar()
-        canvas_layout.addWidget(self.annotation_toolbar)
 
         # Canvas in scroll area with gray background
         self.canvas_scroll = QScrollArea()
@@ -499,114 +551,6 @@ class NewFigureComposerWindow(QMainWindow):
         panel_layout.addWidget(scroll_area)
 
         return control_widget
-
-    def _create_annotation_toolbar(self) -> QToolBar:
-        """Create toolbar for annotation tools."""
-        toolbar = QToolBar("Annotations")
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-
-        # Select/Move tool (default)
-        select_action = QAction("Select", self)
-        select_action.setCheckable(True)
-        select_action.setChecked(True)
-        select_action.triggered.connect(lambda: self._set_annotation_mode(None))
-
-        # Text tool
-        text_action = QAction("Add Text", self)
-        text_action.setCheckable(True)
-        text_action.triggered.connect(lambda: self._set_annotation_mode("text"))
-
-        # Box tool
-        box_action = QAction("Add Box", self)
-        box_action.setCheckable(True)
-        box_action.triggered.connect(lambda: self._set_annotation_mode("box"))
-
-        # Line tool
-        line_action = QAction("Add Line", self)
-        line_action.setCheckable(True)
-        line_action.triggered.connect(lambda: self._set_annotation_mode("line"))
-
-        # Arrow tool
-        arrow_action = QAction("Add Arrow", self)
-        arrow_action.setCheckable(True)
-        arrow_action.triggered.connect(lambda: self._set_annotation_mode("arrow"))
-
-        # Clear annotations
-        clear_action = QAction("Clear All", self)
-        clear_action.triggered.connect(self._clear_annotations)
-
-        # Create action group for exclusive selection
-        self.tool_group = QActionGroup(self)
-        self.tool_group.addAction(select_action)
-        self.tool_group.addAction(text_action)
-        self.tool_group.addAction(box_action)
-        self.tool_group.addAction(line_action)
-        self.tool_group.addAction(arrow_action)
-
-        toolbar.addAction(select_action)
-        toolbar.addSeparator()
-        toolbar.addAction(text_action)
-        toolbar.addAction(box_action)
-        toolbar.addAction(line_action)
-        toolbar.addAction(arrow_action)
-        toolbar.addSeparator()
-        toolbar.addAction(clear_action)
-
-        return toolbar
-
-    def _set_annotation_mode(self, mode: str | None):
-        """Switch annotation tool."""
-        # Deactivate current tool
-        if self.current_tool:
-            self.current_tool.deactivate()
-
-        # Get current axes
-        ax = self.plot_axes
-        if ax is None:
-            self._render()
-            ax = self.plot_axes
-        if not ax:
-            return
-
-        # Keep tool references pointed at the current axes
-        for tool in [self.text_tool, self.box_tool, self.line_tool, self.arrow_tool]:
-            if tool:
-                tool.ax = ax
-
-        # Activate new tool
-        if mode == "text":
-            if not self.text_tool:
-                self.text_tool = TextAnnotationTool(ax, self.figure, self.canvas)
-            self.text_tool.activate()
-            self.current_tool = self.text_tool
-        elif mode == "box":
-            if not self.box_tool:
-                self.box_tool = BoxAnnotationTool(ax, self.figure, self.canvas)
-            self.box_tool.activate()
-            self.current_tool = self.box_tool
-        elif mode == "line":
-            if not self.line_tool:
-                self.line_tool = LineAnnotationTool(ax, self.figure, self.canvas)
-            self.line_tool.activate()
-            self.current_tool = self.line_tool
-        elif mode == "arrow":
-            if not self.arrow_tool:
-                self.arrow_tool = ArrowAnnotationTool(ax, self.figure, self.canvas)
-            self.arrow_tool.activate()
-            self.current_tool = self.arrow_tool
-        else:
-            self.current_tool = None
-            self.canvas.setCursor(Qt.ArrowCursor)
-
-    def _clear_annotations(self):
-        """Remove all annotations."""
-        for tool in [self.text_tool, self.box_tool, self.line_tool, self.arrow_tool]:
-            if tool and tool.annotations:
-                for ann in tool.annotations:
-                    with contextlib.suppress(Exception):
-                        ann.remove()
-                tool.annotations = []
-        self.canvas.draw_idle()
 
     def _create_page_group(self) -> QGroupBox:
         """Create page setup controls (size, orientation, placement)."""
@@ -1061,6 +1005,10 @@ class NewFigureComposerWindow(QMainWindow):
         tiff_btn.clicked.connect(lambda: self._export("tiff"))
         layout.addWidget(tiff_btn)
 
+        save_btn = QPushButton("Save to Project")
+        save_btn.clicked.connect(self._save_to_project)
+        layout.addWidget(save_btn)
+
         return group
 
     # Event handlers
@@ -1098,6 +1046,95 @@ class NewFigureComposerWindow(QMainWindow):
         self._sync_position_controls()
         self._layout_dirty = True
         self._render()
+
+    # ------------------------------------------------------------------
+    # Project integration helpers (load existing figure configs)
+    # ------------------------------------------------------------------
+    def load_from_project(self, figure_id: str | None, figure_data: dict[str, Any] | None) -> None:
+        """Load a saved figure configuration from a project entry."""
+        if not figure_data:
+            return
+
+        self.figure_id = figure_id or figure_data.get("figure_id")
+        self.figure_name = figure_data.get("figure_name", self.figure_name)
+        self.figure_metadata = figure_data.get("metadata", self.figure_metadata)
+
+        # Load config if provided
+        if "config" in figure_data:
+            self.config = copy.deepcopy(figure_data["config"])
+            self._layout_dirty = True
+
+        # Load page settings
+        page_settings = figure_data.get("page_settings", {})
+        size_name = page_settings.get("size_name")
+        orientation = page_settings.get("orientation")
+        if size_name:
+            self.page_size_name = size_name
+        if orientation:
+            self.page_orientation = orientation
+        self._apply_page_canvas_size()
+        self._sync_position_controls()
+
+        # Refresh UI and canvas
+        self._render()
+        self.setWindowTitle(f"Figure Composer - {self.figure_name}")
+
+    def _save_to_project(self) -> None:
+        """Save the current figure configuration into the parent project's sample."""
+        parent = self.parent_window
+        if parent is None:
+            QMessageBox.warning(
+                self, "No Project", "Open the composer from a project to save figures."
+            )
+            return
+
+        current_sample = getattr(parent, "current_sample", None)
+        if current_sample is None:
+            QMessageBox.warning(
+                self, "No Sample Selected", "Select a sample in the project tree first."
+            )
+            return
+
+        # Ensure storage exists
+        if getattr(current_sample, "figure_configs", None) is None:
+            current_sample.figure_configs = {}
+
+        # Prompt for name when creating new
+        if self.figure_id is None:
+            name, ok = QInputDialog.getText(
+                self,
+                "Save Figure",
+                "Enter figure name:",
+                QLineEdit.Normal,
+                self.figure_name,
+            )
+            if not ok or not name.strip():
+                return
+            self.figure_name = name.strip()
+            self.figure_id = f"fig_{uuid.uuid4().hex[:8]}"
+            self.figure_metadata["created"] = datetime.now().isoformat()
+
+        # Update modified timestamp
+        self.figure_metadata["modified"] = datetime.now().isoformat()
+
+        figure_data = {
+            "figure_id": self.figure_id,
+            "figure_name": self.figure_name,
+            "metadata": copy.deepcopy(self.figure_metadata),
+            "config": copy.deepcopy(self.config),
+            "page_settings": {
+                "size_name": self.page_size_name,
+                "orientation": self.page_orientation,
+            },
+        }
+
+        current_sample.figure_configs[self.figure_id] = figure_data
+        # Notify project and tree
+        if hasattr(parent, "mark_session_dirty"):
+            parent.mark_session_dirty(reason="figure saved")
+        if self.figure_saved:
+            self.figure_saved.emit(self.figure_id, figure_data)
+        self.setWindowTitle(f"Figure Composer - {self.figure_name}")
 
     def _on_size_changed(self):
         """Handle width/height changes properly."""
@@ -1303,6 +1340,47 @@ class NewFigureComposerWindow(QMainWindow):
         self.canvas.draw_idle()
         self._update_info_bar()
 
+    # ------------------------------------------------------------------
+    # Mouse-driven zoom (box select)
+    # ------------------------------------------------------------------
+    def _on_zoom_press(self, event):
+        if event.button != 1 or event.inaxes is not self.plot_axes:
+            return
+        if self._nav_mode_active():  # let toolbar zoom/pan take precedence
+            return
+        toolbar = getattr(self, "nav_toolbar", None)
+        if toolbar is None:
+            return
+        # One-shot activation of the built-in Matplotlib zoom tool
+        self._auto_zoom_active = True
+        with contextlib.suppress(Exception):
+            toolbar.zoom()  # toggle on
+            toolbar.press_zoom(event)
+
+    def _on_zoom_motion(self, event):
+        if not self._auto_zoom_active or event.inaxes is not self.plot_axes:
+            return
+        toolbar = getattr(self, "nav_toolbar", None)
+        if toolbar is None:
+            return
+        with contextlib.suppress(Exception):
+            # Matplotlib NavigationToolbar2 implements drag_zoom
+            if hasattr(toolbar, "drag_zoom"):
+                toolbar.drag_zoom(event)
+
+    def _on_zoom_release(self, event):
+        if event.button != 1:
+            return
+        if not self._auto_zoom_active:
+            return
+        toolbar = getattr(self, "nav_toolbar", None)
+        if toolbar is None:
+            return
+        with contextlib.suppress(Exception):
+            toolbar.release_zoom(event)
+            toolbar.zoom()  # toggle off
+        self._auto_zoom_active = False
+
     def _export(self, format_type: str):
         """Export with EXACT dimensions in specified format.
 
@@ -1332,14 +1410,31 @@ class NewFigureComposerWindow(QMainWindow):
         width_inch = self.config["width_mm"] / 25.4
         height_inch = self.config["height_mm"] / 25.4
         export_dpi = self.config["dpi"]
+        margin_in = max(float(self.config.get("export_margin_in", 0.5)), 0.0)
+        canvas_width_in = width_inch + 2 * margin_in
+        canvas_height_in = height_inch + 2 * margin_in
 
         # Make sure the on-screen view is up-to-date before copying
         if self._layout_dirty or self.plot_axes is None:
             self._render()
 
         # Create a NEW figure at export DPI (don't modify display figure)
-        export_fig = Figure(figsize=(width_inch, height_inch), dpi=export_dpi)
-        export_ax = export_fig.add_axes([0.12, 0.15, 0.83, 0.80])
+        export_fig = Figure(figsize=(canvas_width_in, canvas_height_in), dpi=export_dpi)
+        pad_left, pad_right, pad_top, pad_bottom = self._get_axes_padding_fracs(
+            base_width_in=canvas_width_in, base_height_in=canvas_height_in
+        )
+        fig_left_frac = margin_in / canvas_width_in
+        fig_bottom_frac = margin_in / canvas_height_in
+        fig_width_frac = width_inch / canvas_width_in
+        fig_height_frac = height_inch / canvas_height_in
+        export_ax = export_fig.add_axes(
+            [
+                fig_left_frac + pad_left,
+                fig_bottom_frac + pad_bottom,
+                max(fig_width_frac - (pad_left + pad_right), 0.02),
+                max(fig_height_frac - (pad_top + pad_bottom), 0.02),
+            ]
+        )
 
         # Copy the visible plot into the export axes
         self._copy_plot_to_axes(self.plot_axes, export_ax)
@@ -1351,24 +1446,18 @@ class NewFigureComposerWindow(QMainWindow):
                     filepath,
                     format="pdf",
                     dpi=export_dpi,
-                    bbox_inches="tight",
-                    pad_inches=0.02,
                 )
             elif format_type == "svg":
                 export_fig.savefig(
                     filepath,
                     format="svg",
                     dpi=export_dpi,
-                    bbox_inches="tight",
-                    pad_inches=0.02,
                 )
             elif format_type == "tiff":
                 export_fig.savefig(
                     filepath,
                     format="tiff",
                     dpi=export_dpi,
-                    bbox_inches="tight",
-                    pad_inches=0.02,
                     pil_kwargs={"compression": "tiff_lzw"},
                 )
             else:  # png
@@ -1376,8 +1465,6 @@ class NewFigureComposerWindow(QMainWindow):
                     filepath,
                     format="png",
                     dpi=export_dpi,
-                    bbox_inches="tight",
-                    pad_inches=0.02,
                 )
 
             log.info(f"Exported figure to {filepath} at {export_dpi} DPI ({format_type.upper()})")
@@ -1398,89 +1485,39 @@ class NewFigureComposerWindow(QMainWindow):
             label.set_fontfamily(family)
 
     def _copy_plot_to_axes(self, source_ax, target_ax):
-        """Copy the visible plot (lines, labels, limits) to a new axes."""
+        """Render the current visible plot view into a new axes (used for export)."""
         if source_ax is None or target_ax is None:
             return
 
-        # Copy lines
-        for line in source_ax.get_lines():
-            target_ax.plot(
-                line.get_xdata(),
-                line.get_ydata(),
-                color=line.get_color(),
-                linewidth=line.get_linewidth(),
-                linestyle=line.get_linestyle(),
-                marker=line.get_marker(),
-                markersize=line.get_markersize(),
-            )
+        # Freeze the current view so export matches what is on screen
+        x_min, x_max = source_ax.get_xlim()
+        y_min, y_max = source_ax.get_ylim()
 
-        # Copy patches (annotation boxes)
-        for patch in source_ax.patches:
-            try:
-                patch_copy = type(patch)(
-                    patch.get_x(),
-                    patch.get_y(),
-                    patch.get_width(),
-                    patch.get_height(),
-                    linewidth=patch.get_linewidth(),
-                    edgecolor=patch.get_edgecolor(),
-                    facecolor=patch.get_facecolor(),
-                    linestyle=patch.get_linestyle(),
-                    fill=patch.get_fill(),
-                    alpha=patch.get_alpha(),
-                )
-                target_ax.add_patch(patch_copy)
-            except Exception:
-                continue
+        export_config = copy.deepcopy(self.config)
+        export_config.update(
+            {
+                "x_auto": False,
+                "y_auto": False,
+                "x_min": float(x_min),
+                "x_max": float(x_max),
+                "y_min": float(y_min),
+                "y_max": float(y_max),
+            }
+        )
 
-        # Copy text objects (including annotations)
-        for text in source_ax.texts:
-            transform = (
-                target_ax.transAxes
-                if text.get_transform() == source_ax.transAxes
-                else target_ax.transData
-            )
-            target_ax.text(
-                text.get_position()[0],
-                text.get_position()[1],
-                text.get_text(),
-                ha=text.get_ha(),
-                va=text.get_va(),
-                rotation=text.get_rotation(),
-                fontsize=text.get_fontsize(),
-                color=text.get_color(),
-                transform=transform,
-            )
+        export_renderer = SimpleRenderer(target_ax.figure)
+        export_renderer.render(
+            trace_model=self.trace_model,
+            config=export_config,
+            event_times=self.event_times,
+            event_labels=self.event_labels,
+            event_colors=self.event_colors,
+            axes=target_ax,
+        )
 
-        # Axis labels and limits
-        axis_label_kwargs = {
-            "fontsize": self.config.get("axis_label_size", 12),
-            "fontweight": "bold" if self.config.get("axis_label_bold") else "normal",
-            "fontstyle": "italic" if self.config.get("axis_label_italic") else "normal",
-            "fontfamily": self.config.get("font_family", "Arial"),
-        }
-        target_ax.set_xlabel(source_ax.get_xlabel(), **axis_label_kwargs)
-        target_ax.set_ylabel(source_ax.get_ylabel(), **axis_label_kwargs)
-        target_ax.set_xlim(source_ax.get_xlim())
-        target_ax.set_ylim(source_ax.get_ylim())
+        # Mirror scale settings explicitly
         target_ax.set_xscale(source_ax.get_xscale())
         target_ax.set_yscale(source_ax.get_yscale())
-
-        # Grid, ticks, and spines
-        target_ax.grid(self.config.get("show_grid", True), alpha=0.3)
-        target_ax.tick_params(labelsize=self.config.get("tick_label_size", 10))
-        self._set_tick_label_style(target_ax, self.config)
-        target_ax.spines["top"].set_visible(self.config.get("show_top_spine", False))
-        target_ax.spines["right"].set_visible(self.config.get("show_right_spine", False))
-        target_ax.spines["left"].set_visible(True)
-        target_ax.spines["bottom"].set_visible(True)
-
-        # Legend (if present)
-        legend = source_ax.get_legend()
-        if legend:
-            labels = [t.get_text() for t in legend.get_texts()]
-            handles = target_ax.get_lines()[: len(labels)]
-            target_ax.legend(handles, labels, fontsize=self.config.get("tick_label_size", 10))
 
 
 class SimpleRenderer:
@@ -1765,16 +1802,13 @@ class SimpleRenderer:
 
         # Draw labels if needed
         if label_pos != "none":
-            ylim = ax.get_ylim()
-            span = ylim[1] - ylim[0]
-            pix_offset = 5.0 / max(ax.bbox.height, 1.0)  # convert ~5px to data fraction
-            data_offset = span * pix_offset
-            if label_pos == "top":
-                y_text = ylim[1] - data_offset  # a bit below the top limit
-                va = "top"
-            else:  # bottom
-                y_text = ylim[0] + data_offset  # a bit above the bottom limit
-                va = "bottom"
+            y_pos = 1.0 if label_pos == "top" else 0.0
+            va = "top" if label_pos == "top" else "bottom"
+            offset_points = -5.0 if label_pos == "top" else 5.0  # 5 pt inset from edge
+            base_transform = ax.get_xaxis_transform()  # data x, axes-fraction y
+            text_transform = base_transform + mtransforms.ScaledTranslation(
+                0, offset_points / 72.0, ax.figure.dpi_scale_trans
+            )
 
             for i in visible_indices:
                 time = event_times_converted[i]
@@ -1782,13 +1816,14 @@ class SimpleRenderer:
                 color = event_colors[i]
                 ax.text(
                     time,
-                    y_text,
+                    y_pos,
                     label,
                     rotation=90,
                     ha="right",
                     va=va,
                     fontsize=event_font_size,
                     color=color,
+                    transform=text_transform,
                     clip_on=True,  # Keep text within plot area
                 )
 
@@ -1801,330 +1836,3 @@ class SimpleRenderer:
             label.set_fontweight(weight)
             label.set_fontstyle(style)
             label.set_fontfamily(family)
-
-
-# ============================================================================
-# Annotation Tool Classes
-# ============================================================================
-
-
-class AnnotationTool:
-    """Base class for annotation tools."""
-
-    def __init__(self, ax, figure, canvas):
-        self.ax = ax
-        self.figure = figure
-        self.canvas = canvas
-        self.active = False
-        self.annotations = []
-        self.key_cid = None
-
-    def activate(self):
-        """Activate this tool."""
-        self.active = True
-        # Listen for Escape to cancel in-progress annotations for derived tools
-        self.key_cid = self.canvas.mpl_connect("key_press_event", self.on_key_press)
-
-    def deactivate(self):
-        """Deactivate this tool."""
-        self.active = False
-        if self.key_cid:
-            self.canvas.mpl_disconnect(self.key_cid)
-            self.key_cid = None
-
-    def on_key_press(self, event):
-        """Optional key handler for derived tools."""
-        return
-
-
-class TextAnnotationTool(AnnotationTool):
-    """Click to add text annotation."""
-
-    def activate(self):
-        super().activate()
-        self.canvas.setCursor(Qt.IBeamCursor)
-        self.cid = self.canvas.mpl_connect("button_press_event", self.on_click)
-
-    def deactivate(self):
-        super().deactivate()
-        self.canvas.setCursor(Qt.ArrowCursor)
-        if hasattr(self, "cid"):
-            self.canvas.mpl_disconnect(self.cid)
-
-    def on_click(self, event):
-        if event.inaxes != self.ax:
-            return
-
-        # Get text from dialog
-        text, ok = QInputDialog.getText(None, "Add Text", "Enter annotation text:")
-        if ok and text:
-            # Add text annotation at click position
-            annotation = self.ax.text(
-                event.xdata,
-                event.ydata,
-                text,
-                fontsize=10,
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.7),
-            )
-            self.annotations.append(annotation)
-            self.canvas.draw_idle()
-
-
-class BoxAnnotationTool(AnnotationTool):
-    """Drag to create box annotation."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.rect = None
-        self.press = None
-
-    def activate(self):
-        super().activate()
-        self.canvas.setCursor(Qt.CrossCursor)
-        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_press)
-        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
-        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
-
-    def deactivate(self):
-        super().deactivate()
-        self.canvas.setCursor(Qt.ArrowCursor)
-        self._cancel_current()
-        for cid in ["cid_press", "cid_release", "cid_motion"]:
-            if hasattr(self, cid):
-                self.canvas.mpl_disconnect(getattr(self, cid))
-
-    def on_press(self, event):
-        if event.inaxes != self.ax:
-            return
-        self.press = (event.xdata, event.ydata)
-
-        # Create rectangle
-        import matplotlib.patches as patches
-
-        self.rect = patches.Rectangle(
-            self.press,
-            0,
-            0,
-            linewidth=2,
-            edgecolor="red",
-            facecolor="none",
-            linestyle="--",
-        )
-        self.ax.add_patch(self.rect)
-
-    def on_motion(self, event):
-        if self.press is None or event.inaxes != self.ax:
-            return
-
-        x0, y0 = self.press
-        x1, y1 = event.xdata, event.ydata
-        if self.rect is None:
-            return
-        # Allow dragging in any direction by normalizing to top-left
-        left = min(x0, x1)
-        bottom = min(y0, y1)
-        width = abs(x1 - x0)
-        height = abs(y1 - y0)
-        self.rect.set_xy((left, bottom))
-        self.rect.set_width(width)
-        self.rect.set_height(height)
-        self.canvas.draw_idle()
-
-    def on_release(self, event):
-        if self.press is None or event.inaxes != self.ax or self.rect is None:
-            self._cancel_current()
-            return
-
-        # Finalize rectangle
-        self.annotations.append(self.rect)
-        self.press = None
-        self.rect = None
-        self.canvas.draw_idle()
-
-    def on_key_press(self, event):
-        if event.key == "escape":
-            self._cancel_current()
-
-    def _cancel_current(self):
-        """Cancel the in-progress rectangle if any."""
-        if self.rect is not None:
-            with contextlib.suppress(Exception):
-                self.rect.remove()
-        self.rect = None
-        self.press = None
-        self.canvas.draw_idle()
-
-
-class LineAnnotationTool(AnnotationTool):
-    """Click-drag-release to create line annotation."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.first_point = None
-        self.temp_line = None
-        self.cid_motion = None
-        self.cid_press = None
-        self.cid_release = None
-
-    def activate(self):
-        super().activate()
-        self.canvas.setCursor(Qt.CrossCursor)
-        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_press)
-        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
-        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
-
-    def deactivate(self):
-        super().deactivate()
-        self.canvas.setCursor(Qt.ArrowCursor)
-        for cid in [self.cid_press, self.cid_release, self.cid_motion]:
-            if cid:
-                self.canvas.mpl_disconnect(cid)
-        self.cid_press = None
-        self.cid_release = None
-        if self.cid_motion:
-            self.cid_motion = None
-        self._clear_temp()
-
-    def on_press(self, event):
-        if event.inaxes != self.ax:
-            return
-
-        # Start line
-        self.first_point = (event.xdata, event.ydata)
-        (self.temp_line,) = self.ax.plot(
-            [event.xdata, event.xdata],
-            [event.ydata, event.ydata],
-            "r--",
-            linewidth=2,
-        )
-        self.canvas.draw_idle()
-
-    def on_motion(self, event):
-        if self.first_point is None or event.inaxes != self.ax or self.temp_line is None:
-            return
-        x1, y1 = self.first_point
-        self.temp_line.set_data([x1, event.xdata], [y1, event.ydata])
-        self.canvas.draw_idle()
-
-    def on_release(self, event):
-        if self.first_point is None or event.inaxes != self.ax:
-            self._clear_temp()
-            self.first_point = None
-            return
-
-        x1, y1 = self.first_point
-        x2, y2 = event.xdata, event.ydata
-
-        # Remove temp preview
-        self._clear_temp()
-
-        # Draw final line
-        (line,) = self.ax.plot([x1, x2], [y1, y2], "r-", linewidth=2)
-        self.annotations.append(line)
-
-        # Reset
-        self.first_point = None
-        self.canvas.draw_idle()
-
-    def on_key_press(self, event):
-        if event.key == "escape":
-            self.first_point = None
-            self._clear_temp()
-            self.canvas.draw_idle()
-
-    def _clear_temp(self):
-        if self.temp_line is not None:
-            with contextlib.suppress(Exception):
-                self.temp_line.remove()
-        self.temp_line = None
-
-
-class ArrowAnnotationTool(AnnotationTool):
-    """Click-drag-release to create arrow annotation."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.first_point = None
-        self.temp_line = None
-        self.cid_motion = None
-        self.cid_press = None
-        self.cid_release = None
-
-    def activate(self):
-        super().activate()
-        self.canvas.setCursor(Qt.CrossCursor)
-        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_press)
-        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
-        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
-
-    def deactivate(self):
-        super().deactivate()
-        self.canvas.setCursor(Qt.ArrowCursor)
-        for cid in [self.cid_press, self.cid_release, self.cid_motion]:
-            if cid:
-                self.canvas.mpl_disconnect(cid)
-        self.cid_press = None
-        self.cid_release = None
-        self.cid_motion = None
-        self._clear_temp()
-
-    def on_press(self, event):
-        if event.inaxes != self.ax:
-            return
-
-        # Start arrow
-        self.first_point = (event.xdata, event.ydata)
-        # Show temporary arrow for preview
-        self.temp_line = self.ax.annotate(
-            "",
-            xy=(event.xdata, event.ydata),
-            xytext=self.first_point,
-            arrowprops=dict(arrowstyle="->", color="red", lw=2, connectionstyle="arc3"),
-        )
-        self.canvas.draw_idle()
-
-    def on_motion(self, event):
-        if self.first_point is None or event.inaxes != self.ax or self.temp_line is None:
-            return
-        # Update preview arrow endpoint
-        self.temp_line.set_position(self.first_point)
-        self.temp_line.xy = (event.xdata, event.ydata)
-        self.canvas.draw_idle()
-
-    def on_release(self, event):
-        if self.first_point is None or event.inaxes != self.ax:
-            self._clear_temp()
-            self.first_point = None
-            return
-
-        x1, y1 = self.first_point
-        x2, y2 = event.xdata, event.ydata
-
-        # Remove temp preview
-        self._clear_temp()
-
-        # Draw arrow
-        arrow = self.ax.annotate(
-            "",
-            xy=(x2, y2),
-            xytext=(x1, y1),
-            arrowprops=dict(arrowstyle="->", color="red", lw=2, connectionstyle="arc3"),
-        )
-        self.annotations.append(arrow)
-
-        # Reset
-        self.first_point = None
-        self.temp_line = None
-        self.canvas.draw_idle()
-
-    def on_key_press(self, event):
-        if event.key == "escape":
-            self.first_point = None
-            self._clear_temp()
-            self.canvas.draw_idle()
-
-    def _clear_temp(self):
-        if self.temp_line is not None:
-            with contextlib.suppress(Exception):
-                self.temp_line.remove()
-        self.temp_line = None
