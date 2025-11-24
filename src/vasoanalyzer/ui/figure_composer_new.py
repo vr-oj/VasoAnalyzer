@@ -1817,14 +1817,24 @@ class AnnotationTool:
         self.canvas = canvas
         self.active = False
         self.annotations = []
+        self.key_cid = None
 
     def activate(self):
         """Activate this tool."""
         self.active = True
+        # Listen for Escape to cancel in-progress annotations for derived tools
+        self.key_cid = self.canvas.mpl_connect("key_press_event", self.on_key_press)
 
     def deactivate(self):
         """Deactivate this tool."""
         self.active = False
+        if self.key_cid:
+            self.canvas.mpl_disconnect(self.key_cid)
+            self.key_cid = None
+
+    def on_key_press(self, event):
+        """Optional key handler for derived tools."""
+        return
 
 
 class TextAnnotationTool(AnnotationTool):
@@ -1878,6 +1888,7 @@ class BoxAnnotationTool(AnnotationTool):
     def deactivate(self):
         super().deactivate()
         self.canvas.setCursor(Qt.ArrowCursor)
+        self._cancel_current()
         for cid in ["cid_press", "cid_release", "cid_motion"]:
             if hasattr(self, cid):
                 self.canvas.mpl_disconnect(getattr(self, cid))
@@ -1906,116 +1917,214 @@ class BoxAnnotationTool(AnnotationTool):
             return
 
         x0, y0 = self.press
-        dx = event.xdata - x0
-        dy = event.ydata - y0
-        self.rect.set_width(dx)
-        self.rect.set_height(dy)
+        x1, y1 = event.xdata, event.ydata
+        if self.rect is None:
+            return
+        # Allow dragging in any direction by normalizing to top-left
+        left = min(x0, x1)
+        bottom = min(y0, y1)
+        width = abs(x1 - x0)
+        height = abs(y1 - y0)
+        self.rect.set_xy((left, bottom))
+        self.rect.set_width(width)
+        self.rect.set_height(height)
         self.canvas.draw_idle()
 
     def on_release(self, event):
-        if self.press is None:
+        if self.press is None or event.inaxes != self.ax or self.rect is None:
+            self._cancel_current()
             return
 
         # Finalize rectangle
         self.annotations.append(self.rect)
         self.press = None
         self.rect = None
+        self.canvas.draw_idle()
+
+    def on_key_press(self, event):
+        if event.key == "escape":
+            self._cancel_current()
+
+    def _cancel_current(self):
+        """Cancel the in-progress rectangle if any."""
+        if self.rect is not None:
+            with contextlib.suppress(Exception):
+                self.rect.remove()
+        self.rect = None
+        self.press = None
+        self.canvas.draw_idle()
 
 
 class LineAnnotationTool(AnnotationTool):
-    """Click twice to create line annotation."""
+    """Click-drag-release to create line annotation."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.first_point = None
         self.temp_line = None
+        self.cid_motion = None
+        self.cid_press = None
+        self.cid_release = None
 
     def activate(self):
         super().activate()
         self.canvas.setCursor(Qt.CrossCursor)
-        self.cid = self.canvas.mpl_connect("button_press_event", self.on_click)
+        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_press)
+        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
 
     def deactivate(self):
         super().deactivate()
         self.canvas.setCursor(Qt.ArrowCursor)
-        if hasattr(self, "cid"):
-            self.canvas.mpl_disconnect(self.cid)
+        for cid in [self.cid_press, self.cid_release, self.cid_motion]:
+            if cid:
+                self.canvas.mpl_disconnect(cid)
+        self.cid_press = None
+        self.cid_release = None
+        if self.cid_motion:
+            self.cid_motion = None
+        self._clear_temp()
 
-    def on_click(self, event):
+    def on_press(self, event):
         if event.inaxes != self.ax:
             return
 
-        if self.first_point is None:
-            # First click - start line
-            self.first_point = (event.xdata, event.ydata)
-            # Show temporary marker
-            (self.temp_line,) = self.ax.plot(event.xdata, event.ydata, "ro", markersize=5)
-            self.canvas.draw_idle()
-        else:
-            # Second click - finish line
-            x1, y1 = self.first_point
-            x2, y2 = event.xdata, event.ydata
+        # Start line
+        self.first_point = (event.xdata, event.ydata)
+        (self.temp_line,) = self.ax.plot(
+            [event.xdata, event.xdata],
+            [event.ydata, event.ydata],
+            "r--",
+            linewidth=2,
+        )
+        self.canvas.draw_idle()
 
-            # Remove temp marker
-            self.temp_line.remove()
+    def on_motion(self, event):
+        if self.first_point is None or event.inaxes != self.ax or self.temp_line is None:
+            return
+        x1, y1 = self.first_point
+        self.temp_line.set_data([x1, event.xdata], [y1, event.ydata])
+        self.canvas.draw_idle()
 
-            # Draw final line
-            (line,) = self.ax.plot([x1, x2], [y1, y2], "r-", linewidth=2)
-            self.annotations.append(line)
-
-            # Reset
+    def on_release(self, event):
+        if self.first_point is None or event.inaxes != self.ax:
+            self._clear_temp()
             self.first_point = None
-            self.temp_line = None
+            return
+
+        x1, y1 = self.first_point
+        x2, y2 = event.xdata, event.ydata
+
+        # Remove temp preview
+        self._clear_temp()
+
+        # Draw final line
+        (line,) = self.ax.plot([x1, x2], [y1, y2], "r-", linewidth=2)
+        self.annotations.append(line)
+
+        # Reset
+        self.first_point = None
+        self.canvas.draw_idle()
+
+    def on_key_press(self, event):
+        if event.key == "escape":
+            self.first_point = None
+            self._clear_temp()
             self.canvas.draw_idle()
+
+    def _clear_temp(self):
+        if self.temp_line is not None:
+            with contextlib.suppress(Exception):
+                self.temp_line.remove()
+        self.temp_line = None
 
 
 class ArrowAnnotationTool(AnnotationTool):
-    """Click twice to create arrow annotation."""
+    """Click-drag-release to create arrow annotation."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.first_point = None
         self.temp_line = None
+        self.cid_motion = None
+        self.cid_press = None
+        self.cid_release = None
 
     def activate(self):
         super().activate()
         self.canvas.setCursor(Qt.CrossCursor)
-        self.cid = self.canvas.mpl_connect("button_press_event", self.on_click)
+        self.cid_press = self.canvas.mpl_connect("button_press_event", self.on_press)
+        self.cid_release = self.canvas.mpl_connect("button_release_event", self.on_release)
+        self.cid_motion = self.canvas.mpl_connect("motion_notify_event", self.on_motion)
 
     def deactivate(self):
         super().deactivate()
         self.canvas.setCursor(Qt.ArrowCursor)
-        if hasattr(self, "cid"):
-            self.canvas.mpl_disconnect(self.cid)
+        for cid in [self.cid_press, self.cid_release, self.cid_motion]:
+            if cid:
+                self.canvas.mpl_disconnect(cid)
+        self.cid_press = None
+        self.cid_release = None
+        self.cid_motion = None
+        self._clear_temp()
 
-    def on_click(self, event):
+    def on_press(self, event):
         if event.inaxes != self.ax:
             return
 
-        if self.first_point is None:
-            # First click - start arrow
-            self.first_point = (event.xdata, event.ydata)
-            # Show temporary marker
-            (self.temp_line,) = self.ax.plot(event.xdata, event.ydata, "ro", markersize=5)
-            self.canvas.draw_idle()
-        else:
-            # Second click - finish arrow
-            x1, y1 = self.first_point
-            x2, y2 = event.xdata, event.ydata
+        # Start arrow
+        self.first_point = (event.xdata, event.ydata)
+        # Show temporary arrow for preview
+        self.temp_line = self.ax.annotate(
+            "",
+            xy=(event.xdata, event.ydata),
+            xytext=self.first_point,
+            arrowprops=dict(arrowstyle="->", color="red", lw=2, connectionstyle="arc3"),
+        )
+        self.canvas.draw_idle()
 
-            # Remove temp marker
-            self.temp_line.remove()
+    def on_motion(self, event):
+        if self.first_point is None or event.inaxes != self.ax or self.temp_line is None:
+            return
+        # Update preview arrow endpoint
+        self.temp_line.set_position(self.first_point)
+        self.temp_line.xy = (event.xdata, event.ydata)
+        self.canvas.draw_idle()
 
-            # Draw arrow
-            arrow = self.ax.annotate(
-                "",
-                xy=(x2, y2),
-                xytext=(x1, y1),
-                arrowprops=dict(arrowstyle="->", color="red", lw=2, connectionstyle="arc3"),
-            )
-            self.annotations.append(arrow)
-
-            # Reset
+    def on_release(self, event):
+        if self.first_point is None or event.inaxes != self.ax:
+            self._clear_temp()
             self.first_point = None
-            self.temp_line = None
+            return
+
+        x1, y1 = self.first_point
+        x2, y2 = event.xdata, event.ydata
+
+        # Remove temp preview
+        self._clear_temp()
+
+        # Draw arrow
+        arrow = self.ax.annotate(
+            "",
+            xy=(x2, y2),
+            xytext=(x1, y1),
+            arrowprops=dict(arrowstyle="->", color="red", lw=2, connectionstyle="arc3"),
+        )
+        self.annotations.append(arrow)
+
+        # Reset
+        self.first_point = None
+        self.temp_line = None
+        self.canvas.draw_idle()
+
+    def on_key_press(self, event):
+        if event.key == "escape":
+            self.first_point = None
+            self._clear_temp()
             self.canvas.draw_idle()
+
+    def _clear_temp(self):
+        if self.temp_line is not None:
+            with contextlib.suppress(Exception):
+                self.temp_line.remove()
+        self.temp_line = None
