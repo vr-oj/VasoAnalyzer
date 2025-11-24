@@ -58,6 +58,31 @@ __all__ = ["NewFigureComposerWindow"]
 
 log = logging.getLogger(__name__)
 
+TRACE_KEYS = ["inner", "outer", "avg_pressure", "set_pressure"]
+
+
+def _normalize_trace_selection(config: dict[str, Any]) -> dict[str, bool]:
+    """Return a normalized trace selection map, handling legacy single-trace configs."""
+    selection = config.get("trace_selection")
+    sel_map = {k: False for k in TRACE_KEYS}
+
+    if isinstance(selection, dict):
+        for k in TRACE_KEYS:
+            sel_map[k] = bool(selection.get(k, False))
+    else:
+        legacy = config.get("trace")
+        if legacy == "both":
+            sel_map["inner"] = True
+            sel_map["outer"] = True
+        elif legacy in sel_map:
+            sel_map[legacy] = True
+
+    # Guarantee at least one trace so the plot has content
+    if not any(sel_map.values()):
+        sel_map["inner"] = True
+
+    return sel_map
+
 
 class NewFigureComposerWindow(QMainWindow):
     """New Figure Composer with clean architecture and publication-ready features.
@@ -148,7 +173,7 @@ class NewFigureComposerWindow(QMainWindow):
             "fig_left": 0.15,
             "fig_top": 0.63,
             # Data
-            "trace": "inner",  # 'inner', 'outer', 'both', 'avg_pressure', 'set_pressure'
+            "trace_selection": {k: (k == "inner") for k in TRACE_KEYS},
             # Axes
             "x_label": "Time (s)",
             "y_label": "Diameter (μm)",
@@ -714,17 +739,25 @@ class NewFigureComposerWindow(QMainWindow):
     def _create_data_group(self) -> QGroupBox:
         """Create data/trace selection controls."""
         group = QGroupBox("Data")
-        layout = QFormLayout(group)
+        layout = QVBoxLayout(group)
+        selection = _normalize_trace_selection(self.config)
 
-        self.trace_combo = QComboBox()
-        self.trace_combo.addItem("Inner Diameter", "inner")
-        self.trace_combo.addItem("Outer Diameter", "outer")
-        self.trace_combo.addItem("Both Diameters", "both")
-        self.trace_combo.addItem("Average Pressure", "avg_pressure")
-        self.trace_combo.addItem("Set Pressure", "set_pressure")
-        self.trace_combo.currentIndexChanged.connect(self._on_trace_changed)
+        self.trace_checks: dict[str, QCheckBox] = {}
+        check_specs = [
+            ("inner", "Inner Diameter"),
+            ("outer", "Outer Diameter"),
+            ("avg_pressure", "Average Pressure"),
+            ("set_pressure", "Set Pressure"),
+        ]
 
-        layout.addRow("Trace:", self.trace_combo)
+        for key, label in check_specs:
+            cb = QCheckBox(label)
+            cb.setChecked(selection.get(key, False))
+            cb.toggled.connect(lambda checked, k=key: self._on_trace_checkbox_changed(k, checked))
+            self.trace_checks[key] = cb
+            layout.addWidget(cb)
+
+        layout.addStretch()
 
         return group
 
@@ -1173,16 +1206,35 @@ class NewFigureComposerWindow(QMainWindow):
         self.config["x_label"] = self.x_label_edit.text()
         self._render()
 
-    def _on_trace_changed(self):
-        """Handle trace selection change."""
-        self.config["trace"] = self.trace_combo.currentData()
-        # Update Y label based on trace type
-        if self.config["trace"] in ["avg_pressure", "set_pressure"]:
+    def _on_trace_checkbox_changed(self, key: str, checked: bool):
+        """Handle trace checkbox changes (multi-select)."""
+        if not hasattr(self, "trace_checks"):
+            return
+
+        selection = {k: cb.isChecked() for k, cb in self.trace_checks.items()}
+
+        # Ensure at least one trace remains selected
+        if not any(selection.values()):
+            # Re-enable the toggled box to keep one trace active
+            sender_cb = self.trace_checks.get(key)
+            if sender_cb is not None:
+                sender_cb.blockSignals(True)
+                sender_cb.setChecked(True)
+                sender_cb.blockSignals(False)
+                selection[key] = True
+
+        self.config["trace_selection"] = selection
+
+        # Update Y label based on whether only pressure traces are selected
+        pressure_only = selection.get("avg_pressure") or selection.get("set_pressure")
+        diameter_present = selection.get("inner") or selection.get("outer")
+        if pressure_only and not diameter_present:
             self.y_label_edit.setText("Pressure (mmHg)")
             self.config["y_label"] = "Pressure (mmHg)"
         else:
             self.y_label_edit.setText("Diameter (μm)")
             self.config["y_label"] = "Diameter (μm)"
+
         self._render()
 
     def _on_view_limits_changed(self, ax) -> None:
@@ -1581,67 +1633,68 @@ class SimpleRenderer:
                 time_divisor = config.get("time_divisor", 1.0)
                 time = time_sec / time_divisor
 
-                trace_type = config.get("trace", "inner")
+                trace_sel = _normalize_trace_selection(config)
                 line_width = config.get("line_width", 1.5)
+                trace_handles = []
 
                 # Plot based on trace type
-                if trace_type == "inner" and inner is not None:
-                    ax.plot(
-                        time,
-                        inner,
-                        color=config.get("inner_color", "#0000FF"),
-                        linewidth=line_width,
-                        label="Inner Diameter",
-                    )
-                elif trace_type == "outer" and outer is not None:
-                    ax.plot(
-                        time,
-                        outer,
-                        color=config.get("outer_color", "#FF0000"),
-                        linewidth=line_width,
-                        label="Outer Diameter",
-                    )
-                elif trace_type == "both":
-                    if inner is not None:
+                if trace_sel.get("inner") and inner is not None:
+                    trace_handles.append(
                         ax.plot(
                             time,
                             inner,
                             color=config.get("inner_color", "#0000FF"),
                             linewidth=line_width,
                             label="Inner Diameter",
-                        )
-                    if outer is not None:
+                        )[0]
+                    )
+                if trace_sel.get("outer") and outer is not None:
+                    trace_handles.append(
                         ax.plot(
                             time,
                             outer,
                             color=config.get("outer_color", "#FF0000"),
                             linewidth=line_width,
                             label="Outer Diameter",
-                        )
-                    if inner is not None or outer is not None:
-                        ax.legend(fontsize=config.get("tick_label_size", 10))
-                elif trace_type == "avg_pressure" and avg_pressure is not None:
-                    ax.plot(
-                        time,
-                        avg_pressure,
-                        color=config.get("pressure_color", "#00AA00"),
-                        linewidth=line_width,
-                        label="Average Pressure",
+                        )[0]
                     )
-                elif trace_type == "set_pressure" and set_pressure is not None:
-                    ax.plot(
-                        time,
-                        set_pressure,
-                        color=config.get("pressure_color", "#00AA00"),
-                        linewidth=line_width,
-                        label="Set Pressure",
+
+                if trace_sel.get("avg_pressure") and avg_pressure is not None:
+                    trace_handles.append(
+                        ax.plot(
+                            time,
+                            avg_pressure,
+                            color=config.get("pressure_color", "#00AA00"),
+                            linewidth=line_width,
+                            label="Average Pressure",
+                        )[0]
                     )
-                else:
-                    # No valid data for selected trace type
+                if trace_sel.get("set_pressure") and set_pressure is not None:
+                    trace_handles.append(
+                        ax.plot(
+                            time,
+                            set_pressure,
+                            color=config.get("pressure_color", "#00AA00"),
+                            linewidth=line_width,
+                            label="Set Pressure",
+                        )[0]
+                    )
+                if len(trace_handles) > 1:
+                    ax.legend(handles=trace_handles, fontsize=config.get("tick_label_size", 10))
+                if not trace_handles:
                     ax.text(
                         0.5,
                         0.5,
-                        f"No {trace_type} data available",
+                        "No data for selected traces",
+                        ha="center",
+                        va="center",
+                        transform=ax.transAxes,
+                    )
+                if not any(trace_sel.values()):
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "No trace selected",
                         ha="center",
                         va="center",
                         transform=ax.transAxes,
