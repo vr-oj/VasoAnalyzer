@@ -153,6 +153,8 @@ class NewFigureComposerWindow(QMainWindow):
         self._zoom_press_cid = None
         self._zoom_motion_cid = None
         self._zoom_release_cid = None
+        # Track whether a user-driven zoom/pan just occurred
+        self._user_view_change_pending = False
 
         # Apply initial page sizing before creating the UI
         self._apply_page_canvas_size()
@@ -1481,6 +1483,11 @@ class NewFigureComposerWindow(QMainWindow):
         composer config. This also turns off autoscale and updates the axis
         controls to match.
         """
+        # Ignore programmatic limit changes; only sync after user zoom/pan.
+        if not (
+            self._user_view_change_pending or self._nav_mode_active() or self._auto_zoom_active
+        ):
+            return
         if self.plot_axes is None:
             return
         if ax is not None and ax is not self.plot_axes:
@@ -1528,6 +1535,7 @@ class NewFigureComposerWindow(QMainWindow):
             self.y_max_spin.blockSignals(True)
             self.y_max_spin.setValue(self.config["y_max"])
             self.y_max_spin.blockSignals(False)
+        self._user_view_change_pending = False
 
     def _on_axis_changed(self):
         """Handle axis control changes."""
@@ -1560,6 +1568,7 @@ class NewFigureComposerWindow(QMainWindow):
         """After zoom/pan completes, sync the current view into config/UI."""
         if event.inaxes in (self.plot_axes, self.annotation_axes) and self._nav_mode_active():
             # Defer to after Matplotlib applies the new limits
+            self._user_view_change_pending = True
             QTimer.singleShot(0, lambda: self._on_view_limits_changed(self.plot_axes))
 
     def _nav_mode_active(self) -> bool:
@@ -1676,6 +1685,9 @@ class NewFigureComposerWindow(QMainWindow):
         with contextlib.suppress(Exception):
             toolbar.release_zoom(event)
             toolbar.zoom()  # toggle off
+        # Capture the post-zoom limits as an explicit user window
+        self._user_view_change_pending = True
+        QTimer.singleShot(0, lambda: self._on_view_limits_changed(self.plot_axes))
         self._auto_zoom_active = False
 
     def _export(self, format_type: str):

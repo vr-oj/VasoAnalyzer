@@ -2978,6 +2978,7 @@ class VasoAnalyzerApp(QMainWindow):
                     self.current_project.ui_state["last_experiment"] = self.current_experiment.name
                 self.current_project.ui_state["last_sample"] = sample.name
 
+            self._sync_autoscale_y_action_from_host()
             self._update_snapshot_viewer_state(sample)
             self._update_home_resume_button()
             self._update_metadata_panel(sample)
@@ -4065,16 +4066,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         view_menu.addSeparator()
 
-        # Renderer selection
-        renderer_menu = view_menu.addMenu("Renderer")
-        self.action_use_matplotlib = QAction("Matplotlib", self, checkable=True)
-        self.action_use_pyqtgraph = QAction("PyQtGraph", self, checkable=True)
-        self.action_use_matplotlib.triggered.connect(lambda: self.set_renderer("matplotlib"))
-        self.action_use_pyqtgraph.triggered.connect(lambda: self.set_renderer("pyqtgraph"))
-        renderer_menu.addAction(self.action_use_matplotlib)
-        renderer_menu.addAction(self.action_use_pyqtgraph)
-        # Set default checked state
-        self.action_use_matplotlib.setChecked(True)
+        # Renderer note (PyQtGraph is always used in the main window)
+        renderer_note = QAction("Renderer: PyQtGraph (locked for performance)", self)
+        renderer_note.setEnabled(False)
+        view_menu.addAction(renderer_note)
 
         # Color scheme selection
         theme_menu = view_menu.addMenu("Color Scheme")
@@ -4538,24 +4533,6 @@ class VasoAnalyzerApp(QMainWindow):
                     f"Could not open project:\n{e}",
                 )
             return
-
-        # open_project_file already handles project replacement and context creation
-        # Just need to handle UI state and show workspace
-        self.apply_ui_state(getattr(self.current_project, "ui_state", None))
-        self.refresh_project_tree()
-
-        # Always show analysis workspace so user can see project panel
-        self.show_analysis_workspace()
-
-        self.statusBar().showMessage(f"\u2713 Project loaded: {self.current_project.name}", 3000)
-        self.update_recent_projects(path)
-        if (
-            self.current_project
-            and self.current_project.experiments
-            and self.current_project.experiments[0].samples
-        ):
-            first_sample = self.current_project.experiments[0].samples[0]
-            self.load_sample_into_view(first_sample)
 
     def _start_update_check(self, *, silent: bool = False) -> None:
         if self._update_check_in_progress or self._update_checker.is_running:
@@ -5919,19 +5896,16 @@ class VasoAnalyzerApp(QMainWindow):
 
     # View Menu Actions
     def set_renderer(self, renderer: str):
-        """Switch between Matplotlib and PyQtGraph renderers."""
-        # Update checked state
-        is_matplotlib = renderer == "matplotlib"
-        self.action_use_matplotlib.setChecked(is_matplotlib)
-        self.action_use_pyqtgraph.setChecked(not is_matplotlib)
-
-        QMessageBox.information(
-            self,
-            "Renderer Selection",
-            f"Switching to {renderer.capitalize()} renderer.\n\n"
-            f"{'Matplotlib: Traditional renderer with extensive customization options.' if is_matplotlib else 'PyQtGraph: GPU-accelerated renderer for smooth interaction with large datasets.'}\n\n"
-            "Note: This feature will be fully implemented in a future update.",
-        )
+        """Ensure the main window stays on the PyQtGraph renderer."""
+        # Matplotlib is reserved for the figure composer; force PyQtGraph here.
+        self.action_use_pyqtgraph.setChecked(True)
+        self.action_use_matplotlib.setChecked(False)
+        self.action_use_matplotlib.setEnabled(False)
+        if renderer != "pyqtgraph":
+            self.statusBar().showMessage(
+                "Main view is locked to PyQtGraph for performance; use Figure Composer for matplotlib.",
+                4000,
+            )
 
     def set_color_scheme(self, scheme: str):
         """Set application color scheme."""
@@ -7193,6 +7167,8 @@ QPushButton[isGhost="true"]:hover {{
 
         # Enable/disable Y-axis autoscaling for all tracks
         self.plot_host.set_autoscale_y_enabled(checked)
+        self._invalidate_sample_state_cache()
+        self.mark_session_dirty(reason="autoscale y toggled")
 
         if plot_host is not None and hasattr(plot_host, "debug_dump_state"):
             plot_host.debug_dump_state("autoscale_y_toolbar (after)")
@@ -7202,6 +7178,21 @@ QPushButton[isGhost="true"]:hover {{
             and hasattr(plot_host, "log_data_and_view_ranges")
         ):
             plot_host.log_data_and_view_ranges("autoscale_y_toolbar")
+        self._sync_autoscale_y_action_from_host()
+
+    def _sync_autoscale_y_action_from_host(self) -> None:
+        """Align the Y-autoscale toggle with the current renderer state."""
+        act = getattr(self, "actAutoscaleY", None)
+        if act is None:
+            return
+        plot_host = getattr(self, "plot_host", None)
+        enabled = False
+        if plot_host is not None and hasattr(plot_host, "is_autoscale_y_enabled"):
+            with contextlib.suppress(Exception):
+                enabled = bool(plot_host.is_autoscale_y_enabled())
+        act.blockSignals(True)
+        act.setChecked(enabled)
+        act.blockSignals(False)
 
     def _ensure_event_label_actions(self) -> None:
         if getattr(self, "_event_label_action_group", None) is not None:
@@ -9240,6 +9231,7 @@ QPushButton[isGhost="true"]:hover {{
                     continue
                 track.set_ylim(y0, y1)
         self._pending_pyqtgraph_track_state = None
+        self._sync_autoscale_y_action_from_host()
 
     def _apply_pending_pyqtgraph_track_state(self) -> None:
         if self._pending_pyqtgraph_track_state:

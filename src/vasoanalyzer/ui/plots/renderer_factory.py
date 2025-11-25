@@ -23,9 +23,10 @@ def get_default_renderer_type() -> Literal["matplotlib", "pyqtgraph"]:
     Returns:
         "pyqtgraph" if enabled (default), otherwise "matplotlib"
     """
-    if is_enabled("pyqtgraph_renderer", default=True):
-        return "pyqtgraph"
-    return "matplotlib"
+    # Main window should always use the high-performance PyQtGraph path.
+    # Keep a single return to avoid accidentally flipping to matplotlib via flags.
+    _ = is_enabled  # Keep import lint-happy; flags no longer drive renderer choice.
+    return "pyqtgraph"
 
 
 def create_plot_host(

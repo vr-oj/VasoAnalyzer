@@ -207,7 +207,8 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
             QIcon(window.icon_path("Grid.svg")), "Y-Axis Autoscale", window
         )
         window.actAutoscaleY.setCheckable(True)
-        window.actAutoscaleY.setChecked(True)  # Enabled by default
+        # Default OFF for new sessions; user choice is persisted in UI state.
+        window.actAutoscaleY.setChecked(False)
         window.actAutoscaleY.setShortcut(QKeySequence("Y"))
         window.actAutoscaleY.setToolTip(
             "<b>Y-Axis Autoscale</b> <kbd>Y</kbd><br><br>"
