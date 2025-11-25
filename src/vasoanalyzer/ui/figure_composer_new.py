@@ -405,6 +405,175 @@ class NewFigureComposerWindow(QMainWindow):
             self.pos_y_spin.setValue(int(round(self.config.get("fig_top", 0) * 100)))
             self.pos_y_spin.blockSignals(False)
 
+    def _apply_config_to_controls(self) -> None:
+        """Sync the control panel to the current config without mutating it."""
+
+        cfg = self.config
+
+        # Figure size
+        if hasattr(self, "width_spin"):
+            self.width_spin.blockSignals(True)
+            self.width_spin.setValue(cfg.get("width_mm", self.width_spin.value()))
+            self.width_spin.blockSignals(False)
+        if hasattr(self, "height_spin"):
+            self.height_spin.blockSignals(True)
+            self.height_spin.setValue(cfg.get("height_mm", self.height_spin.value()))
+            self.height_spin.blockSignals(False)
+        self._sync_position_controls()
+
+        # Time units
+        if hasattr(self, "time_unit_combo"):
+            self.time_unit_combo.blockSignals(True)
+            unit = cfg.get("time_unit", self.time_unit_combo.currentText())
+            idx = self.time_unit_combo.findText(unit)
+            if idx >= 0:
+                self.time_unit_combo.setCurrentIndex(idx)
+            self.time_unit_combo.blockSignals(False)
+
+        # Axis labels and limits
+        if hasattr(self, "x_label_edit"):
+            self.x_label_edit.blockSignals(True)
+            self.x_label_edit.setText(cfg.get("x_label", "Time (s)"))
+            self.x_label_edit.blockSignals(False)
+        if hasattr(self, "y_label_edit"):
+            self.y_label_edit.blockSignals(True)
+            self.y_label_edit.setText(cfg.get("y_label", "Diameter (μm)"))
+            self.y_label_edit.blockSignals(False)
+
+        x_auto = bool(cfg.get("x_auto", True))
+        y_auto = bool(cfg.get("y_auto", True))
+
+        if hasattr(self, "x_auto_check"):
+            self.x_auto_check.blockSignals(True)
+            self.x_auto_check.setChecked(x_auto)
+            self.x_auto_check.blockSignals(False)
+        if hasattr(self, "y_auto_check"):
+            self.y_auto_check.blockSignals(True)
+            self.y_auto_check.setChecked(y_auto)
+            self.y_auto_check.blockSignals(False)
+
+        if hasattr(self, "x_min_spin"):
+            self.x_min_spin.blockSignals(True)
+            self.x_min_spin.setValue(cfg.get("x_min", self.x_min_spin.value()))
+            self.x_min_spin.setEnabled(not x_auto)
+            self.x_min_spin.blockSignals(False)
+        if hasattr(self, "x_max_spin"):
+            self.x_max_spin.blockSignals(True)
+            self.x_max_spin.setValue(cfg.get("x_max", self.x_max_spin.value()))
+            self.x_max_spin.setEnabled(not x_auto)
+            self.x_max_spin.blockSignals(False)
+        if hasattr(self, "y_min_spin"):
+            self.y_min_spin.blockSignals(True)
+            self.y_min_spin.setValue(cfg.get("y_min", self.y_min_spin.value()))
+            self.y_min_spin.setEnabled(not y_auto)
+            self.y_min_spin.blockSignals(False)
+        if hasattr(self, "y_max_spin"):
+            self.y_max_spin.blockSignals(True)
+            self.y_max_spin.setValue(cfg.get("y_max", self.y_max_spin.value()))
+            self.y_max_spin.setEnabled(not y_auto)
+            self.y_max_spin.blockSignals(False)
+
+        # Grid and spines
+        if hasattr(self, "grid_check"):
+            self.grid_check.blockSignals(True)
+            self.grid_check.setChecked(cfg.get("show_grid", True))
+            self.grid_check.blockSignals(False)
+        if hasattr(self, "show_top_spine_check"):
+            self.show_top_spine_check.blockSignals(True)
+            self.show_top_spine_check.setChecked(cfg.get("show_top_spine", False))
+            self.show_top_spine_check.blockSignals(False)
+        if hasattr(self, "show_right_spine_check"):
+            self.show_right_spine_check.blockSignals(True)
+            self.show_right_spine_check.setChecked(cfg.get("show_right_spine", False))
+            self.show_right_spine_check.blockSignals(False)
+
+        # Trace selection and colors
+        if hasattr(self, "trace_checks"):
+            selection = _normalize_trace_selection(cfg)
+            for key, cb in self.trace_checks.items():
+                cb.blockSignals(True)
+                cb.setChecked(selection.get(key, False))
+                cb.blockSignals(False)
+            for key, btn in getattr(self, "trace_color_btns", {}).items():
+                color_key = {
+                    "inner": "inner_color",
+                    "outer": "outer_color",
+                    "avg_pressure": "pressure_color",
+                    "set_pressure": "pressure_color",
+                }.get(key)
+                if color_key:
+                    btn.setStyleSheet(f"background-color: {cfg.get(color_key, '#000000')}")
+
+        # Styles and fonts
+        if hasattr(self, "line_width_spin"):
+            self.line_width_spin.blockSignals(True)
+            self.line_width_spin.setValue(cfg.get("line_width", self.line_width_spin.value()))
+            self.line_width_spin.blockSignals(False)
+        if hasattr(self, "axis_label_size_spin"):
+            self.axis_label_size_spin.blockSignals(True)
+            self.axis_label_size_spin.setValue(cfg.get("axis_label_size", 12))
+            self.axis_label_size_spin.blockSignals(False)
+        if hasattr(self, "tick_label_size_spin"):
+            self.tick_label_size_spin.blockSignals(True)
+            self.tick_label_size_spin.setValue(cfg.get("tick_label_size", 10))
+            self.tick_label_size_spin.blockSignals(False)
+        if hasattr(self, "font_combo"):
+            self.font_combo.blockSignals(True)
+            family = cfg.get("font_family", self.font_combo.currentFont().family())
+            idx = self.font_combo.findText(family)
+            if idx >= 0:
+                self.font_combo.setCurrentIndex(idx)
+            self.font_combo.blockSignals(False)
+        for attr, key in (
+            ("axis_label_bold_check", "axis_label_bold"),
+            ("axis_label_italic_check", "axis_label_italic"),
+            ("tick_label_bold_check", "tick_label_bold"),
+            ("tick_label_italic_check", "tick_label_italic"),
+        ):
+            chk = getattr(self, attr, None)
+            if chk is not None:
+                chk.blockSignals(True)
+                chk.setChecked(bool(cfg.get(key, False)))
+                chk.blockSignals(False)
+
+        # Event controls
+        if hasattr(self, "show_events_check"):
+            self.show_events_check.blockSignals(True)
+            self.show_events_check.setChecked(cfg.get("show_events", True))
+            self.show_events_check.blockSignals(False)
+        if hasattr(self, "event_style_combo"):
+            self.event_style_combo.blockSignals(True)
+            style = cfg.get("event_style", "lines")
+            idx = next(
+                (
+                    i
+                    for i in range(self.event_style_combo.count())
+                    if self.event_style_combo.itemData(i) == style
+                ),
+                -1,
+            )
+            if idx >= 0:
+                self.event_style_combo.setCurrentIndex(idx)
+            self.event_style_combo.blockSignals(False)
+        if hasattr(self, "event_label_combo"):
+            self.event_label_combo.blockSignals(True)
+            label_pos = cfg.get("event_label_pos", "top")
+            idx = next(
+                (
+                    i
+                    for i in range(self.event_label_combo.count())
+                    if self.event_label_combo.itemData(i) == label_pos
+                ),
+                -1,
+            )
+            if idx >= 0:
+                self.event_label_combo.setCurrentIndex(idx)
+            self.event_label_combo.blockSignals(False)
+        if hasattr(self, "event_font_size_spin"):
+            self.event_font_size_spin.blockSignals(True)
+            self.event_font_size_spin.setValue(cfg.get("event_font_size", 10))
+            self.event_font_size_spin.blockSignals(False)
+
     def _apply_stylesheet(self):
         """Apply stylesheet for better control panel visibility."""
         self.setStyleSheet(
@@ -1328,7 +1497,9 @@ class NewFigureComposerWindow(QMainWindow):
 
         # Load config if provided
         if "config" in figure_data:
-            self.config = copy.deepcopy(figure_data["config"])
+            merged = self._get_default_config()
+            merged.update(copy.deepcopy(figure_data["config"]))
+            self.config = merged
             self.annotations = self.config.setdefault("annotations", [])
             self._next_annotation_id = (
                 max((a.get("id", 0) for a in self.annotations), default=0) + 1
@@ -1344,7 +1515,7 @@ class NewFigureComposerWindow(QMainWindow):
         if orientation:
             self.page_orientation = orientation
         self._apply_page_canvas_size()
-        self._sync_position_controls()
+        self._apply_config_to_controls()
 
         # Refresh UI and canvas
         self._render()
