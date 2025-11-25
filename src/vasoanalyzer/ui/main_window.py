@@ -11226,6 +11226,10 @@ QPushButton[isGhost="true"]:hover {{
             state["inner_trace_visible"] = self.id_toggle_act.isChecked()
         if hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
             state["outer_trace_visible"] = self.od_toggle_act.isChecked()
+        if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act is not None:
+            state["avg_pressure_visible"] = self.avg_pressure_toggle_act.isChecked()
+        if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act is not None:
+            state["set_pressure_visible"] = self.set_pressure_toggle_act.isChecked()
         return state
 
     def _invalidate_sample_state_cache(self):
@@ -11273,6 +11277,16 @@ QPushButton[isGhost="true"]:hover {{
             ),
             "outer_trace_visible": (
                 self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False
+            ),
+            "avg_pressure_visible": (
+                self.avg_pressure_toggle_act.isChecked()
+                if self.avg_pressure_toggle_act is not None
+                else True
+            ),
+            "set_pressure_visible": (
+                self.set_pressure_toggle_act.isChecked()
+                if self.set_pressure_toggle_act is not None
+                else True
             ),
             "axis_settings": {
                 "x": {"label": x_axis.get_xlabel() if x_axis else ""},
@@ -11337,6 +11351,24 @@ QPushButton[isGhost="true"]:hover {{
             self.od_toggle_act.blockSignals(True)
             self.od_toggle_act.setChecked(state["outer_trace_visible"])
             self.od_toggle_act.blockSignals(False)
+        if (
+            "avg_pressure_visible" in state
+            and hasattr(self, "avg_pressure_toggle_act")
+            and self.avg_pressure_toggle_act is not None
+        ):
+            self.avg_pressure_toggle_act.blockSignals(True)
+            self.avg_pressure_toggle_act.setChecked(state["avg_pressure_visible"])
+            self.avg_pressure_toggle_act.blockSignals(False)
+            self._apply_channel_toggle("avg_pressure", state["avg_pressure_visible"])
+        if (
+            "set_pressure_visible" in state
+            and hasattr(self, "set_pressure_toggle_act")
+            and self.set_pressure_toggle_act is not None
+        ):
+            self.set_pressure_toggle_act.blockSignals(True)
+            self.set_pressure_toggle_act.setChecked(state["set_pressure_visible"])
+            self.set_pressure_toggle_act.blockSignals(False)
+            self._apply_channel_toggle("set_pressure", state["set_pressure_visible"])
         # Apply the visibility changes after restoring state
         if "inner_trace_visible" in state or "outer_trace_visible" in state:
             inner_on = state.get("inner_trace_visible", True)
@@ -11364,6 +11396,30 @@ QPushButton[isGhost="true"]:hover {{
                 else:
                     self.event_label_meta = [dict() for _ in self.event_table_data]
                 self.populate_table()
+            # Restore inner/outer toggles
+            for key, act_name, channel in (
+                ("inner_trace_visible", "id_toggle_act", "inner"),
+                ("outer_trace_visible", "od_toggle_act", "outer"),
+            ):
+                if key in state and hasattr(self, act_name):
+                    act = getattr(self, act_name)
+                    if act is not None:
+                        act.blockSignals(True)
+                        act.setChecked(bool(state[key]))
+                        act.blockSignals(False)
+                        self._apply_channel_toggle(channel, bool(state[key]))
+            # Restore channel toggles for pressure tracks
+            for key, act_name, channel in (
+                ("avg_pressure_visible", "avg_pressure_toggle_act", "avg_pressure"),
+                ("set_pressure_visible", "set_pressure_toggle_act", "set_pressure"),
+            ):
+                if key in state and hasattr(self, act_name):
+                    act = getattr(self, act_name)
+                    if act is not None:
+                        act.blockSignals(True)
+                        act.setChecked(bool(state[key]))
+                        act.blockSignals(False)
+                        self._apply_channel_toggle(channel, bool(state[key]))
             # Apply only style if present; skip layout/axes/pins/grid restores.
             style = state.get("style_settings") or state.get("plot_style")
             if style:
@@ -11448,6 +11504,25 @@ QPushButton[isGhost="true"]:hover {{
             outer_supported = self._outer_channel_available()
             self._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)
             self._rebuild_channel_layout(inner_on, outer_on, redraw=False)
+        # Apply avg/set visibility after layout so ancillary tracks stay in sync
+        if (
+            "avg_pressure_visible" in state
+            and hasattr(self, "avg_pressure_toggle_act")
+            and self.avg_pressure_toggle_act is not None
+        ):
+            self.avg_pressure_toggle_act.blockSignals(True)
+            self.avg_pressure_toggle_act.setChecked(state["avg_pressure_visible"])
+            self.avg_pressure_toggle_act.blockSignals(False)
+            self._apply_channel_toggle("avg_pressure", state["avg_pressure_visible"])
+        if (
+            "set_pressure_visible" in state
+            and hasattr(self, "set_pressure_toggle_act")
+            and self.set_pressure_toggle_act is not None
+        ):
+            self.set_pressure_toggle_act.blockSignals(True)
+            self.set_pressure_toggle_act.setChecked(state["set_pressure_visible"])
+            self.set_pressure_toggle_act.blockSignals(False)
+            self._apply_channel_toggle("set_pressure", state["set_pressure_visible"])
 
         legend_settings = state.get("legend_settings")
         if isinstance(legend_settings, dict):
