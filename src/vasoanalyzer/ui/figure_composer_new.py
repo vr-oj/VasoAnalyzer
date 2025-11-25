@@ -20,6 +20,7 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import patches as mpatches
 from matplotlib import transforms as mtransforms
 from matplotlib.backends.backend_qt5agg import (
     FigureCanvasQTAgg,
@@ -48,6 +49,7 @@ from PyQt5.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -131,6 +133,11 @@ class NewFigureComposerWindow(QMainWindow):
 
         # Initialize config with defaults
         self.config = self._get_default_config()
+        self.annotations: list[dict[str, Any]] = self.config.setdefault("annotations", [])
+        self._next_annotation_id = 1
+        self.annotation_mode: str | None = None  # None, 'box', 'select'
+        self._active_annotation_id: int | None = None
+        self._annotation_drag_state: dict[str, Any] = {}
         self.plot_axes = None
         self._layout_dirty = True
         self._xlim_cid = None
@@ -201,6 +208,8 @@ class NewFigureComposerWindow(QMainWindow):
             "axes_pad_top_mm": 4.0,
             "axes_pad_bottom_mm": 6.0,
             "export_margin_in": 0.5,  # extra blank space around figure when exporting
+            # Simple axes-relative annotations (e.g., mmHg header boxes)
+            "annotations": [],
             # Fonts
             "axis_label_size": 12,
             "tick_label_size": 10,
@@ -308,6 +317,8 @@ class NewFigureComposerWindow(QMainWindow):
             [axes_left, axes_bottom, axes_width, axes_height]
         )
         self.plot_axes.set_facecolor("white")
+        # For simple axes-relative annotations, we can use the same axes
+        self.annotation_axes = self.plot_axes
 
         # Share axes with renderer and tools
         self.renderer.set_axes(self.plot_axes)
@@ -499,6 +510,9 @@ class NewFigureComposerWindow(QMainWindow):
                 self.nav_toolbar.removeAction(action)
         canvas_layout.addWidget(self.nav_toolbar)
 
+        # Annotation toolbar (opt-in)
+        canvas_layout.addWidget(self._create_annotation_toolbar())
+
         # Canvas in scroll area with gray background
         self.canvas_scroll = QScrollArea()
         self.canvas_scroll.setWidget(self.canvas)
@@ -539,6 +553,30 @@ class NewFigureComposerWindow(QMainWindow):
         control_panel.setMaximumWidth(500)
 
         main_layout.addWidget(splitter)
+
+    def _create_annotation_toolbar(self) -> QWidget:
+        """Create a minimal annotation toolbar (select / box)."""
+        bar = QWidget()
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(4)
+
+        self.ann_select_btn = QToolButton(bar)
+        self.ann_select_btn.setText("Select")
+        self.ann_select_btn.setCheckable(True)
+        self.ann_select_btn.setToolTip("Select and move annotation boxes")
+        self.ann_select_btn.toggled.connect(self._on_annotation_tool_toggled)
+        layout.addWidget(self.ann_select_btn)
+
+        self.ann_box_btn = QToolButton(bar)
+        self.ann_box_btn.setText("Box")
+        self.ann_box_btn.setCheckable(True)
+        self.ann_box_btn.setToolTip("Draw a box annotation (axes-relative)")
+        self.ann_box_btn.toggled.connect(self._on_annotation_tool_toggled)
+        layout.addWidget(self.ann_box_btn)
+
+        layout.addStretch()
+        return bar
 
     def _create_control_panel(self) -> QWidget:
         """Create control panel with improved layout."""
@@ -1081,6 +1119,175 @@ class NewFigureComposerWindow(QMainWindow):
         self._render()
 
     # ------------------------------------------------------------------
+    # Annotation toolbar handlers (axes-relative boxes)
+    # ------------------------------------------------------------------
+    def _on_annotation_tool_toggled(self, checked: bool):
+        """Update annotation mode when toolbar buttons change."""
+        if not checked:
+            # If a button was unchecked, clear mode only if none remain checked
+            if not self.ann_select_btn.isChecked() and not self.ann_box_btn.isChecked():
+                self.annotation_mode = None
+            return
+
+        sender = self.sender()
+        if sender == self.ann_box_btn:
+            self.ann_select_btn.blockSignals(True)
+            self.ann_select_btn.setChecked(False)
+            self.ann_select_btn.blockSignals(False)
+            self.annotation_mode = "box"
+        elif sender == self.ann_select_btn:
+            self.ann_box_btn.blockSignals(True)
+            self.ann_box_btn.setChecked(False)
+            self.ann_box_btn.blockSignals(False)
+            self.annotation_mode = "select"
+
+    def _event_coords(self, event) -> dict[str, tuple[float, float] | None]:
+        """Return both axes-fraction and figure-fraction coords for an event."""
+        coords: dict[str, tuple[float, float] | None] = {"axes": None, "figure": None}
+        if self.plot_axes is not None:
+            inv_axes = self.plot_axes.transAxes.inverted()
+            coords["axes"] = tuple(inv_axes.transform((event.x, event.y)))
+        if self.page_figure is not None:
+            inv_fig = self.page_figure.transFigure.inverted()
+            coords["figure"] = tuple(inv_fig.transform((event.x, event.y)))
+        return coords
+
+    def _coords_for_space(self, event, space: str) -> tuple[float, float] | None:
+        """Get coords in requested space ('axes' or 'figure')."""
+        coords = self._event_coords(event)
+        val = coords.get(space)
+        if val is None:
+            return None
+        if space == "axes":
+            return val
+        # for figure coords, ensure within page
+        if 0.0 <= val[0] <= 1.0 and 0.0 <= val[1] <= 1.0:
+            return val
+        return None
+
+    def _hit_test_box(self, event) -> dict[str, Any] | None:
+        """Return topmost box containing point (supports axes or figure space)."""
+        coords = self._event_coords(event)
+        ax_xy = coords.get("axes")
+        fig_xy = coords.get("figure")
+        for ann in reversed(self.annotations):
+            if ann.get("type") != "box":
+                continue
+            space = ann.get("space", "axes")
+            coord_pair = ax_xy if space == "axes" else fig_xy
+            if coord_pair is None:
+                continue
+            x, y = coord_pair
+            if x is None or y is None:
+                continue
+            if ann.get("x0", 0) <= x <= ann.get("x1", 0) and ann.get("y0", 0) <= y <= ann.get(
+                "y1", 0
+            ):
+                return ann
+        return None
+
+    def _on_annotation_press(self, event):
+        if event.button != 1:
+            return
+        coords = self._event_coords(event)
+        axes_xy = coords.get("axes")
+        fig_xy = coords.get("figure")
+
+        if self.annotation_mode == "box":
+            if axes_xy and 0.0 <= axes_xy[0] <= 1.0 and 0.0 <= axes_xy[1] <= 1.0:
+                space = "axes"
+                x, y = axes_xy
+            elif fig_xy and 0.0 <= fig_xy[0] <= 1.0 and 0.0 <= fig_xy[1] <= 1.0:
+                space = "figure"
+                x, y = fig_xy
+            else:
+                return
+            self._annotation_drag_state = {"mode": "new_box", "x0": x, "y0": y, "space": space}
+        elif self.annotation_mode == "select":
+            hit = self._hit_test_box(event)
+            if hit:
+                space = hit.get("space", "axes")
+                coord = axes_xy if space == "axes" else fig_xy
+                if coord is None:
+                    return
+                x, y = coord
+                self._active_annotation_id = hit.get("id")
+                self._annotation_drag_state = {
+                    "mode": "move_box",
+                    "space": space,
+                    "x_offset": x - hit.get("x0", 0),
+                    "y_offset": y - hit.get("y0", 0),
+                }
+
+    def _on_annotation_motion(self, event):
+        state = self._annotation_drag_state
+        if not state:
+            return
+        space = state.get("space", "axes")
+        coords = self._coords_for_space(event, space)
+        if coords is None:
+            return
+        x, y = coords
+
+        if state.get("mode") == "move_box" and self._active_annotation_id is not None:
+            ann = self._get_box_by_id(self._active_annotation_id)
+            if ann:
+                w = ann.get("x1", 0) - ann.get("x0", 0)
+                h = ann.get("y1", 0) - ann.get("y0", 0)
+                new_x0 = x - state.get("x_offset", 0)
+                new_y0 = y - state.get("y_offset", 0)
+                ann["x0"] = new_x0
+                ann["y0"] = new_y0
+                ann["x1"] = new_x0 + w
+                ann["y1"] = new_y0 + h
+                self._render()
+
+    def _on_annotation_release(self, event):
+        state = self._annotation_drag_state
+        if not state:
+            return
+
+        if state.get("mode") == "new_box":
+            space = state.get("space", "axes")
+            coords = self._coords_for_space(event, space)
+            if coords is not None:
+                x1, y1 = coords
+                x0, y0 = state["x0"], state["y0"]
+                if abs(x1 - x0) > 0.002 and abs(y1 - y0) > 0.002:
+                    # Optional text prompt
+                    text, ok = QInputDialog.getText(
+                        self, "Box Label", "Enter annotation text:", QLineEdit.Normal, ""
+                    )
+                    if not ok:
+                        text = ""
+                    ann = {
+                        "id": self._next_annotation_id,
+                        "type": "box",
+                        "space": space,
+                        "x0": min(x0, x1),
+                        "y0": min(y0, y1),
+                        "x1": max(x0, x1),
+                        "y1": max(y0, y1),
+                        "text": text,
+                        "edgecolor": "#000000",
+                        "facecolor": "#ffffff",
+                        "linewidth": 0.8,
+                        "color": "#000000",
+                    }
+                    self._next_annotation_id += 1
+                    self.annotations.append(ann)
+                    self._render()
+
+        self._annotation_drag_state = {}
+        self._active_annotation_id = None
+
+    def _get_box_by_id(self, box_id: int) -> dict[str, Any] | None:
+        for ann in self.annotations:
+            if ann.get("id") == box_id:
+                return ann
+        return None
+
+    # ------------------------------------------------------------------
     # Project integration helpers (load existing figure configs)
     # ------------------------------------------------------------------
     def load_from_project(self, figure_id: str | None, figure_data: dict[str, Any] | None) -> None:
@@ -1095,6 +1302,10 @@ class NewFigureComposerWindow(QMainWindow):
         # Load config if provided
         if "config" in figure_data:
             self.config = copy.deepcopy(figure_data["config"])
+            self.annotations = self.config.setdefault("annotations", [])
+            self._next_annotation_id = (
+                max((a.get("id", 0) for a in self.annotations), default=0) + 1
+            )
             self._layout_dirty = True
 
         # Load page settings
@@ -1322,7 +1533,7 @@ class NewFigureComposerWindow(QMainWindow):
 
     def _on_canvas_mouse_release(self, event):
         """After zoom/pan completes, sync the current view into config/UI."""
-        if event.inaxes is self.plot_axes and self._nav_mode_active():
+        if event.inaxes in (self.plot_axes, self.annotation_axes) and self._nav_mode_active():
             # Defer to after Matplotlib applies the new limits
             QTimer.singleShot(0, lambda: self._on_view_limits_changed(self.plot_axes))
 
@@ -1396,7 +1607,10 @@ class NewFigureComposerWindow(QMainWindow):
     # Mouse-driven zoom (box select)
     # ------------------------------------------------------------------
     def _on_zoom_press(self, event):
-        if event.button != 1 or event.inaxes is not self.plot_axes:
+        if self.annotation_mode is not None:
+            self._on_annotation_press(event)
+            return
+        if event.button != 1 or event.inaxes not in (self.plot_axes, self.annotation_axes):
             return
         if self._nav_mode_active():  # let toolbar zoom/pan take precedence
             return
@@ -1410,7 +1624,10 @@ class NewFigureComposerWindow(QMainWindow):
             toolbar.press_zoom(event)
 
     def _on_zoom_motion(self, event):
-        if not self._auto_zoom_active or event.inaxes is not self.plot_axes:
+        if self.annotation_mode is not None:
+            self._on_annotation_motion(event)
+            return
+        if not self._auto_zoom_active or event.inaxes not in (self.plot_axes, self.annotation_axes):
             return
         toolbar = getattr(self, "nav_toolbar", None)
         if toolbar is None:
@@ -1422,6 +1639,9 @@ class NewFigureComposerWindow(QMainWindow):
 
     def _on_zoom_release(self, event):
         if event.button != 1:
+            return
+        if self.annotation_mode is not None:
+            self._on_annotation_release(event)
             return
         if not self._auto_zoom_active:
             return
@@ -1762,6 +1982,9 @@ class SimpleRenderer:
         ax.spines["left"].set_visible(True)
         ax.spines["bottom"].set_visible(True)
 
+        # Axes-relative box annotations (e.g., mmHg headers)
+        self._draw_box_annotations(ax, config)
+
     def _draw_events(
         self,
         ax,
@@ -1889,3 +2112,57 @@ class SimpleRenderer:
             label.set_fontweight(weight)
             label.set_fontstyle(style)
             label.set_fontfamily(family)
+
+    def _draw_box_annotations(self, ax, config: dict[str, Any]) -> None:
+        """Render simple axes-relative boxes stored in config['annotations']."""
+        annotations = config.get("annotations") or []
+        if not annotations:
+            return
+
+        for ann in annotations:
+            if ann.get("type") != "box":
+                continue
+
+            space = ann.get("space", "axes")
+            transform = ax.transAxes if space == "axes" else ax.figure.transFigure
+
+            x0 = float(ann.get("x0", 0.0))
+            y0 = float(ann.get("y0", 0.0))
+            x1 = float(ann.get("x1", 0.0))
+            y1 = float(ann.get("y1", 0.0))
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            width = x1 - x0
+            height = y1 - y0
+            edge = ann.get("edgecolor", "#000000")
+            face = ann.get("facecolor", "#FFFFFF")
+            lw = float(ann.get("linewidth", 0.8))
+
+            rect = mpatches.Rectangle(
+                (x0, y0),
+                width,
+                height,
+                transform=transform,
+                facecolor=face,
+                edgecolor=edge,
+                linewidth=lw,
+                zorder=10,
+                clip_on=False,
+            )
+            ax.add_patch(rect)
+
+            text = ann.get("text", "")
+            if text:
+                ax.text(
+                    x0 + width / 2.0,
+                    y0 + height / 2.0,
+                    text,
+                    ha=ann.get("ha", "center"),
+                    va=ann.get("va", "center"),
+                    fontsize=ann.get("fontsize", config.get("tick_label_size", 10)),
+                    fontfamily=ann.get("fontfamily", config.get("font_family", "Arial")),
+                    color=ann.get("color", "#000000"),
+                    transform=transform,
+                    zorder=11,
+                )

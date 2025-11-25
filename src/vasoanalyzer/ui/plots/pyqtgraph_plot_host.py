@@ -483,13 +483,31 @@ class PyQtGraphPlotHost:
         if not self._tracks or not self._channel_specs:
             return
 
-        visible_specs = [
-            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
-        ]
-        if visible_specs:
-            bottom_visible_id = visible_specs[-1].track_id
+        visible_ids = []
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            try:
+                is_visible = track.is_visible()
+            except Exception:
+                is_visible = self.is_channel_visible(spec.track_id)
+            if is_visible:
+                visible_ids.append(spec.track_id)
+        if visible_ids:
+            bottom_visible_id = visible_ids[-1]
         else:
-            bottom_visible_id = self._channel_specs[-1].track_id
+            # If nothing is marked visible, pick the last existing track so the X-axis is still shown.
+            bottom_visible_id = next(
+                (
+                    spec.track_id
+                    for spec in reversed(self._channel_specs)
+                    if spec.track_id in self._tracks
+                ),
+                None,
+            )
+            if bottom_visible_id is None:
+                return
 
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
