@@ -227,6 +227,9 @@ class SampleN:
     snapshot_format: str | None = None
     analysis_result_keys: list[str] | None = None
     edit_history: list[dict[str, Any]] | None = None
+    # Cache validation fields - track which dataset_id the cached data belongs to
+    _trace_cache_dataset_id: int | None = field(default=None, repr=False)
+    _events_cache_dataset_id: int | None = field(default=None, repr=False)
 
     def copy(self) -> SampleN:
         """Return a deep copy of this sample."""

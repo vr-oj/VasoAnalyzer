@@ -9,6 +9,10 @@ import sys
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
 from PyQt5.QtCore import QLibraryInfo
 
+# ensure project root on path for helper scripts
+spec_path = os.path.abspath(sys.argv[0])
+sys.path.insert(0, os.path.dirname(spec_path))
+
 # Increase recursion limit for Windows PyInstaller builds
 sys.setrecursionlimit(5000)
 
@@ -19,8 +23,18 @@ else:
     project_dir = os.path.abspath(os.path.join(spec_dir, '..'))
 src_dir = os.path.join(project_dir, 'src')
 package_assets_dir = os.path.join(src_dir, 'vasoanalyzer')
+sys.path.insert(0, src_dir)
 
-# decide platform‐specific icon
+# App version for naming
+try:
+    from utils.config import APP_VERSION
+except Exception:
+    APP_VERSION = "0.0.0"
+
+APP_NAME = f"VasoAnalyzer v{APP_VERSION}"
+
+# generate version-stamped icons at build time
+# decide platform‐specific icon (base icon only; no version overlay)
 if sys.platform == 'darwin':
     ICON = os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns')
 elif sys.platform.startswith('win'):
@@ -110,7 +124,7 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
 exe_common_kwargs = dict(
-    name='VasoAnalyzer',
+    name=APP_NAME,
     debug=False,
     strip=False,
     upx=True,
@@ -134,12 +148,12 @@ if sys.platform == 'darwin':
         a.datas,
         strip=False,
         upx=True,
-        name='VasoAnalyzer',
+        name=APP_NAME,
     )
 
     app = BUNDLE(
         coll,
-        name='VasoAnalyzer.app',
+        name=f'{APP_NAME}.app',
         icon=ICON,
         bundle_identifier='org.vasoanalyzer.vaso',
         info_plist=os.path.join(project_dir, 'packaging', 'macos', 'Info.plist'),

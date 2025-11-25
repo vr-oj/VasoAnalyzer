@@ -63,8 +63,8 @@ class PyQtGraphChannelTrack:
         # Create matplotlib-compatible line wrapper
         self._line_compat: PyQtGraphLineCompat | None = None
 
-        # Enable autoscale by default
-        self.view.set_autoscale_y(True)
+        # Disable autoscale by default (user can enable in Plot Settings)
+        self.view.set_autoscale_y(False)
 
     @property
     def id(self) -> str:

@@ -142,6 +142,11 @@ class PyQtGraphPlotHost:
         # Reassign bottom X-axis ownership based on updated visibility.
         self._update_bottom_axis_assignments()
 
+        # Update all track fonts since visible count changed
+        # Y-axis title sizes adapt based on number of visible tracks
+        for t in self._tracks.values():
+            self._apply_axis_font_to_track(t)
+
     def is_channel_visible(self, channel_kind: str) -> bool:
         """Return visibility flag for a channel kind (defaults to True)."""
 
@@ -675,28 +680,38 @@ class PyQtGraphPlotHost:
         for track in self._tracks.values():
             track.set_line_width(self._default_line_width)
 
+    def _count_visible_tracks(self) -> int:
+        """Count currently visible channel tracks."""
+        count = 0
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is not None and track.is_visible():
+                count += 1
+        return count
+
     def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
         plot_item = track.view.get_widget().getPlotItem()
 
-        # Set fixed font sizes based on number of visible tracks
+        # Set fixed font sizes based on number of VISIBLE tracks (not total)
         # These sizes provide optimal readability as vertical space changes
-        track_count = len(self._channel_specs)
-        if track_count == 1:
+        # X-axis title stays fixed at 20pt for consistency
+        visible_count = max(self._count_visible_tracks(), 1)  # At least 1 to avoid edge cases
+        if visible_count == 1:
             tick_size = 14
             ylabel_size = 24
-            xlabel_size = 24
-        elif track_count == 2:
+            xlabel_size = 20  # Fixed for X-axis
+        elif visible_count == 2:
             tick_size = 14
             ylabel_size = 22
-            xlabel_size = 22
-        elif track_count == 3:
+            xlabel_size = 20  # Fixed for X-axis
+        elif visible_count == 3:
             tick_size = 14
             ylabel_size = 20
-            xlabel_size = 20
-        else:  # 4 or more tracks
+            xlabel_size = 20  # Fixed for X-axis
+        else:  # 4 or more visible tracks
             tick_size = 14
             ylabel_size = 16
-            xlabel_size = 20
+            xlabel_size = 20  # Fixed for X-axis
 
         ylabel_font = QFont(self._axis_font_family, ylabel_size)
         xlabel_font = QFont(self._axis_font_family, xlabel_size)

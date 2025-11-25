@@ -85,7 +85,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Data model and state
         self.model: TraceModel | None = None
         self._current_window: TraceWindow | None = None
-        self._autoscale_y = True
+        self._autoscale_y = False  # Default: fixed Y-axis (user can enable in Plot Settings)
 
         # Plot items
         self.inner_curve: pg.PlotDataItem | None = None

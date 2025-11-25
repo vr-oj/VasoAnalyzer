@@ -668,6 +668,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.undo_stack = QUndoStack(self)
         self._thread_pool = QThreadPool.globalInstance()
         self._current_sample_token: object | None = None
+        self._loading_dataset_ids: set[int] = set()  # Track in-flight dataset loads
         self._pending_asset_scan_token: object | None = None
         self._project_missing_messages: list[str] = []
         self._last_missing_assets_snapshot: tuple[int, int] | None = None
@@ -2455,6 +2456,37 @@ class VasoAnalyzerApp(QMainWindow):
         token = object()
         self._current_sample_token = token
 
+        # Validate cache - check if cached data belongs to current dataset_id
+        trace_cache_valid = (
+            sample.trace_data is not None
+            and getattr(sample, "_trace_cache_dataset_id", None) == sample.dataset_id
+        )
+        events_cache_valid = (
+            sample.events_data is not None
+            and getattr(sample, "_events_cache_dataset_id", None) == sample.dataset_id
+        )
+
+        # Invalidate stale cache
+        if sample.trace_data is not None and not trace_cache_valid:
+            log.warning(
+                "CACHE_INVALID: trace cache for '%s' invalid (dataset_id=%s, cached_id=%s), clearing",
+                sample.name,
+                sample.dataset_id,
+                getattr(sample, "_trace_cache_dataset_id", None),
+            )
+            sample.trace_data = None
+            sample._trace_cache_dataset_id = None
+
+        if sample.events_data is not None and not events_cache_valid:
+            log.warning(
+                "CACHE_INVALID: events cache for '%s' invalid (dataset_id=%s, cached_id=%s), clearing",
+                sample.name,
+                sample.dataset_id,
+                getattr(sample, "_events_cache_dataset_id", None),
+            )
+            sample.events_data = None
+            sample._events_cache_dataset_id = None
+
         needs_trace = sample.trace_data is None and sample.dataset_id is not None
         needs_events = sample.events_data is None and sample.dataset_id is not None
         needs_results = (
@@ -2462,6 +2494,18 @@ class VasoAnalyzerApp(QMainWindow):
             and sample.dataset_id is not None
             and (sample.analysis_result_keys is None or bool(sample.analysis_result_keys))
         )
+
+        # Prevent duplicate loads for the same dataset
+        if (
+            sample.dataset_id is not None
+            and sample.dataset_id in self._loading_dataset_ids
+            and (needs_trace or needs_events or needs_results)
+        ):
+            log.info(
+                "DATASET_LOAD_SKIP: dataset_id=%s already loading, skipping duplicate load request",
+                sample.dataset_id,
+            )
+            return
 
         ctx = getattr(self, "project_ctx", None)
         log.debug("load_sample_into_view: ctx type=%s ctx=%s", type(ctx), ctx)
@@ -2525,10 +2569,30 @@ class VasoAnalyzerApp(QMainWindow):
 
         load_async = bool((repo or project_path) and (needs_trace or needs_events or needs_results))
 
+        log.info(
+            "DATASET_LOAD: sample='%s' dataset_id=%s cached=(trace=%s, events=%s) "
+            "needs=(trace=%s, events=%s, results=%s) load_async=%s",
+            sample.name,
+            sample.dataset_id,
+            sample.trace_data is not None,
+            sample.events_data is not None,
+            needs_trace,
+            needs_events,
+            needs_results,
+            load_async,
+        )
+
         self._start_sample_load_progress(sample.name)
         self._prepare_sample_view(sample)
 
         if load_async:
+            # Mark this dataset as loading
+            if sample.dataset_id is not None:
+                self._loading_dataset_ids.add(sample.dataset_id)
+                log.debug(
+                    "DATASET_LOAD_START: dataset_id=%s added to in-flight set", sample.dataset_id
+                )
+
             self.statusBar().showMessage(f"Loading {sample.name}…", 2000)
             self._begin_sample_load_job(
                 sample,
@@ -2547,8 +2611,39 @@ class VasoAnalyzerApp(QMainWindow):
         self._finish_sample_load_progress()
 
     def _prepare_sample_view(self, sample: SampleN) -> None:
+        log.debug(
+            "DATASET_PREPARE: sample='%s' clearing canvas (keeping event table visible during load)",
+            sample.name,
+        )
         self.show_analysis_workspace()
-        self._clear_canvas_and_table()
+        # Clear the plot/canvas but DON'T clear event table yet
+        # Event table will be cleared in _render_sample when new data is ready
+        self._clear_slider_markers()
+        self.trace_data = None
+        if hasattr(self, "plot_host"):
+            self.plot_host.clear()
+            initial_specs = [
+                ChannelTrackSpec(
+                    track_id="inner",
+                    component="inner",
+                    label="Inner Diameter (µm)",
+                    height_ratio=1.0,
+                )
+            ]
+            self.plot_host.ensure_channels(initial_specs)
+            inner_track = self.plot_host.track("inner")
+            self.ax = inner_track.ax if inner_track else None
+            self._bind_primary_axis_callbacks()
+        self.ax2 = None
+        self.outer_line = None
+        self.trace_model = None
+        if self.zoom_dock:
+            self.zoom_dock.set_trace_model(None)
+        if self.scope_dock:
+            self.scope_dock.set_trace_model(None)
+        self.canvas.draw_idle()
+
+        # Clear snapshot UI
         self.snapshot_frames = []
         self.frames_metadata = []
         self.toggle_snapshot_viewer(False)
@@ -2563,16 +2658,13 @@ class VasoAnalyzerApp(QMainWindow):
         self._reset_snapshot_speed()
         self._set_playback_state(False)
         self.metadata_details_label.setText("No metadata available.")
-        self._clear_slider_markers()
         self._clear_event_highlight()
         self._clear_pins()
-        self.trace_data = None
-        self.event_labels = []
-        self.event_times = []
-        self.event_frames = []
-        self.event_table_data = []
-        self.event_label_meta = []
         self._layout_log_ready = False
+
+        # NOTE: We intentionally DON'T clear event_labels, event_times, event_frames,
+        # event_table_data, or event_label_meta here. They will be cleared in _render_sample
+        # when new data is ready. This keeps the old event table visible during async loading.
 
     def _begin_sample_load_job(
         self,
@@ -2609,13 +2701,39 @@ class VasoAnalyzerApp(QMainWindow):
         events_df: pd.DataFrame | None,
         analysis_results: dict[str, Any] | None,
     ) -> None:
+        # Remove from in-flight tracking
+        if sample.dataset_id is not None:
+            self._loading_dataset_ids.discard(sample.dataset_id)
+            log.debug(
+                "DATASET_LOAD_FINISH: dataset_id=%s removed from in-flight set", sample.dataset_id
+            )
+
         if token != self._current_sample_token or sample is not self.current_sample:
+            log.warning(
+                "DATASET_LOAD_DISCARDED: sample='%s' dataset_id=%s reason=%s current_sample='%s'",
+                sample.name,
+                sample.dataset_id,
+                "token_mismatch" if token != self._current_sample_token else "sample_changed",
+                getattr(self.current_sample, "name", None),
+            )
+            # Clear any partial cache from this discarded load to prevent corruption
+            # Only clear if this sample is NOT the current sample (we switched away)
+            if sample is not self.current_sample:
+                if trace_df is not None and sample.trace_data is None:
+                    log.debug("DATASET_LOAD_DISCARDED: clearing partial trace cache")
+                if events_df is not None and sample.events_data is None:
+                    log.debug("DATASET_LOAD_DISCARDED: clearing partial events cache")
+                # Note: We don't set sample.trace_data/events_data here because
+                # the data might be useful if user switches back. Cache validation
+                # will handle correctness on next load.
             return
         t0 = time.perf_counter()
         if trace_df is not None:
             sample.trace_data = trace_df
+            sample._trace_cache_dataset_id = sample.dataset_id
         if events_df is not None:
             sample.events_data = events_df
+            sample._events_cache_dataset_id = sample.dataset_id
         if analysis_results:
             sample.analysis_results = analysis_results
             sample.analysis_result_keys = list(analysis_results.keys())
@@ -2656,6 +2774,13 @@ class VasoAnalyzerApp(QMainWindow):
         )
 
     def _on_sample_load_error(self, token: object, sample: SampleN, message: str) -> None:
+        # Remove from in-flight tracking
+        if sample.dataset_id is not None:
+            self._loading_dataset_ids.discard(sample.dataset_id)
+            log.debug(
+                "DATASET_LOAD_ERROR: dataset_id=%s removed from in-flight set", sample.dataset_id
+            )
+
         if token != self._current_sample_token or sample is not self.current_sample:
             return
         log.warning("Embedded data load failed for %s: %s", sample.name, message)
@@ -5234,7 +5359,7 @@ class VasoAnalyzerApp(QMainWindow):
                 desired_set = (
                     self.set_pressure_toggle_act.isChecked()
                     if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act
-                    else True
+                    else False  # Default: hide Set Pressure track
                 )
                 host.set_channel_visible("set_pressure", bool(desired_set))
             else:
@@ -5532,6 +5657,7 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "canvas"):
             with contextlib.suppress(Exception):
                 self.canvas.draw_idle()
+        self._invalidate_sample_state_cache()
 
     def toggle_fullscreen(self, checked: bool = False):
         """Toggle fullscreen mode.
@@ -7746,6 +7872,11 @@ QPushButton[isGhost="true"]:hover {{
         refresh_plot: bool = True,
         auto_export: bool = False,
     ):
+        log.debug(
+            "DATASET_EVENTS_POPULATE: sample='%s' event_count=%d",
+            getattr(self.current_sample, "name", "<unknown>"),
+            len(labels) if labels else 0,
+        )
         self.event_labels = list(labels)
         self.event_label_meta = [dict() for _ in self.event_labels]
         if times is not None:
@@ -8809,12 +8940,30 @@ QPushButton[isGhost="true"]:hover {{
         if self.scope_dock:
             self.scope_dock.set_trace_model(self.trace_model)
         if track_limits or prev_window is None:
-            target_window = self.trace_model.full_range
+            # Default initial view: first 1800 seconds (30 minutes)
+            # This provides a useful detailed view instead of showing entire trace
+            full_range = self.trace_model.full_range
+            default_window_duration = 1800.0  # seconds
+            if full_range[1] - full_range[0] > default_window_duration:
+                target_window = (full_range[0], full_range[0] + default_window_duration)
+                log.info(
+                    "Initial load: showing first %.0f seconds of %.0f second trace",
+                    default_window_duration,
+                    full_range[1] - full_range[0],
+                )
+            else:
+                # Short recording - show full range
+                target_window = full_range
         else:
             target_window = prev_window
         self.plot_host.set_time_window(*target_window)
-        if track_limits and prev_window is None:
-            self.plot_host.autoscale_all()
+        # NOTE: Removed redundant autoscale_all() call here - set_time_window() already
+        # performs autoscaling internally via _apply_window(). Calling autoscale_all()
+        # again causes double rendering of all tracks, which is especially slow for
+        # datasets with multiple pressure channels (4 tracks × 2 = 8 expensive updates).
+        # This was causing 9+ second load times for multi-track datasets.
+        # if track_limits and prev_window is None:
+        #     self.plot_host.autoscale_all()
         self._refresh_zoom_window()
 
         self.trace_line = None
@@ -11216,8 +11365,16 @@ QPushButton[isGhost="true"]:hover {{
             state["plot_layout"] = layout_state
         if self.current_experiment:
             state["last_experiment"] = self.current_experiment.name
+            log.debug(
+                "SAVE_STATE: Saving last_experiment='%s'",
+                self.current_experiment.name,
+            )
         if self.current_sample:
             state["last_sample"] = self.current_sample.name
+            log.debug(
+                "SAVE_STATE: Saving last_sample='%s'",
+                self.current_sample.name,
+            )
         if hasattr(self, "data_splitter") and self.data_splitter is not None:
             with contextlib.suppress(Exception):
                 state["splitter_state"] = bytes(self.data_splitter.saveState()).hex()
@@ -11226,10 +11383,17 @@ QPushButton[isGhost="true"]:hover {{
             state["inner_trace_visible"] = self.id_toggle_act.isChecked()
         if hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
             state["outer_trace_visible"] = self.od_toggle_act.isChecked()
+        host = getattr(self, "plot_host", None)
         if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act is not None:
             state["avg_pressure_visible"] = self.avg_pressure_toggle_act.isChecked()
+        elif host is not None:
+            with contextlib.suppress(Exception):
+                state["avg_pressure_visible"] = host.is_channel_visible("avg_pressure")
         if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act is not None:
             state["set_pressure_visible"] = self.set_pressure_toggle_act.isChecked()
+        elif host is not None:
+            with contextlib.suppress(Exception):
+                state["set_pressure_visible"] = host.is_channel_visible("set_pressure")
         return state
 
     def _invalidate_sample_state_cache(self):
@@ -11281,12 +11445,20 @@ QPushButton[isGhost="true"]:hover {{
             "avg_pressure_visible": (
                 self.avg_pressure_toggle_act.isChecked()
                 if self.avg_pressure_toggle_act is not None
-                else True
+                else (
+                    getattr(self.plot_host, "is_channel_visible", lambda *_: True)("avg_pressure")
+                    if hasattr(self, "plot_host")
+                    else True
+                )
             ),
             "set_pressure_visible": (
                 self.set_pressure_toggle_act.isChecked()
                 if self.set_pressure_toggle_act is not None
-                else True
+                else (
+                    getattr(self.plot_host, "is_channel_visible", lambda *_: False)("set_pressure")
+                    if hasattr(self, "plot_host")
+                    else False  # Default: hide Set Pressure track
+                )
             ),
             "axis_settings": {
                 "x": {"label": x_axis.get_xlabel() if x_axis else ""},
@@ -11574,9 +11746,15 @@ QPushButton[isGhost="true"]:hover {{
 
         state = getattr(self.current_project, "ui_state", {}) or {}
         last_exp = state.get("last_experiment")
-        if not last_exp:
-            return False
         last_sample = state.get("last_sample")
+        log.info(
+            "RESTORE_SELECTION: last_experiment='%s' last_sample='%s'",
+            last_exp,
+            last_sample,
+        )
+        if not last_exp:
+            log.warning("RESTORE_SELECTION: No last_experiment saved, falling back to first sample")
+            return False
 
         root = self.project_tree.topLevelItem(0)
         if root is None:
@@ -11600,15 +11778,18 @@ QPushButton[isGhost="true"]:hover {{
                 break
 
         if sample_item is not None:
+            log.info("RESTORE_SELECTION: Successfully restored sample '%s'", last_sample)
             self.project_tree.setCurrentItem(sample_item)
             self.on_tree_item_clicked(sample_item, 0)
             return True
 
         if exp_item is not None:
+            log.info("RESTORE_SELECTION: Restored experiment '%s' (sample not found)", last_exp)
             self.project_tree.setCurrentItem(exp_item)
             self.on_tree_item_clicked(exp_item, 0)
             return True
 
+        log.warning("RESTORE_SELECTION: Failed to find experiment '%s' in tree", last_exp)
         return False
 
     def closeEvent(self, event):
