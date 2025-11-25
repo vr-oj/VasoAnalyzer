@@ -411,8 +411,9 @@ class NewFigureComposerWindow(QMainWindow):
                 font-weight: bold;
                 border: 1px solid #cccccc;
                 border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
+                margin-top: 6px;
+                padding-top: 8px;
+                padding-bottom: 4px;
             }
 
             QGroupBox::title {
@@ -422,20 +423,21 @@ class NewFigureComposerWindow(QMainWindow):
             }
 
             QDoubleSpinBox, QSpinBox {
-                min-width: 80px;
+                min-width: 60px;
                 max-width: 120px;
             }
 
             QLineEdit {
-                min-width: 100px;
+                min-width: 80px;
             }
 
             QComboBox {
-                min-width: 120px;
+                min-width: 100px;
             }
 
             QPushButton {
                 min-height: 25px;
+                padding: 4px 8px;
             }
         """
         )
@@ -592,16 +594,15 @@ class NewFigureComposerWindow(QMainWindow):
         # Inner widget that holds all controls
         inner_widget = QWidget()
         inner_layout = QVBoxLayout(inner_widget)
-        inner_layout.setSpacing(5)
+        inner_layout.setSpacing(3)
+        inner_layout.setContentsMargins(5, 5, 5, 5)
 
-        # Add control groups
-        inner_layout.addWidget(self._create_page_group())
-        inner_layout.addWidget(self._create_size_group())
-        inner_layout.addWidget(self._create_data_group())
+        # Add control groups (reordered by frequency of use)
+        inner_layout.addWidget(self._create_data_visualization_group())
         inner_layout.addWidget(self._create_axes_group())
-        inner_layout.addWidget(self._create_style_group())
+        inner_layout.addWidget(self._create_document_layout_group())
+        inner_layout.addWidget(self._create_typography_group())
         inner_layout.addWidget(self._create_events_group())
-        inner_layout.addWidget(self._create_fonts_group())
         inner_layout.addWidget(self._create_export_group())
         inner_layout.addStretch()
 
@@ -615,9 +616,9 @@ class NewFigureComposerWindow(QMainWindow):
 
         return control_widget
 
-    def _create_page_group(self) -> QGroupBox:
-        """Create page setup controls (size, orientation, placement)."""
-        group = QGroupBox("Page Setup")
+    def _create_document_layout_group(self) -> QGroupBox:
+        """Create combined document and layout controls (page + figure size)."""
+        group = QGroupBox("Document & Layout")
         layout = QFormLayout()
 
         # Page size selector
@@ -633,6 +634,41 @@ class NewFigureComposerWindow(QMainWindow):
         self.orientation_combo.addItems(["Portrait", "Landscape"])
         self.orientation_combo.setCurrentText(self.page_orientation)
         self.orientation_combo.currentTextChanged.connect(self._on_orientation_changed)
+
+        # Figure size controls in grid layout (2 columns)
+        size_widget = QWidget()
+        size_layout = QGridLayout(size_widget)
+        size_layout.setContentsMargins(0, 0, 0, 0)
+        size_layout.setSpacing(5)
+
+        self.width_spin = QDoubleSpinBox()
+        self.width_spin.setRange(20, 400)
+        self.width_spin.setValue(self.config["width_mm"])
+        self.width_spin.setSuffix(" mm")
+        self.width_spin.setDecimals(1)
+        self.width_spin.setSingleStep(1.0)
+        self.width_spin.valueChanged.connect(self._on_size_changed)
+
+        self.height_spin = QDoubleSpinBox()
+        self.height_spin.setRange(20, 400)
+        self.height_spin.setValue(self.config["height_mm"])
+        self.height_spin.setSuffix(" mm")
+        self.height_spin.setDecimals(1)
+        self.height_spin.setSingleStep(1.0)
+        self.height_spin.valueChanged.connect(self._on_size_changed)
+
+        self.dpi_spin = QSpinBox()
+        self.dpi_spin.setRange(72, 600)
+        self.dpi_spin.setValue(self.config["dpi"])
+        self.dpi_spin.setSingleStep(50)
+        self.dpi_spin.valueChanged.connect(self._on_dpi_changed)
+
+        size_layout.addWidget(QLabel("Width:"), 0, 0)
+        size_layout.addWidget(self.width_spin, 0, 1)
+        size_layout.addWidget(QLabel("Height:"), 0, 2)
+        size_layout.addWidget(self.height_spin, 0, 3)
+        size_layout.addWidget(QLabel("DPI:"), 1, 0)
+        size_layout.addWidget(self.dpi_spin, 1, 1)
 
         # Position controls (% of page)
         position_widget = QWidget()
@@ -662,6 +698,7 @@ class NewFigureComposerWindow(QMainWindow):
 
         layout.addRow("Page Size:", self.page_combo)
         layout.addRow("Orientation:", self.orientation_combo)
+        layout.addRow("Figure Size:", size_widget)
         layout.addRow("Position:", position_widget)
         layout.addRow("", center_btn)
 
@@ -736,101 +773,111 @@ class NewFigureComposerWindow(QMainWindow):
         self._update_event_filter_summary()
         self._render()
 
-    def _create_size_group(self) -> QGroupBox:
-        """Create figure size controls with better layout."""
-        group = QGroupBox("Figure Size")
-        layout = QFormLayout()
-        layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
-
-        # Width control
-        self.width_spin = QDoubleSpinBox()
-        self.width_spin.setRange(20, 400)
-        self.width_spin.setValue(self.config["width_mm"])
-        self.width_spin.setSuffix(" mm")
-        self.width_spin.setDecimals(1)
-        self.width_spin.setSingleStep(1.0)
-        self.width_spin.valueChanged.connect(self._on_size_changed)
-
-        # Height control
-        self.height_spin = QDoubleSpinBox()
-        self.height_spin.setRange(20, 400)
-        self.height_spin.setValue(self.config["height_mm"])
-        self.height_spin.setSuffix(" mm")
-        self.height_spin.setDecimals(1)
-        self.height_spin.setSingleStep(1.0)
-        self.height_spin.valueChanged.connect(self._on_size_changed)
-
-        # DPI control
-        self.dpi_spin = QSpinBox()
-        self.dpi_spin.setRange(72, 600)
-        self.dpi_spin.setValue(self.config["dpi"])
-        self.dpi_spin.setSingleStep(50)
-        self.dpi_spin.valueChanged.connect(self._on_dpi_changed)
-
-        layout.addRow("Width:", self.width_spin)
-        layout.addRow("Height:", self.height_spin)
-        layout.addRow("DPI:", self.dpi_spin)
-
-        group.setLayout(layout)
-        return group
-
-    def _create_data_group(self) -> QGroupBox:
-        """Create data/trace selection controls."""
-        group = QGroupBox("Data")
+    def _create_data_visualization_group(self) -> QGroupBox:
+        """Create combined data selection and line style controls."""
+        group = QGroupBox("Data & Visualization")
         layout = QVBoxLayout(group)
         selection = _normalize_trace_selection(self.config)
 
+        # Trace selection with inline color pickers in 2x2 grid
         self.trace_checks: dict[str, QCheckBox] = {}
+        self.trace_color_btns: dict[str, QPushButton] = {}
+
         check_specs = [
-            ("inner", "Inner Diameter"),
-            ("outer", "Outer Diameter"),
-            ("avg_pressure", "Average Pressure"),
-            ("set_pressure", "Set Pressure"),
+            ("inner", "Inner Dia.", "inner_color"),
+            ("outer", "Outer Dia.", "outer_color"),
+            ("avg_pressure", "Avg. Pressure", "pressure_color"),
+            ("set_pressure", "Set Pressure", "pressure_color"),
         ]
 
-        for key, label in check_specs:
+        # Create 2x2 grid layout for traces
+        grid_widget = QWidget()
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setHorizontalSpacing(8)
+        grid_layout.setVerticalSpacing(5)
+
+        for idx, (key, label, color_key) in enumerate(check_specs):
+            row = idx // 2
+            col = (idx % 2) * 2  # Each cell takes 2 columns (checkbox + color)
+
             cb = QCheckBox(label)
             cb.setChecked(selection.get(key, False))
             cb.toggled.connect(lambda checked, k=key: self._on_trace_checkbox_changed(k, checked))
             self.trace_checks[key] = cb
-            layout.addWidget(cb)
+            grid_layout.addWidget(cb, row, col)
 
-        layout.addStretch()
+            # Color button (compact)
+            color_btn = QPushButton()
+            color_btn.setFixedSize(40, 20)
+            color_btn.setStyleSheet(f"background-color: {self.config[color_key]}")
+            color_btn.clicked.connect(
+                lambda checked=False, ck=color_key, btn=color_btn: self._pick_color(ck, btn)
+            )
+            self.trace_color_btns[key] = color_btn
+            grid_layout.addWidget(color_btn, row, col + 1)
+
+        # Make columns stretch proportionally
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 0)
+        grid_layout.setColumnStretch(2, 1)
+        grid_layout.setColumnStretch(3, 0)
+
+        layout.addWidget(grid_widget)
+
+        # Line width control
+        width_widget = QWidget()
+        width_layout = QHBoxLayout(width_widget)
+        width_layout.setContentsMargins(0, 0, 0, 0)
+        width_layout.addWidget(QLabel("Line Width:"))
+
+        self.line_width_spin = QDoubleSpinBox()
+        self.line_width_spin.setRange(0.1, 10.0)
+        self.line_width_spin.setSingleStep(0.1)
+        self.line_width_spin.setValue(self.config["line_width"])
+        self.line_width_spin.setMaximumWidth(80)
+        self.line_width_spin.valueChanged.connect(self._on_style_changed)
+        width_layout.addWidget(self.line_width_spin)
+        width_layout.addStretch()
+
+        layout.addWidget(width_widget)
 
         return group
 
     def _create_axes_group(self) -> QGroupBox:
-        """Create axis control group."""
+        """Create axis control group with compact layout."""
         group = QGroupBox("Axes")
-        layout = QVBoxLayout()
+        layout = QFormLayout()
 
-        # Time unit selector
-        time_unit_container = QWidget()
-        time_unit_layout = QHBoxLayout(time_unit_container)
-        time_unit_layout.setContentsMargins(0, 0, 0, 0)
-        time_unit_layout.addWidget(QLabel("Time Units:"))
-
+        # Time unit selector (compact)
         self.time_unit_combo = QComboBox()
         self.time_unit_combo.addItems(["Seconds", "Minutes", "Hours"])
         self.time_unit_combo.setCurrentText(self.config["time_unit"])
         self.time_unit_combo.currentTextChanged.connect(self._on_time_unit_changed)
-        time_unit_layout.addWidget(self.time_unit_combo)
-        time_unit_layout.addStretch()
 
-        layout.addWidget(time_unit_container)
+        # Labels in compact grid (2 columns)
+        labels_widget = QWidget()
+        labels_layout = QGridLayout(labels_widget)
+        labels_layout.setContentsMargins(0, 0, 0, 0)
+        labels_layout.setSpacing(5)
 
-        # Form layout for labels and limits
-        form_layout = QFormLayout()
-
-        # Labels
         self.x_label_edit = QLineEdit(self.config["x_label"])
         self.x_label_edit.editingFinished.connect(self._on_axis_changed)
 
         self.y_label_edit = QLineEdit(self.config["y_label"])
         self.y_label_edit.editingFinished.connect(self._on_axis_changed)
 
-        # X limits
-        x_limit_layout = QHBoxLayout()
+        labels_layout.addWidget(QLabel("X:"), 0, 0)
+        labels_layout.addWidget(self.x_label_edit, 0, 1)
+        labels_layout.addWidget(QLabel("Y:"), 0, 2)
+        labels_layout.addWidget(self.y_label_edit, 0, 3)
+
+        # X limits (compact single row)
+        x_limit_widget = QWidget()
+        x_limit_layout = QHBoxLayout(x_limit_widget)
+        x_limit_layout.setContentsMargins(0, 0, 0, 0)
+        x_limit_layout.setSpacing(5)
+
         self.x_auto_check = QCheckBox("Auto")
         self.x_auto_check.setChecked(self.config["x_auto"])
         self.x_auto_check.toggled.connect(self._on_x_auto_toggled)
@@ -839,12 +886,14 @@ class NewFigureComposerWindow(QMainWindow):
         self.x_min_spin.setRange(-1e9, 1e9)
         self.x_min_spin.setValue(self.config["x_min"])
         self.x_min_spin.setEnabled(not self.config["x_auto"])
+        self.x_min_spin.setMaximumWidth(70)
         self.x_min_spin.valueChanged.connect(self._on_axis_changed)
 
         self.x_max_spin = QDoubleSpinBox()
         self.x_max_spin.setRange(-1e9, 1e9)
         self.x_max_spin.setValue(self.config["x_max"])
         self.x_max_spin.setEnabled(not self.config["x_auto"])
+        self.x_max_spin.setMaximumWidth(70)
         self.x_max_spin.valueChanged.connect(self._on_axis_changed)
 
         x_limit_layout.addWidget(self.x_auto_check)
@@ -852,9 +901,14 @@ class NewFigureComposerWindow(QMainWindow):
         x_limit_layout.addWidget(self.x_min_spin)
         x_limit_layout.addWidget(QLabel("Max:"))
         x_limit_layout.addWidget(self.x_max_spin)
+        x_limit_layout.addStretch()
 
-        # Y limits
-        y_limit_layout = QHBoxLayout()
+        # Y limits (compact single row)
+        y_limit_widget = QWidget()
+        y_limit_layout = QHBoxLayout(y_limit_widget)
+        y_limit_layout.setContentsMargins(0, 0, 0, 0)
+        y_limit_layout.setSpacing(5)
+
         self.y_auto_check = QCheckBox("Auto")
         self.y_auto_check.setChecked(self.config["y_auto"])
         self.y_auto_check.toggled.connect(self._on_y_auto_toggled)
@@ -863,12 +917,14 @@ class NewFigureComposerWindow(QMainWindow):
         self.y_min_spin.setRange(-1e9, 1e9)
         self.y_min_spin.setValue(self.config["y_min"])
         self.y_min_spin.setEnabled(not self.config["y_auto"])
+        self.y_min_spin.setMaximumWidth(70)
         self.y_min_spin.valueChanged.connect(self._on_axis_changed)
 
         self.y_max_spin = QDoubleSpinBox()
         self.y_max_spin.setRange(-1e9, 1e9)
         self.y_max_spin.setValue(self.config["y_max"])
         self.y_max_spin.setEnabled(not self.config["y_auto"])
+        self.y_max_spin.setMaximumWidth(70)
         self.y_max_spin.valueChanged.connect(self._on_axis_changed)
 
         y_limit_layout.addWidget(self.y_auto_check)
@@ -876,72 +932,38 @@ class NewFigureComposerWindow(QMainWindow):
         y_limit_layout.addWidget(self.y_min_spin)
         y_limit_layout.addWidget(QLabel("Max:"))
         y_limit_layout.addWidget(self.y_max_spin)
+        y_limit_layout.addStretch()
 
-        # Grid
-        self.grid_check = QCheckBox("Show Grid")
+        # Options (grid, spines) in single row
+        options_widget = QWidget()
+        options_layout = QHBoxLayout(options_widget)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(10)
+
+        self.grid_check = QCheckBox("Grid")
         self.grid_check.setChecked(self.config["show_grid"])
         self.grid_check.toggled.connect(self._on_axis_changed)
 
-        # Spine controls (publication style)
-        self.show_top_spine_check = QCheckBox("Show Top Spine")
+        self.show_top_spine_check = QCheckBox("Top Spine")
         self.show_top_spine_check.setChecked(self.config["show_top_spine"])
         self.show_top_spine_check.toggled.connect(self._on_axis_changed)
 
-        self.show_right_spine_check = QCheckBox("Show Right Spine")
+        self.show_right_spine_check = QCheckBox("Right Spine")
         self.show_right_spine_check.setChecked(self.config["show_right_spine"])
         self.show_right_spine_check.toggled.connect(self._on_axis_changed)
 
-        form_layout.addRow("X Label:", self.x_label_edit)
-        form_layout.addRow("Y Label:", self.y_label_edit)
-        form_layout.addRow("X Limits:", x_limit_layout)
-        form_layout.addRow("Y Limits:", y_limit_layout)
-        form_layout.addRow(self.grid_check)
-        form_layout.addRow(self.show_top_spine_check)
-        form_layout.addRow(self.show_right_spine_check)
+        options_layout.addWidget(self.grid_check)
+        options_layout.addWidget(self.show_top_spine_check)
+        options_layout.addWidget(self.show_right_spine_check)
+        options_layout.addStretch()
 
-        layout.addLayout(form_layout)
+        layout.addRow("Time Units:", self.time_unit_combo)
+        layout.addRow("Labels:", labels_widget)
+        layout.addRow("X Limits:", x_limit_widget)
+        layout.addRow("Y Limits:", y_limit_widget)
+        layout.addRow("Options:", options_widget)
 
         group.setLayout(layout)
-        return group
-
-    def _create_style_group(self) -> QGroupBox:
-        """Create line style controls."""
-        group = QGroupBox("Line Style")
-        layout = QFormLayout(group)
-
-        self.line_width_spin = QDoubleSpinBox()
-        self.line_width_spin.setRange(0.1, 10.0)
-        self.line_width_spin.setSingleStep(0.1)
-        self.line_width_spin.setValue(self.config["line_width"])
-        self.line_width_spin.valueChanged.connect(self._on_style_changed)
-
-        # Color buttons (labels outside the swatch; smaller swatches)
-        self.inner_color_btn = QPushButton()
-        self.inner_color_btn.setFixedSize(80, 26)
-        self.inner_color_btn.setStyleSheet(f"background-color: {self.config['inner_color']}")
-        self.inner_color_btn.clicked.connect(
-            lambda: self._pick_color("inner_color", self.inner_color_btn)
-        )
-
-        self.outer_color_btn = QPushButton()
-        self.outer_color_btn.setFixedSize(80, 26)
-        self.outer_color_btn.setStyleSheet(f"background-color: {self.config['outer_color']}")
-        self.outer_color_btn.clicked.connect(
-            lambda: self._pick_color("outer_color", self.outer_color_btn)
-        )
-
-        self.pressure_color_btn = QPushButton()
-        self.pressure_color_btn.setFixedSize(80, 26)
-        self.pressure_color_btn.setStyleSheet(f"background-color: {self.config['pressure_color']}")
-        self.pressure_color_btn.clicked.connect(
-            lambda: self._pick_color("pressure_color", self.pressure_color_btn)
-        )
-
-        layout.addRow("Line Width:", self.line_width_spin)
-        layout.addRow("Inner Color:", self.inner_color_btn)
-        layout.addRow("Outer Color:", self.outer_color_btn)
-        layout.addRow("Pressure Color:", self.pressure_color_btn)
-
         return group
 
     def _create_events_group(self) -> QGroupBox:
@@ -990,9 +1012,9 @@ class NewFigureComposerWindow(QMainWindow):
 
         return group
 
-    def _create_fonts_group(self) -> QGroupBox:
-        """Create font controls."""
-        group = QGroupBox("Fonts")
+    def _create_typography_group(self) -> QGroupBox:
+        """Create typography controls."""
+        group = QGroupBox("Typography")
         layout = QFormLayout(group)
 
         self.axis_label_size_spin = QSpinBox()
@@ -1050,32 +1072,30 @@ class NewFigureComposerWindow(QMainWindow):
         return group
 
     def _create_export_group(self) -> QGroupBox:
-        """Create export controls."""
-        group = QGroupBox("Export")
+        """Create export controls (consolidated)."""
+        group = QGroupBox("Export & Actions")
         layout = QVBoxLayout(group)
 
-        # Update preview button
-        update_btn = QPushButton("Update Preview")
-        update_btn.clicked.connect(self._render)
-        layout.addWidget(update_btn)
+        # Export format selector and button in single row
+        export_widget = QWidget()
+        export_layout = QHBoxLayout(export_widget)
+        export_layout.setContentsMargins(0, 0, 0, 0)
+        export_layout.setSpacing(5)
 
-        # Export format buttons
-        png_btn = QPushButton("Export PNG...")
-        png_btn.clicked.connect(lambda: self._export("png"))
-        layout.addWidget(png_btn)
+        self.export_format_combo = QComboBox()
+        self.export_format_combo.addItem("PNG", "png")
+        self.export_format_combo.addItem("PDF", "pdf")
+        self.export_format_combo.addItem("SVG", "svg")
+        self.export_format_combo.addItem("TIFF", "tiff")
+        export_layout.addWidget(self.export_format_combo)
 
-        pdf_btn = QPushButton("Export PDF...")
-        pdf_btn.clicked.connect(lambda: self._export("pdf"))
-        layout.addWidget(pdf_btn)
+        export_btn = QPushButton("Export...")
+        export_btn.clicked.connect(self._export_current_format)
+        export_layout.addWidget(export_btn)
 
-        svg_btn = QPushButton("Export SVG...")
-        svg_btn.clicked.connect(lambda: self._export("svg"))
-        layout.addWidget(svg_btn)
+        layout.addWidget(export_widget)
 
-        tiff_btn = QPushButton("Export TIFF...")
-        tiff_btn.clicked.connect(lambda: self._export("tiff"))
-        layout.addWidget(tiff_btn)
-
+        # Save to project button (prominent)
         save_btn = QPushButton("Save to Project")
         save_btn.clicked.connect(self._save_to_project)
         layout.addWidget(save_btn)
@@ -1083,6 +1103,11 @@ class NewFigureComposerWindow(QMainWindow):
         return group
 
     # Event handlers
+    def _export_current_format(self):
+        """Export using the currently selected format from the dropdown."""
+        format_type = self.export_format_combo.currentData()
+        self._export(format_type)
+
     def _on_page_size_changed(self):
         """Handle page size selection."""
         self.page_size_name = self.page_combo.currentData()
