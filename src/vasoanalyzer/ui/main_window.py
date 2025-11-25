@@ -2457,6 +2457,18 @@ class VasoAnalyzerApp(QMainWindow):
         self._current_sample_token = token
 
         # Validate cache - check if cached data belongs to current dataset_id
+        # If a dataset was just loaded and the cache id never set, adopt the current dataset_id
+        if (
+            sample.trace_data is not None
+            and getattr(sample, "_trace_cache_dataset_id", None) is None
+        ):
+            sample._trace_cache_dataset_id = sample.dataset_id
+        if (
+            sample.events_data is not None
+            and getattr(sample, "_events_cache_dataset_id", None) is None
+        ):
+            sample._events_cache_dataset_id = sample.dataset_id
+
         trace_cache_valid = (
             sample.trace_data is not None
             and getattr(sample, "_trace_cache_dataset_id", None) == sample.dataset_id
@@ -7902,7 +7914,7 @@ QPushButton[isGhost="true"]:hover {{
             )
             arr_avg_p = self.trace_data[avg_label].values if has_avg_pressure else None
             arr_set_p = self.trace_data[set_label].values if has_set_pressure else None
-            offset_sec = 2
+            default_offset_sec = 2.0
             time_trace = self.trace_data["Time (s)"]
 
             for idx_ev, (lbl, t, fr) in enumerate(
@@ -7916,31 +7928,25 @@ QPushButton[isGhost="true"]:hover {{
                 if pd.isna(t):
                     continue
                 idx = int(np.argmin(np.abs(arr_t - t)))
-                diam = float(arr_d[idx])
-                od_val = float(arr_od[idx]) if has_od and arr_od is not None else None
-                avg_p_val = None
-                if arr_avg_p is not None:
-                    avg_val = arr_avg_p[idx]
-                    if avg_val is not None and not pd.isna(avg_val):
-                        avg_p_val = float(avg_val)
-                set_p_val = None
-                if arr_set_p is not None:
-                    set_val = arr_set_p[idx]
-                    if set_val is not None and not pd.isna(set_val):
-                        set_p_val = float(set_val)
-
-                # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
-                self.event_table_data.append(
-                    (lbl, float(t), diam, od_val, avg_p_val, set_p_val, int(fr))
-                )
-
                 frame_number = int(fr) if self.event_frames else idx
 
-                # Sample a value slightly before the next event for tooltip richness
+                # Sample a value before the *next* event (or before trace end)
                 if len(self.event_times) > 1 and idx_ev < len(self.event_times) - 1:
-                    t_sample = self.event_times[idx_ev + 1] - offset_sec
+                    next_t = self.event_times[idx_ev + 1]
+                    gap = max(0.0, float(next_t) - float(t))
+                    if gap <= 0.5:
+                        t_sample = float(t) + gap * 0.5
+                    elif gap <= 1.0:
+                        t_sample = float(t) + gap * 0.6
+                    else:
+                        lookback = min(5.0, max(1.0, gap / 2.0, default_offset_sec))
+                        lookback = min(lookback, gap - 0.05) if gap > 0.05 else gap * 0.5
+                        t_sample = float(next_t) - lookback
                 else:
-                    t_sample = time_trace.iloc[-1] - offset_sec
+                    t_sample = float(time_trace.iloc[-1]) - default_offset_sec
+                # Clamp sample time within trace range
+                t_sample = max(float(time_trace.iloc[0]), min(t_sample, float(time_trace.iloc[-1])))
+
                 idx_pre = int(np.argmin(np.abs(arr_t - t_sample)))
 
                 diam_val = float(arr_d[idx_pre])
@@ -7955,6 +7961,20 @@ QPushButton[isGhost="true"]:hover {{
                     val = arr_set_p[idx_pre]
                     if val is not None and not pd.isna(val):
                         set_p_val_sample = float(val)
+
+                # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+                # Use the sampled value *before the next event* to keep continuity with legacy behavior.
+                self.event_table_data.append(
+                    (
+                        lbl,
+                        float(t),
+                        diam_val,
+                        od_val_sample,
+                        avg_p_val_sample,
+                        set_p_val_sample,
+                        int(fr),
+                    )
+                )
 
                 tooltip = f"{lbl} · {float(t):.2f}s · ID {diam_val:.2f}µm"
                 if od_val_sample is not None:

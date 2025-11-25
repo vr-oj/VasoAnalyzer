@@ -143,6 +143,7 @@ class NewFigureComposerWindow(QMainWindow):
         self._active_annotation_id: int | None = None
         self._annotation_drag_state: dict[str, Any] = {}
         self._annotation_form_lock = False
+        self._axes_rect_page: tuple[float, float, float, float] | None = None
         self.plot_axes = None
         self._layout_dirty = True
         self._xlim_cid = None
@@ -324,6 +325,7 @@ class NewFigureComposerWindow(QMainWindow):
         self.plot_axes = self.page_figure.add_axes(
             [axes_left, axes_bottom, axes_width, axes_height]
         )
+        self._axes_rect_page = (axes_left, axes_bottom, axes_width, axes_height)
         self.plot_axes.set_facecolor("white")
         # For simple axes-relative annotations, we can use the same axes
         self.annotation_axes = self.plot_axes
@@ -1717,15 +1719,7 @@ class NewFigureComposerWindow(QMainWindow):
         new_ann["id"] = self._next_annotation_id
         self._next_annotation_id += 1
         # offset gently so the copy is visible
-        if new_ann.get("type") == "box" or new_ann.get("type") in ("line", "arrow"):
-            dx = dy = 0.02 if new_ann.get("space") != "data" else 1.0
-            new_ann["x0"] = new_ann.get("x0", 0) + dx
-            new_ann["x1"] = new_ann.get("x1", 0) + dx
-            new_ann["y0"] = new_ann.get("y0", 0) + dy
-            new_ann["y1"] = new_ann.get("y1", 0) + dy
-        else:
-            new_ann["x"] = new_ann.get("x", 0.5) + 0.02
-            new_ann["y"] = new_ann.get("y", 0.5) + 0.02
+        self._offset_annotation_for_visibility(new_ann)
         self.annotations.append(new_ann)
         self._set_active_annotation(new_ann["id"])
         self._render()
@@ -1761,6 +1755,50 @@ class NewFigureComposerWindow(QMainWindow):
         if ok:
             ann["text"] = text
             self._sync_annotation_controls()
+
+    def _offset_annotation_for_visibility(self, ann: dict[str, Any]) -> None:
+        """Offset an annotation so a duplicate is visibly separated."""
+        space = ann.get("space", "axes")
+        ann_type = ann.get("type", "box")
+
+        # Pick an offset based on space
+        if space == "data" and self.plot_axes is not None:
+            xlim = self.plot_axes.get_xlim()
+            ylim = self.plot_axes.get_ylim()
+            dx = 0.05 * (xlim[1] - xlim[0])
+            dy = 0.05 * (ylim[1] - ylim[0])
+        else:
+            dx = dy = 0.04
+
+        def clamp01(val: float) -> float:
+            return max(0.0, min(1.0, val))
+
+        if ann_type == "text":
+            ann["x"] = ann.get("x", 0.5) + dx
+            ann["y"] = ann.get("y", 0.5) + dy
+            if space != "data":
+                ann["x"] = clamp01(ann["x"])
+                ann["y"] = clamp01(ann["y"])
+        elif ann_type == "box":
+            ann["x0"] = ann.get("x0", 0.0) + dx
+            ann["x1"] = ann.get("x1", 0.0) + dx
+            ann["y0"] = ann.get("y0", 0.0) + dy
+            ann["y1"] = ann.get("y1", 0.0) + dy
+            if space != "data":
+                ann["x0"] = clamp01(ann["x0"])
+                ann["x1"] = clamp01(ann["x1"])
+                ann["y0"] = clamp01(ann["y0"])
+                ann["y1"] = clamp01(ann["y1"])
+        else:  # line / arrow
+            ann["x0"] = ann.get("x0", 0.0) + dx
+            ann["x1"] = ann.get("x1", 0.0) + dx
+            ann["y0"] = ann.get("y0", 0.0) + dy
+            ann["y1"] = ann.get("y1", 0.0) + dy
+            if space != "data":
+                ann["x0"] = clamp01(ann["x0"])
+                ann["x1"] = clamp01(ann["x1"])
+                ann["y0"] = clamp01(ann["y0"])
+                ann["y1"] = clamp01(ann["y1"])
 
     def _build_annotation(self, kind: str, space: str, **overrides) -> dict[str, Any]:
         """Create a new annotation dict with sensible defaults."""
@@ -2596,6 +2634,16 @@ class NewFigureComposerWindow(QMainWindow):
         )
 
         export_renderer = SimpleRenderer(target_ax.figure)
+
+        # Remap page-space annotations so they stay anchored relative to the axes region
+        export_axes_rect = (
+            target_ax.get_position().x0,
+            target_ax.get_position().y0,
+            target_ax.get_position().width,
+            target_ax.get_position().height,
+        )
+        export_config = self._remap_figure_annotations_for_export(export_config, export_axes_rect)
+
         export_renderer.render(
             trace_model=self.trace_model,
             config=export_config,
@@ -2608,6 +2656,49 @@ class NewFigureComposerWindow(QMainWindow):
         # Mirror scale settings explicitly
         target_ax.set_xscale(source_ax.get_xscale())
         target_ax.set_yscale(source_ax.get_yscale())
+
+    def _remap_figure_annotations_for_export(
+        self,
+        config: dict[str, Any],
+        export_axes_rect: tuple[float, float, float, float] | None,
+    ) -> dict[str, Any]:
+        """Map page-space annotations onto the export canvas so they stay aligned."""
+        src_rect = getattr(self, "_axes_rect_page", None)
+        if not src_rect or not export_axes_rect:
+            return config
+
+        sx, sy, sw, sh = src_rect
+        dx, dy, dw, dh = export_axes_rect
+        if sw == 0 or sh == 0 or dw == 0 or dh == 0:
+            return config
+
+        def map_point(x: float, y: float) -> tuple[float, float]:
+            rx = (x - sx) / sw
+            ry = (y - sy) / sh
+            return dx + rx * dw, dy + ry * dh
+
+        mapped = copy.deepcopy(config)
+        for ann in mapped.get("annotations", []) or []:
+            if ann.get("space") != "figure":
+                continue
+            ann_type = ann.get("type", "box")
+            if ann_type == "text":
+                ann["x"], ann["y"] = map_point(float(ann.get("x", 0.5)), float(ann.get("y", 0.5)))
+            elif ann_type == "box":
+                ann["x0"], ann["y0"] = map_point(
+                    float(ann.get("x0", 0.0)), float(ann.get("y0", 0.0))
+                )
+                ann["x1"], ann["y1"] = map_point(
+                    float(ann.get("x1", 0.0)), float(ann.get("y1", 0.0))
+                )
+            else:
+                ann["x0"], ann["y0"] = map_point(
+                    float(ann.get("x0", 0.0)), float(ann.get("y0", 0.0))
+                )
+                ann["x1"], ann["y1"] = map_point(
+                    float(ann.get("x1", 0.0)), float(ann.get("y1", 0.0))
+                )
+        return mapped
 
 
 class SimpleRenderer:
