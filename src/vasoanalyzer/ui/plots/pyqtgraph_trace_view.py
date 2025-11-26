@@ -9,9 +9,8 @@ from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QObject, Qt
-from PyQt5.QtGui import QColor, QCursor
-from PyQt5.QtWidgets import QToolTip
+from PyQt5.QtCore import QEvent, QObject, Qt
+from PyQt5.QtGui import QColor
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -114,12 +113,73 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Apply theme
         self._apply_theme()
 
+        # Initialize persistent hover label
+        self._hover_text_item: pg.TextItem | None = None
+        self._init_hover_label()
+        self._hover_hide_filter = _HoverHideFilter(self)
+        with contextlib.suppress(Exception):
+            self._plot_widget.viewport().installEventFilter(self._hover_hide_filter)
+
         # Hover tooltip state
         self._hover_tooltip_enabled: bool = False
-        self._hover_tooltip_precision: int = 3
+        self._hover_tooltip_precision: int = 2
         self._hover_connection_active: bool = False
         self._hover_last_text: str = ""
-        self.enable_hover_tooltip(True, precision=3)
+        self.enable_hover_tooltip(True, precision=2)
+
+    def _init_hover_label(self) -> None:
+        """Create a persistent hover label anchored to the plot."""
+        try:
+            text_color = self._to_qcolor(CURRENT_THEME.get("text", "#FFFFFF"), "#FFFFFF")
+            bg_color = self._to_qcolor(
+                CURRENT_THEME.get("hover_label_bg", "rgba(0,0,0,180)"),
+                "rgba(0,0,0,180)",
+            )
+            border_color = self._to_qcolor(
+                CURRENT_THEME.get("hover_label_border", "#000000"), "#000000"
+            )
+        except Exception:
+            text_color = self._to_qcolor("#FFFFFF", "#FFFFFF")
+            bg_color = self._to_qcolor("rgba(0,0,0,180)", "#000000")
+            border_color = self._to_qcolor("#000000", "#000000")
+
+        # Remove existing item if any
+        if self._hover_text_item is not None:
+            with contextlib.suppress(Exception):
+                self._plot_item.removeItem(self._hover_text_item)
+            self._hover_text_item = None
+
+        try:
+            self._hover_text_item = pg.TextItem(
+                color=text_color,
+                anchor=(0, 1),
+                fill=pg.mkBrush(bg_color),
+                border=pg.mkPen(border_color),
+            )
+            self._hover_text_item.setZValue(1e6)
+            self._hover_text_item.setVisible(False)
+            self._plot_item.addItem(self._hover_text_item)
+        except Exception:
+            self._hover_text_item = None
+
+    @staticmethod
+    def _to_qcolor(value: str, fallback: str) -> QColor:
+        """Best-effort conversion of CSS-like color strings to QColor."""
+        try:
+            # Handle rgba(r,g,b,a)
+            if isinstance(value, str) and value.strip().lower().startswith("rgba"):
+                stripped = value.strip()[5:-1]
+                parts = [p.strip() for p in stripped.split(",")]
+                if len(parts) == 4:
+                    r, g, b, a = (float(p) for p in parts)
+                    return QColor(int(r), int(g), int(b), int(a))
+            c = QColor(value)
+            if c.isValid():
+                return c
+        except Exception:
+            pass
+        fallback_color = QColor(fallback)
+        return fallback_color if fallback_color.isValid() else QColor("#000000")
 
     def _create_plot_items(self) -> None:
         """Create PyQtGraph plot items for traces and events."""
@@ -283,7 +343,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 pos=time,
                 angle=90,
                 pen=pg.mkPen(
-                    color=qcolor, width=self._event_line_width, style=self._event_line_style
+                    color=qcolor,
+                    width=self._event_line_width,
+                    style=self._event_line_style,
                 ),
                 movable=False,
             )
@@ -495,7 +557,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 or window.avg_pressure_max is None
             ):
                 return None
-            return window.avg_pressure_mean, window.avg_pressure_min, window.avg_pressure_max
+            return (
+                window.avg_pressure_mean,
+                window.avg_pressure_min,
+                window.avg_pressure_max,
+            )
         elif self._mode == "set_pressure":
             if (
                 window.set_pressure_mean is None
@@ -503,7 +569,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 or window.set_pressure_max is None
             ):
                 return None
-            return window.set_pressure_mean, window.set_pressure_min, window.set_pressure_max
+            return (
+                window.set_pressure_mean,
+                window.set_pressure_min,
+                window.set_pressure_max,
+            )
         return window.inner_mean, window.inner_min, window.inner_max
 
     def _secondary_series(
@@ -736,7 +806,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             qcolor.setAlphaF(self._event_line_alpha)
             for line in self.event_lines:
                 pen = pg.mkPen(
-                    color=qcolor, width=self._event_line_width, style=self._event_line_style
+                    color=qcolor,
+                    width=self._event_line_width,
+                    style=self._event_line_style,
                 )
                 line.setPen(pen)
 
@@ -850,7 +922,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return
         text = self._build_hover_text(window, idx)
         if text:
-            self._show_hover_tooltip(text)
+            self._show_hover_tooltip(text, mouse_point)
         else:
             self._hide_hover_tooltip()
 
@@ -871,55 +943,82 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def _build_hover_text(self, window: TraceWindow, idx: int) -> str:
         precision = max(0, int(self._hover_tooltip_precision))
         fmt = f"{{:.{precision}f}}"
-        try:
-            time_val = fmt.format(float(window.time[idx]))
-        except Exception:
-            return ""
-        lines = [f"t: {time_val} s"]
+        lines: list[str] = []
 
-        # Show inner diameter (unless in outer/pressure-only modes)
-        if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
+        def add(label: str, value: float | None, unit: str = "") -> None:
+            if value is None:
+                return
             try:
-                inner_val = fmt.format(float(window.inner_mean[idx]))
-                lines.append(f"Inner: {inner_val} µm")
+                val = float(value)
+                if np.isnan(val):
+                    return
+                formatted = fmt.format(val)
+                if unit:
+                    lines.append(f"{label}: {formatted} {unit}")
+                else:
+                    lines.append(f"{label}: {formatted}")
             except Exception:
-                pass
+                return
 
-        # Show outer diameter for dual/outer modes
+        add("Time", window.time[idx] if window.time.size > idx else None, "s")
+
+        if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
+            add(
+                "ID",
+                window.inner_mean[idx] if window.inner_mean.size > idx else None,
+                "µm",
+            )
+
         if (
             self._mode in {"outer", "dual"}
             and window.outer_mean is not None
             and window.outer_mean.size > idx
         ):
-            with contextlib.suppress(Exception):
-                outer_val = fmt.format(float(window.outer_mean[idx]))
-                lines.append(f"Outer: {outer_val} µm")
+            add("OD", window.outer_mean[idx], "µm")
 
-        # Show average pressure if available
         if window.avg_pressure_mean is not None and window.avg_pressure_mean.size > idx:
-            with contextlib.suppress(Exception):
-                pressure_val = fmt.format(float(window.avg_pressure_mean[idx]))
-                lines.append(f"Avg P: {pressure_val} mmHg")
+            add("Avg P", window.avg_pressure_mean[idx], "mmHg")
 
-        # Show set pressure if available
         if window.set_pressure_mean is not None and window.set_pressure_mean.size > idx:
-            with contextlib.suppress(Exception):
-                pressure_val = fmt.format(float(window.set_pressure_mean[idx]))
-                lines.append(f"Set P: {pressure_val} mmHg")
+            add("Set P", window.set_pressure_mean[idx], "mmHg")
 
         return "\n".join(lines)
 
-    def _show_hover_tooltip(self, text: str) -> None:
+    def _show_hover_tooltip(self, text: str, data_pos) -> None:
         if not text:
             self._hide_hover_tooltip()
             return
         # Always update tooltip to prevent it from disappearing
         # Don't check if text == self._hover_last_text to keep tooltip visible
         self._hover_last_text = text
-        # Use widget position offset for better positioning near the plot
-        global_pos = self._plot_widget.mapToGlobal(self._plot_widget.rect().center())
-        QToolTip.showText(QCursor.pos(), text, self._plot_widget)
+        if self._hover_text_item is None:
+            self._init_hover_label()
+        if self._hover_text_item is None:
+            return
+        self._hover_text_item.setHtml(text.replace("\n", "<br>"))
+        with contextlib.suppress(Exception):
+            self._hover_text_item.setPos(float(data_pos.x()), float(data_pos.y()))
+        self._hover_text_item.setVisible(True)
 
     def _hide_hover_tooltip(self) -> None:
         self._hover_last_text = ""
-        QToolTip.hideText()
+        if self._hover_text_item is not None:
+            self._hover_text_item.setVisible(False)
+
+
+class _HoverHideFilter(QObject):
+    """Hide hover tooltip when the cursor leaves the viewport."""
+
+    def __init__(self, owner: PyQtGraphTraceView) -> None:
+        super().__init__()
+        self._owner = owner
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.Leave:
+            with contextlib.suppress(Exception):
+                self._owner._hide_hover_tooltip()
+        return False
+
+
+# Ensure ABC is satisfied even if abstractmethod metadata lingers.
+PyQtGraphTraceView.__abstractmethods__ = frozenset()

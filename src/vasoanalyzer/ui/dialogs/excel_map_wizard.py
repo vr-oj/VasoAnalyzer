@@ -27,7 +27,7 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
 from PyQt5.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, pyqtProperty
-from PyQt5.QtGui import QBrush, QColor, QFont
+from PyQt5.QtGui import QBrush, QColor, QFont, QPalette
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -54,6 +54,7 @@ from vasoanalyzer.excel import (
     has_vaso_metadata,
     read_template_metadata,
 )
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["ExcelMapWizard"]
 
@@ -190,6 +191,7 @@ class TemplatePreviewTable(QTableWidget):
         self.setDragDropMode(QAbstractItemView.DropOnly)
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.NoSelection)
+        self._apply_theme()
 
     def set_drop_context(self, context) -> None:
         self._drop_context = context
@@ -239,6 +241,41 @@ class TemplatePreviewTable(QTableWidget):
         template_row, event_index = target
         self._drop_context.assign_event_to_row(template_row, event_index)
         event.acceptProposedAction()
+
+    def _apply_theme(self) -> None:
+        """Apply theme-driven palette for dark/light modes."""
+        palette = self.palette()
+        table_bg = CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
+        highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        grid = CURRENT_THEME.get("grid_color", "#374151")
+
+        palette.setColor(self.backgroundRole(), QColor(table_bg))
+        palette.setColor(self.foregroundRole(), QColor(text))
+        palette.setColor(QPalette.Base, QColor(table_bg))
+        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.Text, QColor(text))
+        palette.setColor(QPalette.WindowText, QColor(text))
+        palette.setColor(QPalette.Highlight, QColor(highlight))
+        palette.setColor(QPalette.HighlightedText, QColor(text))
+
+        self.setPalette(palette)
+        self.setStyleSheet(
+            f"""
+            QTableView {{
+                gridline-color: {grid};
+                background: {table_bg};
+                alternate-background-color: {alt_bg};
+                color: {text};
+                selection-background-color: {highlight};
+            }}
+            QHeaderView::section {{
+                background: {table_bg};
+                color: {text};
+            }}
+        """
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +580,7 @@ class RowMappingPage(WizardPageBase):
         self.preview_table.verticalHeader().setVisible(False)
         self.preview_table.verticalHeader().setDefaultSectionSize(24)
         self.preview_table.set_drop_context(self)
+        self._apply_table_theme(self.preview_table)
         preview_container = QVBoxLayout()
         preview_widget = QFrame()
         preview_widget.setLayout(preview_container)
@@ -558,6 +596,7 @@ class RowMappingPage(WizardPageBase):
         self.mapping_table.verticalHeader().setVisible(False)
         self.mapping_table.verticalHeader().setDefaultSectionSize(24)
         self.mapping_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._apply_table_theme(self.mapping_table)
         self.mapping_table.setAlternatingRowColors(True)
         self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
@@ -595,6 +634,39 @@ class RowMappingPage(WizardPageBase):
         self.redetect_btn.clicked.connect(self._on_redetect)
         self.pick_date_combo.currentIndexChanged.connect(self._on_date_changed)
         self.select_unmapped_btn.clicked.connect(self._select_all_unmapped)
+
+    def _apply_table_theme(self, table) -> None:
+        """Apply theme-aware palette and stylesheet to table widgets."""
+        palette = table.palette()
+        table_bg = CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
+        highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        grid = CURRENT_THEME.get("grid_color", "#374151")
+
+        palette.setColor(QPalette.Base, QColor(table_bg))
+        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.Text, QColor(text))
+        palette.setColor(QPalette.WindowText, QColor(text))
+        palette.setColor(QPalette.Highlight, QColor(highlight))
+        palette.setColor(QPalette.HighlightedText, QColor(text))
+
+        table.setPalette(palette)
+        table.setStyleSheet(
+            f"""
+            QTableView {{
+                gridline-color: {grid};
+                background: {table_bg};
+                alternate-background-color: {alt_bg};
+                color: {text};
+                selection-background-color: {highlight};
+            }}
+            QHeaderView::section {{
+                background: {table_bg};
+                color: {text};
+            }}
+        """
+        )
 
     # --------------------------------------------------
     def initializePage(self) -> None:
@@ -800,6 +872,12 @@ class RowMappingPage(WizardPageBase):
         self._preview_row_to_template_row = {}
         self._preview_base_values = {}
         self._active_preview_column = None
+        table_bg = CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        table_text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
+        active_bg = CURRENT_THEME.get("accent_fill", CURRENT_THEME.get("selection_bg", table_bg))
+        event_bg = alt_bg
+        header_bg = CURRENT_THEME.get("button_hover_bg", alt_bg)
         if not preview_data:
             self.preview_table.setRowCount(0)
             self.preview_table.setColumnCount(0)
@@ -825,12 +903,14 @@ class RowMappingPage(WizardPageBase):
             for col_idx, key in enumerate(headers):
                 value = row.get(key)
                 item = QTableWidgetItem("" if value is None else str(value))
+                item.setForeground(QBrush(QColor(table_text)))
+                bg_color = alt_bg if row_idx % 2 else table_bg
                 if key not in ("Row", "Label"):
                     col_index = column_index_from_string(key)
                     if active_col and col_index == active_col:
-                        item.setBackground(QBrush(QColor("#d9edf7")))
+                        bg_color = active_bg
                     elif is_event:
-                        item.setBackground(QBrush(QColor("#f5f5f5")))
+                        bg_color = event_bg
                     if (
                         self._active_preview_column is not None
                         and col_idx == self._active_preview_column
@@ -853,7 +933,8 @@ class RowMappingPage(WizardPageBase):
                     font = item.font()
                     font.setBold(True)
                     item.setFont(font)
-                    item.setBackground(QBrush(QColor("#eeeeee")))
+                    bg_color = header_bg
+                item.setBackground(QBrush(QColor(bg_color)))
                 self.preview_table.setItem(row_idx, col_idx, item)
             if is_event and template_row_index is not None:
                 self._preview_row_to_template_row[row_idx] = template_row_index

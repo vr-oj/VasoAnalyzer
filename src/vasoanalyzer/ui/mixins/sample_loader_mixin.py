@@ -1060,15 +1060,6 @@ class SampleLoaderMixin:
             self._apply_frame_change(0)
             self.toggle_snapshot_viewer(True)
 
-            if self.current_sample is not None:
-                try:
-                    self.current_sample.snapshots = np.stack(self.snapshot_frames)
-                    self.current_sample.snapshot_path = os.path.abspath(file_path)
-                except Exception:
-                    pass
-                self.mark_session_dirty()
-                self.auto_save_project(reason="snapshot")
-
             return True
 
         except Exception as e:

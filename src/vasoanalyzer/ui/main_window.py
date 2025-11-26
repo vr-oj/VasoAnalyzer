@@ -6490,29 +6490,47 @@ class VasoAnalyzerApp(QMainWindow):
     def _shared_button_css(self) -> str:
         border = CURRENT_THEME["grid_color"]
         text = CURRENT_THEME["text"]
-        hover = CURRENT_THEME["button_hover_bg"]
+        button_bg = CURRENT_THEME.get("button_bg", CURRENT_THEME["window_bg"])
+        button_hover_bg = CURRENT_THEME.get(
+            "button_hover_bg", CURRENT_THEME.get("selection_bg", button_bg)
+        )
+        button_active_bg = CURRENT_THEME.get("button_active_bg", button_hover_bg)
+        accent = CURRENT_THEME.get("accent", button_active_bg)
+        accent_hover = CURRENT_THEME.get("accent_fill", accent)
+        button_bg = CURRENT_THEME.get("button_bg", CURRENT_THEME["window_bg"])
+        primary_bg = accent
+        primary_hover = accent_hover
+        primary_text = "#ffffff"
+        secondary_bg = button_bg
+        secondary_hover = button_hover_bg
         return f"""
 QPushButton[isPrimary="true"] {{
-    background-color: #2c6bed;
-    color: #ffffff;
+    background-color: {primary_bg};
+    color: {primary_text};
     border: none;
     border-radius: 10px;
     padding: 8px 20px;
     font-weight: 600;
 }}
 QPushButton[isPrimary="true"]:hover {{
-    background-color: #1f4fcc;
+    background-color: {primary_hover};
+}}
+QPushButton[isPrimary="true"]:pressed {{
+    background-color: {button_active_bg};
 }}
 QPushButton[isSecondary="true"] {{
-    background-color: #edf2ff;
+    background-color: {secondary_bg};
     color: {text};
-    border: 1px solid #c6d4ff;
+    border: 1px solid {border};
     border-radius: 10px;
     padding: 8px 20px;
     font-weight: 500;
 }}
 QPushButton[isSecondary="true"]:hover {{
-    background-color: #dfe7ff;
+    background-color: {secondary_hover};
+}}
+QPushButton[isSecondary="true"]:pressed {{
+    background-color: {button_active_bg};
 }}
 QPushButton[isGhost="true"] {{
     background-color: transparent;
@@ -6522,7 +6540,7 @@ QPushButton[isGhost="true"] {{
     padding: 8px 20px;
 }}
 QPushButton[isGhost="true"]:hover {{
-    background-color: {hover};
+    background-color: {button_hover_bg};
 }}
 """
 
@@ -8202,6 +8220,25 @@ QPushButton[isGhost="true"]:hover {{
     def _apply_frame_change(self, idx: int):
         self.current_frame = idx
         self.display_frame(idx)
+        frame_time = None
+        if self.frame_times and idx < len(self.frame_times):
+            with contextlib.suppress(Exception):
+                frame_time = float(self.frame_times[idx])
+        if frame_time is None and self.recording_interval:
+            with contextlib.suppress(Exception):
+                frame_time = idx * float(self.recording_interval)
+
+        if frame_time is not None:
+            # Mirror event-table behavior: jump the trace to the corresponding time cursor.
+            if self._plot_host_is_pyqtgraph():
+                plot_host = getattr(self, "plot_host", None)
+                if plot_host is not None and hasattr(plot_host, "center_on_time"):
+                    with contextlib.suppress(Exception):
+                        plot_host.center_on_time(frame_time)
+            # Update the time cursor highlight so the trace reflects the selected frame.
+            with contextlib.suppress(Exception):
+                self._highlight_selected_event(frame_time)
+
         self.update_slider_marker()
         self._update_snapshot_status(idx)
         self._update_metadata_display(idx)

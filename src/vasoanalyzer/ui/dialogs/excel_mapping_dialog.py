@@ -11,6 +11,7 @@ import time
 
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
+from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
     QComboBox,
     QDialog,
@@ -150,6 +151,10 @@ class ExcelMappingDialog(QDialog):
         pvheader.setDefaultSectionSize(24)
         self.layout.addWidget(self.preview_table)
 
+        # Apply theme to tables
+        self._apply_table_theme(self.event_table)
+        self._apply_template_table_theme(self.preview_table)
+
         self.button_layout = QHBoxLayout()
         self.button_layout.addStretch()
         self.skip_button = QPushButton("Skip")
@@ -162,6 +167,86 @@ class ExcelMappingDialog(QDialog):
         self.button_layout.addWidget(self.undo_button)
         self.button_layout.addWidget(self.done_button)
         self.layout.addLayout(self.button_layout)
+
+    def _apply_table_theme(self, table) -> None:
+        """Apply theme-aware palette to a table widget."""
+        palette = table.palette()
+
+        table_bg = CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
+        highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        grid = CURRENT_THEME.get("grid_color", "#374151")
+
+        palette.setColor(QPalette.Base, QColor(table_bg))
+        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.Text, QColor(text))
+        palette.setColor(QPalette.WindowText, QColor(text))
+        palette.setColor(QPalette.Highlight, QColor(highlight))
+        palette.setColor(QPalette.HighlightedText, QColor(text))
+
+        table.setPalette(palette)
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            f"""
+            QTableView {{
+                gridline-color: {grid};
+                background: {table_bg};
+                color: {text};
+                selection-background-color: {highlight};
+            }}
+            QTableWidget {{
+                background: {table_bg};
+                alternate-background-color: {alt_bg};
+                color: {text};
+                selection-background-color: {highlight};
+            }}
+            QHeaderView::section {{
+                background: {table_bg};
+                color: {text};
+            }}
+        """
+        )
+
+    def _apply_template_table_theme(self, table) -> None:
+        """Apply theme-aware palette to the Template Preview table."""
+        palette = table.palette()
+
+        table_bg = CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
+        highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        grid = CURRENT_THEME.get("grid_color", "#374151")
+
+        palette.setColor(QPalette.Base, QColor(table_bg))
+        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.Text, QColor(text))
+        palette.setColor(QPalette.WindowText, QColor(text))
+        palette.setColor(QPalette.Highlight, QColor(highlight))
+        palette.setColor(QPalette.HighlightedText, QColor(text))
+
+        table.setPalette(palette)
+        table.setAlternatingRowColors(True)
+        table.setStyleSheet(
+            f"""
+            QTableView {{
+                gridline-color: {grid};
+                background: {table_bg};
+                color: {text};
+                selection-background-color: {highlight};
+            }}
+            QTableWidget {{
+                background: {table_bg};
+                alternate-background-color: {alt_bg};
+                color: {text};
+                selection-background-color: {highlight};
+            }}
+            QHeaderView::section {{
+                background: {table_bg};
+                color: {text};
+            }}
+        """
+        )
 
     def populate_event_table(self):
         self.event_table.setRowCount(len(self.event_data))
@@ -236,6 +321,12 @@ class ExcelMappingDialog(QDialog):
             self.preview_table.setColumnCount(0)
             return
 
+        table_bg = CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        table_text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
+        active_bg = CURRENT_THEME.get("accent_fill", CURRENT_THEME.get("selection_bg", table_bg))
+        header_label_bg = CURRENT_THEME.get("button_hover_bg", alt_bg)
+
         col_letter = self.column_selector.currentText()
         col_idx = column_index_from_string(col_letter)
         column_indices = []
@@ -262,11 +353,21 @@ class ExcelMappingDialog(QDialog):
         for r, sheet_row in enumerate(range(start_row, end_row + 1)):
             for c, col in enumerate(column_indices):
                 value = self.ws.cell(row=sheet_row, column=col).value
-                self.preview_table.setItem(
-                    r, c, QTableWidgetItem("" if value is None else str(value))
-                )
+                item = QTableWidgetItem("" if value is None else str(value))
+                item.setForeground(QColor(table_text))
+
+                bg_color = alt_bg if r % 2 else table_bg
+                if col == col_idx:
+                    bg_color = active_bg
+                if c == 0:
+                    # leftmost column (neighbor) header/title region
+                    bg_color = header_label_bg
+
+                item.setBackground(QColor(bg_color))
+                self.preview_table.setItem(r, c, item)
 
         self.preview_table.resizeColumnsToContents()
+        self._apply_template_table_theme(self.preview_table)
 
     def map_event_to_excel(self, row, column):
         if not self.ws or not self.column_selector.currentText():

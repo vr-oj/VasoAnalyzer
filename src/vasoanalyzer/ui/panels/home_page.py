@@ -272,6 +272,7 @@ class HomePage(QWidget):
         placeholder_color = rgba_from_hex(text_color, 0.55)
         muted_action_color = rgba_from_hex(text_color, 0.68)
         row_hover_color = rgba_from_hex(text_color, 0.08)
+        card_border_color = rgba_from_hex(border_color, 0.8)
 
         self.setStyleSheet(
             window._shared_button_css()
@@ -286,7 +287,7 @@ QFrame#HeroFrame {{
 }}
 QFrame#HomeCard {{
     background: {card_bg};
-    border: 1px solid {border_color};
+    border: 1px solid {card_border_color};
     border-radius: 14px;
 }}
 QLabel#HeroTitle {{
@@ -330,6 +331,7 @@ QToolButton#HomeRemoveButton:hover {{
     padding-bottom: 4px;
 }}
 QWidget#HomeRecentRow {{
+    border: 1px solid {card_border_color};
     border-radius: 10px;
 }}
 
