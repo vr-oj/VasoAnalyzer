@@ -12,7 +12,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QHelpEvent, QKeySequence, QPainter, QResizeEvent
+from PyQt5.QtGui import QColor, QHelpEvent, QKeySequence, QPainter, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -31,8 +31,10 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 EventRow = tuple[str, float, float, float | None, float | None, float | None, int | None]
 DEFAULT_QMODEL_INDEX = QModelIndex()
 
-EVENT_COLUMN_INDEX = 0
+STATUS_COLUMN_INDEX = 0
+EVENT_COLUMN_INDEX = 1
 DEFAULT_EVENT_COLUMN_WIDTH = 220
+DEFAULT_REVIEW_STATE = "UNREVIEWED"
 
 HEADER_TOOLTIPS = {
     "Event": "Event label or description",
@@ -88,26 +90,44 @@ class EventTableModel(QAbstractTableModel):
         self._rows: list[tuple] = []
         self._has_outer = False
         self._headers: list[str] = []
+        self._review_states: list[str] = []
+        self._status_icons: dict[str, QPixmap] = {}
 
     # Qt model API -----------------------------------------------------
     def rowCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return 0 if parent.isValid() else len(self._rows)
 
     def columnCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
-        return 0 if parent.isValid() else len(self._headers)
+        if parent.isValid():
+            return 0
+        if not self._headers:
+            return 0
+        # Extra leading status column
+        return len(self._headers) + 1
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
-        if orientation == Qt.Horizontal and 0 <= section < len(self._headers):
-            header = self._headers[section]
-            if role == Qt.DisplayRole:
-                return header
-            if role == Qt.ToolTipRole:
-                return HEADER_TOOLTIPS.get(header)
-            if role == Qt.TextAlignmentRole:
-                if section == 0:
-                    return Qt.AlignLeft | Qt.AlignVCenter
-                return Qt.AlignHCenter | Qt.AlignVCenter
-            return None
+        if orientation == Qt.Horizontal and 0 <= section < self.columnCount():
+            if section == STATUS_COLUMN_INDEX:
+                if role == Qt.DisplayRole:
+                    return " "
+                if role == Qt.ToolTipRole:
+                    return "Review status"
+                if role == Qt.TextAlignmentRole:
+                    return Qt.AlignHCenter | Qt.AlignVCenter
+                return None
+
+            data_idx = section - 1
+            if 0 <= data_idx < len(self._headers):
+                header = self._headers[data_idx]
+                if role == Qt.DisplayRole:
+                    return header
+                if role == Qt.ToolTipRole:
+                    return HEADER_TOOLTIPS.get(header)
+                if role == Qt.TextAlignmentRole:
+                    if section == EVENT_COLUMN_INDEX:
+                        return Qt.AlignLeft | Qt.AlignVCenter
+                    return Qt.AlignHCenter | Qt.AlignVCenter
+                return None
         return super().headerData(section, orientation, role)
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
@@ -115,17 +135,29 @@ class EventTableModel(QAbstractTableModel):
             return None
         row_idx = index.row()
         col = index.column()
-        if row_idx >= len(self._rows) or col >= len(self._headers):
+        if row_idx >= len(self._rows) or col >= self.columnCount():
             return None
 
-        raw_value = self._value_at(row_idx, col)
+        if col == STATUS_COLUMN_INDEX:
+            state = self._review_states[row_idx] if row_idx < len(self._review_states) else None
+            if role == Qt.DecorationRole:
+                return self._status_icon_for(state)
+            if role == Qt.ToolTipRole:
+                return self._status_tooltip(state)
+            if role == Qt.DisplayRole:
+                return ""
+            if role == Qt.TextAlignmentRole:
+                return Qt.AlignCenter
+            return None
+
+        raw_value = self._value_at(row_idx, col - 1)
 
         if role == Qt.DisplayRole:
             return self._format_display(col, raw_value)
         if role == Qt.EditRole:
             return "" if raw_value is None else str(raw_value)
         if role == Qt.TextAlignmentRole:
-            if col == 0:
+            if col == EVENT_COLUMN_INDEX:
                 return Qt.AlignVCenter | Qt.AlignLeft
             return Qt.AlignVCenter | Qt.AlignRight
         return None
@@ -168,6 +200,7 @@ class EventTableModel(QAbstractTableModel):
         has_outer_diameter: bool,
         has_avg_pressure: bool = False,
         has_set_pressure: bool = False,
+        review_states: Sequence[str] | None = None,
     ) -> None:
         self.beginResetModel()
         self._rows = [tuple(row) for row in rows]
@@ -183,6 +216,7 @@ class EventTableModel(QAbstractTableModel):
             headers.append("Set P (mmHg)")
         headers.append("Frame")
         self._headers = headers
+        self.set_review_states(list(review_states or []), suppress_layout=True)
         self.endResetModel()
         self.structure_changed.emit()
 
@@ -194,6 +228,9 @@ class EventTableModel(QAbstractTableModel):
 
     def has_outer(self) -> bool:
         return self._has_outer
+
+    def review_states(self) -> list[str]:
+        return list(self._review_states)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(self._rows, columns=self._headers)
@@ -220,6 +257,28 @@ class EventTableModel(QAbstractTableModel):
         right = self.index(index, self.columnCount() - 1)
         self.dataChanged.emit(left, right, [Qt.DisplayRole, Qt.EditRole])
 
+    def set_review_states(self, review_states: list[str] | None, *, suppress_layout: bool = False):
+        target_len = len(self._rows)
+        incoming = list(review_states or [])
+        if len(incoming) < target_len:
+            incoming.extend([DEFAULT_REVIEW_STATE] * (target_len - len(incoming)))
+        elif len(incoming) > target_len:
+            incoming = incoming[:target_len]
+        # Normalize entries
+        self._review_states = [
+            state if isinstance(state, str) and state.strip() else DEFAULT_REVIEW_STATE
+            for state in incoming
+        ]
+        if not suppress_layout:
+            top_left = self.index(0, STATUS_COLUMN_INDEX) if self.rowCount() else QModelIndex()
+            bottom_right = (
+                self.index(self.rowCount() - 1, STATUS_COLUMN_INDEX)
+                if self.rowCount()
+                else QModelIndex()
+            )
+            if top_left.isValid() and bottom_right.isValid():
+                self.dataChanged.emit(top_left, bottom_right, [Qt.DecorationRole, Qt.ToolTipRole])
+
     # Internal helpers -------------------------------------------------
     def _value_at(self, row_idx: int, column: int):
         """Map display column to row tuple index."""
@@ -239,7 +298,6 @@ class EventTableModel(QAbstractTableModel):
 
         # Build column mapping dynamically
         col_idx = 3
-        row_idx_map = {3: 3, 4: 4, 5: 5, 6: 6}  # Start with row indices for od, avg_p, set_p, frame
 
         if self._has_outer:
             if column == col_idx:
@@ -258,18 +316,21 @@ class EventTableModel(QAbstractTableModel):
 
         # Last column is always Frame
         if column == col_idx:
-            return row[6] if len(row) > 6 else None
+            frame_idx = len(row) - 1
+            if frame_idx < 0:
+                return None
+            return row[frame_idx] if frame_idx < len(row) else None
 
         return None
 
     def _format_display(self, column: int, value):
-        if column == 0:  # Event label
+        if column == EVENT_COLUMN_INDEX:  # Event label
             return value
         if value is None:
             return "—"
 
         # Determine if this is the frame column (always last)
-        last_col_idx = len(self._headers) - 1
+        last_col_idx = self.columnCount() - 1
         is_frame_column = column == last_col_idx
 
         if is_frame_column:
@@ -284,10 +345,54 @@ class EventTableModel(QAbstractTableModel):
             return value
 
         # Time, diameter, and pressure columns get 2 decimal places
-        if column >= 1:  # All numeric columns except frame
+        if column >= 2:  # All numeric columns except status/event label
             return f"{num:,.2f}"
 
         return f"{num:,}"
+
+    def _status_icon_for(self, state: str | None) -> QPixmap:
+        label = self._status_label(state)
+        if label in self._status_icons:
+            return self._status_icons[label]
+
+        color_map = {
+            "UNREVIEWED": "#9CA3AF",  # gray
+            "CONFIRMED": "#10B981",  # green
+            "EDITED": "#F59E0B",  # amber
+            "NEEDS_FOLLOWUP": "#EF4444",  # red
+        }
+        color_hex = (
+            color_map.get(label.upper(), color_map["UNREVIEWED"])
+            if isinstance(label, str)
+            else color_map["UNREVIEWED"]
+        )
+        pix = QPixmap(12, 12)
+        pix.fill(Qt.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(QColor(color_hex))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(1, 1, 10, 10)
+        painter.end()
+        self._status_icons[label] = pix
+        return pix
+
+    @staticmethod
+    def _status_label(state: str | None) -> str:
+        if not isinstance(state, str) or not state.strip():
+            return DEFAULT_REVIEW_STATE
+        normalized = state.strip().upper().replace(" ", "_").replace("-", "_")
+        return normalized or DEFAULT_REVIEW_STATE
+
+    def _status_tooltip(self, state: str | None) -> str:
+        label = self._status_label(state)
+        friendly = {
+            "UNREVIEWED": "Unreviewed",
+            "CONFIRMED": "Confirmed",
+            "EDITED": "Edited",
+            "NEEDS_FOLLOWUP": "Needs follow-up",
+        }
+        return friendly.get(label, "Unreviewed")
 
 
 class EventTableWidget(QTableView):
@@ -311,7 +416,7 @@ class EventTableWidget(QTableView):
 
         h_header = self.horizontalHeader()
         h_header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        h_header.setMinimumSectionSize(70)
+        h_header.setMinimumSectionSize(40)
         h_header.setStretchLastSection(False)
         h_header.setDefaultSectionSize(110)
         h_header.setMinimumHeight(24)
@@ -442,7 +547,10 @@ class EventTableWidget(QTableView):
 
         for col in range(model.columnCount()):
             title = model.headerData(col, Qt.Horizontal, Qt.DisplayRole) or ""
-            if col == EVENT_COLUMN_INDEX:
+            if col == STATUS_COLUMN_INDEX:
+                header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+                header.resizeSection(col, max(26, header.sectionSize(col)))
+            elif col == EVENT_COLUMN_INDEX:
                 header.setSectionResizeMode(col, QHeaderView.Interactive)
                 preferred_width = max(
                     self._preferred_event_width,

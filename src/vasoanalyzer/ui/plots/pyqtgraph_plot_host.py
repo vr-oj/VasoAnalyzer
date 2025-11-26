@@ -110,6 +110,7 @@ class PyQtGraphPlotHost:
         self._compact_legend_location: str = "upper right"
         self._time_window_listeners: list[Callable[[float, float], None]] = []
         self._range_change_user_driven: bool = False
+        self._click_handler: Callable[[str, float, float, int, Any], None] | None = None
         border_color = CURRENT_THEME.get(
             "hover_label_border",
             CURRENT_THEME.get("text", "#000000"),
@@ -146,6 +147,16 @@ class PyQtGraphPlotHost:
         # Y-axis title sizes adapt based on number of visible tracks
         for t in self._tracks.values():
             self._apply_axis_font_to_track(t)
+
+    def set_click_handler(self, handler: Callable[[str, float, float, int, Any], None] | None):
+        """Assign a global click handler for all tracks."""
+        self._click_handler = handler
+        for track_id, track in self._tracks.items():
+            track.set_click_handler(
+                lambda x, y, button, _mode, ev, tid=track_id: self._emit_click(
+                    tid, x, y, button, ev
+                )
+            )
 
     def is_channel_visible(self, channel_kind: str) -> bool:
         """Return visibility flag for a channel kind (defaults to True)."""
@@ -387,6 +398,13 @@ class PyQtGraphPlotHost:
 
             # Apply stored visibility state for this track
             track.set_visible(self.is_channel_visible(spec.track_id))
+
+            if self._click_handler is not None:
+                track.set_click_handler(
+                    lambda x, y, button, _mode, ev, tid=spec.track_id: self._emit_click(
+                        tid, x, y, button, ev
+                    )
+                )
 
         self._tracks = new_tracks
 
@@ -1343,6 +1361,14 @@ class PyQtGraphPlotHost:
             if track.ax == axes or track.view.get_widget().getPlotItem() == axes:
                 return track
         return None
+
+    def _emit_click(self, track_id: str, x: float, y: float, button: int, event: Any) -> None:
+        handler = self._click_handler
+        if callable(handler):
+            try:
+                handler(track_id, x, y, button, event)
+            except Exception:
+                log.debug("Click handler failed for track %s", track_id, exc_info=True)
 
     def zoom_at(self, center: float, factor: float) -> None:
         """Zoom around a given time coordinate."""

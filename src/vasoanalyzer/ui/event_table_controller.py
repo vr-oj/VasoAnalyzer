@@ -53,12 +53,14 @@ class EventTableController(QObject):
         has_outer_diameter: bool,
         has_avg_pressure: bool = False,
         has_set_pressure: bool = False,
+        review_states: Iterable[str] | None = None,
     ) -> None:
         self._model.set_events(
             list(data),
             has_outer_diameter=has_outer_diameter,
             has_avg_pressure=has_avg_pressure,
             has_set_pressure=has_set_pressure,
+            review_states=list(review_states) if review_states is not None else None,
         )
         self._table.apply_theme()
         self.rows_changed.emit()
@@ -70,6 +72,10 @@ class EventTableController(QObject):
 
     def to_dataframe(self) -> pd.DataFrame:
         return self._model.to_dataframe()
+
+    @property
+    def review_states(self) -> list[str]:
+        return self._model.review_states()
 
     def insert_row(self, index: int, row: EventRow) -> None:
         self._model.insert_row(index, row)
@@ -87,6 +93,9 @@ class EventTableController(QObject):
     def update_row(self, index: int, row: EventRow) -> None:
         self._model.update_row(index, row)
         self.rows_changed.emit()
+
+    def set_review_states(self, states: Iterable[str] | None) -> None:
+        self._model.set_review_states(list(states) if states is not None else None)
 
     def _handle_row_deletion_request(self, rows: list[int]) -> None:
         if not rows:

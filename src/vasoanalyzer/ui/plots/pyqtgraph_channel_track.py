@@ -198,6 +198,10 @@ class PyQtGraphChannelTrack:
         widget = self.view.get_widget()
         widget.setVisible(self._visible)
 
+    def set_click_handler(self, handler) -> None:
+        """Assign click handler callback for this track's view."""
+        self.view.set_click_handler(handler)
+
     def is_visible(self) -> bool:
         """Check if track is visible."""
         return self._visible

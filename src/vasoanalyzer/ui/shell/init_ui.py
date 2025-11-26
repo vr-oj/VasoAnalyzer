@@ -52,6 +52,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.plot_host = create_plot_host(dpi=dpi)
     window.fig = window.plot_host.figure
     window.canvas = window.plot_host.canvas
+    if hasattr(window.plot_host, "set_click_handler"):
+        window.plot_host.set_click_handler(window._handle_pyqtgraph_click)
     window.canvas.setMouseTracking(True)
     window.canvas.toolbar = None
     initial_specs = [

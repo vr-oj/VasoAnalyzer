@@ -115,6 +115,7 @@ from vasoanalyzer.services.project_service import (
 from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.ui.commands import PointEditCommand, ReplaceEventCommand
 from vasoanalyzer.ui.dialogs.axis_settings_dialog import AxisSettingsDialog
+from vasoanalyzer.ui.dialogs.event_review_wizard import EventReviewWizard
 from vasoanalyzer.ui.dialogs.excel_mapping_dialog import update_excel_file
 from vasoanalyzer.ui.dialogs.legend_settings_dialog import LegendSettingsDialog
 from vasoanalyzer.ui.dialogs.relink_dialog import MissingAsset, RelinkDialog
@@ -148,6 +149,11 @@ from .style_manager import PlotStyleManager
 from .update_checker import UpdateChecker
 
 log = logging.getLogger(__name__)
+
+REVIEW_UNREVIEWED = "UNREVIEWED"
+REVIEW_CONFIRMED = "CONFIRMED"
+REVIEW_EDITED = "EDITED"
+REVIEW_NEEDS_FOLLOWUP = "NEEDS_FOLLOWUP"
 
 
 class _StyleHolder:
@@ -3260,12 +3266,27 @@ class VasoAnalyzerApp(QMainWindow):
             def _update_metrics_if_changed(self) -> None:
                 signatures = []
                 changed = False
+
+                def _pin_x(marker) -> float | None:
+                    try:
+                        if hasattr(marker, "get_xdata"):
+                            return float(marker.get_xdata()[0])
+                        getter = getattr(marker, "getData", None)
+                        if callable(getter):
+                            xdata, _ydata = getter()
+                            if xdata is not None and len(xdata) > 0:
+                                return float(xdata[0])
+                    except Exception:
+                        return None
+                    return None
+
                 for idx, view in enumerate(self.views):
                     pins = tuple(
                         sorted(
-                            round(marker.get_xdata()[0], 4)
+                            round(px, 4)
                             for marker, _ in view.pinned_points
-                            if getattr(marker, "trace_type", "inner") == "inner"
+                            for px in [_pin_x(marker)]
+                            if px is not None and getattr(marker, "trace_type", "inner") == "inner"
                         )
                     )
                     signatures.append(pins)
@@ -4400,6 +4421,13 @@ class VasoAnalyzerApp(QMainWindow):
         """Remove the Matplotlib artist if it is still attached to a canvas."""
         if artist is None:
             return
+        scene = getattr(artist, "scene", None)
+        if callable(scene):
+            sc = scene()
+            if sc is not None:
+                with contextlib.suppress(Exception):
+                    sc.removeItem(artist)
+                return
         if getattr(artist, "figure", None) is None and getattr(artist, "axes", None) is None:
             return
         try:
@@ -4407,6 +4435,66 @@ class VasoAnalyzerApp(QMainWindow):
         except (NotImplementedError, ValueError):
             if hasattr(artist, "set_visible"):
                 artist.set_visible(False)
+
+    def _pin_coords(self, marker) -> tuple[float, float] | None:
+        """Return (x,y) for a pin marker (Matplotlib or PyQtGraph)."""
+        if marker is None:
+            return None
+        try:
+            if hasattr(marker, "get_xdata") and hasattr(marker, "get_ydata"):
+                return float(marker.get_xdata()[0]), float(marker.get_ydata()[0])
+            get_data = getattr(marker, "getData", None)
+            if callable(get_data):
+                xdata, ydata = get_data()
+                if xdata is not None and len(xdata) > 0 and ydata is not None and len(ydata) > 0:
+                    return float(xdata[0]), float(ydata[0])
+        except Exception:
+            return None
+        return None
+
+    def _nearest_pin_index(self, x: float, y: float) -> int | None:
+        best_idx = None
+        best_dist = float("inf")
+        for idx, (marker, _label) in enumerate(self.pinned_points):
+            coords = self._pin_coords(marker)
+            if coords is None:
+                continue
+            dx = coords[0] - x
+            dy = coords[1] - y
+            dist = abs(dx) + abs(dy)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = idx
+        if best_idx is None or best_dist > 0.25:
+            return None
+        return best_idx
+
+    def _add_pyqtgraph_pin(self, track_id: str, x: float, y: float, trace_type: str = "inner"):
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "track"):
+            return
+        track = plot_host.track(track_id)
+        if track is None:
+            return
+        try:
+            import pyqtgraph as pg
+        except Exception:
+            return
+
+        plot_item = track.view.get_widget().getPlotItem()
+        color = CURRENT_THEME.get("selection_bg", "#EF4444")
+        brush = pg.mkBrush(color)
+        pen = pg.mkPen(color)
+        marker = pg.ScatterPlotItem([x], [y], symbol="o", size=8, brush=brush, pen=pen)
+        marker.trace_type = trace_type
+        plot_item.addItem(marker)
+
+        label = pg.TextItem(f"{x:.2f} s\n{y:.1f} µm", anchor=(0, 1))
+        label.trace_type = trace_type
+        label.setPos(x, y)
+        plot_item.addItem(label)
+
+        self.pinned_points.append((marker, label))
 
     def clear_all_pins(self, checked: bool = False):
         """Clear all pinned annotations.
@@ -4430,7 +4518,9 @@ class VasoAnalyzerApp(QMainWindow):
                 "event_times": self.event_times,
                 "event_table_data": self.event_table_data,
                 "pinned_points": [
-                    (p.get_xdata()[0], p.get_ydata()[0]) for p, _ in self.pinned_points
+                    coords
+                    for marker, _ in self.pinned_points
+                    if (coords := self._pin_coords(marker))
                 ],
                 "grid_visible": self.grid_visible,
                 "xlim": self.ax.get_xlim(),
@@ -4941,20 +5031,57 @@ class VasoAnalyzerApp(QMainWindow):
         self.event_table_data = [tuple(row) for row in rows]
         self._sync_event_data_from_table()
         self._update_event_table_presence_state(bool(self.event_table_data))
+        if controller is not None:
+            controller.set_review_states(self._current_review_states())
+        self._update_excel_controls()
 
     def _ensure_event_meta_length(self, length: int | None = None) -> None:
         if length is None:
             length = len(self.event_labels)
         length = max(int(length), 0)
-        current = list(getattr(self, "event_label_meta", []))
-        if len(current) < length:
-            current.extend({} for _ in range(length - len(current)))
-        elif len(current) > length:
-            current = current[:length]
-        self.event_label_meta = current
+        self._normalize_event_label_meta(length)
+
+    def _normalize_event_label_meta(self, length: int | None = None) -> None:
+        target_len = len(self.event_table_data) if length is None else length
+        current = list(getattr(self, "event_label_meta", []) or [])
+        if len(current) < target_len:
+            current.extend({} for _ in range(target_len - len(current)))
+        elif len(current) > target_len:
+            current = current[:target_len]
+        normalized: list[dict[str, Any]] = []
+        for meta in current:
+            normalized.append(self._with_default_review_state(meta))
+        self.event_label_meta = normalized
+
+    @staticmethod
+    def _with_default_review_state(meta: Mapping[str, Any] | None) -> dict[str, Any]:
+        payload = dict(meta or {})
+        state = payload.get("review_state")
+        if isinstance(state, str) and state.strip():
+            payload["review_state"] = state.strip().upper().replace(" ", "_").replace("-", "_")
+        else:
+            payload["review_state"] = REVIEW_UNREVIEWED
+        return payload
+
+    def _current_review_states(self) -> list[str]:
+        self._normalize_event_label_meta(len(self.event_table_data))
+        return [meta.get("review_state", REVIEW_UNREVIEWED) for meta in self.event_label_meta]
+
+    def _set_review_state_for_row(self, index: int, state: str) -> None:
+        if not hasattr(self, "event_label_meta"):
+            self.event_label_meta = []
+        self._normalize_event_label_meta(len(self.event_table_data))
+        if 0 <= index < len(self.event_label_meta):
+            self.event_label_meta[index]["review_state"] = state
+
+    def _mark_row_edited(self, index: int) -> None:
+        self._set_review_state_for_row(index, REVIEW_EDITED)
+        controller = getattr(self, "event_table_controller", None)
+        if controller is not None:
+            controller.set_review_states(self._current_review_states())
 
     def _insert_event_meta(self, index: int, meta: dict[str, Any] | None = None) -> None:
-        payload = dict(meta or {})
+        payload = self._with_default_review_state(meta)
         if not hasattr(self, "event_label_meta"):
             self.event_label_meta = [payload]
             return
@@ -4971,6 +5098,7 @@ class VasoAnalyzerApp(QMainWindow):
         """Recompute cached event arrays, metadata, and annotation entries."""
 
         rows = list(getattr(self, "event_table_data", []) or [])
+        self._normalize_event_label_meta(len(rows))
         self._apply_event_rows_to_current_sample(rows)
         if not rows:
             self.event_labels = []
@@ -5018,7 +5146,8 @@ class VasoAnalyzerApp(QMainWindow):
         if labels is None or metadata is None:
             return
         new_labels = list(labels)
-        new_meta = [dict(entry or {}) for entry in metadata]
+        existing_states = self._current_review_states()
+        new_meta = [self._with_default_review_state(entry) for entry in metadata]
         if not new_labels:
             # No events – clear helpers and bail.
             self.event_labels = []
@@ -5040,10 +5169,17 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.event_labels = new_labels
         if len(new_meta) < len(new_labels):
-            new_meta.extend({} for _ in range(len(new_labels) - len(new_meta)))
+            new_meta.extend(
+                self._with_default_review_state(None)
+                for _ in range(len(new_labels) - len(new_meta))
+            )
         elif len(new_meta) > len(new_labels):
             new_meta = new_meta[: len(new_labels)]
-        self.event_label_meta = new_meta
+        for idx, state in enumerate(existing_states):
+            if idx < len(new_meta):
+                new_meta[idx]["review_state"] = state
+        self.event_label_meta = [self._with_default_review_state(entry) for entry in new_meta]
+        self._normalize_event_label_meta(len(self.event_label_meta))
 
         # Update table rows in-place so the UI reflects any text edits.
         for idx, label in enumerate(new_labels):
@@ -5057,6 +5193,9 @@ class VasoAnalyzerApp(QMainWindow):
             controller = getattr(self, "event_table_controller", None)
             if controller is not None:
                 controller.update_row(idx, self.event_table_data[idx])
+        controller = getattr(self, "event_table_controller", None)
+        if controller is not None:
+            controller.set_review_states(self._current_review_states())
 
         # Rebuild annotations and tooltips to reflect the new text.
         annotations: list[AnnotationSpec] = []
@@ -6070,6 +6209,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_action.setEnabled(False)
         self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
 
+        self.review_events_action = QAction(QIcon(), "Review Events…", self)
+        self.review_events_action.setToolTip("Step through events to confirm or flag values")
+        self.review_events_action.setEnabled(False)
+        self.review_events_action.triggered.connect(self._launch_event_review_wizard)
+
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Load events…", self
         )
@@ -6088,12 +6232,14 @@ class VasoAnalyzerApp(QMainWindow):
         import_menu.addAction(self.action_import_folder)
         import_menu.addAction(self.load_events_action)
         import_menu.addAction(self.excel_action)
+        import_menu.addAction(self.review_events_action)
         import_button.setMenu(import_menu)
         import_button.setPopupMode(QToolButton.InstantPopup)
         toolbar.addWidget(import_button)
 
         toolbar.addAction(self.load_snapshot_action)
         toolbar.addAction(self.excel_action)
+        toolbar.addAction(self.review_events_action)
         toolbar.addAction(self.action_figure_composer)
 
         self.save_session_action = QAction(QIcon(self.icon_path("Save.svg")), "Save Project", self)
@@ -7733,14 +7879,53 @@ QPushButton[isGhost="true"]:hover {{
         set_label = self._trace_label_for("p2")
         has_avg_p = self.trace_data is not None and avg_label in self.trace_data.columns
         has_set_p = self.trace_data is not None and set_label in self.trace_data.columns
+        review_states = self._current_review_states()
         self.event_table_controller.set_events(
             self.event_table_data,
             has_outer_diameter=has_od,
             has_avg_pressure=has_avg_p,
             has_set_pressure=has_set_p,
+            review_states=review_states,
         )
         self._update_excel_controls()
         self._update_event_table_presence_state(has_data)
+
+    def _launch_event_review_wizard(self) -> None:
+        if not self.event_table_data:
+            QMessageBox.information(self, "No Events", "Load events before starting a review.")
+            return
+
+        events = [tuple(row) for row in self.event_table_data]
+        review_states = self._current_review_states()
+
+        def _focus(idx: int, event_data: tuple | None = None) -> None:
+            try:
+                self._focus_event_row(int(idx), source="wizard")
+            except Exception:
+                log.debug("Unable to focus event row %s from wizard", idx, exc_info=True)
+
+        dialog = EventReviewWizard(
+            self,
+            events=events,
+            review_states=review_states,
+            focus_event_callback=_focus,
+        )
+        result = dialog.exec_()
+        if result != QDialog.Accepted:
+            return
+
+        updated_events = dialog.updated_events()
+        updated_states = dialog.updated_review_states()
+        if updated_events:
+            self.event_table_data = [tuple(row) for row in updated_events]
+        if updated_states:
+            self._normalize_event_label_meta(len(self.event_table_data))
+            for idx, state in enumerate(updated_states):
+                self._set_review_state_for_row(idx, state)
+
+        self.populate_table()
+        self._sync_event_data_from_table()
+        self.mark_session_dirty()
 
     def _update_event_table_presence_state(self, has_events: bool) -> None:
         self._event_panel_has_data = bool(has_events)
@@ -7752,6 +7937,8 @@ QPushButton[isGhost="true"]:hover {{
         has_data = bool(getattr(self, "event_table_data", None))
         if hasattr(self, "excel_action") and self.excel_action is not None:
             self.excel_action.setEnabled(has_data)
+        if hasattr(self, "review_events_action") and self.review_events_action is not None:
+            self.review_events_action.setEnabled(has_data)
         action_map = getattr(self, "action_map_excel", None)
         if action_map is not None:
             action_map.setEnabled(has_data)
@@ -7902,7 +8089,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def load_events(self, labels, diam_before, od_before=None):
         self.event_labels = list(labels)
-        self.event_label_meta = [dict() for _ in self.event_labels]
+        self.event_label_meta = [self._with_default_review_state(None) for _ in self.event_labels]
         self.event_table_data = []
         has_od = od_before is not None
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
@@ -7932,7 +8119,7 @@ QPushButton[isGhost="true"]:hover {{
             len(labels) if labels else 0,
         )
         self.event_labels = list(labels)
-        self.event_label_meta = [dict() for _ in self.event_labels]
+        self.event_label_meta = [self._with_default_review_state(None) for _ in self.event_labels]
         if times is not None:
             self.event_times = pd.to_numeric(times, errors="coerce").tolist()
         else:
@@ -8077,6 +8264,7 @@ QPushButton[isGhost="true"]:hover {{
             )
         else:
             log.info("DEBUG load: event_table_data rows=0")
+        self._normalize_event_label_meta(len(self.event_table_data))
         self.populate_table()
         if auto_export:
             self.auto_export_table()
@@ -8603,11 +8791,13 @@ QPushButton[isGhost="true"]:hover {{
             rows.append((str(label), time_val, id_val, od_val, avg_p_val, set_p_val, frame_val))
 
         self.event_table_data = rows
+        self.event_label_meta = [self._with_default_review_state(None) for _ in rows]
         self.event_table_controller.set_events(
             rows,
             has_outer_diameter=has_od,
             has_avg_pressure=has_avg_p,
             has_set_pressure=has_set_p,
+            review_states=self._current_review_states(),
         )
         self._update_excel_controls()
 
@@ -9451,6 +9641,7 @@ QPushButton[isGhost="true"]:hover {{
         cmd = ReplaceEventCommand(self, row, old_val, rounded_val)
         self.undo_stack.push(cmd)
         log.info("ID updated at %.2fs → %.2f µm", time, rounded_val)
+        self._mark_row_edited(row)
         self.mark_session_dirty()
         self._sync_event_data_from_table()
 
@@ -9478,6 +9669,7 @@ QPushButton[isGhost="true"]:hover {{
             self.event_labels.append(label_text)
 
         self._ensure_event_meta_length(len(self.event_table_data))
+        self._mark_row_edited(row)
         self.apply_event_label_overrides(self.event_labels, self.event_label_meta)
 
     def table_row_clicked(self, row, col):
@@ -9739,8 +9931,10 @@ QPushButton[isGhost="true"]:hover {{
             click_x, click_y = event.x, event.y
 
             for marker, label in self.pinned_points:
-                data_x = marker.get_xdata()[0]
-                data_y = marker.get_ydata()[0]
+                coords = self._pin_coords(marker)
+                if coords is None:
+                    continue
+                data_x, data_y = coords
                 tr_type = getattr(marker, "trace_type", "inner")
                 ax_ref = self.ax2 if tr_type == "outer" and self.ax2 else self.ax
                 pixel_x, pixel_y = ax_ref.transData.transform((data_x, data_y))
@@ -9836,6 +10030,77 @@ QPushButton[isGhost="true"]:hover {{
             self.canvas.draw_idle()
             self.mark_session_dirty()
 
+    def _handle_pyqtgraph_click(self, track_id: str, x: float, y: float, button: int, event=None):
+        """Handle clicks from PyQtGraph tracks for pin interactions."""
+        if self.trace_data is None:
+            return
+        is_left = button == 1
+        is_right = button == 3
+
+        # Focus nearest event if click is close
+        if is_left and self.event_times:
+            current_window = None
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "current_window"):
+                current_window = plot_host.current_window()
+            x_low, x_high = (
+                current_window
+                if current_window
+                else (min(self.event_times, default=x), max(self.event_times, default=x))
+            )
+            tolerance = max((x_high - x_low) * 0.004, 0.05)
+            idx = self._nearest_event_index(x)
+            if (
+                idx is not None
+                and idx < len(self.event_times)
+                and abs(x - float(self.event_times[idx])) <= tolerance
+            ):
+                self._focus_event_row(idx, source="plot")
+                return
+
+        # Right-click on pin -> context menu
+        if is_right and self.pinned_points:
+            idx = self._nearest_pin_index(x, y)
+            if idx is not None:
+                marker, label = self.pinned_points[idx]
+                coords = self._pin_coords(marker)
+                if coords is None:
+                    return
+                data_x, data_y = coords
+                menu = QMenu(self)
+                replace_action = menu.addAction("Replace Event Value…")
+                delete_action = menu.addAction("Delete Pin")
+                undo_action = menu.addAction("Undo Last Replacement")
+                add_new_action = menu.addAction("➕ Add as New Event")
+                action = menu.exec_(QCursor.pos())
+                if action == delete_action:
+                    self._safe_remove_artist(marker)
+                    self._safe_remove_artist(label)
+                    self.pinned_points.pop(idx)
+                    self.mark_session_dirty()
+                    return
+                if action == replace_action:
+                    self.handle_event_replacement(data_x, data_y)
+                    return
+                if action == undo_action:
+                    self.undo_last_replacement()
+                    return
+                if action == add_new_action:
+                    tr_type = getattr(marker, "trace_type", "inner")
+                    self.prompt_add_event(data_x, data_y, tr_type)
+                    return
+
+        # Left-click add pin
+        if is_left:
+            tr_type = "inner"
+            track = getattr(self, "plot_host", None)
+            if track is not None and hasattr(track, "track"):
+                spec_track = track.track(track_id)
+                if spec_track and getattr(spec_track.spec, "component", "") == "outer":
+                    tr_type = "outer"
+            self._add_pyqtgraph_pin(track_id, x, y, tr_type)
+            self.mark_session_dirty()
+
     def handle_event_replacement(self, x, y):
         if not self.event_labels or not self.event_times:
             log.info("No events available to replace.")
@@ -9888,6 +10153,7 @@ QPushButton[isGhost="true"]:hover {{
                         frame_num,
                     )
                 self.event_table_controller.update_row(index, self.event_table_data[index])
+                self._mark_row_edited(index)
                 self.auto_export_table()
                 self.mark_session_dirty()
 
@@ -9960,7 +10226,7 @@ QPushButton[isGhost="true"]:hover {{
             self.event_times.append(x)
             self.event_table_data.append(new_entry)
             self.event_frames.append(frame_number)
-            self.event_label_meta.append({})
+            self.event_label_meta.append(self._with_default_review_state(None))
         else:
             self.event_labels.insert(insert_idx, new_label.strip())
             self.event_times.insert(insert_idx, x)
@@ -10032,7 +10298,7 @@ QPushButton[isGhost="true"]:hover {{
             self.event_times.append(t_val)
             self.event_table_data.append(new_entry)
             self.event_frames.append(frame_number)
-            self.event_label_meta.append({})
+            self.event_label_meta.append(self._with_default_review_state(None))
         else:
             self.event_labels.insert(insert_idx, label.strip())
             self.event_times.insert(insert_idx, t_val)
@@ -11125,6 +11391,7 @@ QPushButton[isGhost="true"]:hover {{
                     lbl, t, _, frame_val = self.event_table_data[row]
                     self.event_table_data[row] = (lbl, t, rounded, frame_val)
                 self.event_table_controller.update_row(row, self.event_table_data[row])
+                self._mark_row_edited(row)
                 self.auto_export_table()
 
         elif index.isValid() and action == delete_action:
@@ -11162,8 +11429,16 @@ QPushButton[isGhost="true"]:hover {{
             if not self.pinned_points:
                 QMessageBox.information(self, "No Pins", "There are no pinned points to use.")
                 return
-            closest_pin = min(self.pinned_points, key=lambda p: abs(p[0].get_xdata()[0] - t_event))
-            pin_id = closest_pin[0].get_ydata()[0]
+
+            def _pin_time(pin) -> float:
+                coords = self._pin_coords(pin[0])
+                return coords[0] if coords is not None else float("inf")
+
+            closest_pin = min(self.pinned_points, key=lambda p: abs(_pin_time(p) - t_event))
+            coords = self._pin_coords(closest_pin[0])
+            if coords is None:
+                return
+            pin_id = coords[1]
             confirm = QMessageBox.question(
                 self,
                 "Confirm Replacement",
@@ -11189,6 +11464,7 @@ QPushButton[isGhost="true"]:hover {{
                         self.event_table_data[row][3],
                     )
                 self.event_table_controller.update_row(row, self.event_table_data[row])
+                self._mark_row_edited(row)
                 self.auto_export_table()
                 log.info(
                     "Replaced ID at %.2fs with pinned value %.2f µm.",
@@ -11275,11 +11551,13 @@ QPushButton[isGhost="true"]:hover {{
         if "Inner Diameter" not in self.trace_data.columns:
             return None
 
-        inner_pins = [
-            marker.get_xdata()[0]
-            for marker, _ in self.pinned_points
-            if getattr(marker, "trace_type", "inner") == "inner"
-        ]
+        inner_pins = []
+        for marker, _ in self.pinned_points:
+            if getattr(marker, "trace_type", "inner") != "inner":
+                continue
+            coords = self._pin_coords(marker)
+            if coords is not None:
+                inner_pins.append(coords[0])
         if len(inner_pins) < 2:
             return None
 
@@ -11546,6 +11824,7 @@ QPushButton[isGhost="true"]:hover {{
             self._sync_sample_events_dataframe(self._cached_sample_state)
             return self._cached_sample_state
 
+        self._normalize_event_label_meta(len(self.event_table_data))
         # preserve any previously saved style_settings
         prev = {}
         if self.current_sample and isinstance(self.current_sample.ui_state, dict):
@@ -11555,7 +11834,9 @@ QPushButton[isGhost="true"]:hover {{
             "table_fontsize": self.event_table.font().pointSize(),
             "event_table_data": list(self.event_table_data),
             "event_label_meta": copy.deepcopy(self.event_label_meta),
-            "pins": [(p.get_xdata()[0], p.get_ydata()[0]) for p, _ in self.pinned_points],
+            "pins": [
+                coords for marker, _ in self.pinned_points if (coords := self._pin_coords(marker))
+            ],
             "plot_style": self.get_current_plot_style(),
             "grid_visible": self.grid_visible,
             "inner_trace_visible": (
@@ -11685,10 +11966,15 @@ QPushButton[isGhost="true"]:hover {{
                 meta_payload = state.get("event_label_meta")
                 if isinstance(meta_payload, list):
                     self.event_label_meta = [
-                        dict(item) if isinstance(item, dict) else {} for item in meta_payload
+                        self._with_default_review_state(item)
+                        if isinstance(item, Mapping)
+                        else self._with_default_review_state(None)
+                        for item in meta_payload
                     ]
                 else:
-                    self.event_label_meta = [dict() for _ in self.event_table_data]
+                    self.event_label_meta = [
+                        self._with_default_review_state(None) for _ in self.event_table_data
+                    ]
                 self.populate_table()
             # Restore inner/outer toggles
             for key, act_name, channel in (
@@ -11742,10 +12028,15 @@ QPushButton[isGhost="true"]:hover {{
             meta_payload = state.get("event_label_meta")
             if isinstance(meta_payload, list):
                 self.event_label_meta = [
-                    dict(item) if isinstance(item, dict) else {} for item in meta_payload
+                    self._with_default_review_state(item)
+                    if isinstance(item, Mapping)
+                    else self._with_default_review_state(None)
+                    for item in meta_payload
                 ]
             else:
-                self.event_label_meta = [dict() for _ in self.event_table_data]
+                self.event_label_meta = [
+                    self._with_default_review_state(None) for _ in self.event_table_data
+                ]
             self.populate_table()
         t_axes = time.perf_counter()
         if "axis_xlim" in state:

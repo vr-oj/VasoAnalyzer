@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -113,6 +113,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Apply theme
         self._apply_theme()
 
+        # Click handling
+        self._click_handler: Callable[[float, float, int, str, Any], None] | None = None
+
         # Initialize persistent hover label
         self._hover_text_item: pg.TextItem | None = None
         self._init_hover_label()
@@ -126,6 +129,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._hover_connection_active: bool = False
         self._hover_last_text: str = ""
         self.enable_hover_tooltip(True, precision=2)
+
+        scene = self._plot_widget.scene()
+        if scene is not None:
+            scene.sigMouseClicked.connect(self._handle_mouse_clicked)
 
     def _init_hover_label(self) -> None:
         """Create a persistent hover label anchored to the plot."""
@@ -879,6 +886,34 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._hover_tooltip_enabled = bool(enabled)
         self._hover_tooltip_precision = max(0, int(precision))
         self._ensure_hover_tracking()
+
+    # Click handling ----------------------------------------------------
+    def set_click_handler(
+        self, handler: Callable[[float, float, int, str, Any], None] | None
+    ) -> None:
+        self._click_handler = handler
+
+    def _handle_mouse_clicked(self, mouse_event) -> None:
+        if self._click_handler is None:
+            return
+        try:
+            button = mouse_event.button()
+        except Exception:
+            return
+        if button not in (Qt.LeftButton, Qt.RightButton):
+            return
+        vb = self._plot_item.vb
+        if vb is None:
+            return
+        try:
+            point = vb.mapSceneToView(mouse_event.scenePos())
+            x_val = float(point.x())
+            y_val = float(point.y())
+        except Exception:
+            return
+        self._click_handler(
+            x_val, y_val, 1 if button == Qt.LeftButton else 3, self._mode, mouse_event
+        )
 
     def hover_tooltip_enabled(self) -> bool:
         return self._hover_tooltip_enabled
