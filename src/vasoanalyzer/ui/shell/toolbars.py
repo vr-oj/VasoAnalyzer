@@ -32,11 +32,18 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
     toolbar.setFloatable(False)
     toolbar.setMovable(False)
+    border_color = CURRENT_THEME["grid_color"]
+    bg = CURRENT_THEME.get("toolbar_bg", CURRENT_THEME["window_bg"])
+    hover_bg = CURRENT_THEME.get("button_hover_bg", CURRENT_THEME.get("selection_bg", bg))
+    checked_bg = CURRENT_THEME.get("selection_bg", hover_bg)
+    pressed_bg = CURRENT_THEME.get("button_active_bg", checked_bg)
+    text_color = CURRENT_THEME["text"]
+    disabled_text = CURRENT_THEME.get("text_disabled", text_color)
     toolbar.setStyleSheet(
         f"""
         QToolBar {{
-            background: #f7f9fc;
-            border: 1px solid #d9e2f2;
+            background: {bg};
+            border: 1px solid {border_color};
             border-radius: 10px;
             padding: 4px 6px;
             spacing: 2px;
@@ -48,17 +55,20 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
             margin: 0px 3px;
             padding: 6px 10px;
             min-width: 54px;
-            color: {CURRENT_THEME["text"]};
+            color: {text_color};
+        }}
+        QToolBar > QToolButton:disabled {{
+            color: {disabled_text};
         }}
         QToolBar > QToolButton:hover {{
-            background: #e9f0ff;
+            background: {hover_bg};
         }}
         QToolBar > QToolButton:checked {{
-            background: #dbe5ff;
-            color: #1f3a82;
+            background: {checked_bg};
+            color: {text_color};
         }}
         QToolBar > QToolButton:pressed {{
-            background: #d2dbf5;
+            background: {pressed_bg};
         }}
     """
     )

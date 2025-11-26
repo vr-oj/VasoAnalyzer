@@ -4,9 +4,12 @@
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
 import re
+import subprocess
+import sys
 from typing import cast
 
 from matplotlib import rcParams
+from PyQt5.QtCore import QSettings
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
 
@@ -32,6 +35,51 @@ LIGHT_THEME = {
     "cursor_b": "#FF6B3D",
     "cursor_text": "#222222",
 }
+
+DARK_THEME = dict(LIGHT_THEME)
+DARK_THEME.update(
+    {
+        # Surfaces
+        "window_bg": "#020617",  # near-black navy
+        "plot_bg": "#020617",
+        "toolbar_bg": "#020617",
+        # Text
+        "text": "#E5E7EB",
+        "text_disabled": "#9CA3AF",
+        # Tables
+        "table_bg": "#020617",
+        "table_text": "#E5E7EB",
+        "alternate_bg": "#0B1120",
+        "selection_bg": "#1D4ED8",
+        # Buttons
+        "button_bg": "#020617",
+        "button_hover_bg": "#111827",
+        "button_active_bg": "#1D4ED8",
+        # Overlays / tooltips
+        "hover_label_bg": "rgba(15,23,42,220)",
+        "hover_label_border": "#4B5563",
+        # Lines / grids / cursors
+        "grid_color": "#374151",
+        "cursor_a": "#38BDF8",
+        "cursor_b": "#F97316",
+        "cursor_text": "#E5E7EB",
+        "cursor_line": "#38BDF8",
+        # Accents
+        "accent": "#38BDF8",
+        "accent_fill": "#0EA5E9",
+        "accent_fill_secondary": "#F97316",
+        "event_line": "#9CA3AF",
+        "event_highlight": "#1D4ED8",
+        "time_cursor": "#F97316",
+        # Trace defaults
+        "trace_color": "#E5E7EB",
+        "trace_color_secondary": "#F97316",
+        # Warnings
+        "warning_bg": "#451A03",
+        "warning_border": "#F97316",
+        "warning_text": "#FDE68A",
+    }
+)
 
 # Currently applied theme; defaults to light until explicitly changed
 CURRENT_THEME = LIGHT_THEME
@@ -206,11 +254,90 @@ def apply_matplotlib_style(theme: dict):
 # -----------------------------------------------------------------------------
 
 
-def apply_light_theme():
+def _apply_theme(theme: dict) -> None:
+    """Internal helper to push theme to Qt + matplotlib."""
     global CURRENT_THEME
-    CURRENT_THEME = LIGHT_THEME
-    apply_qt_palette(LIGHT_THEME)
+    CURRENT_THEME = theme
+    apply_qt_palette(theme)
+
     app = QApplication.instance()
     if app is not None:
-        app.setStyleSheet(apply_qt_stylesheet(LIGHT_THEME))
-    apply_matplotlib_style(LIGHT_THEME)
+        cast(QApplication, app).setStyleSheet(apply_qt_stylesheet(theme))
+
+    apply_matplotlib_style(theme)
+
+
+def apply_light_theme() -> None:
+    """Force the light theme."""
+    _apply_theme(LIGHT_THEME)
+
+
+def apply_dark_theme() -> None:
+    """Force the dark theme."""
+    _apply_theme(DARK_THEME)
+
+
+def detect_system_theme() -> str:
+    """
+    Try to detect the OS theme preference.
+
+    Returns:
+        "dark" or "light" (defaults to "light" on errors/unknown platforms).
+    """
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0 and "Dark" in result.stdout:
+                return "dark"
+        except Exception:
+            pass
+        return "light"
+
+    if sys.platform.startswith("win"):
+        try:
+            import winreg  # type: ignore[attr-defined]
+
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+                value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+                return "light" if value else "dark"
+        except Exception:
+            return "light"
+
+    return "light"
+
+
+def apply_theme_from_settings() -> str:
+    """
+    Apply the theme configured in QSettings and return the effective theme.
+
+    QSettings key:
+        appearance/themeMode -> "light", "dark", or "system" (default "system").
+
+    Returns:
+        "light" or "dark" depending on what was ultimately applied.
+    """
+    try:
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        mode = settings.value("appearance/themeMode", "system", type=str)
+    except Exception:
+        mode = "system"
+
+    if mode == "light":
+        apply_light_theme()
+        return "light"
+
+    if mode == "dark":
+        apply_dark_theme()
+        return "dark"
+
+    system_mode = detect_system_theme()
+    if system_mode == "dark":
+        apply_dark_theme()
+    else:
+        apply_light_theme()
+    return system_mode

@@ -8,13 +8,12 @@ import sys
 from pathlib import Path
 
 from PyQt5.QtCore import QCoreApplication, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPalette, QPixmap
+from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PyQt5.QtWidgets import QApplication, QSplashScreen
 
 from utils.config import APP_VERSION
 from vasoanalyzer.ui import theme
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp
-from vasoanalyzer.ui.theme import apply_light_theme
 
 try:  # Optional helper used for locating packaged resources
     from utils import resource_path
@@ -62,28 +61,28 @@ class VasoAnalyzerLauncher:
 
     # ------------------------------------------------------------------
     def _apply_theme(self) -> None:
-        apply_light_theme()
-        self.app.setStyle("Fusion")
+        """
+        Apply the Qt + matplotlib theme before showing the main window.
 
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#f5f5f5"))
-        palette.setColor(QPalette.Base, QColor("#ffffff"))
-        palette.setColor(QPalette.AlternateBase, QColor("#f7f7f7"))
-        palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
-        palette.setColor(QPalette.Button, QColor("#e0e0e0"))
-        palette.setColor(QPalette.ButtonText, QColor("#222222"))
-        selection_bg = theme.CURRENT_THEME.get("selection_bg", "#CCE5FF")
-        selection_text = theme.CURRENT_THEME.get("table_text", "#000000")
-        palette.setColor(QPalette.Highlight, QColor(selection_bg))
-        palette.setColor(QPalette.HighlightedText, QColor(selection_text))
-        self.app.setPalette(palette)
+        The theme choice comes from QSettings ("appearance/themeMode"):
+            - "light"     -> force light theme
+            - "dark"      -> force dark theme
+            - "system"    -> follow macOS/Windows preference (default)
+        """
+        try:
+            effective = theme.apply_theme_from_settings()
+        except Exception:  # pragma: no cover - very defensive fallback
+            theme.apply_light_theme()
+            effective = "light"
+
+        self.app.setStyle("Fusion")
 
         if resource_path is not None:
             try:
                 style_path = Path(resource_path("style.qss"))
             except TypeError:  # pragma: no cover - resource helper missing
                 style_path = None
-            if style_path and style_path.exists():
+            if style_path and style_path.exists() and effective == "light":
                 with style_path.open() as fh:
                     self.app.setStyleSheet(self.app.styleSheet() + fh.read())
 

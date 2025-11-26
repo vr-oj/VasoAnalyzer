@@ -96,6 +96,20 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(dir_group)
 
+        # Appearance
+        appearance_group = QGroupBox("Appearance")
+        appearance_layout = QFormLayout(appearance_group)
+        appearance_layout.setSpacing(8)
+
+        self.theme_mode_combo = QComboBox()
+        self.theme_mode_combo.addItem("Follow system", "system")
+        self.theme_mode_combo.addItem("Light", "light")
+        self.theme_mode_combo.addItem("Dark", "dark")
+        self.theme_mode_combo.setEditable(False)
+
+        appearance_layout.addRow("Theme (requires restart):", self.theme_mode_combo)
+        layout.addWidget(appearance_group)
+
         # Startup Options
         startup_group = QGroupBox("Startup")
         startup_layout = QVBoxLayout(startup_group)
@@ -369,6 +383,13 @@ class PreferencesDialog(QDialog):
             self.settings.value("startup/restore_session", False, type=bool)
         )
 
+        # Appearance
+        mode = self.settings.value("appearance/themeMode", "system", type=str)
+        index = self.theme_mode_combo.findData(mode)
+        if index < 0:
+            index = 0
+        self.theme_mode_combo.setCurrentIndex(index)
+
         # Projects
         self.bundle_format_checkbox.setChecked(
             self.settings.value("project/use_bundle_format", True, type=bool)
@@ -409,6 +430,9 @@ class PreferencesDialog(QDialog):
         self.settings.setValue("directories/imports", self.import_dir_edit.text())
         self.settings.setValue("startup/show_welcome", self.show_welcome_checkbox.isChecked())
         self.settings.setValue("startup/restore_session", self.restore_session_checkbox.isChecked())
+
+        # Appearance
+        self.settings.setValue("appearance/themeMode", self.theme_mode_combo.currentData())
 
         # Projects
         use_bundle = self.bundle_format_checkbox.isChecked()

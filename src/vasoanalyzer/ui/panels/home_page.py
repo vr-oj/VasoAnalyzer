@@ -332,5 +332,15 @@ QToolButton#HomeRemoveButton:hover {{
 QWidget#HomeRecentRow {{
     border-radius: 10px;
 }}
+
+/* Make recent file/project rows clearly readable */
+QWidget#HomeRecentRow QPushButton[isGhost="true"] {{
+    color: {card_title_color};
+}}
+
+/* Subtle hover background for the whole row */
+QWidget#HomeRecentRow:hover {{
+    background: {row_hover_color};
+}}
 """
         )

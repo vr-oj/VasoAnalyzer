@@ -26,6 +26,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
+from vasoanalyzer.ui.theme import CURRENT_THEME
+
 log = logging.getLogger(__name__)
 
 
@@ -33,32 +35,48 @@ class ExcelMappingDialog(QDialog):
     def __init__(self, parent, event_data):
         super().__init__(parent)
         self.setWindowTitle("Map Events to Excel")
-        self.setStyleSheet("""
-            QLabel, QTableWidget, QComboBox, QPushButton {
-                color: black;
+        bg = CURRENT_THEME["window_bg"]
+        text = CURRENT_THEME["text"]
+        border = CURRENT_THEME.get("grid_color", text)
+        button_bg = CURRENT_THEME.get("button_bg", bg)
+        button_hover = CURRENT_THEME.get("button_hover_bg", CURRENT_THEME.get("selection_bg", bg))
+        selection_bg = CURRENT_THEME.get("selection_bg", button_hover)
+        table_bg = CURRENT_THEME.get("table_bg", bg)
+        alternate_bg = CURRENT_THEME.get("alternate_bg", table_bg)
+        self.setStyleSheet(
+            f"""
+            QLabel, QTableWidget, QComboBox, QPushButton {{
+                color: {text};
                 font-family: Arial;
                 font-size: 13px;
-            }
-            QComboBox {
-                background-color: white;
-                border: 1px solid #CCCCCC;
+            }}
+            QComboBox {{
+                background-color: {button_bg};
+                border: 1px solid {border};
                 border-radius: 4px;
                 padding: 4px;
-            }
-            QComboBox QAbstractItemView {
-                background-color: white;
-                selection-background-color: #E6F0FF;
-            }
-            QPushButton {
-                background-color: white;
-                border: 1px solid #CCCCCC;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {bg};
+                selection-background-color: {selection_bg};
+                color: {text};
+            }}
+            QPushButton {{
+                background-color: {button_bg};
+                border: 1px solid {border};
                 border-radius: 6px;
                 padding: 6px 12px;
-            }
-            QPushButton:hover {
-                background-color: #E6F0FF;
-            }
-        """)
+                color: {text};
+            }}
+            QPushButton:hover {{
+                background-color: {button_hover};
+            }}
+            QTableWidget {{
+                background-color: {table_bg};
+                alternate-background-color: {alternate_bg};
+            }}
+        """
+        )
         self.event_data = event_data
         self.excel_path = None
         self.wb = None
@@ -162,12 +180,14 @@ class ExcelMappingDialog(QDialog):
         self.event_table.resizeColumnsToContents()
 
         self.event_table.setAlternatingRowColors(True)
-        self.event_table.setStyleSheet("""
-            QTableWidget {
-                alternate-background-color: #F5F5F5;
-                background-color: white;
-            }
-        """)
+        self.event_table.setStyleSheet(
+            f"""
+            QTableWidget {{
+                alternate-background-color: {CURRENT_THEME.get("alternate_bg", "#F5F5F5")};
+                background-color: {CURRENT_THEME.get("table_bg", "#FFFFFF")};
+            }}
+        """
+        )
 
     def load_excel(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select Excel File", "", "Excel Files (*.xlsx)")

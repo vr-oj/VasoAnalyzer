@@ -3824,6 +3824,20 @@ class VasoAnalyzerApp(QMainWindow):
         """Return absolute path to an icon shipped with the application."""
         from utils import resource_path
 
+        try:
+            from vasoanalyzer.ui import theme as theme_module
+
+            current_theme = getattr(theme_module, "CURRENT_THEME", None)
+            dark_theme = getattr(theme_module, "DARK_THEME", None)
+            if current_theme is not None and dark_theme is not None and current_theme is dark_theme:
+                name, ext = os.path.splitext(filename)
+                dark_filename = f"{name}_Dark{ext}"
+                candidate = resource_path("icons", dark_filename)
+                if os.path.exists(candidate):
+                    return candidate
+        except Exception:
+            pass
+
         return resource_path("icons", filename)
 
     def _brand_icon_path(self, extension: str) -> str:
