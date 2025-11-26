@@ -59,7 +59,10 @@ def scan_folder_for_traces(root_folder: str) -> list[tuple[str, str]]:
         for filename in filenames:
             if filename.endswith(".csv"):
                 # Skip known output files
-                if filename == "eventDiameters_output.csv":
+                if (
+                    filename.endswith("_eventDiameters_output.csv")
+                    or filename == "eventDiameters_output.csv"
+                ):
                     continue
 
                 # Skip files that look like event tables
@@ -115,7 +118,10 @@ def check_import_status(
     """
     # Check if output file exists (indicates already processed)
     trace_dir = os.path.dirname(trace_file)
-    output_file = os.path.join(trace_dir, "eventDiameters_output.csv")
+    base_name = os.path.splitext(os.path.basename(trace_file))[0]
+    preferred_output = os.path.join(trace_dir, f"{base_name}_eventDiameters_output.csv")
+    legacy_output = os.path.join(trace_dir, "eventDiameters_output.csv")
+    output_file = preferred_output if os.path.exists(preferred_output) else legacy_output
     output_exists = os.path.exists(output_file)
 
     # Check if already loaded in the experiment

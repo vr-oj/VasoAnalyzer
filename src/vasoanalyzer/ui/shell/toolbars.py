@@ -26,6 +26,7 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     )
 
     toolbar = CustomToolbar(canvas, window, reset_callback=window.reset_to_full_view)
+    toolbar.setObjectName("PlotToolbar")
     toolbar.setIconSize(QSize(22, 22))
     toolbar.setContentsMargins(0, 0, 0, 0)
     toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
@@ -34,25 +35,30 @@ def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
     toolbar.setStyleSheet(
         f"""
         QToolBar {{
-            background: transparent;
-            border: none;
-            padding: 0px;
-            spacing: 0px;
+            background: #f7f9fc;
+            border: 1px solid #d9e2f2;
+            border-radius: 10px;
+            padding: 4px 6px;
+            spacing: 2px;
         }}
         QToolBar > QToolButton {{
             background: transparent;
             border: none;
-            border-radius: 8px;
-            margin: 0px 5px;
-            padding: 6px 8px;
-            min-width: 52px;
+            border-radius: 10px;
+            margin: 0px 3px;
+            padding: 6px 10px;
+            min-width: 54px;
             color: {CURRENT_THEME["text"]};
         }}
         QToolBar > QToolButton:hover {{
-            background: {CURRENT_THEME["button_hover_bg"]};
+            background: #e9f0ff;
         }}
         QToolBar > QToolButton:checked {{
-            background: {CURRENT_THEME["button_active_bg"]};
+            background: #dbe5ff;
+            color: #1f3a82;
+        }}
+        QToolBar > QToolButton:pressed {{
+            background: #d2dbf5;
         }}
     """
     )

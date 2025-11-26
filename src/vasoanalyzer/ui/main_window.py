@@ -42,6 +42,7 @@ from PyQt5.QtGui import (
     QColor,
     QCursor,
     QDesktopServices,
+    QFont,
     QFontMetrics,
     QIcon,
     QImage,
@@ -754,6 +755,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_dock.visibilityChanged.connect(self.project_toggle_btn.setChecked)
         self.toolbar.addWidget(self.project_toggle_btn)
         self.project_dock.hide()
+
+    def _bold_font(self, size_delta: int = 0) -> QFont:
+        font = QFont()
+        font.setBold(True)
+        if size_delta:
+            with contextlib.suppress(Exception):
+                font.setPointSize(font.pointSize() + int(size_delta))
+        return font
 
     def _reveal_project_sidebar(self) -> None:
         """Ensure the project dock is visible when a project is active."""
@@ -1779,12 +1788,14 @@ class VasoAnalyzerApp(QMainWindow):
         root.setData(0, Qt.UserRole, self.current_project)
         root.setFlags(root.flags() | Qt.ItemIsEditable)
         root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+        root.setData(0, Qt.FontRole, self._bold_font(size_delta=2))
         self.project_tree.addTopLevelItem(root)
         for exp in self.current_project.experiments:
             exp_item = QTreeWidgetItem([exp.name])
             exp_item.setData(0, Qt.UserRole, exp)
             exp_item.setFlags(exp_item.flags() | Qt.ItemIsEditable)
             exp_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogListView))
+            exp_item.setData(0, Qt.FontRole, self._bold_font(size_delta=1))
             root.addChild(exp_item)
             samples = sorted(
                 exp.samples,
@@ -2836,7 +2847,7 @@ class VasoAnalyzerApp(QMainWindow):
                 trace = load_trace(resolved_trace, cache=cache)
                 sample.trace_path = resolved_trace
                 self._clear_missing_asset(sample, "trace")
-                self.trace_file_path = os.path.dirname(resolved_trace)
+                self.trace_file_path = resolved_trace
                 trace_source = resolved_trace
             else:
                 QMessageBox.warning(self, "No Trace", "Sample has no trace data.")
@@ -2872,7 +2883,7 @@ class VasoAnalyzerApp(QMainWindow):
                 and os.path.exists(trace_source)
             ):
                 prefix = "Trace"
-                self.trace_file_path = os.path.dirname(trace_source)
+                self.trace_file_path = trace_source
             else:
                 self.trace_file_path = None
             self._set_status_source(f"{prefix} · {display_name}", tooltip)
@@ -2950,7 +2961,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.compute_frame_trace_indices()
             t_ev = time.perf_counter()
             self.load_project_events(
-                labels, times, frames, diam, od, refresh_plot=False, auto_export=False
+                labels, times, frames, diam, od, refresh_plot=False, auto_export=True
             )
             log.info(
                 "Timing: load_project_events for '%s' took %.2f ms",
@@ -3111,7 +3122,7 @@ class VasoAnalyzerApp(QMainWindow):
     def _open_samples_in_dual_view_legacy(self, samples):
         """Display two samples stacked vertically in a single window."""
         if len(samples) != 2:
-            QMessageBox.warning(self, "Dual View", "Please select exactly two N's.")
+            QMessageBox.warning(self, "Dual View", "Please select exactly two datasets.")
             return
 
         class DualViewWindow(QMainWindow):
@@ -3307,7 +3318,7 @@ class VasoAnalyzerApp(QMainWindow):
         open_act = None
         dual_act = None
         if selected_samples:
-            open_act = menu.addAction("Open Selected N's…")
+            open_act = menu.addAction("Open Selected Datasets…")
             if len(selected_samples) == 2:
                 dual_act = menu.addAction("Open Dual View…")
 
@@ -4164,7 +4175,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.avg_pressure_toggle_act = QAction("Pressure", self, checkable=True, checked=True)
         self.avg_pressure_toggle_act.setStatusTip("Show pressure trace")
         self.avg_pressure_toggle_act.setToolTip("Toggle pressure trace")
-        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=True)
+        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=False)
         self.set_pressure_toggle_act.setStatusTip("Show set pressure trace")
         self.set_pressure_toggle_act.setToolTip("Toggle set pressure trace")
         self.id_toggle_act.setShortcut("I")
@@ -5266,6 +5277,14 @@ class VasoAnalyzerApp(QMainWindow):
 
         has_outer = self._outer_channel_available()
         self._apply_toggle_state(True, True, outer_supported=has_outer)
+        if self.avg_pressure_toggle_act is not None:
+            self.avg_pressure_toggle_act.blockSignals(True)
+            self.avg_pressure_toggle_act.setChecked(True)
+            self.avg_pressure_toggle_act.blockSignals(False)
+        if self.set_pressure_toggle_act is not None:
+            self.set_pressure_toggle_act.blockSignals(True)
+            self.set_pressure_toggle_act.setChecked(False)
+            self.set_pressure_toggle_act.blockSignals(False)
 
     def _rebuild_channel_layout(
         self, inner_on: bool, outer_on: bool, *, redraw: bool = True
@@ -5443,7 +5462,7 @@ class VasoAnalyzerApp(QMainWindow):
         set_pressure_on = (
             self.set_pressure_toggle_act.isChecked()
             if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act is not None
-            else True
+            else False
         )
 
         if self._avg_pressure_channel_available() and avg_pressure_on:
@@ -7476,7 +7495,7 @@ QPushButton[isGhost="true"]:hover {{
         self.trace_data = self._prepare_trace_dataframe(df)
         self._reset_channel_view_defaults()
         self._last_event_import = import_meta or {}
-        self.trace_file_path = os.path.dirname(trace_path)
+        self.trace_file_path = trace_path
         trace_filename = os.path.basename(trace_path)
         self.sampling_rate_hz = self._compute_sampling_rate(self.trace_data)
         self._set_status_source(f"Trace · {trace_filename}", trace_path)
@@ -7484,7 +7503,7 @@ QPushButton[isGhost="true"]:hover {{
         self.show_analysis_workspace()
 
         if labels:
-            self.load_project_events(labels, times, frames, diam, od_diam, auto_export=False)
+            self.load_project_events(labels, times, frames, diam, od_diam, auto_export=True)
         else:
             self.event_labels = []
             self.event_times = []
@@ -7669,7 +7688,7 @@ QPushButton[isGhost="true"]:hover {{
         if frames is None:
             frames = [0] * len(labels)
 
-        self.load_project_events(labels, times, frames, None, None, auto_export=False)
+        self.load_project_events(labels, times, frames, None, None, auto_export=True)
         self._last_event_import = {"event_file": file_path, "manual": True}
         self.statusBar().showMessage(f"{len(labels)} events loaded", 3000)
         self.mark_session_dirty()
@@ -11314,14 +11333,42 @@ QPushButton[isGhost="true"]:hover {{
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        if not self.trace_file_path:
-            log.warning("No trace path set. Cannot export event table.")
-            return
-
         try:
-            trace_path = os.path.abspath(self.trace_file_path)
-            output_dir = os.path.dirname(trace_path) if os.path.isfile(trace_path) else trace_path
-            csv_path = os.path.join(output_dir, "eventDiameters_output.csv")
+            sample = getattr(self, "current_sample", None)
+
+            # Resolve the best trace path (prefer the live file on disk)
+            candidate_paths: list[str] = []
+            if self.trace_file_path:
+                candidate_paths.append(os.path.abspath(self.trace_file_path))
+            if sample is not None and getattr(sample, "trace_path", None):
+                candidate_paths.append(os.path.abspath(sample.trace_path))
+                # Try resolving stored links if present
+                with contextlib.suppress(Exception):
+                    resolved = self._resolve_sample_link(sample, "trace")
+                    if resolved:
+                        candidate_paths.append(os.path.abspath(resolved))
+
+            trace_path = next((p for p in candidate_paths if p and os.path.isfile(p)), None)
+
+            # Name and output directory
+            base_name = None
+            if sample is not None and getattr(sample, "name", None):
+                base_name = str(sample.name).strip()
+            if base_name is None and trace_path:
+                base_name = os.path.splitext(os.path.basename(trace_path))[0]
+            if not base_name:
+                base_name = "event"
+
+            if trace_path:
+                output_dir = os.path.dirname(trace_path)
+            elif getattr(self.current_project, "path", None):
+                output_dir = os.path.dirname(self.current_project.path)
+            else:
+                output_dir = os.getcwd()
+
+            os.makedirs(output_dir, exist_ok=True)
+            filename = f"{base_name}_eventDiameters_output.csv"
+            csv_path = os.path.join(output_dir, filename)
             has_od = (
                 "Outer Diameter" in self.trace_data.columns
                 if self.trace_data is not None
@@ -11342,6 +11389,18 @@ QPushButton[isGhost="true"]:hover {{
                 "Frame",
             ]
             df = pd.DataFrame(self.event_table_data, columns=columns)
+
+            # Round numeric columns to 2 decimal places
+            if "ID (µm)" in df.columns:
+                df["ID (µm)"] = df["ID (µm)"].round(2)
+            if "OD (µm)" in df.columns:
+                df["OD (µm)"] = df["OD (µm)"].round(2)
+            if "Time (s)" in df.columns:
+                df["Time (s)"] = df["Time (s)"].round(2)
+            if "Avg P (mmHg)" in df.columns:
+                df["Avg P (mmHg)"] = df["Avg P (mmHg)"].round(2)
+            if "Set P (mmHg)" in df.columns:
+                df["Set P (mmHg)"] = df["Set P (mmHg)"].round(2)
 
             # Drop columns that don't have data
             if not has_od:

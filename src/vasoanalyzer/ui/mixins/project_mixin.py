@@ -999,7 +999,7 @@ class ProjectMixin:
         open_act = None
         dual_act = None
         if selected_samples:
-            open_act = menu.addAction("Open Selected N's…")
+            open_act = menu.addAction("Open Selected Datasets…")
             if len(selected_samples) == 2:
                 dual_act = menu.addAction("Open Dual View…")
 

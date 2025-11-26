@@ -2156,20 +2156,9 @@ def _persist_sample_snapshots(
         abs_path = _absolute_path(snapshot_path, base_dir)
         rel_path = _relativize_path(abs_path.as_posix(), base_dir) if abs_path else snapshot_path
         payload["snapshot_path"] = rel_path
-        if abs_path and abs_path.exists():
-            try:
-                repo.add_or_update_asset(
-                    dataset_id,
-                    "snapshot_tiff",
-                    abs_path,
-                    embed=True,
-                    mime="image/tiff",
-                    note="snapshot-tiff",
-                )
-                payload["snapshot_tiff_role"] = "snapshot_tiff"
-                sample.snapshot_tiff_role = "snapshot_tiff"
-            except Exception:
-                log.debug("Failed to register snapshot TIFF %s", abs_path, exc_info=True)
+        # Do NOT embed TIFF snapshots in the project to avoid ballooning .vaso size.
+        # They are used only for local playback; keeping the path is sufficient.
+        sample.snapshot_tiff_role = None
     duration = time.perf_counter() - t_start
     log.info(
         "Save: snapshots sample=%s dataset_id=%s time=%.3fs",
@@ -2679,7 +2668,7 @@ def _dataset_to_sample(
     snapshot_role = extra.get("snapshot_role")
     if snapshot_role is None and "snapshot_stack" in assets_by_role:
         snapshot_role = "snapshot_stack"
-    snapshot_tiff_role = extra.get("snapshot_tiff_role")
+    snapshot_tiff_role = None  # TIFF snapshots are kept external
     result_keys_meta = extra.get("analysis_result_keys")
     analysis_result_keys = list(result_keys_meta) if isinstance(result_keys_meta, list) else None
     edit_history = extra.get("edit_history") if isinstance(extra, dict) else None
@@ -2914,31 +2903,10 @@ def _load_sample_snapshots(
                 log.debug("Failed to load snapshot stack for dataset %s", dataset_id, exc_info=True)
 
     snapshot_path: str | None = None
-    tiff_role = extra.get("snapshot_tiff_role")
-    if tiff_role and tiff_role in assets:
-        asset = assets[tiff_role]
-        data = repo.get_asset_bytes(asset["id"])
-        if data:
-            out_dir = tmp_root / f"dataset_{dataset_id}" / "snapshots"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            ext = ".tif"
-            mime = asset.get("mime")
-            if mime and not mime.endswith("tiff"):
-                ext = ".bin"
-            sha = asset.get("sha256") or "snapshot"
-            out_path = out_dir / f"{sha[:16]}{ext}"
-            try:
-                with open(out_path, "wb") as fh:
-                    fh.write(data)
-                snapshot_path = out_path.as_posix()
-            except OSError:
-                snapshot_path = None
-
-    if snapshot_path is None:
-        raw = extra.get("snapshot_path")
-        if raw:
-            abs_path = _absolute_path(raw, base_dir)
-            snapshot_path = abs_path.as_posix() if abs_path else raw
+    raw = extra.get("snapshot_path")
+    if raw:
+        abs_path = _absolute_path(raw, base_dir)
+        snapshot_path = abs_path.as_posix() if abs_path else raw
 
     return stack_array, snapshot_path
 

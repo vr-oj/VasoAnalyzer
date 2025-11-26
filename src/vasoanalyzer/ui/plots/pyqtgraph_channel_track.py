@@ -111,7 +111,7 @@ class PyQtGraphChannelTrack:
         self._model = model
         self._sticky_ylim = None
         self._last_time_span = None
-        self.view.set_autoscale_y(True)
+        self.view.set_autoscale_y(False)
 
         # Check if component data is available, hide if not
         if self.spec.component == "outer" and model.outer_full is None:
@@ -233,22 +233,21 @@ class PyQtGraphChannelTrack:
 
     def set_ylim(self, ymin: float, ymax: float) -> None:
         """Set Y-axis limits manually."""
-        self._sticky_ylim = None
+        self._sticky_ylim = (float(ymin), float(ymax))
         self.view.set_autoscale_y(False)
         self.view.set_ylim(ymin, ymax)
 
     def pan_y(self, delta: float) -> None:
         """Pan the Y-axis by a delta amount."""
-        self._sticky_ylim = None
         ymin, ymax = self.view.get_ylim()
         new_min = ymin + delta
         new_max = ymax + delta
+        self._sticky_ylim = (float(new_min), float(new_max))
         self.view.set_autoscale_y(False)
         self.view.set_ylim(new_min, new_max)
 
     def zoom_y(self, center: float, factor: float) -> None:
         """Zoom the Y-axis around a center point."""
-        self._sticky_ylim = None
         ymin, ymax = self.view.get_ylim()
         span = ymax - ymin
 
@@ -264,6 +263,7 @@ class PyQtGraphChannelTrack:
         new_min = center - half
         new_max = center + half
 
+        self._sticky_ylim = (float(new_min), float(new_max))
         self.view.set_autoscale_y(False)
         self.view.set_ylim(new_min, new_max)
 
@@ -389,6 +389,22 @@ class PyQtGraphChannelTrack:
         )
 
         if not autoscale_enabled:
+            if self._sticky_ylim is None and self._model is not None:
+                limits = self._compute_padded_limits()
+                if limits is not None:
+                    ymin, ymax = limits
+                    if math.isclose(ymin, ymax, rel_tol=1e-6, abs_tol=1e-6):
+                        margin = abs(ymin) if ymin else 1.0
+                        ymin -= margin
+                        ymax += margin
+                    self._sticky_ylim = (float(ymin), float(ymax))
+                    _log.debug(
+                        "apply_auto_y track=%s primed sticky ylim ymin=%.6f ymax=%.6f",
+                        track_id,
+                        ymin,
+                        ymax,
+                    )
+
             if self._sticky_ylim is not None:
                 ymin, ymax = self._sticky_ylim
                 self.view.set_ylim(ymin, ymax)

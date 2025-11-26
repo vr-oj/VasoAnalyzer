@@ -689,29 +689,83 @@ class PyQtGraphPlotHost:
                 count += 1
         return count
 
+    def _estimate_track_height(self, track: PyQtGraphChannelTrack) -> float:
+        """Approximate the pixel height of a track widget."""
+
+        # First try the real widget height if available
+        try:
+            widget = track.view.get_widget()
+            actual_height = float(widget.height())
+            if actual_height > 0:
+                return actual_height
+        except Exception:
+            pass
+
+        # Fallback: estimate using layout geometry and height ratios
+        container_height = float(max(self.widget.height(), self.layout.geometry().height(), 1))
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        total_ratio = float(sum(max(spec.height_ratio, 0.05) for spec in visible_specs) or 1.0)
+        track_spec = getattr(track, "spec", None)
+        ratio = max(float(getattr(track_spec, "height_ratio", 1.0)), 0.05)
+        spacing = float(max(self.layout.spacing(), 0))
+        gap_per_track = spacing * max(len(visible_specs) - 1, 0) / max(len(visible_specs), 1)
+        estimated = container_height * (ratio / total_ratio) - gap_per_track
+        return max(1.0, estimated)
+
+    def _recenter_axis_label(self, axis, track_height: float) -> None:
+        """Position the axis label so it remains vertically centered within the track."""
+        if axis is None or not hasattr(axis, "label"):
+            return
+        try:
+            label = axis.label
+            br = label.boundingRect()
+            height = track_height if track_height > 0 else float(axis.size().height())
+            nudge = 5
+            y = height / 2.0 + br.width() / 2.0
+            if getattr(axis, "orientation", "") == "left":
+                x = -nudge
+            elif getattr(axis, "orientation", "") == "right":
+                x = float(axis.size().width()) - br.height() + nudge
+            else:
+                return
+            label.setPos(x, y)
+            axis.picture = None
+        except Exception:
+            with contextlib.suppress(Exception):
+                axis.resizeEvent()
+
+    def _recenter_bottom_label(self, axis) -> None:
+        """Center the bottom axis label horizontally."""
+        if axis is None or not hasattr(axis, "label"):
+            return
+        try:
+            label = axis.label
+            br = label.boundingRect()
+            width = float(axis.size().width())
+            height = float(axis.size().height())
+            nudge = 5
+            x = width / 2.0 - br.width() / 2.0
+            y = height - br.height() + nudge
+            label.setPos(x, y)
+            axis.picture = None
+        except Exception:
+            with contextlib.suppress(Exception):
+                axis.resizeEvent()
+
     def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
         plot_item = track.view.get_widget().getPlotItem()
 
-        # Set fixed font sizes based on number of VISIBLE tracks (not total)
-        # These sizes provide optimal readability as vertical space changes
-        # X-axis title stays fixed at 20pt for consistency
-        visible_count = max(self._count_visible_tracks(), 1)  # At least 1 to avoid edge cases
-        if visible_count == 1:
-            tick_size = 14
-            ylabel_size = 24
-            xlabel_size = 20  # Fixed for X-axis
-        elif visible_count == 2:
-            tick_size = 14
-            ylabel_size = 22
-            xlabel_size = 20  # Fixed for X-axis
-        elif visible_count == 3:
-            tick_size = 14
-            ylabel_size = 20
-            xlabel_size = 20  # Fixed for X-axis
-        else:  # 4 or more visible tracks
-            tick_size = 14
-            ylabel_size = 16
-            xlabel_size = 20  # Fixed for X-axis
+        height_px = self._estimate_track_height(track)
+
+        # Scale fonts to the available track height; clamp to readable bounds
+        def _clamp(value: float, lo: int, hi: int) -> int:
+            return int(max(lo, min(hi, round(value))))
+
+        tick_size = _clamp(height_px * 0.045, 10, 18)
+        ylabel_size = _clamp(height_px * 0.06, 12, 28)
+        xlabel_size = int(self._axis_font_size)  # Keep x-axis title a steady, readable size
 
         ylabel_font = QFont(self._axis_font_family, ylabel_size)
         xlabel_font = QFont(self._axis_font_family, xlabel_size)
@@ -722,13 +776,25 @@ class PyQtGraphPlotHost:
         with contextlib.suppress(AttributeError):
             left_axis.setTickFont(tick_font)
             left_axis.setTickLength(5, 0)
+        self._recenter_axis_label(left_axis, height_px)
 
-        is_bottom = not self._channel_specs or track.id == self._channel_specs[-1].track_id
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        if visible_specs:
+            bottom_visible_id = visible_specs[-1].track_id
+        elif self._channel_specs:
+            bottom_visible_id = self._channel_specs[-1].track_id
+        else:
+            bottom_visible_id = track.id
+
+        is_bottom = track.id == bottom_visible_id
         if is_bottom:
             bottom_axis = plot_item.getAxis("bottom")
             bottom_axis.label.setFont(xlabel_font)
             with contextlib.suppress(AttributeError):
                 bottom_axis.setTickFont(tick_font)
+            self._recenter_bottom_label(bottom_axis)
 
     def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:
         if color is None:

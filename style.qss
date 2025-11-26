@@ -74,27 +74,110 @@ QComboBox:hover {
 
 QFrame#ProjectCard {
   background: #ffffff;
-  border: 1px solid #d7d7d7;
-  border-radius: 12px;
+  border: 1px solid #c5cedd;
+  border-radius: 9px;
+  padding: 3px 3px 6px 3px;
+  box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.05);
 }
 
 QLabel#ProjectHeaderLabel {
-  font-weight: 600;
-  font-size: 11pt;
-  color: #333333;
+  font-weight: 700;
+  font-size: 10.5pt;
+  letter-spacing: 0.2px;
+  color: #111827;
+  font-family: "Arial";
 }
 
 QTreeWidget#ProjectTree {
   background: transparent;
   border: none;
-  padding: 4px 0 0 0;
+  padding: 4px 0 4px 0;
+  font-size: 13px;
+  font-family: ".AppleSystemUIFont";
+  color: #111827;
 }
 
 QTreeWidget#ProjectTree::item:selected {
-  background: #e0f0ff;
-  color: #000000;
+  background: #cfd9ff;
+  border-left: 3px solid #2e55cc;
+  color: #0f172a;
+  border-radius: 5px;
 }
 
 QTreeWidget#ProjectTree::item:hover {
-  background: #f5f5f5;
+  background: #f2f5fb;
+}
+
+QTreeWidget#ProjectTree::item {
+  margin: 2px 6px;
+  padding: 6px 12px;
+  border-radius: 5px;
+  color: #111827;
+}
+
+/* Primary toolbar styling */
+QToolBar#PrimaryToolbar {
+  background: #f7f9fc;
+  border: 1px solid #d9e2f2;
+  border-radius: 10px;
+  padding: 6px 8px;
+  spacing: 2px;
+}
+
+QToolBar#PrimaryToolbar > QToolButton,
+QToolBar#PrimaryToolbar > QWidget > QToolButton {
+  background: #ffffff;
+  border: 1px solid #cfd8e5;
+  border-radius: 10px;
+  margin: 2px 4px;
+  padding: 7px 12px;
+  min-width: 56px;
+  color: #0f172a;
+  box-shadow: 0px 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+QToolBar#PrimaryToolbar > QToolButton:hover,
+QToolBar#PrimaryToolbar > QWidget > QToolButton:hover {
+  background: #edf3ff;
+  border-color: #b6c7ea;
+}
+
+QToolBar#PrimaryToolbar > QToolButton:pressed,
+QToolBar#PrimaryToolbar > QWidget > QToolButton:pressed {
+  background: #d9e4ff;
+  border-color: #9cb5e8;
+}
+
+/* Plot toolbar (canvas) buttons share the same button look */
+QToolBar#PlotToolbar,
+QToolBar[objectName=\"PlotToolbar\"] {
+  background: #f7f9fc;
+  border: 1px solid #d9e2f2;
+  border-radius: 10px;
+  padding: 6px 8px;
+  spacing: 2px;
+}
+
+QToolBar#PlotToolbar > QToolButton,
+QToolBar[objectName=\"PlotToolbar\"] > QToolButton {
+  background: #ffffff;
+  border: 1px solid #cfd8e5;
+  border-radius: 10px;
+  margin: 2px 4px;
+  padding: 7px 12px;
+  min-width: 56px;
+  color: #0f172a;
+  box-shadow: 0px 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+QToolBar#PlotToolbar > QToolButton:hover,
+QToolBar[objectName=\"PlotToolbar\"] > QToolButton:hover {
+  background: #edf3ff;
+  border-color: #b6c7ea;
+}
+
+QToolBar#PlotToolbar > QToolButton:pressed,
+QToolBar[objectName=\"PlotToolbar\"] > QToolButton:pressed {
+  background: #d9e4ff;
+  border-color: #9cb5e8;
 }

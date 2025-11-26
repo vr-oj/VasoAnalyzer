@@ -588,7 +588,7 @@ class SampleLoaderMixin:
     def _open_samples_in_dual_view_legacy(self, samples):
         """Display two samples stacked vertically in a single window."""
         if len(samples) != 2:
-            QMessageBox.warning(self, "Dual View", "Please select exactly two N's.")
+            QMessageBox.warning(self, "Dual View", "Please select exactly two datasets.")
             return
 
         class DualViewWindow(QMainWindow):
