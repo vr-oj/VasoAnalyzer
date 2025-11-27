@@ -48,6 +48,7 @@ from PyQt5.QtGui import (
     QImage,
     QKeySequence,
     QPainter,
+    QPalette,
     QPixmap,
 )
 from PyQt5.QtWidgets import (
@@ -422,6 +423,76 @@ class _MissingAssetScanJob(QRunnable):
         self.signals.finished.emit(self._token, payload)
 
 
+class _SaveJobSignals(QObject):
+    progressChanged = pyqtSignal(int, str)
+    finished = pyqtSignal(bool, float, str)
+    error = pyqtSignal(str)
+
+
+class _SaveJob(QRunnable):
+    """Background job that writes the project to disk off the UI thread."""
+
+    def __init__(
+        self,
+        project: Project,
+        path: str | None,
+        *,
+        skip_optimize: bool,
+        mode: str = "manual",
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(True)
+        self.signals = _SaveJobSignals()
+        self._project = project
+        self._path = path
+        self._skip_optimize = skip_optimize
+        self._mode = mode
+        self._emit_progress(0, "Preparing project…")
+
+    def _emit_progress(self, percent: int, label: str) -> None:
+        """Safely emit progress updates."""
+        with contextlib.suppress(RuntimeError):
+            self.signals.progressChanged.emit(percent, label)
+
+    def run(self) -> None:  # type: ignore[override]
+        import time
+
+        start = time.perf_counter()
+        path = self._path
+        log.debug("Background save job started path=%s mode=%s", path, self._mode)
+        try:
+            from vasoanalyzer.services.project_service import (
+                autosave_project,
+                save_project_file,
+            )
+
+            if self._mode == "autosave":
+                self._emit_progress(20, "Autosaving project…")
+                autosave_path = autosave_project(self._project)
+                actual_path = autosave_path or path or getattr(self._project, "path", None)
+                self._emit_progress(80, "Writing autosave…")
+            else:
+                self._emit_progress(20, "Serializing project…")
+                save_project_file(self._project, path=path, skip_optimize=self._skip_optimize)
+                actual_path = path or getattr(self._project, "path", None)
+                self._emit_progress(80, "Writing project…")
+
+            duration = time.perf_counter() - start
+            self._emit_progress(100, "Finalizing…")
+            self.signals.finished.emit(True, duration, actual_path or "")
+        except Exception as exc:
+            duration = time.perf_counter() - start
+            self.signals.error.emit(str(exc))
+            self.signals.finished.emit(False, duration, path or getattr(self._project, "path", ""))
+        finally:
+            # Ensure any store opened during the save is closed in the worker thread
+            store = getattr(self._project, "_store", None)
+            if store is not None:
+                with contextlib.suppress(Exception):
+                    store.close()
+                self._project._store = None
+
+
 def _collect_missing_assets(project: Project) -> tuple[list[MissingAsset], list[str]]:
     missing: list[MissingAsset] = []
     project_missing: list[str] = []
@@ -553,6 +624,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._annotation_lane_visible = False
         self.event_text_objects = []
         self.event_table_data = []
+        self._event_review_wizard = None
+        self._suppress_review_prompt = False
+        self._current_review_event_index = None
         self._sample_summary_logged = False
         self.pinned_points = []
         self.slider_markers = {}
@@ -567,6 +641,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
         self.event_metadata = []
         self._last_event_import = {}
+        self._event_table_path = None  # path to the current sample's event table, if known
         self.sampling_rate_hz: float | None = None
         self.session_dirty = False
         self.last_autosave_path: str | None = None
@@ -577,6 +652,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.autosave_timer.timeout.connect(self._autosave_tick)
         self.autosave_timer.start()
         self._save_in_progress = False  # Mutex to prevent concurrent saves
+        self._active_save_reason: str | None = None
+        self._active_save_path: str | None = None
+        self._active_save_mode: str | None = None
+        self._last_save_error: str | None = None
         self._event_highlight_color = DEFAULT_STYLE.get("event_highlight_color", "#1D5CFF")
         self._event_highlight_base_alpha = float(DEFAULT_STYLE.get("event_highlight_alpha", 0.95))
         self._event_highlight_duration_ms = int(
@@ -626,11 +705,32 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Setup progress bar in status bar
         self._progress_bar = QProgressBar()
-        self._progress_bar.setMaximumWidth(200)
-        self._progress_bar.setMaximumHeight(16)
+        self._progress_bar.setMaximumWidth(240)
+        self._progress_bar.setMaximumHeight(18)
         self._progress_bar.setTextVisible(True)
         self._progress_bar.hide()  # Hidden by default
         self.statusBar().addPermanentWidget(self._progress_bar)
+        self._save_progress_bar = QProgressBar(self.statusBar())
+        self._save_progress_bar.setVisible(False)
+        self._save_progress_bar.setMinimumWidth(240)
+        self._save_progress_bar.setMaximumHeight(18)
+        self._save_progress_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._save_progress_bar.setTextVisible(False)
+        self._save_progress_label = QLabel("")
+        self._save_progress_label.setVisible(False)
+
+        self._save_progress_container = QWidget(self.statusBar())
+        _save_layout = QHBoxLayout(self._save_progress_container)
+        _save_layout.setContentsMargins(4, 0, 4, 0)
+        _save_layout.setSpacing(6)
+        _save_layout.addWidget(self._save_progress_label)
+        _save_layout.addWidget(self._save_progress_bar)
+        self._save_progress_container.setVisible(False)
+        self.statusBar().addPermanentWidget(self._save_progress_container, 0)
+        self._save_progress_hide_timer = QTimer(self)
+        self._save_progress_hide_timer.setSingleShot(True)
+        self._save_progress_hide_timer.timeout.connect(self._hide_save_progress_bar)
+        self._apply_status_bar_theme()
 
         self.current_project = None
         self.project_tree = None
@@ -1129,7 +1229,11 @@ class VasoAnalyzerApp(QMainWindow):
                 self._trace_model_cache[dsid] = model
                 self._window_cache.setdefault(dsid, model.full_range)
             except Exception:
-                log.debug("Preload: failed to build TraceModel for %s", sample.name, exc_info=True)
+                log.debug(
+                    "Preload: failed to build TraceModel for %s",
+                    sample.name,
+                    exc_info=True,
+                )
 
         self._preload_in_flight = max(0, self._preload_in_flight - 1)
         if self._preload_in_flight == 0 and self.statusBar() is not None:
@@ -1498,6 +1602,252 @@ class VasoAnalyzerApp(QMainWindow):
 
         return _open_project_file(self, path)
 
+    def _prepare_project_for_save(self) -> None:
+        """Capture UI state into the project before dispatching a background save."""
+
+        if not self.current_project:
+            return
+
+        self.current_project.ui_state = self.gather_ui_state()
+        if self.current_sample:
+            state = self.gather_sample_state()
+            self.current_sample.ui_state = state
+            self.project_state[id(self.current_sample)] = state
+
+    def _project_snapshot_for_save(self, project: Project) -> Project:
+        """Create a lightweight snapshot of ``project`` suitable for background save."""
+
+        snap = copy.copy(project)
+        snap.resources = project_module.ProjectResources()
+        snap._store = None  # Ensure thread-local store is opened inside the worker
+        if hasattr(snap, "_store_cleanup_registered"):
+            delattr(snap, "_store_cleanup_registered")
+        return snap
+
+    def _set_save_actions_enabled(self, enabled: bool) -> None:
+        """Enable/disable save-related actions while a background save is running."""
+
+        for action in (
+            getattr(self, "action_save_project", None),
+            getattr(self, "action_save_project_as", None),
+            getattr(self, "save_session_action", None),
+        ):
+            if action is not None:
+                action.setEnabled(enabled)
+
+    def _start_save_progress_bar(self, message: str) -> None:
+        """Show save progress bar with initial message."""
+
+        self._save_progress_hide_timer.stop()
+        self._save_progress_bar.setRange(0, 100)
+        self._save_progress_bar.setValue(0)
+        self._save_progress_bar.setTextVisible(False)
+        self._save_progress_container.setVisible(True)
+        self._save_progress_bar.setVisible(True)
+        self._save_progress_label.setVisible(True)
+        self._save_progress_label.setText(message)
+        self.statusBar().showMessage(message)
+
+    def _update_save_progress_bar(self, percent: int, message: str | None = None) -> None:
+        """Update save progress bar from worker signals."""
+
+        clamped = max(0, min(100, percent))
+        self._save_progress_bar.setRange(0, 100)
+        self._save_progress_bar.setValue(clamped)
+        if message:
+            self._save_progress_label.setText(message)
+            self.statusBar().showMessage(message)
+
+    def _finish_save_progress_bar(
+        self,
+        ok: bool,
+        path: str | None,
+        duration_sec: float | None = None,
+        details: str | None = None,
+    ) -> None:
+        """Finalize save progress bar display and schedule hide."""
+
+        base = "Project saved" if ok else "Save failed"
+        message = base
+        if path:
+            message = f"{base}: {Path(path).name}"
+        if not ok and details:
+            message = f"{message} — {details}"
+        if duration_sec is not None:
+            message = f"{message} ({duration_sec:.2f}s)"
+
+        timeout = 2500 if ok else 5000
+        self.statusBar().showMessage(message, timeout)
+        self._save_progress_hide_timer.start(timeout)
+
+    def _hide_save_progress_bar(self) -> None:
+        """Hide the save progress bar."""
+
+        self._save_progress_bar.hide()
+        self._save_progress_container.hide()
+        self._save_progress_label.hide()
+        self._save_progress_bar.setValue(0)
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.PaletteChange:
+            self._apply_status_bar_theme()
+        super().changeEvent(event)
+
+    def _status_bar_theme_colors(self) -> dict[str, str]:
+        """Return palette-aware colors for status/progress widgets."""
+
+        pal = self.palette()
+        window = pal.color(QPalette.Window)
+        text = pal.color(QPalette.WindowText)
+        highlight = pal.color(QPalette.Highlight)
+
+        is_dark = window.lightness() < 128
+        status_bg = window.name()
+        border = "#3a3a3a" if is_dark else "#c8c8c8"
+        bar_bg = "#2a2a2a" if is_dark else "#e6e6e6"
+        chunk = highlight.name() if highlight.isValid() else ("#4da3ff" if is_dark else "#2f7de1")
+        text_color = text.name() if text.isValid() else ("#dcdcdc" if is_dark else "#202020")
+
+        return {
+            "status_bg": status_bg,
+            "border": border,
+            "bar_bg": bar_bg,
+            "chunk": chunk,
+            "text": text_color,
+        }
+
+    def _apply_status_bar_theme(self) -> None:
+        """Apply palette-aware styling to status and progress bars."""
+
+        colors = self._status_bar_theme_colors()
+        status_style = (
+            "QStatusBar { background: {status_bg}; border-top: 1px solid {border}; } "
+            "QStatusBar QLabel { color: {text}; }"
+        ).format(**colors)
+        bar_style = (
+            "QProgressBar { border: 1px solid {border}; border-radius: 3px; "
+            "background: {bar_bg}; min-height: 16px; } "
+            "QProgressBar::chunk { background-color: {chunk}; }"
+        ).format(**colors)
+
+        self.statusBar().setStyleSheet(status_style)
+        self._progress_bar.setStyleSheet(bar_style)
+        self._save_progress_bar.setStyleSheet(bar_style)
+        self._save_progress_label.setStyleSheet(f"color: {colors['text']}; padding-right: 6px;")
+
+    def _start_background_save(
+        self,
+        path: str | None,
+        *,
+        skip_optimize: bool,
+        reason: str = "manual",
+        mode: str = "manual",
+    ) -> None:
+        """Dispatch a background save job using the thread pool."""
+
+        project = self.current_project
+        if project is None:
+            return
+
+        target_path = path or getattr(project, "path", None)
+        if not target_path:
+            self.statusBar().showMessage("No project path available to save.", 5000)
+            return
+
+        if self._save_in_progress:
+            log.debug("Save already in progress, skipping concurrent save request")
+            self.statusBar().showMessage("Save already in progress…", 3000)
+            return
+
+        self._prepare_project_for_save()
+        self._save_in_progress = True
+        self._active_save_reason = reason
+        self._active_save_path = target_path
+        self._active_save_mode = mode
+        self._last_save_error = None
+        if mode != "autosave":
+            self._set_save_actions_enabled(False)
+        progress_label = "Autosaving project…" if mode == "autosave" else "Saving project…"
+        self._start_save_progress_bar(progress_label)
+
+        project_snapshot = self._project_snapshot_for_save(project)
+
+        job = _SaveJob(
+            project_snapshot,
+            target_path,
+            skip_optimize=skip_optimize,
+            mode=mode,
+        )
+        job.signals.progressChanged.connect(self._on_save_progress_changed)
+        job.signals.finished.connect(self._on_save_finished)
+        job.signals.error.connect(self._on_save_error)
+        self._thread_pool.start(job)
+        log.info(
+            "Background save started path=%s reason=%s mode=%s",
+            target_path,
+            reason,
+            mode,
+        )
+
+    def _on_save_progress_changed(self, percent: int, message: str) -> None:
+        self._update_save_progress_bar(percent, message)
+
+    def _on_save_error(self, details: str) -> None:
+        self._last_save_error = details
+        mode = self._active_save_mode or "manual"
+        prefix = "Autosave" if mode == "autosave" else "Save"
+        log.error("Error during project %s: %s", mode, details)
+        self.statusBar().showMessage(f"{prefix} failed: {details}", 5000)
+
+    def _on_save_finished(self, ok: bool, duration_sec: float, path: str) -> None:
+        resolved_path = (
+            path or self._active_save_path or getattr(self.current_project, "path", None)
+        )
+        reason = self._active_save_reason or "manual"
+        mode = self._active_save_mode or "manual"
+
+        if ok:
+            log.info(
+                "Background save completed path=%s reason=%s mode=%s duration=%.2fs",
+                resolved_path,
+                reason,
+                mode,
+                duration_sec,
+            )
+            if self.current_project and reason == "save_as" and resolved_path:
+                self.current_project.path = resolved_path
+            if mode == "autosave":
+                if resolved_path:
+                    self.last_autosave_path = resolved_path
+                self._finish_save_progress_bar(True, resolved_path, duration_sec)
+            else:
+                if resolved_path:
+                    self.update_recent_projects(resolved_path)
+                self._finish_save_progress_bar(True, resolved_path, duration_sec)
+                reset_reason = (
+                    "manual save" if reason in ("manual", "save_as") else f"{reason} save"
+                )
+                self._reset_session_dirty(reason=reset_reason)
+                self._update_window_title()
+        else:
+            log.error(
+                "Background save failed path=%s reason=%s mode=%s duration=%.2fs",
+                resolved_path,
+                reason,
+                mode,
+                duration_sec,
+            )
+            self._finish_save_progress_bar(
+                False, resolved_path, duration_sec, self._last_save_error
+            )
+
+        self._active_save_reason = None
+        self._active_save_path = None
+        self._active_save_mode = None
+        self._last_save_error = None
+        self._set_save_actions_enabled(True)
+        self._save_in_progress = False
+
     def save_project_file(self, checked: bool = False):
         """Save the current project file.
 
@@ -1506,36 +1856,8 @@ class VasoAnalyzerApp(QMainWindow):
         """
         if self.current_project and self.current_project.path:
             project_path = self.current_project.path
-            # Prevent concurrent saves
-            if self._save_in_progress:
-                log.debug("Save already in progress, skipping concurrent save request")
-                return
-
-            try:
-                log.info("Manual save requested path=%s", project_path)
-                self._save_in_progress = True
-                self.current_project.ui_state = self.gather_ui_state()
-                if self.current_sample:
-                    state = self.gather_sample_state()
-                    self.current_sample.ui_state = state
-                    self.project_state[id(self.current_sample)] = state
-                save_project_file(self.current_project)
-                log.info("Manual save completed path=%s", project_path)
-                self.update_recent_projects(self.current_project.path)
-                self.statusBar().showMessage("\u2713 Project saved", 3000)
-                self._reset_session_dirty(reason="manual save")
-                self._update_window_title()
-            except Exception as e:
-                log.error(
-                    "Manual save failed path=%s error=%s",
-                    project_path,
-                    e,
-                    exc_info=True,
-                )
-                self.statusBar().showMessage(f"Save failed: {e}", 5000)
-                raise
-            finally:
-                self._save_in_progress = False
+            log.info("Manual save requested path=%s", project_path)
+            self._start_background_save(project_path, skip_optimize=False, reason="manual")
         elif self.current_project:
             self.save_project_file_as()
 
@@ -1553,51 +1875,43 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_project.path or "",
             "Vaso Bundles (*.vasopack)",
         )
-        if path:
-            path_obj = Path(path).expanduser()
-            if path_obj.suffix.lower() != ".vasopack":
-                path_obj = path_obj.with_suffix(".vasopack")
-            path = str(path_obj.resolve(strict=False))
+        if not path:
+            return
 
-            # Check if user is trying to save to cloud storage
-            from vasoanalyzer.core.project import _is_cloud_storage_path
+        path_obj = Path(path).expanduser()
+        if path_obj.suffix.lower() != ".vasopack":
+            path_obj = path_obj.with_suffix(".vasopack")
+        path = str(path_obj.resolve(strict=False))
 
-            is_cloud, cloud_service = _is_cloud_storage_path(path)
-            if is_cloud:
-                reply = QMessageBox.warning(
-                    self,
-                    "Cloud Storage - Known Limitation",
-                    f"<b>You are saving to {cloud_service}</b>\n\n"
-                    f"<b>Technical Limitation:</b>\n"
-                    f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
-                    f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
-                    f"database writes, breaking integrity.\n\n"
-                    f"<b>Mitigations in place:</b>\n"
-                    f"• VasoAnalyzer uses WAL mode for better resilience\n"
-                    f"• Automatic recovery attempts if corruption occurs\n"
-                    f"• Risk is highest during active editing and autosaves\n\n"
-                    f"<b>Best practice:</b>\n"
-                    f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
-                    f"files to cloud storage for backup and sharing.\n\n"
-                    f"<b>Continue saving to {cloud_service}?</b>",
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.No,
-                )
-                if reply == QMessageBox.No:
-                    return
+        # Check if user is trying to save to cloud storage
+        from vasoanalyzer.core.project import _is_cloud_storage_path
 
-            self.current_project.ui_state = self.gather_ui_state()
-            if self.current_sample:
-                state = self.gather_sample_state()
-                self.current_sample.ui_state = state
-                self.project_state[id(self.current_sample)] = state
-            log.info("Manual save (Save As) requested destination=%s", path)
-            save_project_file(self.current_project, path)
-            log.info("Manual save (Save As) completed destination=%s", path)
-            self.update_recent_projects(path)
-        self.statusBar().showMessage("\u2713 Project saved", 3000)
-        self._reset_session_dirty(reason="save as")
-        self._update_window_title()
+        is_cloud, cloud_service = _is_cloud_storage_path(path)
+        if is_cloud:
+            reply = QMessageBox.warning(
+                self,
+                "Cloud Storage - Known Limitation",
+                f"<b>You are saving to {cloud_service}</b>\n\n"
+                f"<b>Technical Limitation:</b>\n"
+                f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
+                f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
+                f"database writes, breaking integrity.\n\n"
+                f"<b>Mitigations in place:</b>\n"
+                f"• VasoAnalyzer uses WAL mode for better resilience\n"
+                f"• Automatic recovery attempts if corruption occurs\n"
+                f"• Risk is highest during active editing and autosaves\n\n"
+                f"<b>Best practice:</b>\n"
+                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                f"files to cloud storage for backup and sharing.\n\n"
+                f"<b>Continue saving to {cloud_service}?</b>",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply == QMessageBox.No:
+                return
+
+        log.info("Manual save (Save As) requested destination=%s", path)
+        self._start_background_save(path, skip_optimize=False, reason="save_as")
 
     def export_project_bundle_action(self, checked: bool = False):
         """Export project as .vasopack bundle.
@@ -1744,38 +2058,13 @@ class VasoAnalyzerApp(QMainWindow):
             self.request_deferred_autosave(delay_ms=5000, reason=reason or "deferred")
             return
 
-        try:
-            log.info(
-                "Autosave started path=%s reason=%s",
-                project_path,
-                reason or "auto",
-            )
-            self._save_in_progress = True
-            self.current_project.ui_state = self.gather_ui_state()
-            if self.current_sample:
-                state = self.gather_sample_state()
-                self.current_sample.ui_state = state
-                self.project_state[id(self.current_sample)] = state
-
-            autosave_path = autosave_project(self.current_project)
-            if autosave_path:
-                self.last_autosave_path = autosave_path
-                log.info(
-                    "Autosave completed path=%s autosave=%s reason=%s",
-                    project_path,
-                    autosave_path,
-                    reason or "auto",
-                )
-        except Exception as exc:
-            log.error(
-                "Failed to write autosave path=%s reason=%s error=%s",
-                project_path,
-                reason or "auto",
-                exc,
-                exc_info=True,
-            )
-        finally:
-            self._save_in_progress = False
+        log.info("Autosave started path=%s reason=%s", project_path, reason or "auto")
+        self._start_background_save(
+            path=None,
+            skip_optimize=True,
+            reason=reason or "auto",
+            mode="autosave",
+        )
 
     def _autosave_tick(self):
         if not self.current_project or not self.current_project.path:
@@ -1853,7 +2142,8 @@ class VasoAnalyzerApp(QMainWindow):
                             # Make figure items NOT editable so double-click works
                             fig_item.setFlags(fig_item.flags() & ~Qt.ItemIsEditable)
                             fig_item.setIcon(
-                                0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+                                0,
+                                self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
                             )
                             fig_item.setToolTip(
                                 0,
@@ -2619,7 +2909,8 @@ class VasoAnalyzerApp(QMainWindow):
             if sample.dataset_id is not None:
                 self._loading_dataset_ids.add(sample.dataset_id)
                 log.debug(
-                    "DATASET_LOAD_START: dataset_id=%s added to in-flight set", sample.dataset_id
+                    "DATASET_LOAD_START: dataset_id=%s added to in-flight set",
+                    sample.dataset_id,
                 )
 
             self.statusBar().showMessage(f"Loading {sample.name}…", 2000)
@@ -2734,7 +3025,8 @@ class VasoAnalyzerApp(QMainWindow):
         if sample.dataset_id is not None:
             self._loading_dataset_ids.discard(sample.dataset_id)
             log.debug(
-                "DATASET_LOAD_FINISH: dataset_id=%s removed from in-flight set", sample.dataset_id
+                "DATASET_LOAD_FINISH: dataset_id=%s removed from in-flight set",
+                sample.dataset_id,
             )
 
         if token != self._current_sample_token or sample is not self.current_sample:
@@ -2742,7 +3034,7 @@ class VasoAnalyzerApp(QMainWindow):
                 "DATASET_LOAD_DISCARDED: sample='%s' dataset_id=%s reason=%s current_sample='%s'",
                 sample.name,
                 sample.dataset_id,
-                "token_mismatch" if token != self._current_sample_token else "sample_changed",
+                ("token_mismatch" if token != self._current_sample_token else "sample_changed"),
                 getattr(self.current_sample, "name", None),
             )
             # Clear any partial cache from this discarded load to prevent corruption
@@ -2807,7 +3099,8 @@ class VasoAnalyzerApp(QMainWindow):
         if sample.dataset_id is not None:
             self._loading_dataset_ids.discard(sample.dataset_id)
             log.debug(
-                "DATASET_LOAD_ERROR: dataset_id=%s removed from in-flight set", sample.dataset_id
+                "DATASET_LOAD_ERROR: dataset_id=%s removed from in-flight set",
+                sample.dataset_id,
             )
 
         if token != self._current_sample_token or sample is not self.current_sample:
@@ -2823,210 +3116,222 @@ class VasoAnalyzerApp(QMainWindow):
             self._clear_pending_figure_state()
 
     def _render_sample(self, sample: SampleN) -> None:
-        log.info(
-            "UI: _render_sample called for %s (dataset_id=%s)",
-            getattr(sample, "name", "<unknown>"),
-            getattr(sample, "dataset_id", None),
-        )
-        style = None
-        if isinstance(sample.ui_state, dict):
-            style = sample.ui_state.get("style_settings") or sample.ui_state.get("plot_style")
-        merged_style = {**DEFAULT_STYLE, **style} if style else DEFAULT_STYLE.copy()
-        self._style_holder = _StyleHolder(merged_style.copy())
-        self._style_manager.replace(merged_style)
-
-        cache: DataCache | None = None
+        # Prevent review prompts from firing during intermediate sample rendering steps.
+        self._suppress_review_prompt = True
         try:
-            trace_source = None
-            if sample.trace_data is not None:
-                trace = sample.trace_data
-                # For embedded datasets, avoid touching external paths (may be on iCloud)
-                if getattr(sample, "dataset_id", None) is not None:
-                    trace_source = sample.name
-                else:
-                    trace_source = sample.trace_path or sample.name
-            elif sample.trace_path and sample.dataset_id is None:
-                resolved_trace = self._resolve_sample_link(sample, "trace")
-                if not resolved_trace or not Path(resolved_trace).exists():
-                    raise FileNotFoundError(str(sample.trace_path))
-                cache = self._ensure_data_cache(resolved_trace)
-                trace = load_trace(resolved_trace, cache=cache)
-                sample.trace_path = resolved_trace
-                self._clear_missing_asset(sample, "trace")
-                self.trace_file_path = resolved_trace
-                trace_source = resolved_trace
-            else:
-                QMessageBox.warning(self, "No Trace", "Sample has no trace data.")
-                return
-        except FileNotFoundError as exc:
-            missing = getattr(exc, "filename", None) or sample.trace_path
-            self._handle_missing_asset(sample, "trace", missing, str(exc))
-            QMessageBox.warning(
-                self,
-                "Trace File Missing",
-                "The trace file could not be located. Use Relink Missing Files to update the link.",
+            log.info(
+                "UI: _render_sample called for %s (dataset_id=%s)",
+                getattr(sample, "name", "<unknown>"),
+                getattr(sample, "dataset_id", None),
             )
-            return
-        except Exception as error:
-            QMessageBox.critical(self, "Trace Load Error", str(error))
-            return
+            style = None
+            if isinstance(sample.ui_state, dict):
+                style = sample.ui_state.get("style_settings") or sample.ui_state.get("plot_style")
+            merged_style = {**DEFAULT_STYLE, **style} if style else DEFAULT_STYLE.copy()
+            self._style_holder = _StyleHolder(merged_style.copy())
+            self._style_manager.replace(merged_style)
 
-        self.sampling_rate_hz = self._compute_sampling_rate(trace)
-        if trace_source:
-            display_name = (
-                os.path.basename(trace_source)
-                if isinstance(trace_source, str)
-                else str(trace_source)
-            )
-            prefix = "Sample"
-            tooltip = (
-                sample.name if getattr(sample, "dataset_id", None) is not None else trace_source
-            )
-            # Only probe filesystem when not embedded
-            if (
-                isinstance(trace_source, str)
-                and getattr(sample, "dataset_id", None) is None
-                and os.path.exists(trace_source)
-            ):
-                prefix = "Trace"
-                self.trace_file_path = trace_source
-            else:
-                self.trace_file_path = None
-            self._set_status_source(f"{prefix} · {display_name}", tooltip)
-        else:
-            self._set_status_source(f"Sample · {sample.name}", sample.name)
-            self.trace_file_path = None
-        self._reset_session_dirty()
-
-        labels, times, frames, diam, od = [], [], [], [], []
-        try:
-            # If events are embedded in the repo but not materialised on the sample, fetch them now.
-            if sample.events_data is None and sample.dataset_id is not None:
-                repo_ctx = getattr(self, "project_ctx", None)
-                repo = repo_ctx.repo if isinstance(repo_ctx, ProjectContext) else None
-                get_events = getattr(repo, "get_events", None)
-                if callable(get_events):
-                    with contextlib.suppress(Exception):
-                        sample.events_data = project_module._format_events_df(
-                            get_events(sample.dataset_id)  # type: ignore[arg-type]
-                        )
-
-            if sample.events_data is not None:
-                labels, times, frames = load_events(sample.events_data)
-                self._clear_missing_asset(sample, "events")
-            elif sample.events_path and sample.dataset_id is None:
-                resolved_events = self._resolve_sample_link(sample, "events")
-                if not resolved_events or not Path(resolved_events).exists():
-                    raise FileNotFoundError(str(sample.events_path))
-                event_cache = cache or self._ensure_data_cache(resolved_events)
-                labels, times, frames = load_events(resolved_events, cache=event_cache)
-                sample.events_path = resolved_events
-                self._clear_missing_asset(sample, "events")
-            else:
-                labels, times, frames = [], [], []
-
-            diam = []
-            if times:
-                arr_t = trace["Time (s)"].values
-                arr_d = trace["Inner Diameter"].values
-                arr_od = (
-                    trace["Outer Diameter"].values if "Outer Diameter" in trace.columns else None
-                )
-                for t in times:
-                    idx_evt = int(np.argmin(np.abs(arr_t - t)))
-                    diam.append(float(arr_d[idx_evt]))
-                    if arr_od is not None:
-                        od.append(float(arr_od[idx_evt]))
-        except FileNotFoundError as exc:
-            missing = getattr(exc, "filename", None) or sample.events_path
-            self._handle_missing_asset(sample, "events", missing, str(exc))
-        except Exception as error:
-            QMessageBox.warning(self, "Event Load Error", str(error))
-
-        # Batch all plot updates to avoid multiple redraws during sample rendering
-        plot_host = getattr(self, "plot_host", None)
-        # Suspending/resuming updates can block in some render backends (e.g., pyqtgraph).
-        # Only do it for backends that support fast suspend, and measure the resume cost.
-        suspend_updates = False
-        if plot_host is not None:
+            cache: DataCache | None = None
             try:
-                backend = plot_host.get_render_backend()
-                suspend_updates = backend != "pyqtgraph"
-            except Exception:
-                suspend_updates = False
-        if suspend_updates:
-            plot_host.suspend_updates()
-
-        try:
-            self.trace_data = self._prepare_trace_dataframe(trace)
-            self._layout_log_ready = True
-            self._reset_channel_view_defaults()
-            self.xlim_full = None
-            self.ylim_full = None
-            self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
-            self.compute_frame_trace_indices()
-            t_ev = time.perf_counter()
-            self.load_project_events(
-                labels, times, frames, diam, od, refresh_plot=False, auto_export=True
-            )
-            log.info(
-                "Timing: load_project_events for '%s' took %.2f ms",
-                getattr(sample, "name", "<unknown>"),
-                (time.perf_counter() - t_ev) * 1000,
-            )
-            t_plot = time.perf_counter()
-            self.update_plot()
-            self._apply_event_label_mode()
-            self._sync_event_controls()
-            self._update_trace_controls_state()
-            log.info(
-                "Timing: update_plot for '%s' took %.2f ms",
-                getattr(sample, "name", "<unknown>"),
-                (time.perf_counter() - t_plot) * 1000,
-            )
-            state_to_apply = self.project_state.get(id(sample), getattr(sample, "ui_state", None))
-            t_state = time.perf_counter()
-            self.apply_sample_state(state_to_apply)
-            log.info(
-                "Timing: apply_sample_state for '%s' took %.2f ms",
-                getattr(sample, "name", "<unknown>"),
-                (time.perf_counter() - t_state) * 1000,
-            )
-            if (
-                self._plot_host_is_pyqtgraph()
-                and plot_host is not None
-                and hasattr(plot_host, "log_data_and_view_ranges")
-            ):
-                plot_host.log_data_and_view_ranges("after_sample_render")
-
-            t_after = time.perf_counter()
-            if self.current_project is not None:
-                if not isinstance(self.current_project.ui_state, dict):
-                    self.current_project.ui_state = {}
-                if self.current_experiment:
-                    self.current_project.ui_state["last_experiment"] = self.current_experiment.name
-                self.current_project.ui_state["last_sample"] = sample.name
-
-            self._sync_autoscale_y_action_from_host()
-            self._update_snapshot_viewer_state(sample)
-            self._update_home_resume_button()
-            self._update_metadata_panel(sample)
-            self._maybe_launch_pending_figure()
-            log.info(
-                "Timing: post-plot UI updates for '%s' took %.2f ms",
-                getattr(sample, "name", "<unknown>"),
-                (time.perf_counter() - t_after) * 1000,
-            )
-        finally:
-            # Always resume updates even if there was an error
-            if suspend_updates and plot_host is not None:
-                t_resume = time.perf_counter()
-                plot_host.resume_updates()
-                log.info(
-                    "Timing: plot_host.resume_updates for '%s' took %.2f ms",
-                    getattr(sample, "name", "<unknown>"),
-                    (time.perf_counter() - t_resume) * 1000,
+                trace_source = None
+                if sample.trace_data is not None:
+                    trace = sample.trace_data
+                    # For embedded datasets, avoid touching external paths (may be on iCloud)
+                    if getattr(sample, "dataset_id", None) is not None:
+                        trace_source = sample.name
+                    else:
+                        trace_source = sample.trace_path or sample.name
+                elif sample.trace_path and sample.dataset_id is None:
+                    resolved_trace = self._resolve_sample_link(sample, "trace")
+                    if not resolved_trace or not Path(resolved_trace).exists():
+                        raise FileNotFoundError(str(sample.trace_path))
+                    cache = self._ensure_data_cache(resolved_trace)
+                    trace = load_trace(resolved_trace, cache=cache)
+                    sample.trace_path = resolved_trace
+                    self._clear_missing_asset(sample, "trace")
+                    self.trace_file_path = resolved_trace
+                    trace_source = resolved_trace
+                else:
+                    QMessageBox.warning(self, "No Trace", "Sample has no trace data.")
+                    return
+            except FileNotFoundError as exc:
+                missing = getattr(exc, "filename", None) or sample.trace_path
+                self._handle_missing_asset(sample, "trace", missing, str(exc))
+                QMessageBox.warning(
+                    self,
+                    "Trace File Missing",
+                    "The trace file could not be located. Use Relink Missing Files to update the link.",
                 )
+                return
+            except Exception as error:
+                QMessageBox.critical(self, "Trace Load Error", str(error))
+                return
+
+            self.sampling_rate_hz = self._compute_sampling_rate(trace)
+            if trace_source:
+                display_name = (
+                    os.path.basename(trace_source)
+                    if isinstance(trace_source, str)
+                    else str(trace_source)
+                )
+                prefix = "Sample"
+                tooltip = (
+                    sample.name if getattr(sample, "dataset_id", None) is not None else trace_source
+                )
+                # Only probe filesystem when not embedded
+                if (
+                    isinstance(trace_source, str)
+                    and getattr(sample, "dataset_id", None) is None
+                    and os.path.exists(trace_source)
+                ):
+                    prefix = "Trace"
+                    self.trace_file_path = trace_source
+                else:
+                    self.trace_file_path = None
+                self._set_status_source(f"{prefix} · {display_name}", tooltip)
+            else:
+                self._set_status_source(f"Sample · {sample.name}", sample.name)
+                self.trace_file_path = None
+            self._reset_session_dirty()
+
+            labels, times, frames, diam, od = [], [], [], [], []
+            try:
+                # If events are embedded in the repo but not materialised on the sample, fetch them now.
+                if sample.events_data is None and sample.dataset_id is not None:
+                    repo_ctx = getattr(self, "project_ctx", None)
+                    repo = repo_ctx.repo if isinstance(repo_ctx, ProjectContext) else None
+                    get_events = getattr(repo, "get_events", None)
+                    if callable(get_events):
+                        with contextlib.suppress(Exception):
+                            sample.events_data = project_module._format_events_df(
+                                get_events(sample.dataset_id)  # type: ignore[arg-type]
+                            )
+
+                if sample.events_data is not None:
+                    labels, times, frames = load_events(sample.events_data)
+                    self._clear_missing_asset(sample, "events")
+                elif sample.events_path and sample.dataset_id is None:
+                    resolved_events = self._resolve_sample_link(sample, "events")
+                    if not resolved_events or not Path(resolved_events).exists():
+                        raise FileNotFoundError(str(sample.events_path))
+                    event_cache = cache or self._ensure_data_cache(resolved_events)
+                    labels, times, frames = load_events(resolved_events, cache=event_cache)
+                    sample.events_path = resolved_events
+                    self._clear_missing_asset(sample, "events")
+                else:
+                    labels, times, frames = [], [], []
+
+                diam = []
+                if times:
+                    arr_t = trace["Time (s)"].values
+                    arr_d = trace["Inner Diameter"].values
+                    arr_od = (
+                        trace["Outer Diameter"].values
+                        if "Outer Diameter" in trace.columns
+                        else None
+                    )
+                    for t in times:
+                        idx_evt = int(np.argmin(np.abs(arr_t - t)))
+                        diam.append(float(arr_d[idx_evt]))
+                        if arr_od is not None:
+                            od.append(float(arr_od[idx_evt]))
+            except FileNotFoundError as exc:
+                missing = getattr(exc, "filename", None) or sample.events_path
+                self._handle_missing_asset(sample, "events", missing, str(exc))
+            except Exception as error:
+                QMessageBox.warning(self, "Event Load Error", str(error))
+
+            # Batch all plot updates to avoid multiple redraws during sample rendering
+            plot_host = getattr(self, "plot_host", None)
+            # Suspending/resuming updates can block in some render backends (e.g., pyqtgraph).
+            # Only do it for backends that support fast suspend, and measure the resume cost.
+            suspend_updates = False
+            if plot_host is not None:
+                try:
+                    backend = plot_host.get_render_backend()
+                    suspend_updates = backend != "pyqtgraph"
+                except Exception:
+                    suspend_updates = False
+            if suspend_updates:
+                plot_host.suspend_updates()
+
+            try:
+                self.trace_data = self._prepare_trace_dataframe(trace)
+                self._layout_log_ready = True
+                self._reset_channel_view_defaults()
+                self.xlim_full = None
+                self.ylim_full = None
+                self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
+                self.compute_frame_trace_indices()
+                t_ev = time.perf_counter()
+                self.load_project_events(
+                    labels, times, frames, diam, od, refresh_plot=False, auto_export=True
+                )
+                log.info(
+                    "Timing: load_project_events for '%s' took %.2f ms",
+                    getattr(sample, "name", "<unknown>"),
+                    (time.perf_counter() - t_ev) * 1000,
+                )
+                t_plot = time.perf_counter()
+                self.update_plot()
+                self._apply_event_label_mode()
+                self._sync_event_controls()
+                self._update_trace_controls_state()
+                log.info(
+                    "Timing: update_plot for '%s' took %.2f ms",
+                    getattr(sample, "name", "<unknown>"),
+                    (time.perf_counter() - t_plot) * 1000,
+                )
+                state_to_apply = self.project_state.get(
+                    id(sample), getattr(sample, "ui_state", None)
+                )
+                t_state = time.perf_counter()
+                self.apply_sample_state(state_to_apply)
+                log.info(
+                    "Timing: apply_sample_state for '%s' took %.2f ms",
+                    getattr(sample, "name", "<unknown>"),
+                    (time.perf_counter() - t_state) * 1000,
+                )
+                if (
+                    self._plot_host_is_pyqtgraph()
+                    and plot_host is not None
+                    and hasattr(plot_host, "log_data_and_view_ranges")
+                ):
+                    plot_host.log_data_and_view_ranges("after_sample_render")
+
+                t_after = time.perf_counter()
+                if self.current_project is not None:
+                    if not isinstance(self.current_project.ui_state, dict):
+                        self.current_project.ui_state = {}
+                    if self.current_experiment:
+                        self.current_project.ui_state["last_experiment"] = (
+                            self.current_experiment.name
+                        )
+                    self.current_project.ui_state["last_sample"] = sample.name
+
+                self._sync_autoscale_y_action_from_host()
+                self._update_snapshot_viewer_state(sample)
+                self._update_home_resume_button()
+                self._update_metadata_panel(sample)
+                self._maybe_launch_pending_figure()
+                log.info(
+                    "Timing: post-plot UI updates for '%s' took %.2f ms",
+                    getattr(sample, "name", "<unknown>"),
+                    (time.perf_counter() - t_after) * 1000,
+                )
+            finally:
+                # Always resume updates even if there was an error
+                if suspend_updates and plot_host is not None:
+                    t_resume = time.perf_counter()
+                    plot_host.resume_updates()
+                    log.info(
+                        "Timing: plot_host.resume_updates for '%s' took %.2f ms",
+                        getattr(sample, "name", "<unknown>"),
+                        (time.perf_counter() - t_resume) * 1000,
+                    )
+        finally:
+            self._suppress_review_prompt = False
+            self._maybe_prompt_event_review()
 
     def _update_snapshot_viewer_state(self, sample: SampleN) -> None:
         has_stack = isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0
@@ -4036,7 +4341,7 @@ class VasoAnalyzerApp(QMainWindow):
         export_menu.addAction(self.action_export_shareable)
 
         self.action_export_csv = QAction("Events as CSV…", self)
-        self.action_export_csv.triggered.connect(self.auto_export_table)
+        self.action_export_csv.triggered.connect(self._export_event_table_via_dialog)
         export_menu.addAction(self.action_export_csv)
 
         self.action_export_excel = QAction("To Excel Template…", self)
@@ -5067,6 +5372,53 @@ class VasoAnalyzerApp(QMainWindow):
         self._normalize_event_label_meta(len(self.event_table_data))
         return [meta.get("review_state", REVIEW_UNREVIEWED) for meta in self.event_label_meta]
 
+    def _maybe_prompt_event_review(self) -> None:
+        """
+        Prompt the user to review events if any remain UNREVIEWED after loading.
+        """
+        # If prompts are temporarily suppressed (e.g., while rendering a sample), do nothing.
+        if getattr(self, "_suppress_review_prompt", False):
+            return
+
+        if not getattr(self, "event_table_data", None):
+            return
+
+        wizard = getattr(self, "_event_review_wizard", None)
+        if wizard is not None and wizard.isVisible():
+            return
+
+        review_states = (
+            self._current_review_states() if hasattr(self, "_current_review_states") else []
+        )
+        if not review_states:
+            return
+
+        has_unreviewed = any(state == REVIEW_UNREVIEWED for state in review_states)
+        if not has_unreviewed:
+            return
+
+        msg = QMessageBox(self)
+        app_icon = self.windowIcon()
+        if isinstance(app_icon, QIcon) and not app_icon.isNull():
+            msg.setIconPixmap(app_icon.pixmap(48, 48))
+        else:
+            msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Review event table values")
+        msg.setText(
+            "Event table values are automatically populated, but even the best "
+            "software makes mistakes. "
+            "Make sure to review the data."
+        )
+
+        review_now_button = msg.addButton("Review now", QMessageBox.AcceptRole)
+        msg.addButton("Not right now", QMessageBox.RejectRole)
+        msg.setDefaultButton(review_now_button)
+
+        msg.exec_()
+
+        if msg.clickedButton() is review_now_button:
+            self._launch_event_review_wizard()
+
     def _set_review_state_for_row(self, index: int, state: str) -> None:
         if not hasattr(self, "event_label_meta"):
             self.event_label_meta = []
@@ -5079,6 +5431,43 @@ class VasoAnalyzerApp(QMainWindow):
         controller = getattr(self, "event_table_controller", None)
         if controller is not None:
             controller.set_review_states(self._current_review_states())
+
+    def _sample_values_at_time(
+        self, time_sec: float
+    ) -> tuple[float | None, float | None, float | None, float | None]:
+        """Sample ID/OD/Avg P/Set P at a given time using current trace data."""
+        if self.trace_data is None or "Time (s)" not in self.trace_data.columns:
+            return (None, None, None, None)
+        try:
+            target_time = float(time_sec)
+        except Exception:
+            return (None, None, None, None)
+
+        times = self.trace_data["Time (s)"].to_numpy()
+        if times.size == 0:
+            return (None, None, None, None)
+
+        idx = int(np.argmin(np.abs(times - target_time)))
+
+        def _sample_column(label: str | None) -> float | None:
+            if not label or label not in self.trace_data.columns:
+                return None
+            try:
+                value = self.trace_data[label].iloc[idx]
+            except Exception:
+                return None
+            if pd.isna(value):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        id_val = _sample_column("Inner Diameter")
+        od_val = _sample_column("Outer Diameter")
+        avg_val = _sample_column(self._trace_label_for("p_avg"))
+        set_val = _sample_column(self._trace_label_for("p2"))
+        return (id_val, od_val, avg_val, set_val)
 
     def _insert_event_meta(self, index: int, meta: dict[str, Any] | None = None) -> None:
         payload = self._with_default_review_state(meta)
@@ -7682,12 +8071,16 @@ QPushButton[isGhost="true"]:hover {{
 
         if labels:
             self.load_project_events(labels, times, frames, diam, od_diam, auto_export=True)
+            event_file = import_meta.get("event_file") if import_meta else None
+            if event_file:
+                self._event_table_path = str(event_file)
         else:
             self.event_labels = []
             self.event_times = []
             self.event_frames = []
             self.event_table_data = []
             self.event_label_meta = []
+            self._event_table_path = None
             self.populate_table()
             self.xlim_full = None
             self.ylim_full = None
@@ -7868,6 +8261,7 @@ QPushButton[isGhost="true"]:hover {{
 
         self.load_project_events(labels, times, frames, None, None, auto_export=True)
         self._last_event_import = {"event_file": file_path, "manual": True}
+        self._event_table_path = str(file_path)
         self.statusBar().showMessage(f"{len(labels)} events loaded", 3000)
         self.mark_session_dirty()
         return True
@@ -7891,6 +8285,12 @@ QPushButton[isGhost="true"]:hover {{
         self._update_event_table_presence_state(has_data)
 
     def _launch_event_review_wizard(self) -> None:
+        if self._event_review_wizard is not None and self._event_review_wizard.isVisible():
+            with contextlib.suppress(Exception):
+                self._event_review_wizard.raise_()
+                self._event_review_wizard.activateWindow()
+            return
+
         if not self.event_table_data:
             QMessageBox.information(self, "No Events", "Load events before starting a review.")
             return
@@ -7899,6 +8299,7 @@ QPushButton[isGhost="true"]:hover {{
         review_states = self._current_review_states()
 
         def _focus(idx: int, event_data: tuple | None = None) -> None:
+            self._current_review_event_index = idx
             try:
                 self._focus_event_row(int(idx), source="wizard")
             except Exception:
@@ -7909,13 +8310,27 @@ QPushButton[isGhost="true"]:hover {{
             events=events,
             review_states=review_states,
             focus_event_callback=_focus,
+            sample_values_callback=self._sample_values_at_time,
         )
-        result = dialog.exec_()
-        if result != QDialog.Accepted:
+        self._event_review_wizard = dialog
+        flags = dialog.windowFlags()
+        dialog.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
+        dialog.setWindowModality(Qt.NonModal)
+        dialog.accepted.connect(self._apply_event_review_changes)
+        dialog.rejected.connect(self._cleanup_event_review_wizard)
+        dialog.finished.connect(self._cleanup_event_review_wizard)
+        dialog.show()
+        with contextlib.suppress(Exception):
+            dialog.raise_()
+            dialog.activateWindow()
+
+    def _apply_event_review_changes(self) -> None:
+        wizard = getattr(self, "_event_review_wizard", None)
+        if wizard is None:
             return
 
-        updated_events = dialog.updated_events()
-        updated_states = dialog.updated_review_states()
+        updated_events = wizard.updated_events()
+        updated_states = wizard.updated_review_states()
         if updated_events:
             self.event_table_data = [tuple(row) for row in updated_events]
         if updated_states:
@@ -7926,6 +8341,11 @@ QPushButton[isGhost="true"]:hover {{
         self.populate_table()
         self._sync_event_data_from_table()
         self.mark_session_dirty()
+        self._prompt_export_event_table_after_review()
+
+    def _cleanup_event_review_wizard(self, *args) -> None:
+        self._event_review_wizard = None
+        self._current_review_event_index = None
 
     def _update_event_table_presence_state(self, has_events: bool) -> None:
         self._event_panel_has_data = bool(has_events)
@@ -8275,6 +8695,7 @@ QPushButton[isGhost="true"]:hover {{
             self._apply_event_label_mode()
             self._sync_event_controls()
             self._update_trace_controls_state()
+        self._maybe_prompt_event_review()
 
         sample = getattr(self, "current_sample", None)
         sample_name = getattr(sample, "name", getattr(sample, "label", "N/A"))
@@ -10037,6 +10458,13 @@ QPushButton[isGhost="true"]:hover {{
         is_left = button == 1
         is_right = button == 3
 
+        wizard = getattr(self, "_event_review_wizard", None)
+        if wizard is not None and wizard.isVisible() and (button == 1 or button == Qt.LeftButton):
+            try:
+                wizard.handle_trace_click(x)
+            except Exception:
+                log.debug("Wizard trace click handling failed", exc_info=True)
+
         # Focus nearest event if click is close
         if is_left and self.event_times:
             current_window = None
@@ -10046,7 +10474,10 @@ QPushButton[isGhost="true"]:hover {{
             x_low, x_high = (
                 current_window
                 if current_window
-                else (min(self.event_times, default=x), max(self.event_times, default=x))
+                else (
+                    min(self.event_times, default=x),
+                    max(self.event_times, default=x),
+                )
             )
             tolerance = max((x_high - x_low) * 0.004, 0.05)
             idx = self._nearest_event_index(x)
@@ -11656,7 +12087,7 @@ QPushButton[isGhost="true"]:hover {{
         return splitter
 
     # [K] ========================= EXPORT LOGIC (CSV, FIG) ==============================
-    def auto_export_table(self, checked: bool = False):
+    def auto_export_table(self, checked: bool = False, path: str | None = None):
         """Auto-export event table to CSV.
 
         Args:
@@ -11688,16 +12119,22 @@ QPushButton[isGhost="true"]:hover {{
             if not base_name:
                 base_name = "event"
 
-            if trace_path:
-                output_dir = os.path.dirname(trace_path)
-            elif getattr(self.current_project, "path", None):
-                output_dir = os.path.dirname(self.current_project.path)
+            if path:
+                csv_path = path
+                output_dir = os.path.dirname(csv_path)
+                if output_dir:
+                    os.makedirs(output_dir, exist_ok=True)
             else:
-                output_dir = os.getcwd()
+                if trace_path:
+                    output_dir = os.path.dirname(trace_path)
+                elif getattr(self.current_project, "path", None):
+                    output_dir = os.path.dirname(self.current_project.path)
+                else:
+                    output_dir = os.getcwd()
 
-            os.makedirs(output_dir, exist_ok=True)
-            filename = f"{base_name}_eventDiameters_output.csv"
-            csv_path = os.path.join(output_dir, filename)
+                os.makedirs(output_dir, exist_ok=True)
+                filename = f"{base_name}_eventDiameters_output.csv"
+                csv_path = os.path.join(output_dir, filename)
             has_od = (
                 "Outer Diameter" in self.trace_data.columns
                 if self.trace_data is not None
@@ -11751,6 +12188,103 @@ QPushButton[isGhost="true"]:hover {{
                 start_row=3,
                 column_letter=self.excel_auto_column,
             )
+
+    def _export_event_table_to_path(self, path: str) -> bool:
+        """
+        Export the current event table to the given path using auto_export_table.
+
+        Returns True on success, False on error.
+        """
+        try:
+            self.auto_export_table(checked=False, path=path)
+        except Exception as exc:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Critical)
+            msg.setWindowTitle("Failed to export events")
+            msg.setText(f"Could not export event table to:\n{path}\n\n{exc}")
+            msg.exec_()
+            return False
+
+        self._event_table_path = path
+        self._invalidate_sample_state_cache()
+        return True
+
+    def _export_event_table_via_dialog(self) -> None:
+        """
+        Ask the user where to save the event table, then export if a path was chosen.
+        """
+        initial_dir = ""
+        initial_name = "event_table.csv"
+
+        if self._event_table_path:
+            initial_dir = os.path.dirname(self._event_table_path)
+            initial_name = os.path.basename(self._event_table_path)
+        else:
+            trace_path = getattr(self, "trace_file_path", None)
+            if trace_path:
+                initial_dir = os.path.dirname(trace_path)
+                base = os.path.splitext(os.path.basename(trace_path))[0]
+                initial_name = f"{base}_eventDiameters_output.csv"
+            elif getattr(self.current_project, "path", None):
+                initial_dir = os.path.dirname(self.current_project.path)
+
+        start_path = os.path.join(initial_dir, initial_name) if initial_dir else initial_name
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export event table",
+            start_path,
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not path:
+            return
+
+        self._export_event_table_to_path(path)
+
+    def _prompt_export_event_table_after_review(self) -> None:
+        """
+        Offer to export the updated event table after a review session completes.
+        """
+        if not getattr(self, "event_table_data", None):
+            return
+
+        path = self._event_table_path
+
+        if path:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle("Export updated event table?")
+            msg.setText(
+                "You reviewed and updated the event table.\n\n"
+                f"Do you want to save these changes to:\n{path}"
+            )
+            overwrite_btn = msg.addButton("Export", QMessageBox.AcceptRole)
+            choose_btn = msg.addButton("Choose different path…", QMessageBox.ActionRole)
+            later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+            msg.setDefaultButton(overwrite_btn)
+            msg.exec_()
+            clicked = msg.clickedButton()
+
+            if clicked is overwrite_btn:
+                if not self._export_event_table_to_path(path):
+                    self._export_event_table_via_dialog()
+            elif clicked is choose_btn:
+                self._export_event_table_via_dialog()
+        else:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Question)
+            msg.setWindowTitle("Export updated event table?")
+            msg.setText(
+                "You reviewed and updated the event table.\n\n"
+                "Do you want to export these values to a file?"
+            )
+            export_btn = msg.addButton("Export…", QMessageBox.AcceptRole)
+            later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+            msg.setDefaultButton(export_btn)
+            msg.exec_()
+
+            if msg.clickedButton() is export_btn:
+                self._export_event_table_via_dialog()
 
     # ---------- UI State Persistence ----------
     def gather_ui_state(self):
@@ -11834,6 +12368,7 @@ QPushButton[isGhost="true"]:hover {{
             "table_fontsize": self.event_table.font().pointSize(),
             "event_table_data": list(self.event_table_data),
             "event_label_meta": copy.deepcopy(self.event_label_meta),
+            "event_table_path": str(self._event_table_path) if self._event_table_path else None,
             "pins": [
                 coords for marker, _ in self.pinned_points if (coords := self._pin_coords(marker))
             ],
@@ -11957,6 +12492,7 @@ QPushButton[isGhost="true"]:hover {{
         t0 = time.perf_counter()
         sample = getattr(self, "current_sample", None)
         is_embedded = sample is not None and getattr(sample, "dataset_id", None) is not None
+        self._event_table_path = state.get("event_table_path")
 
         # ── minimal restore for embedded datasets to avoid pyqtgraph stalls
         if is_embedded:
@@ -11966,9 +12502,11 @@ QPushButton[isGhost="true"]:hover {{
                 meta_payload = state.get("event_label_meta")
                 if isinstance(meta_payload, list):
                     self.event_label_meta = [
-                        self._with_default_review_state(item)
-                        if isinstance(item, Mapping)
-                        else self._with_default_review_state(None)
+                        (
+                            self._with_default_review_state(item)
+                            if isinstance(item, Mapping)
+                            else self._with_default_review_state(None)
+                        )
                         for item in meta_payload
                     ]
                 else:
@@ -12028,9 +12566,11 @@ QPushButton[isGhost="true"]:hover {{
             meta_payload = state.get("event_label_meta")
             if isinstance(meta_payload, list):
                 self.event_label_meta = [
-                    self._with_default_review_state(item)
-                    if isinstance(item, Mapping)
-                    else self._with_default_review_state(None)
+                    (
+                        self._with_default_review_state(item)
+                        if isinstance(item, Mapping)
+                        else self._with_default_review_state(None)
+                    )
                     for item in meta_payload
                 ]
             else:
@@ -12038,6 +12578,7 @@ QPushButton[isGhost="true"]:hover {{
                     self._with_default_review_state(None) for _ in self.event_table_data
                 ]
             self.populate_table()
+            self._maybe_prompt_event_review()
         t_axes = time.perf_counter()
         if "axis_xlim" in state:
             self._apply_time_window(state["axis_xlim"])
@@ -12197,7 +12738,10 @@ QPushButton[isGhost="true"]:hover {{
             return True
 
         if exp_item is not None:
-            log.info("RESTORE_SELECTION: Restored experiment '%s' (sample not found)", last_exp)
+            log.info(
+                "RESTORE_SELECTION: Restored experiment '%s' (sample not found)",
+                last_exp,
+            )
             self.project_tree.setCurrentItem(exp_item)
             self.on_tree_item_clicked(exp_item, 0)
             return True

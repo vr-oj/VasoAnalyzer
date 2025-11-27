@@ -33,6 +33,7 @@ class EventReviewWizard(QDialog):
         events: Sequence[Sequence[Any]],
         review_states: Sequence[str] | None = None,
         focus_event_callback: Callable[[int, tuple | None], None] | None = None,
+        sample_values_callback: Callable[[float], Sequence[Any]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Review Events")
@@ -41,6 +42,7 @@ class EventReviewWizard(QDialog):
         self._events = [list(self._normalize_event(evt)) for evt in events]
         self._review_states = self._normalise_states(review_states, len(self._events))
         self._focus_event_callback = focus_event_callback
+        self._sample_values_callback = sample_values_callback
         self._current_index = 0
 
         self._build_ui()
@@ -237,6 +239,49 @@ class EventReviewWizard(QDialog):
             self._review_states[idx] = REVIEW_EDITED
 
         self._events[idx] = updated
+
+    def handle_trace_click(self, time_sec: float) -> None:
+        """Update the current event using sampled values at ``time_sec``."""
+        if self._sample_values_callback is None or not self._events:
+            return
+        idx = self._current_index
+        if not (0 <= idx < len(self._events)):
+            return
+        try:
+            sampled = self._sample_values_callback(time_sec)
+        except Exception:
+            return
+        if not sampled or len(sampled) < 4:
+            return
+        try:
+            id_val, od_val, avg_val, set_val = sampled[:4]
+        except Exception:
+            return
+        if all(val is None for val in (id_val, od_val, avg_val, set_val)):
+            return
+
+        row_len = self._row_lengths[idx] if idx < len(self._row_lengths) else len(self._events[idx])
+        has_od = row_len >= 5
+        has_avg = row_len > 5
+        has_set = row_len > 6
+
+        def _set_text(widget: QLineEdit, value: Any) -> None:
+            try:
+                widget.setText(f"{float(value):.2f}")
+            except Exception:
+                return
+
+        if id_val is not None:
+            _set_text(self.id_input, id_val)
+        if has_od and od_val is not None:
+            _set_text(self.od_input, od_val)
+        if has_avg and avg_val is not None:
+            _set_text(self.avg_p_input, avg_val)
+        if has_set and set_val is not None:
+            _set_text(self.set_p_input, set_val)
+
+        self.state_combo.setCurrentText("Edited")
+        self._apply_current_edits()
 
     def _go_next(self) -> None:
         self._apply_current_edits()

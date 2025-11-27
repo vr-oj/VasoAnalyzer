@@ -16,13 +16,14 @@ class PanOnlyViewBox(pg.ViewBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def wheelEvent(self, ev: QGraphicsSceneWheelEvent) -> None:
+    def wheelEvent(self, ev: QGraphicsSceneWheelEvent, axis=None, **_ignored) -> None:
         """Override wheel event to pan horizontally instead of zooming.
 
         Consume the event here so ViewBox's default zoom logic never runs.
         Map vertical scroll to horizontal pan. The amount is proportional to current view width.
         QGraphicsSceneWheelEvent only provides delta(), not angleDelta/pixelDelta.
         """
+        # PyQtGraph AxisItem passes axis; ignore it and pan horizontally.
         # QGraphicsSceneWheelEvent uses delta() - returns degrees * 8
         # Typical mouse: 120 units (15 degrees * 8) per notch
         delta = ev.delta()

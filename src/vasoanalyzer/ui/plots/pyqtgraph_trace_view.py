@@ -92,6 +92,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self.inner_band: pg.FillBetweenItem | None = None
         self.outer_band: pg.FillBetweenItem | None = None
         self.event_lines: list[pg.InfiniteLine] = []
+        self._inner_band_min_curve: pg.PlotDataItem | None = None
+        self._inner_band_max_curve: pg.PlotDataItem | None = None
+        self._outer_band_min_curve: pg.PlotDataItem | None = None
+        self._outer_band_max_curve: pg.PlotDataItem | None = None
 
         # Band visibility
         self._show_uncertainty_bands: bool = False
@@ -128,6 +132,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._hover_tooltip_precision: int = 2
         self._hover_connection_active: bool = False
         self._hover_last_text: str = ""
+        self._last_hover_index: int | None = None
+        self._last_hover_text: str = ""
         self.enable_hover_tooltip(True, precision=2)
 
         scene = self._plot_widget.scene()
@@ -206,18 +212,30 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         self.inner_curve = self._plot_item.plot(
             pen=pg.mkPen(color=theme_color, width=1.5),
-            antialias=True,
+            antialias=False,
             name=trace_name,
         )
+        if hasattr(self.inner_curve, "setClipToView"):
+            with contextlib.suppress(Exception):
+                self.inner_curve.setClipToView(True)
+        if hasattr(self.inner_curve, "setDownsampling"):
+            with contextlib.suppress(Exception):
+                self.inner_curve.setDownsampling(auto=True, mode="peak")
 
         # Outer diameter trace (secondary, if dual mode)
         if self._mode == "dual":
             outer_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
             self.outer_curve = self._plot_item.plot(
                 pen=pg.mkPen(color=outer_color, width=1.2),
-                antialias=True,
+                antialias=False,
                 name="Outer Diameter",
             )
+            if hasattr(self.outer_curve, "setClipToView"):
+                with contextlib.suppress(Exception):
+                    self.outer_curve.setClipToView(True)
+            if hasattr(self.outer_curve, "setDownsampling"):
+                with contextlib.suppress(Exception):
+                    self.outer_curve.setDownsampling(auto=True, mode="peak")
 
     def _apply_theme(self) -> None:
         """Apply color theme from CURRENT_THEME."""
@@ -414,16 +432,24 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         time = window.time
         if time.size == 0:
             self._hide_hover_tooltip()
+            self._last_hover_index = None
+            self._last_hover_text = ""
             if self.inner_curve is not None:
                 self.inner_curve.setData([], [])
-            if self.inner_band is not None and self.inner_band.scene() is not None:
-                self._plot_item.removeItem(self.inner_band)
-                self.inner_band = None
             if self.outer_curve is not None:
                 self.outer_curve.setData([], [])
-            if self.outer_band is not None and self.outer_band.scene() is not None:
-                self._plot_item.removeItem(self.outer_band)
-                self.outer_band = None
+            if self._inner_band_min_curve is not None:
+                self._inner_band_min_curve.setData([], [])
+            if self._inner_band_max_curve is not None:
+                self._inner_band_max_curve.setData([], [])
+            if self.inner_band is not None:
+                self.inner_band.setVisible(False)
+            if self._outer_band_min_curve is not None:
+                self._outer_band_min_curve.setData([], [])
+            if self._outer_band_max_curve is not None:
+                self._outer_band_max_curve.setData([], [])
+            if self.outer_band is not None:
+                self.outer_band.setVisible(False)
             return
 
         # Update primary trace (inner or outer depending on mode)
@@ -435,49 +461,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
             # Add uncertainty bands if enabled
             if self._show_uncertainty_bands and time.size > 1:
-                # Create min/max band
-                if self.inner_band is None:
-                    # Create placeholder curves for FillBetweenItem
-                    min_curve = pg.PlotDataItem(time, ymin)
-                    max_curve = pg.PlotDataItem(time, ymax)
-
-                    # Create fill between
-                    theme_color = CURRENT_THEME.get("accent_fill", "#BBD7FF")
-                    qcolor = QColor(theme_color)
-                    qcolor.setAlpha(77)  # ~30% opacity
-
-                    self.inner_band = pg.FillBetweenItem(
-                        min_curve,
-                        max_curve,
-                        brush=qcolor,
-                    )
-                    self.inner_band.setZValue(-1)  # Behind the main trace
-                    self._plot_item.addItem(self.inner_band)
-                else:
-                    # Update existing band
-                    # Note: FillBetweenItem doesn't have a direct setData method
-                    # We need to recreate it
-                    self._plot_item.removeItem(self.inner_band)
-
-                    min_curve = pg.PlotDataItem(time, ymin)
-                    max_curve = pg.PlotDataItem(time, ymax)
-
-                    theme_color = CURRENT_THEME.get("accent_fill", "#BBD7FF")
-                    qcolor = QColor(theme_color)
-                    qcolor.setAlpha(77)
-
-                    self.inner_band = pg.FillBetweenItem(
-                        min_curve,
-                        max_curve,
-                        brush=qcolor,
-                    )
-                    self.inner_band.setZValue(-1)
-                    self._plot_item.addItem(self.inner_band)
+                self._update_inner_band(time, ymin, ymax)
             elif self.inner_band is not None:
-                # Remove band if disabled
-                if self.inner_band.scene() is not None:
-                    self._plot_item.removeItem(self.inner_band)
-                self.inner_band = None
+                self.inner_band.setVisible(False)
 
             # Autoscale Y if enabled
             if self._autoscale_y:
@@ -506,48 +492,73 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
                 # Add outer uncertainty bands if enabled
                 if self._show_uncertainty_bands and time.size > 1:
-                    if self.outer_band is None:
-                        min_curve = pg.PlotDataItem(time, ymin2)
-                        max_curve = pg.PlotDataItem(time, ymax2)
-
-                        theme_color = CURRENT_THEME.get("accent_fill_secondary", "#FFD1A9")
-                        qcolor = QColor(theme_color)
-                        qcolor.setAlpha(51)  # ~20% opacity
-
-                        self.outer_band = pg.FillBetweenItem(
-                            min_curve,
-                            max_curve,
-                            brush=qcolor,
-                        )
-                        self.outer_band.setZValue(-1)
-                        self._plot_item.addItem(self.outer_band)
-                    else:
-                        # Update existing band
-                        self._plot_item.removeItem(self.outer_band)
-
-                        min_curve = pg.PlotDataItem(time, ymin2)
-                        max_curve = pg.PlotDataItem(time, ymax2)
-
-                        theme_color = CURRENT_THEME.get("accent_fill_secondary", "#FFD1A9")
-                        qcolor = QColor(theme_color)
-                        qcolor.setAlpha(51)
-
-                        self.outer_band = pg.FillBetweenItem(
-                            min_curve,
-                            max_curve,
-                            brush=qcolor,
-                        )
-                        self.outer_band.setZValue(-1)
-                        self._plot_item.addItem(self.outer_band)
+                    self._update_outer_band(time, ymin2, ymax2)
                 elif self.outer_band is not None:
-                    if self.outer_band.scene() is not None:
-                        self._plot_item.removeItem(self.outer_band)
-                    self.outer_band = None
+                    self.outer_band.setVisible(False)
             else:
                 self.outer_curve.setData([], [])
-                if self.outer_band is not None and self.outer_band.scene() is not None:
-                    self._plot_item.removeItem(self.outer_band)
-                    self.outer_band = None
+                if self.outer_band is not None:
+                    self.outer_band.setVisible(False)
+
+    def _update_inner_band(self, time: np.ndarray, ymin: np.ndarray, ymax: np.ndarray) -> None:
+        """Create or update the inner uncertainty band without recreating items."""
+        if self._inner_band_min_curve is None:
+            self._inner_band_min_curve = pg.PlotDataItem(time, ymin)
+        else:
+            self._inner_band_min_curve.setData(time, ymin)
+
+        if self._inner_band_max_curve is None:
+            self._inner_band_max_curve = pg.PlotDataItem(time, ymax)
+        else:
+            self._inner_band_max_curve.setData(time, ymax)
+
+        if self.inner_band is None:
+            theme_color = CURRENT_THEME.get("accent_fill", "#BBD7FF")
+            qcolor = QColor(theme_color)
+            qcolor.setAlpha(77)  # ~30% opacity
+
+            self.inner_band = pg.FillBetweenItem(
+                self._inner_band_min_curve,
+                self._inner_band_max_curve,
+                brush=qcolor,
+            )
+            self.inner_band.setZValue(-1)  # Behind the main trace
+            self._plot_item.addItem(self.inner_band)
+        elif self.inner_band.scene() is None:
+            self._plot_item.addItem(self.inner_band)
+
+        if self.inner_band is not None:
+            self.inner_band.setVisible(True)
+
+    def _update_outer_band(self, time: np.ndarray, ymin: np.ndarray, ymax: np.ndarray) -> None:
+        """Create or update the outer uncertainty band without recreating items."""
+        if self._outer_band_min_curve is None:
+            self._outer_band_min_curve = pg.PlotDataItem(time, ymin)
+        else:
+            self._outer_band_min_curve.setData(time, ymin)
+
+        if self._outer_band_max_curve is None:
+            self._outer_band_max_curve = pg.PlotDataItem(time, ymax)
+        else:
+            self._outer_band_max_curve.setData(time, ymax)
+
+        if self.outer_band is None:
+            theme_color = CURRENT_THEME.get("accent_fill_secondary", "#FFD1A9")
+            qcolor = QColor(theme_color)
+            qcolor.setAlpha(51)  # ~20% opacity
+
+            self.outer_band = pg.FillBetweenItem(
+                self._outer_band_min_curve,
+                self._outer_band_max_curve,
+                brush=qcolor,
+            )
+            self.outer_band.setZValue(-1)
+            self._plot_item.addItem(self.outer_band)
+        elif self.outer_band.scene() is None:
+            self._plot_item.addItem(self.outer_band)
+
+        if self.outer_band is not None:
+            self.outer_band.setVisible(True)
 
     def _primary_series(
         self, window: TraceWindow
@@ -955,11 +966,30 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if idx is None:
             self._hide_hover_tooltip()
             return
+        if (
+            idx == self._last_hover_index
+            and self._last_hover_text
+            and self._hover_text_item is not None
+        ):
+            self._last_hover_index = idx
+            with contextlib.suppress(Exception):
+                self._hover_text_item.setPos(float(mouse_point.x()), float(mouse_point.y()))
+            self._hover_text_item.setVisible(True)
+            return
         text = self._build_hover_text(window, idx)
-        if text:
-            self._show_hover_tooltip(text, mouse_point)
-        else:
+        if not text:
             self._hide_hover_tooltip()
+            return
+        if text == self._last_hover_text and self._hover_text_item is not None:
+            with contextlib.suppress(Exception):
+                self._hover_text_item.setPos(float(mouse_point.x()), float(mouse_point.y()))
+            self._hover_text_item.setVisible(True)
+            self._last_hover_index = idx
+            self._last_hover_text = text
+            return
+        self._last_hover_index = idx
+        self._last_hover_text = text
+        self._show_hover_tooltip(text, mouse_point)
 
     def _index_at_time(self, samples: np.ndarray, target: float) -> int | None:
         sample_count = int(samples.size)
@@ -1037,6 +1067,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def _hide_hover_tooltip(self) -> None:
         self._hover_last_text = ""
+        self._last_hover_index = None
+        self._last_hover_text = ""
         if self._hover_text_item is not None:
             self._hover_text_item.setVisible(False)
 

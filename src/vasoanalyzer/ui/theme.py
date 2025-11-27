@@ -81,6 +81,64 @@ DARK_THEME.update(
     }
 )
 
+# Extra contrast styling for dark mode widgets
+DARK_WIDGET_CONTRAST_QSS = """
+/* Core input widgets in dark mode */
+QLineEdit,
+QSpinBox,
+QDoubleSpinBox,
+QComboBox {
+    background-color: #1b212d;
+    border: 1px solid #4a5368;
+    border-radius: 3px;
+    padding: 2px 4px;
+}
+
+/* Focus state: make the active field obvious */
+QLineEdit:focus,
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QComboBox:focus {
+    border: 1px solid #5292e4;
+}
+
+/* Checkboxes and radio buttons: clearer indicators */
+QCheckBox::indicator,
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+    border-radius: 2px;
+    border: 1px solid #9aa2b5;
+    background: #1b212d;
+}
+
+QCheckBox::indicator:checked,
+QRadioButton::indicator:checked {
+    background: #5292e4;
+    border-color: #5292e4;
+}
+
+/* Optional: hover state for indicators */
+QCheckBox::indicator:hover,
+QRadioButton::indicator:hover {
+    border-color: #c3cadb;
+}
+
+/* Group boxes: faint borders so sections are visible */
+QGroupBox {
+    border: 1px solid #343b4d;
+    border-radius: 3px;
+    margin-top: 6px;
+    padding-top: 6px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 4px;
+}
+"""
+
 # Currently applied theme; defaults to light until explicitly changed
 CURRENT_THEME = LIGHT_THEME
 
@@ -275,6 +333,13 @@ def apply_light_theme() -> None:
 def apply_dark_theme() -> None:
     """Force the dark theme."""
     _apply_theme(DARK_THEME)
+
+    # Append dark-mode widget contrast tweaks on top of the theme stylesheet
+    app = QApplication.instance()
+    if app is not None:
+        q_app = cast(QApplication, app)
+        existing_qss = q_app.styleSheet() or ""
+        q_app.setStyleSheet(existing_qss + "\n" + DARK_WIDGET_CONTRAST_QSS)
 
 
 def detect_system_theme() -> str:
