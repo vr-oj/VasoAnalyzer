@@ -22,8 +22,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+import vasoanalyzer.ui.theme as theme
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
-from vasoanalyzer.ui.theme import CURRENT_THEME
 
 
 def _format_float(value: float) -> str:
@@ -87,22 +87,22 @@ class PointEditorDialog(QDialog):
         self.figure = Figure(
             figsize=(6.0, 4.0),
             dpi=120,
-            facecolor=CURRENT_THEME.get("window_bg", "#FFFFFF"),
+            facecolor=theme.CURRENT_THEME.get("window_bg", "#FFFFFF"),
         )
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         vbox.addWidget(self.canvas, stretch=1)
 
         self.ax = self.figure.add_subplot(111)
-        self.ax.set_facecolor(CURRENT_THEME.get("plot_bg", "#FFFFFF"))
-        self.ax.grid(True, color=CURRENT_THEME.get("grid_color", "#D4D4D4"))
+        self.ax.set_facecolor(theme.CURRENT_THEME.get("plot_bg", "#FFFFFF"))
+        self.ax.grid(True, color=theme.CURRENT_THEME.get("grid_color", "#D4D4D4"))
         self.ax.set_xlabel("Time (s)")
         label = "Inner Diameter (µm)" if self.session.channel == "inner" else "Outer Diameter (µm)"
         self.ax.set_ylabel(label)
 
-        raw_color = CURRENT_THEME.get("text_disabled", "#9AA3B4")
-        preview_color = CURRENT_THEME.get("accent", "#1976D2")
-        selection_color = CURRENT_THEME.get("accent_fill", "#E64A19")
+        raw_color = theme.CURRENT_THEME.get("text_disabled", "#9AA3B4")
+        preview_color = theme.CURRENT_THEME.get("accent", "#1976D2")
+        selection_color = theme.CURRENT_THEME.get("accent_fill", "#E64A19")
 
         times = self._visible_times
         raw = self._visible_raw
@@ -150,6 +150,9 @@ class PointEditorDialog(QDialog):
         header = self.table.horizontalHeader()
         for col in range(self.table.columnCount()):
             header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        header.setStretchLastSection(False)
+        grid_color = theme.CURRENT_THEME.get("grid_color", "#666666")
+        self.table.setStyleSheet(f"QTableWidget {{ gridline-color: {grid_color}; }}")
         grid.addWidget(self.table, 0, 0, 1, 3)
 
         method_label = QLabel("Connect Method", container)
@@ -210,6 +213,31 @@ class PointEditorDialog(QDialog):
         self._update_plot_data()
         self._update_selection_visuals()
         self._update_controls()
+        self._resize_table_columns()
+
+    def _resize_table_columns(self) -> None:
+        """Ensure table columns are wide enough for current contents."""
+        if self.table is None:
+            return
+
+        self.table.resizeColumnsToContents()
+        header = self.table.horizontalHeader()
+        col_count = self.table.columnCount()
+        if col_count <= 0:
+            return
+
+        content_width = sum(header.sectionSize(col) for col in range(col_count))
+        available = self.table.viewport().width()
+        extra = available - content_width
+        if extra <= 0:
+            return
+
+        base_extra = extra // col_count
+        remainder = extra % col_count
+        for col in range(col_count):
+            add = base_extra + (1 if col < remainder else 0)
+            if add > 0:
+                header.resizeSection(col, header.sectionSize(col) + add)
 
     def _populate_table(self) -> None:
         times = self._visible_times
@@ -237,7 +265,7 @@ class PointEditorDialog(QDialog):
             self.table.setItem(row, 1, time_item)
             self.table.setItem(row, 2, raw_item)
             self.table.setItem(row, 3, clean_item)
-        self.table.resizeColumnsToContents()
+        self._resize_table_columns()
 
     def _update_plot_data(self) -> None:
         times = self._visible_times
@@ -280,6 +308,7 @@ class PointEditorDialog(QDialog):
             item = self.table.item(row, 3)
             if item is not None:
                 item.setText(_format_float(float(value)))
+        self._resize_table_columns()
 
     def _update_selection_visuals(self) -> None:
         selected = self.session.selection()
@@ -329,6 +358,7 @@ class PointEditorDialog(QDialog):
         self._update_plot_data()
         self._update_selection_visuals()
         self._update_controls()
+        self._resize_table_columns()
 
     def _on_session_selection_changed(self) -> None:
         self._update_selection_visuals()

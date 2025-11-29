@@ -41,6 +41,7 @@ class HomePage(QWidget):
         cards_row.addWidget(self._build_recent_sessions_card(), 1)
         cards_row.addWidget(self._build_recent_projects_card(), 1)
         root.addLayout(cards_row)
+        root.addWidget(self.cloud_storage_warning)
         root.addStretch()
 
         self._apply_stylesheet()
@@ -91,6 +92,25 @@ class HomePage(QWidget):
         subtitle.setObjectName("HeroSubtitle")
 
         # Cloud storage warning
+        def rgba_from_hex(color: str, alpha: float) -> str:
+            color = color.strip()
+            if color.startswith("rgba"):
+                return color
+            color = color.lstrip("#")
+            if len(color) == 3:
+                color = "".join(ch * 2 for ch in color)
+            try:
+                r, g, b = tuple(int(color[i : i + 2], 16) for i in (0, 2, 4))
+            except ValueError:
+                return color
+            alpha = max(0.0, min(1.0, alpha))
+            return f"rgba({r}, {g}, {b}, {alpha:.2f})"
+
+        accent = CURRENT_THEME.get("accent", "#38BDF8")
+        accent_fill = CURRENT_THEME.get("accent_fill", accent)
+        text_color = CURRENT_THEME.get("text", "#000000")
+        info_bg = rgba_from_hex(accent_fill, 0.12)
+
         cloud_warning = QLabel(
             (
                 "<b>Storage recommendation</b><br><br>"
@@ -102,19 +122,21 @@ class HomePage(QWidget):
         )
         cloud_warning.setWordWrap(True)
         cloud_warning.setObjectName("CloudStorageWarning")
-        cloud_warning.setStyleSheet(f"""
+        cloud_warning.setStyleSheet(
+            f"""
             QLabel#CloudStorageWarning {{
-                background-color: {CURRENT_THEME.get('warning_bg', '#FFF4E5')};
-                color: {CURRENT_THEME.get('warning_text', '#663C00')};
+                background-color: {info_bg};
+                color: {text_color};
                 padding: 12px;
                 border-radius: 8px;
-                border: 1px solid {CURRENT_THEME.get('warning_border', '#FFD6A5')};
+                border: 1px solid {accent};
             }}
-        """)
+        """
+        )
+        self.cloud_storage_warning = cloud_warning
 
         text_column.addLayout(title_row)
         text_column.addWidget(subtitle)
-        text_column.addWidget(cloud_warning)
         text_column.addLayout(self._build_primary_actions())
         text_column.addLayout(self._build_secondary_actions())
         text_column.addStretch()
@@ -133,25 +155,27 @@ class HomePage(QWidget):
             lambda: window.show_analysis_workspace(),
             secondary=True,
         )
+        window.home_resume_btn.setObjectName("HomeSecondaryButton")
         window.home_resume_btn.hide()
         row.addWidget(window.home_resume_btn)
 
-        row.addWidget(
-            window._make_home_button(
-                "Create new project…",
-                "folder-plus.svg",
-                lambda: window.new_project(),
-                primary=True,
-            )
+        create_btn = window._make_home_button(
+            "Create new project…",
+            "folder-plus.svg",
+            lambda: window.new_project(),
+            primary=True,
         )
-        row.addWidget(
-            window._make_home_button(
-                "Open project…",
-                "folder-open.svg",
-                lambda: window.open_project_file(),
-                secondary=True,
-            )
+        create_btn.setObjectName("HomePrimaryButton")
+        row.addWidget(create_btn)
+
+        open_btn = window._make_home_button(
+            "Open project…",
+            "folder-open.svg",
+            lambda: window.open_project_file(),
+            secondary=True,
         )
+        open_btn.setObjectName("HomeSecondaryButton")
+        row.addWidget(open_btn)
         return row
 
     def _build_secondary_actions(self) -> QHBoxLayout:
@@ -159,22 +183,23 @@ class HomePage(QWidget):
         row = QHBoxLayout()
         row.setSpacing(12)
 
-        row.addWidget(
-            window._make_home_button(
-                "Import trace/events file…",
-                "folder-open.svg",
-                lambda: window._handle_load_trace(),
-                secondary=True,
-            )
+        import_btn = window._make_home_button(
+            "Import trace/events file…",
+            "folder-open.svg",
+            lambda: window._handle_load_trace(),
+            secondary=True,
         )
-        row.addWidget(
-            window._make_home_button(
-                "Open welcome guide",
-                "info-circle.svg",
-                lambda: window.show_welcome_guide(modal=False),
-                secondary=True,
-            )
+        import_btn.setObjectName("HomeSecondaryButton")
+        row.addWidget(import_btn)
+
+        welcome_btn = window._make_home_button(
+            "Open welcome guide",
+            "info-circle.svg",
+            lambda: window.show_welcome_guide(modal=False),
+            secondary=True,
         )
+        welcome_btn.setObjectName("HomeSecondaryButton")
+        row.addWidget(welcome_btn)
         return row
 
     def _build_recent_sessions_card(self) -> QFrame:
@@ -268,11 +293,27 @@ class HomePage(QWidget):
             return f"rgba({r}, {g}, {b}, {alpha:.2f})"
 
         subtitle_color = rgba_from_hex(text_color, 0.72)
-        card_title_color = rgba_from_hex(text_color, 0.86)
+        card_title_color = text_color
         placeholder_color = rgba_from_hex(text_color, 0.55)
         muted_action_color = rgba_from_hex(text_color, 0.68)
-        row_hover_color = rgba_from_hex(text_color, 0.08)
+        accent = CURRENT_THEME.get("accent", text_color)
+        accent_fill = CURRENT_THEME.get("accent_fill", accent)
+        row_hover_color = rgba_from_hex(accent_fill, 0.16)
         card_border_color = rgba_from_hex(border_color, 0.8)
+        button_bg = CURRENT_THEME.get("button_bg", window_bg)
+        button_hover_bg = CURRENT_THEME.get("button_hover_bg", button_bg)
+        button_active_bg = CURRENT_THEME.get("button_active_bg", accent_fill)
+        if window_bg.lower() == "#ffffff":
+            hero_primary_bg = "#1774FF"
+            hero_primary_hover = "#CCE0FF"
+        else:
+            hero_primary_bg = accent
+            hero_primary_hover = accent_fill
+        hero_primary_text = "#FFFFFF"
+        hero_secondary_bg = button_bg
+        hero_secondary_hover = button_hover_bg
+        hero_secondary_text = text_color
+        hero_secondary_border = border_color
 
         self.setStyleSheet(
             window._shared_button_css()
@@ -310,6 +351,34 @@ QLabel#CardTitle {{
     font-weight: 600;
     color: {card_title_color};
 }}
+QPushButton#HomePrimaryButton {{
+    background-color: {hero_primary_bg};
+    color: {hero_primary_text};
+    border: none;
+    border-radius: 10px;
+    padding: 8px 20px;
+    font-weight: 600;
+}}
+QPushButton#HomePrimaryButton:hover {{
+    background-color: {hero_primary_hover};
+}}
+QPushButton#HomePrimaryButton:pressed {{
+    background-color: {button_active_bg};
+}}
+QPushButton#HomeSecondaryButton {{
+    background-color: {hero_secondary_bg};
+    color: {hero_secondary_text};
+    border: 1px solid {hero_secondary_border};
+    border-radius: 10px;
+    padding: 8px 20px;
+    font-weight: 500;
+}}
+QPushButton#HomeSecondaryButton:hover {{
+    background-color: {hero_secondary_hover};
+}}
+QPushButton#HomeSecondaryButton:pressed {{
+    background-color: {button_active_bg};
+}}
 QLabel#CardPlaceholder {{
     color: {placeholder_color};
 }}
@@ -338,6 +407,12 @@ QWidget#HomeRecentRow {{
 /* Make recent file/project rows clearly readable */
 QWidget#HomeRecentRow QPushButton[isGhost="true"] {{
     color: {card_title_color};
+    background-color: transparent;
+}}
+
+/* Keep ghost buttons transparent on hover inside recent rows */
+QWidget#HomeRecentRow QPushButton[isGhost="true"]:hover {{
+    background-color: transparent;
 }}
 
 /* Subtle hover background for the whole row */

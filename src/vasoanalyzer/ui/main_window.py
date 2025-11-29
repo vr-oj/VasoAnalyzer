@@ -1721,13 +1721,13 @@ class VasoAnalyzerApp(QMainWindow):
 
         colors = self._status_bar_theme_colors()
         status_style = (
-            "QStatusBar { background: {status_bg}; border-top: 1px solid {border}; } "
-            "QStatusBar QLabel { color: {text}; }"
+            "QStatusBar {{ background: {status_bg}; border-top: 1px solid {border}; }} "
+            "QStatusBar QLabel {{ color: {text}; }}"
         ).format(**colors)
         bar_style = (
-            "QProgressBar { border: 1px solid {border}; border-radius: 3px; "
-            "background: {bar_bg}; min-height: 16px; } "
-            "QProgressBar::chunk { background-color: {chunk}; }"
+            "QProgressBar {{ border: 1px solid {border}; border-radius: 3px; "
+            "background: {bar_bg}; min-height: 16px; }} "
+            "QProgressBar::chunk {{ background-color: {chunk}; }}"
         ).format(**colors)
 
         self.statusBar().setStyleSheet(status_style)
@@ -6655,7 +6655,7 @@ class VasoAnalyzerApp(QMainWindow):
     def _update_toolbar_compact_mode(self, width: int | None = None) -> None:
         if width is None:
             width = self.width()
-        compact = width < 1280
+        compact = width < 1152
         style = Qt.ToolButtonIconOnly if compact else Qt.ToolButtonTextUnderIcon
         for toolbar in (
             getattr(self, "primary_toolbar", None),
@@ -6709,8 +6709,7 @@ class VasoAnalyzerApp(QMainWindow):
         if not widths:
             return
 
-        target_width = max(widths)
-        target_width = max(target_width, 200)
+        target_width = min(max(widths), 140)
         for button in buttons:
             button.setMinimumWidth(target_width)
             button.setMaximumWidth(target_width)

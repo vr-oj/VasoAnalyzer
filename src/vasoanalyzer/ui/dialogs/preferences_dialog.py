@@ -220,9 +220,9 @@ class PreferencesDialog(QDialog):
         snapshot_layout.setSpacing(8)
 
         self.snapshot_count_spin = QSpinBox()
-        self.snapshot_count_spin.setMinimum(10)
+        self.snapshot_count_spin.setMinimum(5)
         self.snapshot_count_spin.setMaximum(500)
-        self.snapshot_count_spin.setValue(50)
+        self.snapshot_count_spin.setValue(10)
         self.snapshot_count_spin.setSuffix(" snapshots")
         snapshot_layout.addRow("Keep last:", self.snapshot_count_spin)
 
@@ -410,7 +410,7 @@ class PreferencesDialog(QDialog):
         self.autosave_interval_combo.setCurrentIndex(interval_index)
 
         # Snapshots
-        self.snapshot_count_spin.setValue(self.settings.value("snapshots/keep_count", 50, type=int))
+        self.snapshot_count_spin.setValue(self.settings.value("snapshots/keep_count", 10, type=int))
 
         # Advanced
         self.auto_recovery_checkbox.setChecked(

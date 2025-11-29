@@ -17,6 +17,7 @@ project repository.
 """
 
 import csv
+import os
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from numbers import Real
@@ -26,7 +27,7 @@ from typing import Any, cast
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
-from PyQt5.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, pyqtProperty
+from PyQt5.QtCore import QAbstractTableModel, QMimeData, QModelIndex, QSettings, Qt, pyqtProperty
 from PyQt5.QtGui import QBrush, QColor, QFont, QPalette
 from PyQt5.QtWidgets import (
     QAbstractItemView,
@@ -37,6 +38,8 @@ from PyQt5.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QMessageBox,
     QPushButton,
     QSplitter,
@@ -49,12 +52,12 @@ from PyQt5.QtWidgets import (
     QWizardPage,
 )
 
+import vasoanalyzer.ui.theme as theme
 from vasoanalyzer.excel import (
     TemplateMetadata,
     has_vaso_metadata,
     read_template_metadata,
 )
-from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["ExcelMapWizard"]
 
@@ -245,11 +248,11 @@ class TemplatePreviewTable(QTableWidget):
     def _apply_theme(self) -> None:
         """Apply theme-driven palette for dark/light modes."""
         palette = self.palette()
-        table_bg = CURRENT_THEME.get("table_bg", "#020617")
-        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
-        text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
-        highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
-        grid = CURRENT_THEME.get("grid_color", "#374151")
+        table_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
+        text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
+        highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        grid = theme.CURRENT_THEME.get("grid_color", "#374151")
 
         palette.setColor(self.backgroundRole(), QColor(table_bg))
         palette.setColor(self.foregroundRole(), QColor(text))
@@ -302,11 +305,36 @@ class TemplatePage(WizardPageBase):
         layout.addWidget(self.btn_excel)
         layout.addWidget(self.lbl_excel)
 
+        # Recent templates UI
+        self.recent_templates_label = QLabel("Recent templates")
+        self.recent_templates_list = QListWidget()
+        self.recent_templates_list.setSelectionMode(QListWidget.SingleSelection)
+        self.recent_templates_list.setAlternatingRowColors(True)
+        self.recent_templates_list.setUniformItemSizes(True)
+        self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
+        self.remove_recent_button = QPushButton("Remove selected")
+        self.clear_recent_button = QPushButton("Clear all")
+        self.remove_recent_button.clicked.connect(self._on_remove_selected_recent_template)
+        self.clear_recent_button.clicked.connect(self._on_clear_recent_templates)
+        self.recent_templates_label.setVisible(False)
+        self.recent_templates_list.setVisible(False)
+        self.remove_recent_button.setVisible(False)
+        self.clear_recent_button.setVisible(False)
+        layout.addWidget(self.recent_templates_label)
+        layout.addWidget(self.recent_templates_list)
+        recent_buttons_row = QHBoxLayout()
+        recent_buttons_row.addStretch()
+        recent_buttons_row.addWidget(self.remove_recent_button)
+        recent_buttons_row.addWidget(self.clear_recent_button)
+        layout.addLayout(recent_buttons_row)
+
         self.btn_csv = QPushButton("Load Events CSV…")
         self.lbl_csv = QLabel("No events loaded.")
         self.btn_csv.clicked.connect(self.load_csv)
         layout.addWidget(self.btn_csv)
         layout.addWidget(self.lbl_csv)
+
+        self._update_recent_templates_list()
 
     # Properties exposed as wizard fields
     def get_templatePath(self) -> str:
@@ -331,15 +359,11 @@ class TemplatePage(WizardPageBase):
         self._update_events_status()
 
     # ------------------------------------------------------
-    def load_template(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Excel Template",
-            "",
-            "Excel Files (*.xlsx *.xlsm);;Macro-Enabled (*.xlsm);;Standard (*.xlsx)",
-        )
+    def _load_template_from_path(self, path: str) -> None:
+        """Load a template from the given path and update wizard state."""
         if not path:
             return
+
         try:
             wb = load_workbook_preserve(path)
         except Exception as exc:  # pragma: no cover - GUI feedback
@@ -379,7 +403,20 @@ class TemplatePage(WizardPageBase):
             self.lbl_excel.setText(f"Loaded: {Path(path).name}")
             self.lbl_excel.setStyleSheet("")
 
+        self._update_recent_templates(path)
         self.completeChanged.emit()
+
+    # ------------------------------------------------------
+    def load_template(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Excel Template",
+            "",
+            "Excel Files (*.xlsx *.xlsm);;Macro-Enabled (*.xlsm);;Standard (*.xlsx)",
+        )
+        if not path:
+            return
+        self._load_template_from_path(path)
 
     # ------------------------------------------------------
     def load_csv(self) -> None:
@@ -429,6 +466,93 @@ class TemplatePage(WizardPageBase):
             message = f"Loaded {count} {noun} from {base}."
             self.btn_csv.setText("Reload Events CSV…")
         self.lbl_csv.setText(message)
+
+    # ------------------------------------------------------
+    def _load_recent_templates(self) -> list[str]:
+        """Return the stored recent templates list."""
+        settings = self._get_settings()
+        paths = settings.value("recentTemplates", [], type=list) or []
+        return [p for p in paths if p]
+
+    # ------------------------------------------------------
+    def _save_recent_templates(self, paths: list[str]) -> None:
+        """Persist the recent templates list."""
+        settings = self._get_settings()
+        settings.setValue("recentTemplates", paths)
+
+    # ------------------------------------------------------
+    def _update_recent_templates_list(self) -> None:
+        """Refresh the Recent Templates UI from QSettings."""
+        self.recent_templates_list.clear()
+        paths = self._load_recent_templates()
+        has_items = bool(paths)
+
+        if not has_items:
+            self.recent_templates_label.setVisible(False)
+            self.recent_templates_list.setVisible(False)
+            self.remove_recent_button.setVisible(False)
+            self.clear_recent_button.setVisible(False)
+            return
+
+        for path in paths:
+            file_name = os.path.basename(path)
+            item = QListWidgetItem(file_name)
+            item.setToolTip(path)
+            item.setData(Qt.UserRole, path)
+            self.recent_templates_list.addItem(item)
+
+        self.recent_templates_label.setVisible(True)
+        self.recent_templates_list.setVisible(True)
+        self.remove_recent_button.setVisible(True)
+        self.clear_recent_button.setVisible(True)
+
+    # ------------------------------------------------------
+    def _update_recent_templates(self, path: str) -> None:
+        """Update the stored recent templates list and refresh the UI."""
+        if not path:
+            return
+
+        paths = self._load_recent_templates()
+        if path in paths:
+            paths.remove(path)
+        paths.insert(0, path)
+        paths = paths[:5]
+        self._save_recent_templates(paths)
+        self._update_recent_templates_list()
+
+    # ------------------------------------------------------
+    def _on_recent_template_activated(self, item: QListWidgetItem) -> None:
+        """Handle activation of a recent template entry."""
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        if not path:
+            return
+        self._load_template_from_path(path)
+
+    # ------------------------------------------------------
+    def _on_clear_recent_templates(self) -> None:
+        """Clear all recent templates."""
+        self._save_recent_templates([])
+        self._update_recent_templates_list()
+
+    # ------------------------------------------------------
+    def _on_remove_selected_recent_template(self) -> None:
+        """Remove only the currently selected recent template."""
+        item = self.recent_templates_list.currentItem()
+        if item is None:
+            return
+        path = item.data(Qt.UserRole)
+        if not path:
+            return
+        paths = [p for p in self._load_recent_templates() if p != path]
+        self._save_recent_templates(paths)
+        self._update_recent_templates_list()
+
+    # ------------------------------------------------------
+    @staticmethod
+    def _get_settings() -> QSettings:
+        return QSettings("TykockiLab", "VasoAnalyzer")
 
     # ------------------------------------------------------
     @staticmethod
@@ -638,11 +762,11 @@ class RowMappingPage(WizardPageBase):
     def _apply_table_theme(self, table) -> None:
         """Apply theme-aware palette and stylesheet to table widgets."""
         palette = table.palette()
-        table_bg = CURRENT_THEME.get("table_bg", "#020617")
-        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
-        text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
-        highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
-        grid = CURRENT_THEME.get("grid_color", "#374151")
+        table_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
+        text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
+        highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        grid = theme.CURRENT_THEME.get("grid_color", "#374151")
 
         palette.setColor(QPalette.Base, QColor(table_bg))
         palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
@@ -872,12 +996,16 @@ class RowMappingPage(WizardPageBase):
         self._preview_row_to_template_row = {}
         self._preview_base_values = {}
         self._active_preview_column = None
-        table_bg = CURRENT_THEME.get("table_bg", "#020617")
-        alt_bg = CURRENT_THEME.get("alternate_bg", table_bg)
-        table_text = CURRENT_THEME.get("table_text", CURRENT_THEME.get("text", "#FFFFFF"))
-        active_bg = CURRENT_THEME.get("accent_fill", CURRENT_THEME.get("selection_bg", table_bg))
+        table_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
+        table_text = theme.CURRENT_THEME.get(
+            "table_text", theme.CURRENT_THEME.get("text", "#FFFFFF")
+        )
+        active_bg = theme.CURRENT_THEME.get(
+            "accent_fill", theme.CURRENT_THEME.get("selection_bg", table_bg)
+        )
         event_bg = alt_bg
-        header_bg = CURRENT_THEME.get("button_hover_bg", alt_bg)
+        header_bg = theme.CURRENT_THEME.get("button_hover_bg", alt_bg)
         if not preview_data:
             self.preview_table.setRowCount(0)
             self.preview_table.setColumnCount(0)

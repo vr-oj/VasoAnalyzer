@@ -94,7 +94,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     )
     window.trace_file_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     window.trace_file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    window.trace_file_label.setMinimumWidth(260)
+    window.trace_file_label.setMinimumWidth(180)
     window._status_base_label = "No trace loaded"
     window.trace_file_label.installEventFilter(window)
 

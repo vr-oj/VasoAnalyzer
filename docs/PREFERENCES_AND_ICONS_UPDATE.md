@@ -135,9 +135,9 @@ This document describes two major UX improvements:
 - Clear explanation of crash recovery
 
 **Snapshot Retention:**
-- Number of snapshots to keep (10-500, default: 50)
+- Number of snapshots to keep (5-500, default: 10)
 - **Live disk usage estimate** that updates as you change the value
-- Example: "Estimated disk usage: ~500 MB for typical project"
+- Example: "Estimated disk usage: ~100 MB for typical project"
 
 **Purpose:** Balance safety (more snapshots) vs. disk space.
 
@@ -191,7 +191,7 @@ This document describes two major UX improvements:
 "autosave/interval"              # Interval in seconds (30-600)
 
 # Snapshots
-"snapshots/keep_count"           # Number to retain (10-500)
+"snapshots/keep_count"           # Number to retain (5-500)
 
 # Advanced
 "recovery/enabled"               # Enable auto-recovery
@@ -235,7 +235,7 @@ if settings.value("autosave/enabled", True, type=bool):
 ```python
 # In bundle_adapter.py save_project_handle()
 settings = QSettings("TykockiLab", "VasoAnalyzer")
-keep_count = settings.value("snapshots/keep_count", 50, type=int)
+keep_count = settings.value("snapshots/keep_count", 10, type=int)
 pruned = prune_old_snapshots(handle.path, keep_count=keep_count)
 ```
 
@@ -273,7 +273,7 @@ with zipfile.ZipFile(temp_target, "w", compression) as zf:
 **For Most Users:**
 - ✓ Single-file format (.vaso)
 - ✓ Autosave enabled, 1-2 minute interval
-- ✓ Keep 50 snapshots (default)
+- ✓ Keep 10 snapshots (default)
 - ✓ Auto-migrate legacy projects
 - ✗ Compression disabled (faster saves)
 

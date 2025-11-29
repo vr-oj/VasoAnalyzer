@@ -79,7 +79,14 @@ class PyQtGraphEventStripTrack:
         self.clear()
         self._options = options
 
-        color_default = options.font_color or "#000000"
+        theme_text = CURRENT_THEME.get("text", "#000000")
+        color_default = options.font_color or theme_text
+        if (
+            isinstance(color_default, str)
+            and color_default.strip().lower() == "#000000"
+            and theme_text.lower() != "#000000"
+        ):
+            color_default = theme_text
         show_numbers_only = bool(getattr(options, "show_numbers_only", False))
         font = None
         try:
@@ -127,7 +134,14 @@ class PyQtGraphEventStripTrack:
         """Reapply font/color to existing labels without rebuilding."""
 
         self._options = options
-        color = options.font_color or "#000000"
+        theme_text = CURRENT_THEME.get("text", "#000000")
+        color = options.font_color or theme_text
+        if (
+            isinstance(color, str)
+            and color.strip().lower() == "#000000"
+            and theme_text.lower() != "#000000"
+        ):
+            color = theme_text
         font = None
         try:
             from PyQt5.QtGui import QFont

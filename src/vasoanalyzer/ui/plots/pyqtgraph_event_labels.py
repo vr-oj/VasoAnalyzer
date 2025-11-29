@@ -12,6 +12,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont, QFontMetricsF
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["PyQtGraphEventLabeler"]
 
@@ -306,8 +307,10 @@ class PyQtGraphEventLabeler:
             color = self._coerce_color(self.options.font_color)
         if color is None:
             color = self._coerce_color(event.meta.get("event_color"))
-        if color is None:
-            color = QColor("#000000")
+        if color is None or (
+            color == QColor("#000000") and CURRENT_THEME.get("text", "#000000").lower() != "#000000"
+        ):
+            color = QColor(CURRENT_THEME.get("text", "#000000"))
         return (color.red(), color.green(), color.blue())
 
     def _coerce_color(self, value: Any) -> QColor | None:

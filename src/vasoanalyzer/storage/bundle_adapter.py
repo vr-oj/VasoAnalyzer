@@ -47,6 +47,9 @@ __all__ = [
     "close_project_handle",
 ]
 
+# Default snapshots retained when no preference is available
+DEFAULT_SNAPSHOT_KEEP_COUNT = 10
+
 
 # =============================================================================
 # Project Handle
@@ -481,6 +484,21 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
     Raises:
         RuntimeError: If save fails
     """
+
+    def _get_snapshot_keep_count() -> int:
+        """Read snapshot retention from settings with safe fallback."""
+        keep_count = DEFAULT_SNAPSHOT_KEEP_COUNT
+        try:
+            from PyQt5.QtCore import QSettings
+
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            value = settings.value("snapshots/keep_count", keep_count, type=int)
+            if value is not None:
+                keep_count = int(value)
+        except Exception as e:
+            log.debug(f"Could not read snapshot keep_count from settings: {e}")
+        return max(1, keep_count)
+
     if handle.readonly:
         log.warning("Cannot save read-only project")
         return
@@ -526,10 +544,11 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
             # Staging will be refreshed when project is next opened (from snapshot)
             # This keeps the file portable while avoiding mid-save connection issues
 
-            # Prune old snapshots (keep last 50)
-            pruned = prune_old_snapshots(handle.path, keep_count=50)
+            # Prune old snapshots based on user preference
+            keep_count = _get_snapshot_keep_count()
+            pruned = prune_old_snapshots(handle.path, keep_count=keep_count)
             if pruned > 0:
-                log.info(f"Pruned {pruned} old snapshots")
+                log.info(f"Pruned {pruned} old snapshots (keep_count={keep_count})")
 
             # If this is a container, pack it back to .vaso file
             if handle.is_container and handle.container_path:
