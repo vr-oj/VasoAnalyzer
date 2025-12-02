@@ -1,0 +1,152 @@
+Metadata-Version: 2.4
+Name: vasoanalyzer
+Version: 0.1.0
+Summary: Developer tooling and tests for the VasoAnalyzer application.
+Author: Osvaldo J. Vega Rodríguez
+License: CC BY-NC-SA 4.0
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+License-File: NOTICE
+Requires-Dist: pydantic>=1.10
+Provides-Extra: dev
+Requires-Dist: pytest>=7.4; extra == "dev"
+Requires-Dist: pytest-qt>=4.4; extra == "dev"
+Requires-Dist: ruff>=0.6.0; extra == "dev"
+Requires-Dist: mypy>=1.8.0; extra == "dev"
+Requires-Dist: types-requests>=2.32.0.20240712; extra == "dev"
+Dynamic: license-file
+
+# VasoAnalyzer v2.2.5
+
+**Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
+
+VasoAnalyzer is a **desktop** app (Windows/macOS) that streamlines analysis of pressure myography experiments. It pairs fast trace visualization with event editing, optional TIFF snapshots, and export‑ready figures/tables.
+
+---
+
+## 🧬 VasoAnalyzer Project Files (`.vaso`)
+
+As of **v2.0**, VasoAnalyzer stores and shares entire experiments as a single
+`.vaso` package — a structured, open, and portable format inspired by LabChart
+and GraphPad projects.
+
+Each `.vaso` file is a ZIP container that holds every component of an analysis:
+
+- **Datasets** (traces, ROIs, QC flags)
+- **Event labels** (semantic time-based annotations)
+- **Views** (layout, colors, label positions)
+- **Analysis graph & results** (Parquet tables)
+- **Figures & exports**
+- **Audit trail** (timestamped actions and provenance)
+
+Large raw files (TIFFs, CSVs) can be **referenced** externally or **embedded**
+for sharing. The format is fully JSON/YAML-based — no pickles, no binaries —
+and is designed for long-term reproducibility.
+
+> 📦 To pack or unpack a project:
+> ```bash
+> vaso pack study.vaso
+> vaso unpack study.vaso --to ./local_data
+> ```
+
+```bash
+# Create a new project
+vaso new study.vaso --title "My Study"
+
+# Add a dataset (10 Hz, channels ID:µm and PRES:mmHg)
+vaso add-dataset study.vaso --name Seg1 --rate 10 --channels ID:µm PRES:mmHg
+
+# Add an event
+vaso add-event study.vaso --id ev1 --dataset-id <DATASET_ID> --t 12.3 --label "CCh 1µM" --lane drug
+
+# Embed a TIFF
+vaso pack study.vaso --dataset-id <DATASET_ID> --file path/to/segment_001.tif
+```
+
+---
+
+## 🚀 Quick Start (End Users)
+
+**1) Download the app**
+- Go to the project’s *Releases* page and download the latest build for your OS.
+- Windows: unzip, then run `VasoAnalyzer.exe`.
+- macOS: unzip, drag the app into **Applications**, then right‑click → Open (first run).
+
+**2) Start a project**
+- Launch VasoAnalyzer → **Create Project / Experiment** (or **Open Project**).
+- A project saves to a single `*.vaso` file (a standard ZIP under the hood) with:
+  - `manifest.json` – experiment metadata & file signatures
+  - `state.json` – your window/plot state and layout
+
+**3) Import your data**
+- **Trace CSV** with columns like **`Time (s)`**, **`Inner Diameter (µm)`** and optional **`Outer Diameter (µm)`** (header names are case‑insensitive; common synonyms are auto‑recognized). Negative diameters are treated as missing.
+- **Event file** (CSV/TXT) with **`Time`** and **`Label`**; optional contextual columns such as **`Temp`**, **`P1`**, **`P2`**, **`Caliper`**, etc.
+- **TIFF snapshot** (optional). Large stacks are automatically sub‑sampled for preview to keep the UI responsive.
+
+**4) Analyze & export**
+- Pin/edit events, tweak plot style & axes, and export:
+  - **`eventDiameters_output.csv`** (event table) — saved next to your trace file
+  - **Figure (TIFF/SVG)** — publication‑ready
+  - **Session state** → `tracePlot_output.fig.json` — reopens your exact view later
+  - **Excel Mapper** — push table data into your lab’s Excel template
+
+**5) Save**
+- Use **Save** to write/update your `.vaso` project. You can associate `.vaso` with the app to open projects by double‑clicking.
+
+---
+
+## 🧰 Supported Inputs (summary)
+
+- **Trace:** CSV with **Time** + **Inner Diameter** (µm); **Outer Diameter** optional.
+- **Events:** CSV/TXT with **Time** + **Label**; optional columns include **Temp**, **P1**, **P2**, **Caliper**.
+- **Images:** TIFF stacks for snapshots/previews (frames auto‑sampled by default).
+
+> Tip: The app is tolerant to common header variants and whitespace/case differences.
+
+---
+
+## 📦 Projects & Files
+
+- **Project format:** `*.vaso` (ZIP) with a schema-validated manifest, datasets, views, analysis graph, and audit trail.
+- **Snapshots:** Link externally by default; embed with `vaso pack` for portable copies.
+- **Exports:** Figures/tables live under `/figures` and `/exports` inside the project; CLI helpers can unpack them for batch workflows.
+
+---
+
+## 🖼️ Styling & Layout
+
+Use **Plot Settings** to set titles, fonts, grids, axes, and subplot layout. A factory style with sensible defaults ships with the app; you can revert to defaults at any time.
+
+---
+
+## 🔄 Updates & Privacy
+
+- On startup the app may **check GitHub Releases** to notify you of a newer version (short timeout; no telemetry or data upload).
+- All analysis happens **locally** on your machine.
+
+---
+
+## 🧪 Run from source (advanced)
+
+1. Install Python 3.10+ and a virtual environment.
+2. `pip install -r requirements.txt`
+3. `python -m src.main` (or run `src/main.py`)
+
+> Windows packaging uses PyInstaller; macOS uses a standard app bundle (see `packaging/`).
+
+---
+
+## ❓Troubleshooting
+
+- **macOS “unidentified developer”**: Right‑click the app → **Open**.
+- **Windows SmartScreen**: Click **More info** → **Run anyway** (if you trust the source).
+- **Large TIFFs feel slow**: The app loads a capped number of frames for preview; consider trimming or down‑sampling for smoother navigation.
+- **CSV didn’t load**: Ensure headers include *Time* and *Inner Diameter*; see the User Guide for accepted variants.
+
+---
+
+## 🙌 Citation & License
+
+If you use VasoAnalyzer, please cite it (see `CITATION.cff`).  
+License: **CC BY‑NC‑SA 4.0**. For details, see `LICENSE` and `LICENSES/` in this repository.
