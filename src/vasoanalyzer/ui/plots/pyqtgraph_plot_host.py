@@ -1,0 +1,1622 @@
+"""PyQtGraph-based plot host for high-performance trace visualization."""
+
+from __future__ import annotations
+
+import contextlib
+import logging
+from collections.abc import Callable, Iterable
+from typing import Any, cast
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtWidgets import QVBoxLayout, QWidget
+
+from vasoanalyzer.core.trace_model import TraceModel
+from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
+from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
+from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
+from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
+from vasoanalyzer.ui.plots.plot_host import LayoutState
+from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
+from vasoanalyzer.ui.plots.pyqtgraph_event_strip import PyQtGraphEventStripTrack
+from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
+    PyQtGraphEventHighlightOverlay,
+    PyQtGraphTimeCursorOverlay,
+)
+from vasoanalyzer.ui.theme import CURRENT_THEME
+
+__all__ = ["PyQtGraphPlotHost"]
+
+log = logging.getLogger(__name__)
+
+
+class PyQtGraphPlotHost:
+    """GPU-accelerated plot host using PyQtGraph.
+
+    Provides high-performance alternative to matplotlib-based PlotHost
+    while maintaining a compatible interface for easy integration.
+    """
+
+    def __init__(self, *, dpi: int = 100, enable_opengl: bool = True) -> None:
+        """Initialize PyQtGraph plot host.
+
+        Args:
+            dpi: Display DPI (maintained for compatibility, not used by PyQtGraph)
+            enable_opengl: Enable GPU acceleration
+        """
+        self._dpi = dpi
+        self._enable_opengl = enable_opengl
+
+        # Create main widget with vertical layout for stacked tracks
+        self.widget = QWidget()
+        self.layout = QVBoxLayout(self.widget)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(2)  # Small gap between tracks
+
+        # Create graphics layout for tracks
+        # Tracks are managed as individual widgets stacked vertically.
+
+        # Apply theme
+        bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        self.widget.setStyleSheet(f"background-color: {bg_color};")
+
+        # Create matplotlib-compatible canvas wrapper for event handling
+        # The wrapper contains self.widget and provides mpl_connect() for toolbar
+        self.canvas = PyQtGraphCanvasCompat(self.widget)
+
+        # Channel management
+        self._channel_specs: list[ChannelTrackSpec] = []
+        self._tracks: dict[str, PyQtGraphChannelTrack] = {}
+        self._channel_visible: dict[str, bool] = {}
+
+        # Data model and state
+        self._model: TraceModel | None = None
+        self._current_window: tuple[float, float] | None = None
+        self._event_times: list[float] = []
+        self._event_colors: list[str] | None = None
+        self._event_labels: list[str] = []
+        self._event_label_meta: list[dict[str, Any]] | None = None
+        self._event_label_options = LayoutOptionsV3(mode="h_belt", show_numbers_only=True)
+        self._event_entries: list[EventEntryV3] = []
+        self._event_strip_track: PyQtGraphEventStripTrack | None = None
+        self._event_strip_widget: pg.PlotWidget | None = None
+
+        # Interaction state
+        self._pan_active: bool = False
+        self._pan_start_x: float | None = None
+        self._pan_start_window: tuple[float, float] | None = None
+
+        # Performance throttling
+        self._min_draw_interval: float = 1.0 / 120.0  # 120 FPS cap
+        self._last_draw_ts: float = 0.0
+
+        # Overlays
+        self._time_cursor_overlay = PyQtGraphTimeCursorOverlay()
+        self._event_highlight_overlay = PyQtGraphEventHighlightOverlay()
+        self._event_labels_enabled = True
+        self._auto_event_label_mode = True
+        self._label_density_thresholds: dict[str, float | None] = {"compact": None, "belt": None}
+        self._hover_tooltip_enabled = True
+        self._hover_tooltip_precision = 3
+        self._tooltip_proximity = 10.0
+        self._axis_font_family: str = "Arial"
+        self._axis_font_size: float = 20.0
+        self._tick_font_size: float = 16.0
+        self._default_line_width: float = 4.0
+        self._window_bg_color: tuple[int, int, int] | None = None
+        self._plot_bg_color: tuple[int, int, int] | None = None
+        self._compact_legend_enabled: bool = False
+        self._compact_legend_location: str = "upper right"
+        self._time_window_listeners: list[Callable[[float, float], None]] = []
+        self._range_change_user_driven: bool = False
+        self._click_handler: Callable[[str, float, float, int, Any], None] | None = None
+        border_color = CURRENT_THEME.get(
+            "hover_label_border",
+            CURRENT_THEME.get("text", "#000000"),
+        )
+        self._lane_border_pen = pg.mkPen(
+            color=border_color,
+            width=1,
+            cosmetic=True,
+        )
+        self._x_grid_visible: bool = True
+        self._y_grid_visible: bool = True
+        self._grid_alpha: float = 0.10
+
+    def apply_theme(self) -> None:
+        """Refresh plot host colors from the active theme."""
+        print(f"[THEME-DEBUG] PyQtGraphPlotHost.apply_theme called, id(self)={id(self)}")
+
+        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        border_color = CURRENT_THEME.get(
+            "hover_label_border",
+            CURRENT_THEME.get("text", "#000000"),
+        )
+        self.widget.setStyleSheet(f"background-color: {bg};")
+        self._lane_border_pen = pg.mkPen(color=border_color, width=1, cosmetic=True)
+
+        for track in self._tracks.values():
+            try:
+                track.view.apply_theme()
+                plot_item = track.view.get_widget().getPlotItem()
+                plot_item.getViewBox().setBorder(self._lane_border_pen)
+            except Exception:
+                pass
+
+        if self._event_strip_track is not None:
+            try:
+                self._event_strip_track.apply_theme()
+                vb = self._event_strip_track.plot_item.getViewBox()
+                vb.setBorder(self._lane_border_pen)
+            except Exception:
+                pass
+
+        for overlay in (
+            getattr(self, "_time_cursor_overlay", None),
+            getattr(self, "_event_highlight_overlay", None),
+        ):
+            apply_method = getattr(overlay, "apply_theme", None)
+            if callable(apply_method):
+                with contextlib.suppress(Exception):
+                    apply_method()
+        style = self.widget.styleSheet() if hasattr(self, "widget") else ""
+        print(
+            f"[THEME-DEBUG] PyQtGraphPlotHost styleSheet length={len(style) if style is not None else 0}"
+        )
+
+    # ------------------------------------------------------------------ visibility helpers
+    def set_channel_visible(self, channel_kind: str, visible: bool) -> None:
+        """Set visibility for a given channel kind.
+
+        Keeps tracks instantiated; only toggles their visibility state.
+        If the track exists, apply visibility directly. If a spec exists but the
+        track hasn't been built yet, the stored flag is applied when tracks are created.
+        """
+
+        kind = str(channel_kind)
+        self._channel_visible[kind] = bool(visible)
+
+        track = self._tracks.get(kind)
+        if track is not None:
+            track.set_visible(bool(visible))
+
+        # Reassign bottom X-axis ownership based on updated visibility.
+        self._update_bottom_axis_assignments()
+
+        # Update all track fonts since visible count changed
+        # Y-axis title sizes adapt based on number of visible tracks
+        for t in self._tracks.values():
+            self._apply_axis_font_to_track(t)
+
+    def set_click_handler(self, handler: Callable[[str, float, float, int, Any], None] | None):
+        """Assign a global click handler for all tracks."""
+        self._click_handler = handler
+        for track_id, track in self._tracks.items():
+            track.set_click_handler(
+                lambda x, y, button, _mode, ev, tid=track_id: self._emit_click(
+                    tid, x, y, button, ev
+                )
+            )
+
+    def is_channel_visible(self, channel_kind: str) -> bool:
+        """Return visibility flag for a channel kind (defaults to True)."""
+
+        return bool(self._channel_visible.get(str(channel_kind), True))
+
+    def iter_channels(self) -> Iterable[ChannelTrackSpec]:
+        """Yield channel specs for currently configured channels."""
+
+        return list(self._channel_specs)
+
+    def debug_dump_state(self, label: str) -> None:
+        if not log.isEnabledFor(logging.DEBUG):
+            return
+        window = self._current_window
+        if window is None:
+            window_repr = "None"
+            span_repr = "None"
+        else:
+            x0, x1 = window
+            window_repr = f"({x0:.6f}, {x1:.6f})"
+            span_repr = f"{(x1 - x0):.6f}"
+        log.debug(
+            "[PLOT DEBUG] label=%s backend=pyqtgraph window=%s span=%s tracks=%d",
+            label,
+            window_repr,
+            span_repr,
+            len(self._tracks),
+        )
+        for track_id, track in self._tracks.items():
+            try:
+                visible = track.is_visible()
+            except Exception:
+                visible = None
+            try:
+                autoscale = bool(track.view.is_autoscale_enabled())
+            except Exception:
+                autoscale = None
+            try:
+                ylim = track.view.get_ylim()
+            except Exception:
+                ylim = None
+            sticky = getattr(track, "_sticky_ylim", None)
+            event_labels = getattr(track.view, "_event_labels_visible", None)
+            log.debug(
+                "[PLOT DEBUG] track=%s visible=%s autoscale=%s ylim=%s sticky=%s event_labels=%s",
+                track_id,
+                visible,
+                autoscale,
+                ylim,
+                sticky,
+                event_labels,
+            )
+
+    def log_data_and_view_ranges(self, label: str) -> None:
+        """
+        Debug helper: log raw data ranges from the TraceModel and current view ranges.
+        """
+        if not log.isEnabledFor(logging.DEBUG):
+            return
+        model = getattr(self, "_model", None)
+        window = getattr(self, "_current_window", None)
+        if model is None:
+            log.debug(
+                "[RANGE DEBUG] label=%s backend=pyqtgraph model=None window=%s",
+                label,
+                window,
+            )
+            return
+        log.debug(
+            "[RANGE DEBUG] label=%s backend=pyqtgraph window=%s",
+            label,
+            window,
+        )
+        time_full = getattr(model, "time_full", None)
+        raw_x = None
+        if time_full is not None:
+            try:
+                raw_x = (float(np.nanmin(time_full)), float(np.nanmax(time_full)))
+            except Exception:
+                raw_x = None
+        tracks = getattr(self, "_tracks", None)
+        if not tracks:
+            return
+        iterable = tracks.values() if isinstance(tracks, dict) else tracks
+        component_attr = {
+            "inner": "inner_full",
+            "outer": "outer_full",
+            "avg_pressure": "avg_pressure_full",
+            "set_pressure": "set_pressure_full",
+            "dual": "inner_full",
+        }
+        for track in iterable:
+            try:
+                spec = getattr(track, "spec", None)
+                component = getattr(spec, "component", None) if spec is not None else None
+                track_id = getattr(spec, "track_id", None) if spec is not None else None
+                if track_id is None:
+                    track_id = getattr(track, "id", None)
+                if track_id is None:
+                    track_id = repr(track)
+                raw_y = None
+                attr_name = component_attr.get(str(component))
+                if attr_name is not None:
+                    series = getattr(model, attr_name, None)
+                    if series is not None:
+                        try:
+                            raw_y = (float(np.nanmin(series)), float(np.nanmax(series)))
+                        except Exception:
+                            raw_y = None
+                view = getattr(track, "view", None)
+                view_y = None
+                if view is not None and hasattr(view, "get_ylim"):
+                    try:
+                        view_y = view.get_ylim()
+                    except Exception:
+                        view_y = None
+                log.debug(
+                    "[RANGE DEBUG] track=%s component=%s raw_x=%s raw_y=%s view_x=%s view_y=%s",
+                    track_id,
+                    component,
+                    raw_x,
+                    raw_y,
+                    window,
+                    view_y,
+                )
+            except Exception:
+                log.debug("[RANGE DEBUG] track=%r failed to compute ranges", track)
+
+    def add_channel(self, spec: ChannelTrackSpec) -> PyQtGraphChannelTrack:
+        """Add a channel to the stack and rebuild the layout."""
+        existing_ids = {s.track_id for s in self._channel_specs}
+        if spec.track_id in existing_ids:
+            raise ValueError(f"Channel '{spec.track_id}' already exists")
+
+        self._channel_specs.append(spec)
+        self._rebuild_tracks()
+        return self._tracks[spec.track_id]
+
+    def ensure_channels(self, specs: Iterable[ChannelTrackSpec]) -> None:
+        """Ensure the provided set of channels (ordered) exist."""
+        desired = list(specs)
+        current_ids = [spec.track_id for spec in self._channel_specs]
+        desired_ids = [spec.track_id for spec in desired]
+
+        self._channel_specs = desired
+        self._rebuild_tracks()
+
+    def _rebuild_tracks(self) -> None:
+        """Recreate tracks to match specs."""
+        # Clear existing widgets/layout but keep track objects we can reuse
+        for _track_id, track in list(self._tracks.items()):
+            widget = track.widget
+            self.layout.removeWidget(widget)
+            widget.setParent(None)
+
+        # Recreate tracks and re-add widgets in desired order
+        new_tracks: dict[str, PyQtGraphChannelTrack] = {}
+        if not self._channel_specs:
+            self._tracks = new_tracks
+            return
+
+        # Ensure event strip exists and sits at top
+        if self._event_strip_track is None:
+            self._event_strip_widget = pg.PlotWidget()
+            self._event_strip_widget.setMaximumHeight(40 if self._event_labels_enabled else 0)
+            self._event_strip_widget.setVisible(self._event_labels_enabled)
+            self._event_strip_track = PyQtGraphEventStripTrack(
+                self._event_strip_widget.getPlotItem()
+            )
+            self.layout.insertWidget(
+                0, self._event_strip_widget, 5 if self._event_labels_enabled else 0
+            )
+
+        plot_items = []
+
+        # Determine which track should own the bottom X-axis.
+        # Prefer the lowest visible track; if none are visible, fall back to the last spec.
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        if visible_specs:
+            bottom_visible_id = visible_specs[-1].track_id
+        else:
+            bottom_visible_id = self._channel_specs[-1].track_id
+
+        for idx, spec in enumerate(self._channel_specs):
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                track = PyQtGraphChannelTrack(spec, enable_opengl=self._enable_opengl)
+            else:
+                track.spec = spec
+            track.height_ratio = spec.height_ratio
+
+            # Initialize visibility flag default if unseen
+            self._channel_visible.setdefault(spec.track_id, True)
+
+            # Add to layout with stretch factor based on height ratio
+            stretch = max(int(spec.height_ratio * 100), 1)
+            self.layout.addWidget(track.widget, stretch)
+
+            new_tracks[spec.track_id] = track
+
+            plot_item = track.view.get_widget().getPlotItem()
+            plot_items.append(plot_item)
+
+            # Configure X-axis visibility: only show labels on the bottom-visible track
+            is_bottom_track = spec.track_id == bottom_visible_id
+            self._configure_bottom_axis(plot_item, is_bottom_track=is_bottom_track)
+
+            # Add subtle border around each plot's ViewBox for visual separation
+            view_box = plot_item.getViewBox()
+            view_box.setBorder(self._lane_border_pen)
+
+            # Ensure Y-axes are aligned by setting consistent width
+            left_axis = plot_item.getAxis("left")
+            left_axis.setWidth(80)  # Fixed width for alignment
+
+            axes_wrapper = track.ax
+            if hasattr(axes_wrapper, "set_grid_callback"):
+                axes_wrapper.set_grid_callback(self._handle_axis_grid_request)
+
+            # Apply model if already set
+            if self._model is not None:
+                track.set_model(self._model)
+
+            # Link strip X-axis to first track
+            if idx == 0 and self._event_strip_track is not None:
+                self._event_strip_track.plot_item.setXLink(plot_item)
+
+            # Apply events if already set
+            if self._event_times:
+                track.set_events(
+                    self._event_times,
+                    self._event_colors,
+                    self._event_labels,
+                    label_meta=self._event_label_meta,
+                )
+
+            # Apply stored visibility state for this track
+            track.set_visible(self.is_channel_visible(spec.track_id))
+
+            if self._click_handler is not None:
+                track.set_click_handler(
+                    lambda x, y, button, _mode, ev, tid=spec.track_id: self._emit_click(
+                        tid, x, y, button, ev
+                    )
+                )
+
+        self._tracks = new_tracks
+
+        # Prune visibility flags for channels that no longer exist
+        for key in list(self._channel_visible.keys()):
+            if key not in self._tracks:
+                self._channel_visible.pop(key, None)
+
+            # Connect signals for synchronized interactions
+            self._connect_track_signals(track)
+            is_top_track = idx == 0
+            self._configure_track_defaults(track, is_top_track=is_top_track)
+
+        # Set row spacing between tracks for visual separation
+        # Note: QVBoxLayout spacing is set in __init__, but we can adjust per-item spacing
+        self.layout.setSpacing(5)  # 5px spacing between tracks
+
+        # Sync overlays with new tracks
+        self._time_cursor_overlay.sync_tracks(plot_items)
+        self._event_highlight_overlay.sync_tracks(plot_items)
+        self._apply_grid_to_all_tracks()
+
+        # Update window if already set
+        if self._current_window is not None:
+            x0, x1 = self._current_window
+            self.set_time_window(x0, x1)
+
+    def _connect_track_signals(self, track: PyQtGraphChannelTrack) -> None:
+        """Connect track signals for synchronized pan/zoom."""
+        plot_item = track.view.get_widget().getPlotItem()
+
+        # Connect view range changed signal
+        plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+
+    def _configure_track_defaults(
+        self, track: PyQtGraphChannelTrack, is_top_track: bool = False
+    ) -> None:
+        track.view.enable_hover_tooltip(
+            self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
+        )
+        # Only enable per-track labels when strip is absent
+        enable_labels = (
+            self._event_labels_enabled and is_top_track and self._event_strip_track is None
+        )
+        # Fill in safe defaults without clobbering any user-provided settings
+        options = self._event_label_options
+        if getattr(options, "mode", None) is None:
+            options.mode = "h_belt"
+        if getattr(options, "show_numbers_only", None) is None:
+            options.show_numbers_only = True
+        track.view.enable_event_labels(
+            enable_labels,
+            options=options if enable_labels else None,
+        )
+        if track.primary_line:
+            track.set_line_width(self._default_line_width)
+        self._apply_axis_font_to_track(track)
+        self._apply_axis_font_to_track(track)
+
+    def _configure_bottom_axis(
+        self,
+        plot_item: pg.PlotItem,
+        *,
+        is_bottom_track: bool,
+    ) -> None:
+        """Ensure only the bottom track shows X-axis labels/ticks."""
+        bottom_axis = plot_item.getAxis("bottom")
+        if bottom_axis is None:
+            return
+        plot_item.showAxis("bottom")
+        with contextlib.suppress(AttributeError):
+            bottom_axis.enableAutoSIPrefix(False)
+        bottom_axis.setVisible(True)
+        if is_bottom_track:
+            bottom_axis.setStyle(showValues=True)
+            bottom_axis.setLabel("Time (s)")
+            with contextlib.suppress(AttributeError):
+                bottom_axis.setTickLength(5, 0)
+            bottom_axis.setHeight(None)
+            with contextlib.suppress(AttributeError):
+                bottom_axis.label.show()
+                bottom_axis.showLabel(True)
+        else:
+            bottom_axis.setStyle(showValues=False, tickLength=0)
+            bottom_axis.setLabel("")
+            bottom_axis.setHeight(12)
+            with contextlib.suppress(AttributeError):
+                bottom_axis.label.hide()
+                bottom_axis.showLabel(False)
+
+    def _update_bottom_axis_assignments(self) -> None:
+        """Reapply bottom X-axis ownership based on current visibility.
+
+        Ensures that the lowest visible channel track owns the X-axis labels.
+        If no tracks are currently visible, falls back to the last spec so that
+        styling stays consistent once a track is shown again.
+        """
+
+        if not self._tracks or not self._channel_specs:
+            return
+
+        visible_ids = []
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            try:
+                is_visible = track.is_visible()
+            except Exception:
+                is_visible = self.is_channel_visible(spec.track_id)
+            if is_visible:
+                visible_ids.append(spec.track_id)
+        if visible_ids:
+            bottom_visible_id = visible_ids[-1]
+        else:
+            # If nothing is marked visible, pick the last existing track so the X-axis is still shown.
+            bottom_visible_id = next(
+                (
+                    spec.track_id
+                    for spec in reversed(self._channel_specs)
+                    if spec.track_id in self._tracks
+                ),
+                None,
+            )
+            if bottom_visible_id is None:
+                return
+
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            plot_item = track.view.get_widget().getPlotItem()
+            self._configure_bottom_axis(
+                plot_item,
+                is_bottom_track=(spec.track_id == bottom_visible_id),
+            )
+
+    def _apply_event_label_options(self) -> None:
+        if not self._tracks:
+            return
+        # Ensure defaults are present unless explicitly set by user/settings
+        if getattr(self._event_label_options, "mode", None) is None:
+            self._event_label_options.mode = "h_belt"
+        if getattr(self._event_label_options, "show_numbers_only", None) is None:
+            self._event_label_options.show_numbers_only = True
+        ordered_tracks = [
+            self._tracks[spec.track_id]
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks
+        ] or list(self._tracks.values())
+        label_track: PyQtGraphChannelTrack | None = None
+        for track in ordered_tracks:
+            if getattr(track, "is_visible", lambda: True)():
+                label_track = track
+                break
+        if label_track is None and ordered_tracks:
+            label_track = ordered_tracks[0]
+        for track in ordered_tracks:
+            enable = (
+                self._event_strip_track is None
+                and self._event_labels_enabled
+                and track is label_track
+            )
+            track.view.enable_event_labels(
+                enable,
+                options=self._event_label_options if enable else None,
+            )
+        if self._event_strip_track is not None and self._event_strip_widget is not None:
+            if self._event_labels_enabled:
+                self._event_strip_widget.setMaximumHeight(40)
+                self._event_strip_widget.setVisible(True)
+                self._event_strip_track.set_visible(True)
+                if self._event_entries:
+                    self._event_strip_track.set_events(
+                        self._event_entries, self._event_label_options
+                    )
+            else:
+                self._event_strip_widget.setMaximumHeight(0)
+                self._event_strip_widget.setVisible(False)
+                self._event_strip_track.set_visible(False)
+
+    def _apply_tooltip_settings(self) -> None:
+        for track in self._tracks.values():
+            track.view.enable_hover_tooltip(
+                self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
+            )
+
+    def _apply_grid_to_all_tracks(
+        self,
+        *,
+        x_enabled: bool | None = None,
+        y_enabled: bool | None = None,
+        alpha: float | None = None,
+    ) -> None:
+        """Apply the current grid visibility/settings to every track."""
+        if x_enabled is not None:
+            self._x_grid_visible = bool(x_enabled)
+        if y_enabled is not None:
+            self._y_grid_visible = bool(y_enabled)
+        if alpha is not None:
+            self._grid_alpha = max(0.0, min(float(alpha), 1.0))
+
+        tracks = self.all_tracks()
+        if not tracks:
+            return
+
+        last_index = len(tracks) - 1
+        for idx, track in enumerate(tracks):
+            plot_item = track.view.get_widget().getPlotItem()
+            plot_item.showGrid(
+                x=self._x_grid_visible,
+                y=self._y_grid_visible,
+                alpha=self._grid_alpha,
+            )
+            self._configure_bottom_axis(plot_item, is_bottom_track=(idx == last_index))
+
+    def _handle_axis_grid_request(self, visible: bool) -> None:
+        """Normalize grid toggles triggered through matplotlib-compatible axes."""
+        desired = bool(visible)
+        if desired == self._x_grid_visible and desired == self._y_grid_visible:
+            return
+        self.set_grid_visible(desired)
+
+    def set_axis_font(self, *, family: str | None = None, size: float | None = None) -> None:
+        changed = False
+        if family and family != self._axis_font_family:
+            self._axis_font_family = str(family)
+            changed = True
+        if size is not None and float(size) != self._axis_font_size:
+            self._axis_font_size = float(size)
+            changed = True
+        if changed:
+            for track in self._tracks.values():
+                self._apply_axis_font_to_track(track)
+
+    def axis_font(self) -> tuple[str, float]:
+        return self._axis_font_family, self._axis_font_size
+
+    def set_tick_font_size(self, size: float) -> None:
+        value = float(size)
+        if value == self._tick_font_size:
+            return
+        self._tick_font_size = value
+        for track in self._tracks.values():
+            self._apply_axis_font_to_track(track)
+
+    def tick_font_size(self) -> float:
+        return self._tick_font_size
+
+    def set_grid_visible(self, enabled: bool, *, alpha: float | None = None) -> None:
+        """Show/hide the shared grid across all tracks."""
+        self._apply_grid_to_all_tracks(x_enabled=enabled, y_enabled=enabled, alpha=alpha)
+
+    def grid_visible(self) -> bool:
+        """Return whether the shared grid is currently visible."""
+        return self._x_grid_visible
+
+    def grid_state(self) -> tuple[bool, bool, float]:
+        """Return current grid visibility flags and alpha."""
+        return self._x_grid_visible, self._y_grid_visible, self._grid_alpha
+
+    def set_window_background_color(self, color: tuple[int, int, int]) -> None:
+        if color is None:
+            self._window_bg_color = None
+            return
+        r, g, b = (int(c) for c in color)
+        self._window_bg_color = (r, g, b)
+        self.widget.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
+
+    def window_background_color(self) -> tuple[int, int, int] | None:
+        return self._window_bg_color
+
+    def set_plot_background_color(self, color: tuple[int, int, int]) -> None:
+        if color is None:
+            self._plot_bg_color = None
+            return
+        r, g, b = (int(c) for c in color)
+        self._plot_bg_color = (r, g, b)
+        for track in self._tracks.values():
+            plot_widget = track.view.get_widget()
+            plot_widget.setBackground(self._plot_bg_color)
+
+    def plot_background_color(self) -> tuple[int, int, int] | None:
+        return self._plot_bg_color
+
+    def set_default_line_width(self, width: float) -> None:
+        value = float(width)
+        if value == self._default_line_width:
+            return
+        self._default_line_width = value
+        for track in self._tracks.values():
+            track.set_line_width(self._default_line_width)
+
+    def _count_visible_tracks(self) -> int:
+        """Count currently visible channel tracks."""
+        count = 0
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is not None and track.is_visible():
+                count += 1
+        return count
+
+    def _estimate_track_height(self, track: PyQtGraphChannelTrack) -> float:
+        """Approximate the pixel height of a track widget."""
+
+        # First try the real widget height if available
+        try:
+            widget = track.view.get_widget()
+            actual_height = float(widget.height())
+            if actual_height > 0:
+                return actual_height
+        except Exception:
+            pass
+
+        # Fallback: estimate using layout geometry and height ratios
+        container_height = float(max(self.widget.height(), self.layout.geometry().height(), 1))
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        total_ratio = float(sum(max(spec.height_ratio, 0.05) for spec in visible_specs) or 1.0)
+        track_spec = getattr(track, "spec", None)
+        ratio = max(float(getattr(track_spec, "height_ratio", 1.0)), 0.05)
+        spacing = float(max(self.layout.spacing(), 0))
+        gap_per_track = spacing * max(len(visible_specs) - 1, 0) / max(len(visible_specs), 1)
+        estimated = container_height * (ratio / total_ratio) - gap_per_track
+        return max(1.0, estimated)
+
+    def _recenter_axis_label(self, axis, track_height: float) -> None:
+        """Position the axis label so it remains vertically centered within the track."""
+        if axis is None or not hasattr(axis, "label"):
+            return
+        try:
+            label = axis.label
+            br = label.boundingRect()
+            height = track_height if track_height > 0 else float(axis.size().height())
+            nudge = 5
+            y = height / 2.0 + br.width() / 2.0
+            if getattr(axis, "orientation", "") == "left":
+                x = -nudge
+            elif getattr(axis, "orientation", "") == "right":
+                x = float(axis.size().width()) - br.height() + nudge
+            else:
+                return
+            label.setPos(x, y)
+            axis.picture = None
+        except Exception:
+            with contextlib.suppress(Exception):
+                axis.resizeEvent()
+
+    def _recenter_bottom_label(self, axis) -> None:
+        """Center the bottom axis label horizontally."""
+        if axis is None or not hasattr(axis, "label"):
+            return
+        try:
+            label = axis.label
+            br = label.boundingRect()
+            width = float(axis.size().width())
+            height = float(axis.size().height())
+            nudge = 5
+            x = width / 2.0 - br.width() / 2.0
+            y = height - br.height() + nudge
+            label.setPos(x, y)
+            axis.picture = None
+        except Exception:
+            with contextlib.suppress(Exception):
+                axis.resizeEvent()
+
+    def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
+        plot_item = track.view.get_widget().getPlotItem()
+
+        height_px = self._estimate_track_height(track)
+
+        # Scale fonts to the available track height; clamp to readable bounds
+        def _clamp(value: float, lo: int, hi: int) -> int:
+            return int(max(lo, min(hi, round(value))))
+
+        tick_size = _clamp(height_px * 0.045, 10, 18)
+        ylabel_size = _clamp(height_px * 0.06, 12, 28)
+        xlabel_size = int(self._axis_font_size)  # Keep x-axis title a steady, readable size
+
+        ylabel_font = QFont(self._axis_font_family, ylabel_size)
+        xlabel_font = QFont(self._axis_font_family, xlabel_size)
+        tick_font = QFont(self._axis_font_family, tick_size)
+
+        left_axis = plot_item.getAxis("left")
+        left_axis.label.setFont(ylabel_font)
+        with contextlib.suppress(AttributeError):
+            left_axis.setTickFont(tick_font)
+            left_axis.setTickLength(5, 0)
+        self._recenter_axis_label(left_axis, height_px)
+
+        visible_specs = [
+            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
+        ]
+        if visible_specs:
+            bottom_visible_id = visible_specs[-1].track_id
+        elif self._channel_specs:
+            bottom_visible_id = self._channel_specs[-1].track_id
+        else:
+            bottom_visible_id = track.id
+
+        is_bottom = track.id == bottom_visible_id
+        if is_bottom:
+            bottom_axis = plot_item.getAxis("bottom")
+            bottom_axis.label.setFont(xlabel_font)
+            with contextlib.suppress(AttributeError):
+                bottom_axis.setTickFont(tick_font)
+            self._recenter_bottom_label(bottom_axis)
+
+    def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:
+        if color is None:
+            return None
+        if (
+            isinstance(color, tuple)
+            and 3 <= len(color) <= 4
+            or isinstance(color, list)
+            and 3 <= len(color) <= 4
+        ):
+            comps = list(color)
+        elif isinstance(color, str):
+            qcolor = QColor(color)
+            if not qcolor.isValid():
+                return None
+            comps = [qcolor.redF(), qcolor.greenF(), qcolor.blueF(), qcolor.alphaF()]
+        else:
+            return None
+        if len(comps) == 3:
+            comps.append(1.0)
+        try:
+            normalized: list[float] = []
+            for value in comps[:4]:
+                val = float(value)
+                normalized_val = (
+                    max(0.0, min(255.0, val)) / 255.0 if val > 1.0 else max(0.0, min(1.0, val))
+                )
+                normalized.append(normalized_val)
+            normalized_tuple = cast(tuple[float, float, float, float], tuple(normalized))
+            return normalized_tuple
+        except Exception:
+            return None
+
+    def add_time_window_listener(self, callback: Callable[[float, float], None]) -> None:
+        """Register a callback for time window changes."""
+        if callback in self._time_window_listeners:
+            return
+        self._time_window_listeners.append(callback)
+
+    def remove_time_window_listener(self, callback: Callable[[float, float], None]) -> None:
+        """Unregister a previously added time window listener."""
+        with contextlib.suppress(ValueError):
+            self._time_window_listeners.remove(callback)
+
+    def _notify_time_window_changed(self) -> None:
+        if self._current_window is None:
+            return
+        listeners = list(self._time_window_listeners)
+        for listener in listeners:
+            try:
+                listener(*self._current_window)
+            except Exception:
+                log.exception("Time window listener failed")
+
+    def _on_track_range_changed(self, view_box) -> None:
+        """Handle range change from any track (synchronize all tracks)."""
+        # Get the new X range
+        x_range = view_box.viewRange()[0]
+        x0, x1 = float(x_range[0]), float(x_range[1])
+
+        # Update internal state
+        self._current_window = (x0, x1)
+
+        # Synchronize all other tracks (block signals to avoid recursion)
+        for track in self._tracks.values():
+            plot_item = track.view.get_widget().getPlotItem()
+            with contextlib.suppress(Exception):
+                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
+            track.update_window(x0, x1)
+            plot_item.setXRange(x0, x1, padding=0)
+            plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+
+        previous_flag = self._range_change_user_driven
+        self._range_change_user_driven = True
+        try:
+            self._notify_time_window_changed()
+        finally:
+            self._range_change_user_driven = previous_flag
+        self.debug_dump_state("range_changed")
+
+    def set_model(self, model: TraceModel) -> None:
+        """Set the trace data model for all tracks."""
+        self._model = model
+
+        for track in self._tracks.values():
+            track.set_model(model)
+        self._apply_grid_to_all_tracks()
+
+        # Set initial window to full range
+        if model is not None:
+            x0, x1 = model.full_range
+            self.set_time_window(x0, x1)
+        self.debug_dump_state("set_trace_model (after)")
+
+    def set_time_window(self, x0: float, x1: float) -> None:
+        """Set the visible time window for all tracks."""
+        self._current_window = (x0, x1)
+
+        for track in self._tracks.values():
+            # Block signals temporarily
+            plot_item = track.view.get_widget().getPlotItem()
+            with contextlib.suppress(Exception):
+                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
+
+            track.update_window(x0, x1)
+            plot_item.setXRange(x0, x1, padding=0)
+
+            # Reconnect signals
+            plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+
+        previous_flag = self._range_change_user_driven
+        self._range_change_user_driven = False
+        try:
+            self._notify_time_window_changed()
+        finally:
+            self._range_change_user_driven = previous_flag
+        self.debug_dump_state("set_time_window (after)")
+        self.log_data_and_view_ranges("time_window_changed")
+
+    def set_events(
+        self,
+        times: list[float],
+        colors: list[str] | None = None,
+        labels: list[str] | None = None,
+        label_meta: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Set event markers for all tracks.
+
+        Args:
+            times: Event timestamps
+            colors: Event colors (optional)
+            labels: Event labels (optional)
+            label_meta: Event label metadata (matplotlib PlotHost compatibility, ignored)
+        """
+        self._event_times = list(times)
+        self._event_colors = None if colors is None else list(colors)
+        self._event_labels = [] if labels is None else list(labels)
+        self._event_label_meta = None if label_meta is None else list(label_meta)
+
+        entries: list[EventEntryV3] = []
+        for idx, t in enumerate(self._event_times):
+            text = ""
+            if self._event_labels and idx < len(self._event_labels):
+                text = self._event_labels[idx]
+            if not text:
+                text = str(idx + 1)
+            meta_payload = {}
+            if self._event_label_meta and idx < len(self._event_label_meta):
+                candidate = self._event_label_meta[idx]
+                if isinstance(candidate, dict):
+                    meta_payload.update(candidate)
+            if colors and idx < len(colors):
+                meta_payload.setdefault("color", colors[idx])
+            entries.append(
+                EventEntryV3(
+                    t=float(t),
+                    text=str(text),
+                    meta=meta_payload,
+                    index=idx + 1,
+                )
+            )
+        self._event_entries = entries
+
+        for track in self._tracks.values():
+            track.set_events(times, colors, labels, label_meta=self._event_label_meta)
+        if self._event_strip_track is not None and self._event_strip_widget is not None:
+            if self._event_labels_enabled:
+                self._event_strip_widget.setMaximumHeight(40)
+                self._event_strip_widget.setVisible(True)
+                self._event_strip_track.set_visible(True)
+                self._event_strip_track.set_events(entries, self._event_label_options)
+            else:
+                self._event_strip_widget.setMaximumHeight(0)
+                self._event_strip_widget.setVisible(False)
+                self._event_strip_track.set_visible(False)
+        self._apply_event_label_options()
+
+    def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:
+        """Get track by ID."""
+        return self._tracks.get(track_id)
+
+    def track(self, track_id: str) -> PyQtGraphChannelTrack | None:
+        """Get track by ID (matplotlib PlotHost compatibility)."""
+        return self.get_track(track_id)
+
+    def all_tracks(self) -> list[PyQtGraphChannelTrack]:
+        """Get all tracks in order."""
+        return [
+            self._tracks[spec.track_id]
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks
+        ]
+
+    def autoscale_all_tracks(self, margin: float = 0.05) -> None:
+        """Autoscale Y-axis for all tracks."""
+        for track in self._tracks.values():
+            track.autoscale(margin=margin)
+
+    def get_widget(self) -> QWidget:
+        """Get the main widget for embedding in UI."""
+        return self.widget
+
+    def get_render_backend(self) -> str:
+        """Get the rendering backend identifier."""
+        return "pyqtgraph"
+
+    def is_user_range_change_active(self) -> bool:
+        """Return True if the latest time-window update originated from user input."""
+        return bool(self._range_change_user_driven)
+
+    # Compatibility properties/methods for matplotlib PlotHost interface
+    @property
+    def figure(self):
+        """Compatibility property - PyQtGraph doesn't use matplotlib figure."""
+        return None
+
+    def bottom_axis(self):
+        """Get the bottom axis (last track's plot item).
+
+        Returns:
+            PyQtGraphAxesCompat wrapper with matplotlib-compatible interface
+        """
+        if not self._channel_specs:
+            return None
+        last_track_id = self._channel_specs[-1].track_id
+        track = self._tracks.get(last_track_id)
+        if track:
+            # Return the wrapped axes object, not the raw AxisItem
+            return track.ax
+        return None
+
+    def apply_style(self, style: dict[str, Any]) -> None:
+        """Apply visual styling to all tracks."""
+        for track in self._tracks.values():
+            track.view.apply_style(style)
+
+        # Update widget background
+        if "background_color" in style:
+            bg = style["background_color"]
+            self.widget.setStyleSheet(f"background-color: {bg};")
+
+    def _schedule_draw(self) -> None:
+        """Schedule a draw (compatibility method - PyQtGraph updates automatically)."""
+        # PyQtGraph handles drawing automatically, so this is a no-op
+        pass
+
+    def set_event_highlight_style(self, color: str | None = None, alpha: float = 0.2) -> None:
+        """Set event highlight style.
+
+        Args:
+            color: Highlight color
+            alpha: Transparency (0-1)
+        """
+        self._event_highlight_overlay.set_style(color=color, alpha=alpha)
+
+    def set_time_cursor(self, time: float | None, visible: bool = True) -> None:
+        """Set time cursor position and visibility.
+
+        Args:
+            time: Time value to position cursor at (None to hide)
+            visible: Whether cursor should be visible
+        """
+        if time is None:
+            self._time_cursor_overlay.set_visible(False)
+        else:
+            self._time_cursor_overlay.set_time(time)
+            self._time_cursor_overlay.set_visible(visible)
+
+    def set_event_highlight(self, time: float | None, visible: bool = True) -> None:
+        """Set event highlight position and visibility.
+
+        Args:
+            time: Time value to highlight (None to clear)
+            visible: Whether highlight should be visible
+        """
+        if time is None:
+            self._event_highlight_overlay.clear()
+        else:
+            self._event_highlight_overlay.set_time(time)
+            self._event_highlight_overlay.set_visible(visible)
+
+    def clear_event_highlight(self) -> None:
+        """Clear event highlight."""
+        self._event_highlight_overlay.clear()
+
+    def highlight_event(self, time_s: float | None, *, visible: bool = True) -> None:
+        """Highlight a selected event across all tracks (matplotlib PlotHost compatibility).
+
+        Args:
+            time_s: Time value to highlight (None to clear)
+            visible: Whether highlight should be visible
+        """
+        self.set_event_highlight(time_s, visible)
+
+    def primary_axis(self):
+        """Get the primary (first) axis (matplotlib PlotHost compatibility)."""
+        if not self._channel_specs:
+            return None
+        first_id = self._channel_specs[0].track_id
+        track = self._tracks.get(first_id)
+        return None if track is None else track.ax
+
+    def set_trace_model(self, model: TraceModel) -> None:
+        """Set trace model (matplotlib PlotHost compatibility - alias for set_model)."""
+        self.set_model(model)
+        self.debug_dump_state("set_trace_model (alias)")
+
+    def set_shared_xlabel(self, text: str) -> None:
+        """Set xlabel on bottom axis (matplotlib PlotHost compatibility)."""
+        if not self._channel_specs:
+            return
+        last_track_id = self._channel_specs[-1].track_id
+        track = self._tracks.get(last_track_id)
+        if track:
+            track.view.get_widget().getPlotItem().setLabel("bottom", text)
+
+    def set_event_lines_visible(self, visible: bool) -> None:
+        """Set event line visibility (matplotlib PlotHost compatibility).
+
+        Note: PyQtGraph tracks handle event visibility internally.
+        This is a no-op for compatibility.
+        """
+        # TODO: Implement event line visibility control if needed
+        pass
+
+    def set_annotation_entries(self, entries: list) -> None:
+        """Set annotation entries (matplotlib PlotHost compatibility).
+
+        Note: PyQtGraph doesn't use annotation lanes yet.
+        This is a no-op for compatibility.
+        """
+        # TODO: Implement annotation lane if needed
+        pass
+
+    def annotation_text_objects(self) -> list:
+        """Get annotation text objects (matplotlib PlotHost compatibility).
+
+        Returns:
+            Empty list (PyQtGraph uses different annotation system)
+        """
+        # TODO: Return PyQtGraph text items if needed
+        return []
+
+    # Event label configuration methods (matplotlib PlotHost compatibility)
+    # These are stubs for now - PyQtGraph uses different event labeling system
+
+    def set_event_highlight_alpha(self, alpha: float) -> None:
+        """Set event highlight alpha transparency."""
+        alpha = max(0.0, min(float(alpha), 1.0))
+        self._event_highlight_overlay.set_style(alpha=alpha)
+
+    def event_highlight_alpha(self) -> float:
+        """Get current event highlight alpha."""
+        return float(self._event_highlight_overlay.alpha())
+
+    def current_window(self) -> tuple[float, float] | None:
+        """Get current time window."""
+        return self._current_window
+
+    def full_range(self) -> tuple[float, float] | None:
+        """Get full time range from model."""
+        if self._model is None:
+            return None
+        start, end = self._model.full_range
+        return float(start), float(end)
+
+    def axes(self) -> list:
+        """Get all axes (matplotlib PlotHost compatibility)."""
+        return [track.ax for track in self._tracks.values()]
+
+    def layout_state(self) -> LayoutState:
+        """Get layout state snapshot."""
+        return LayoutState(
+            order=[spec.track_id for spec in self._channel_specs],
+            height_ratios={spec.track_id: spec.height_ratio for spec in self._channel_specs},
+            visibility={track.id: track.is_visible() for track in self._tracks.values()},
+        )
+
+    def channel_specs(self) -> list[ChannelTrackSpec]:
+        """Get channel specifications."""
+        from copy import copy
+
+        return [copy(spec) for spec in self._channel_specs]
+
+    def autoscale_all(self, *, margin: float = 0.05) -> None:
+        """Autoscale all tracks."""
+        self.autoscale_all_tracks(margin=margin)
+
+    def set_autoscale_y_enabled(self, enabled: bool) -> None:
+        """Enable/disable Y-axis autoscaling for all tracks."""
+        self.debug_dump_state(f"set_autoscale_y_enabled (request={enabled})")
+        for track in self._tracks.values():
+            track.view.set_autoscale_y(enabled)
+
+    def is_autoscale_y_enabled(self) -> bool:
+        """Check if Y-axis autoscaling is enabled (checks first track)."""
+        if not self._tracks:
+            return True  # Default to enabled
+        first_track = next(iter(self._tracks.values()))
+        return bool(first_track.view.is_autoscale_enabled())
+
+    def use_track_event_lines(self, flag: bool) -> None:
+        """Control whether tracks draw their own event lines (compatibility stub)."""
+        # PyQtGraph tracks always handle their own event rendering
+        pass
+
+    def set_event_labels_visible(self, visible: bool) -> None:
+        """Set event labels visibility."""
+        self._event_labels_enabled = bool(visible)
+        self._apply_event_label_options()
+
+    def set_event_labels_v3_enabled(self, enabled: bool) -> None:
+        self.set_event_labels_visible(enabled)
+
+    def set_event_label_mode(self, mode: str) -> None:
+        normalized = str(mode or "").lower()
+        mapping = {
+            "vertical": "vertical",
+            "horizontal": "h_inside",
+            "horizontal_outside": "h_belt",
+            "h_inside": "h_inside",
+            "h_belt": "h_belt",
+        }
+        self._event_label_options.mode = mapping.get(normalized, "vertical")
+        self._apply_event_label_options()
+
+    def set_max_labels_per_cluster(self, max_labels: int) -> None:
+        self._event_label_options.max_labels_per_cluster = max(1, int(max_labels))
+        self._apply_event_label_options()
+
+    def set_cluster_style_policy(self, policy: str) -> None:
+        normalized = str(policy or "").lower()
+        valid = {"first", "most_common", "priority", "blend_color"}
+        if normalized not in valid:
+            normalized = "first"
+        self._event_label_options.style_policy = normalized
+        self._apply_event_label_options()
+
+    def set_label_lanes(self, lanes: int) -> None:
+        self._event_label_options.lanes = max(1, int(lanes))
+        self._apply_event_label_options()
+
+    def set_belt_baseline(self, baseline: bool) -> None:
+        self._event_label_options.belt_baseline = bool(baseline)
+        self._apply_event_label_options()
+
+    def set_event_label_span_siblings(self, span: bool) -> None:
+        self._event_label_options.span_siblings = bool(span)
+        self._apply_event_label_options()
+
+    def set_event_label_gap(self, pixels: int) -> None:
+        self._event_label_options.min_px = max(1, int(pixels))
+        self._apply_event_label_options()
+
+    def set_auto_event_label_mode(self, auto_mode: bool) -> None:
+        self._auto_event_label_mode = bool(auto_mode)
+
+    def set_label_density_thresholds(
+        self, *, compact: float | None = None, belt: float | None = None
+    ) -> None:
+        self._label_density_thresholds = {"compact": compact, "belt": belt}
+
+    def set_label_outline_enabled(self, enabled: bool) -> None:
+        self._event_label_options.outline_enabled = bool(enabled)
+        self._apply_event_label_options()
+
+    def set_label_outline(self, width: float, color: Any) -> None:
+        self._event_label_options.outline_width = max(0.0, float(width))
+        self._event_label_options.outline_color = self._normalize_color_tuple(color)
+        self._apply_event_label_options()
+
+    def set_label_tooltips_enabled(self, enabled: bool) -> None:
+        self._hover_tooltip_enabled = bool(enabled)
+        self._apply_tooltip_settings()
+
+    def set_tooltip_proximity(self, proximity: float) -> None:
+        self._tooltip_proximity = float(proximity)
+        # Placeholder - PyQtGraph tooltips currently ignore proximity
+
+    def set_tooltip_precision(self, precision: int) -> None:
+        self._hover_tooltip_precision = max(0, int(precision))
+        self._apply_tooltip_settings()
+
+    def set_compact_legend_enabled(self, enabled: bool) -> None:
+        self._compact_legend_enabled = bool(enabled)
+
+    def set_compact_legend_location(self, location: str) -> None:
+        self._compact_legend_location = str(location)
+
+    def set_event_base_style(self, **kwargs) -> None:
+        """Set event base style from keyword arguments."""
+        font_family = kwargs.get("font_family")
+        if font_family:
+            self._event_label_options.font_family = str(font_family)
+        font_size = kwargs.get("font_size")
+        if font_size is not None:
+            self._event_label_options.font_size = float(font_size)
+        if "bold" in kwargs:
+            self._event_label_options.font_bold = bool(kwargs["bold"])
+        if "italic" in kwargs:
+            self._event_label_options.font_italic = bool(kwargs["italic"])
+        color = kwargs.get("color")
+        if color:
+            self._event_label_options.font_color = str(color)
+        if "show_numbers_only" in kwargs:
+            self._event_label_options.show_numbers_only = bool(kwargs["show_numbers_only"])
+        self._apply_event_label_options()
+
+    # Additional core PlotHost methods for full compatibility
+
+    def clear(self) -> None:
+        """Clear all tracks and reset to initial state."""
+        # Clear all tracks
+        for _track_id, track in list(self._tracks.items()):
+            widget = track.widget
+            self.layout.removeWidget(widget)
+            widget.setParent(None)
+
+        self._tracks.clear()
+        self._channel_specs.clear()
+        self._model = None
+        self._current_window = None
+        self._event_times = []
+        self._event_colors = None
+        self._event_labels = []
+        self._event_label_meta = None
+
+    def tracks(self) -> list[PyQtGraphChannelTrack]:
+        """Get all tracks as a list."""
+        return list(self._tracks.values())
+
+    def suspend_updates(self) -> None:
+        """Suspend updates for batching operations (compatibility stub)."""
+        # PyQtGraph updates automatically, so this is a no-op
+        pass
+
+    def resume_updates(self) -> None:
+        """Resume updates after batching (compatibility stub)."""
+        # PyQtGraph updates automatically, so this is a no-op
+        pass
+
+    def track_for_axes(self, axes) -> PyQtGraphChannelTrack | None:
+        """Get track for given axes (matplotlib PlotHost compatibility)."""
+        # In PyQtGraph, we can try to match by the axes object
+        for track in self._tracks.values():
+            if track.ax == axes or track.view.get_widget().getPlotItem() == axes:
+                return track
+        return None
+
+    def _emit_click(self, track_id: str, x: float, y: float, button: int, event: Any) -> None:
+        handler = self._click_handler
+        if callable(handler):
+            try:
+                handler(track_id, x, y, button, event)
+            except Exception:
+                log.debug("Click handler failed for track %s", track_id, exc_info=True)
+
+    def zoom_at(self, center: float, factor: float) -> None:
+        """Zoom around a given time coordinate."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        span = x1 - x0
+        if span <= 0:
+            return
+        new_span = max(span * factor, 1e-6)
+        half = new_span / 2.0
+        new_x0 = center - half
+        new_x1 = center + half
+        self.set_time_window(new_x0, new_x1)
+
+    def scroll_by(self, delta: float) -> None:
+        """Scroll the current time window by delta seconds."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        self.set_time_window(x0 + delta, x1 + delta)
+
+    def center_on_time(self, time_value: float) -> None:
+        """Recenter the current window around ``time_value`` without changing span."""
+        # Determine current span
+        window = self.current_window()
+        if window is None:
+            window = self.full_range()
+        full_range = self.full_range()
+        if window is None or full_range is None:
+            return
+
+        x0, x1 = window
+        span = x1 - x0
+        fr_min, fr_max = full_range
+        fr_span = fr_max - fr_min
+        if fr_span <= 0:
+            return
+        if span <= 0:
+            span = fr_span
+
+        half = span / 2.0
+        new_start = time_value - half
+        new_end = time_value + half
+
+        if span >= fr_span:
+            new_start, new_end = fr_min, fr_max
+        else:
+            if new_start < fr_min:
+                new_start = fr_min
+                new_end = fr_min + span
+            elif new_end > fr_max:
+                new_end = fr_max
+                new_start = fr_max - span
+
+        self.set_time_window(new_start, new_end)
+
+    # Event label configuration getters (return defaults for PyQtGraph)
+
+    def event_labels_v3_enabled(self) -> bool:
+        """Get whether v3 event labels are enabled."""
+        return False  # PyQtGraph uses its own labeling
+
+    def max_labels_per_cluster(self) -> int:
+        """Get max labels per cluster."""
+        return 1
+
+    def cluster_style_policy(self) -> str:
+        """Get cluster style policy."""
+        return "first"
+
+    def event_label_lanes(self) -> int:
+        """Get number of label lanes."""
+        return 3
+
+    def belt_baseline_enabled(self) -> bool:
+        """Get whether belt baseline is enabled."""
+        return True
+
+    def span_event_lines_across_siblings(self) -> bool:
+        """Get whether event lines span across siblings."""
+        return True
+
+    def auto_event_label_mode(self) -> bool:
+        """Get whether auto event label mode is enabled."""
+        return False
+
+    def label_density_thresholds(self) -> tuple[float, float]:
+        """Get label density thresholds."""
+        return (0.8, 0.25)
+
+    def label_outline_settings(
+        self,
+    ) -> tuple[bool, float, tuple[float, float, float, float] | None]:
+        """Get label outline settings."""
+        return (True, 2.0, (1.0, 1.0, 1.0, 0.9))
+
+    def label_tooltips_enabled(self) -> bool:
+        """Get whether label tooltips are enabled."""
+        return bool(getattr(self, "_hover_tooltip_enabled", True))
+
+    def tooltip_proximity(self) -> int:
+        """Get tooltip proximity in pixels."""
+        return int(getattr(self, "_tooltip_proximity", 10))
+
+    def tooltip_precision(self) -> int:
+        """Get tooltip precision in decimals."""
+        return int(getattr(self, "_hover_tooltip_precision", 3))
+
+    def compact_legend_enabled(self) -> bool:
+        """Get whether compact legend is enabled."""
+        return False
+
+    def compact_legend_location(self) -> str:
+        """Get compact legend location."""
+        return "upper right"
+
+    def capture_view_state(self) -> ExportViewState:
+        """Capture current view state for export.
+
+        Returns:
+            ExportViewState with all current view parameters
+        """
+        # Get current view range from first visible track
+        xlim = (0.0, 1.0)
+        ylim = (0.0, 1.0)
+        if self._tracks:
+            first_track = next(iter(self._tracks.values()))
+            xlim = first_track.get_xlim()
+            ylim = first_track.get_ylim()
+
+        # Get height ratios
+        height_ratios = {spec.track_id: spec.height_ratio for spec in self._channel_specs}
+
+        # Get visible tracks
+        visible_tracks = [
+            track_id for track_id, track in self._tracks.items() if track.is_visible()
+        ]
+
+        # Capture style (basic for now)
+        style = {
+            "show_uncertainty": False,  # Can be configured
+            "background_color": CURRENT_THEME.get("window_bg", "#FFFFFF"),
+        }
+
+        return ExportViewState(
+            trace_model=self._model,
+            xlim=xlim,
+            ylim=ylim,
+            channel_specs=self._channel_specs,
+            visible_tracks=visible_tracks,
+            event_times=self._event_times,
+            event_colors=self._event_colors,
+            event_labels=self._event_labels,
+            style=style,
+            height_ratios=height_ratios,
+            show_grid=True,
+            show_legend=False,
+        )
+
+    def export_to_file(
+        self,
+        filename: str,
+        *,
+        dpi: int = 600,
+        figsize: tuple[float, float] | None = None,
+        format: str | None = None,
+        **kwargs,
+    ) -> None:
+        """Export current view to file using matplotlib for high quality.
+
+        Args:
+            filename: Output filename
+            dpi: Export DPI (default: 600 for publication quality)
+            figsize: Figure size in inches (width, height)
+            format: File format (auto-detected from filename if None)
+            **kwargs: Additional arguments for savefig
+        """
+        # Capture current view state
+        view_state = self.capture_view_state()
+
+        # Create export renderer
+        renderer = MatplotlibExportRenderer(dpi=dpi)
+
+        # Render with matplotlib
+        renderer.render(view_state, figsize=figsize)
+
+        # Save to file
+        renderer.save(filename, format=format, **kwargs)
+
+        # Cleanup
+        renderer.close()
+
+    def create_export_figure(
+        self,
+        dpi: int = 300,
+        figsize: tuple[float, float] | None = None,
+    ):
+        """Create a matplotlib Figure for export preview or customization.
+
+        Args:
+            dpi: Export DPI
+            figsize: Figure size in inches
+
+        Returns:
+            Matplotlib Figure
+        """
+        view_state = self.capture_view_state()
+        renderer = MatplotlibExportRenderer(dpi=dpi)
+        return renderer.render(view_state, figsize=figsize)
