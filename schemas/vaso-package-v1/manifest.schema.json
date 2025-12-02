@@ -1,0 +1,77 @@
+{
+  "$id": "https://vaso.dev/schemas/vaso-package-v1/manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Vaso Package Manifest",
+  "type": "object",
+  "required": [
+    "schema",
+    "format_version",
+    "package_id",
+    "created_utc",
+    "modified_utc",
+    "generator",
+    "summary"
+  ],
+  "properties": {
+    "schema": {
+      "const": "https://vaso.dev/schemas/vaso-package-v1.json"
+    },
+    "format_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$"
+    },
+    "package_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "created_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "modified_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "generator": {
+      "type": "object",
+      "required": [
+        "app",
+        "version"
+      ],
+      "properties": {
+        "app": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "title",
+        "datasets",
+        "events",
+        "has_embedded_blobs"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "datasets": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "events": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "has_embedded_blobs": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
+

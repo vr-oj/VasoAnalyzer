@@ -1,0 +1,33 @@
+{
+  "$id": "https://vaso.dev/schemas/vaso-package-v1/event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Event",
+  "type": "object",
+  "required": [
+    "id",
+    "dataset_id",
+    "t",
+    "label"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "dataset_id": {
+      "type": "string"
+    },
+    "t": {
+      "type": "number"
+    },
+    "label": {
+      "type": "string"
+    },
+    "lane": {
+      "type": "string"
+    },
+    "style": {
+      "type": "object"
+    }
+  }
+}
+

@@ -1,0 +1,80 @@
+{
+  "$id": "https://vaso.dev/schemas/vaso-package-v1/dataset.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dataset",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "modality",
+    "sampling",
+    "channels",
+    "provenance"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string"
+    },
+    "modality": {
+      "type": "string"
+    },
+    "sampling": {
+      "type": "object",
+      "required": [
+        "rate_hz"
+      ],
+      "properties": {
+        "rate_hz": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "time_zero": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "channels": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "key",
+          "unit"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "roi_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "imported_from": {
+          "type": "string"
+        },
+        "import_hash": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
+

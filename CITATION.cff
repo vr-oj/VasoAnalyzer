@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: VasoAnalyzer
+version: "2.2.5"
+authors:
+  - family-names: Vega Rodríguez
+    given-names: Osvaldo J.
+repository-code: https://github.com/vr-oj/VasoAnalyzer
+url: https://github.com/vr-oj/VasoAnalyzer
+license: CC-BY-NC-SA-4.0

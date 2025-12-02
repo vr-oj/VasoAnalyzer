@@ -1,0 +1,183 @@
+QGroupBox {
+  border: 1px solid #dddddd;
+  border-radius: 6px;
+  margin-top: 8px;
+  padding: 8px;
+  background: #ffffff;
+}
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  padding: 0 4px;
+  font-weight: bold;
+}
+QSpinBox, QDoubleSpinBox, QComboBox {
+  padding: 4px;
+  border: 1px solid #cccccc;
+  border-radius: 4px;
+  min-width: 60px;
+  background: #ffffff;
+}
+QTabWidget::pane {
+  border: none;
+}
+QTabBar::tab {
+  padding: 6px 12px;
+  background: #f0f0f0;
+  border: 1px solid #dddddd;
+  border-bottom: none;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
+}
+QTabBar::tab:selected {
+  background: #ffffff;
+  font-weight: bold;
+}
+
+QMenuBar {
+  background: #f7f7f7;
+  border-bottom: 1px solid #ccc;
+}
+QMenuBar::item:selected {
+  background: #e0e0e0;
+}
+QMenu {
+  background: #ffffff;
+  border: 1px solid #ccc;
+}
+
+/* ----- Buttons and dropdowns hover/press feedback ----- */
+QToolButton,
+QPushButton {
+  border-radius: 4px;
+}
+
+QToolButton:hover,
+QPushButton:hover {
+  background-color: #e9f1fb; /* subtle tint */
+  border: 1px solid #b0c4de;
+}
+
+QToolButton:pressed,
+QPushButton:pressed {
+  background-color: #d7e5fb;
+}
+
+QComboBox {
+  border-radius: 4px;
+}
+
+QComboBox:hover {
+  background-color: #e9f1fb;
+  border: 1px solid #b0c4de;
+}
+
+QFrame#ProjectCard {
+  background: #ffffff;
+  border: 1px solid #c5cedd;
+  border-radius: 9px;
+  padding: 3px 3px 6px 3px;
+  box-shadow: 0px 4px 10px rgba(0, 0, 0, 0.05);
+}
+
+QLabel#ProjectHeaderLabel {
+  font-weight: 700;
+  font-size: 10.5pt;
+  letter-spacing: 0.2px;
+  color: #111827;
+  font-family: "Arial";
+}
+
+QTreeWidget#ProjectTree {
+  background: transparent;
+  border: none;
+  padding: 4px 0 4px 0;
+  font-size: 13px;
+  font-family: ".AppleSystemUIFont";
+  color: #111827;
+}
+
+QTreeWidget#ProjectTree::item:selected {
+  background: #cfd9ff;
+  border-left: 3px solid #2e55cc;
+  color: #0f172a;
+  border-radius: 5px;
+}
+
+QTreeWidget#ProjectTree::item:hover {
+  background: #f2f5fb;
+}
+
+QTreeWidget#ProjectTree::item {
+  margin: 2px 6px;
+  padding: 6px 12px;
+  border-radius: 5px;
+  color: #111827;
+}
+
+/* Primary toolbar styling */
+QToolBar#PrimaryToolbar {
+  background: #f7f9fc;
+  border: 1px solid #d9e2f2;
+  border-radius: 10px;
+  padding: 6px 8px;
+  spacing: 2px;
+}
+
+QToolBar#PrimaryToolbar > QToolButton,
+QToolBar#PrimaryToolbar > QWidget > QToolButton {
+  background: #ffffff;
+  border: 1px solid #cfd8e5;
+  border-radius: 10px;
+  margin: 2px 4px;
+  padding: 6px 10px;
+  min-width: 56px;
+  color: #0f172a;
+  box-shadow: 0px 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+QToolBar#PrimaryToolbar > QToolButton:hover,
+QToolBar#PrimaryToolbar > QWidget > QToolButton:hover {
+  background: #edf3ff;
+  border-color: #b6c7ea;
+}
+
+QToolBar#PrimaryToolbar > QToolButton:pressed,
+QToolBar#PrimaryToolbar > QWidget > QToolButton:pressed {
+  background: #d9e4ff;
+  border-color: #9cb5e8;
+}
+
+/* Plot toolbar (canvas) buttons share the same button look */
+QToolBar#PlotToolbar,
+QToolBar[objectName=\"PlotToolbar\"] {
+  background: #f7f9fc;
+  border: 1px solid #d9e2f2;
+  border-radius: 10px;
+  padding: 6px 8px;
+  spacing: 2px;
+}
+
+QToolBar#PlotToolbar > QToolButton,
+QToolBar[objectName=\"PlotToolbar\"] > QToolButton {
+  background: #ffffff;
+  border: 1px solid #cfd8e5;
+  border-radius: 10px;
+  margin: 2px 4px;
+  padding: 7px 12px;
+  min-width: 56px;
+  color: #0f172a;
+  box-shadow: 0px 1px 2px rgba(15, 23, 42, 0.08);
+}
+
+QToolBar#PlotToolbar > QToolButton:hover,
+QToolBar[objectName=\"PlotToolbar\"] > QToolButton:hover {
+  background: #edf3ff;
+  border-color: #b6c7ea;
+}
+
+QToolBar#PlotToolbar > QToolButton:pressed,
+QToolBar[objectName=\"PlotToolbar\"] > QToolButton:pressed {
+  background: #d9e4ff;
+  border-color: #9cb5e8;
+}

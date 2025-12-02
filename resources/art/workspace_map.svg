@@ -1,0 +1,25 @@
+<!-- resources/art/workspace_map.svg -->
+<svg width="640" height="240" viewBox="0 0 640 240" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style><![CDATA[
+      .frame{fill:#f7f9ff;stroke:#cfd7ea}
+      .bar{fill:#e6edff;stroke:#cfd7ea}
+      .panel{fill:#eef2ff;stroke:#cfd7ea}
+      .accent{fill:#dfe8ff;stroke:#cfd7ea}
+      .r12{rx:12;ry:12}
+      .r16{rx:16;ry:16}
+    ]]></style>
+  </defs>
+  <!-- overall frame -->
+  <rect x="10" y="10" width="620" height="220" class="frame r16"/>
+  <!-- header -->
+  <rect x="26" y="26" width="588" height="26" class="bar r12"/>
+  <!-- left sidebar -->
+  <rect x="26" y="60" width="96" height="110" class="accent r12"/>
+  <!-- central plot -->
+  <rect x="126" y="60" width="300" height="110" class="panel r12"/>
+  <!-- right snapshot viewer -->
+  <rect x="430" y="60" width="184" height="110" class="panel r12"/>
+  <!-- bottom event table -->
+  <rect x="26" y="176" width="588" height="38" class="panel r12"/>
+</svg>
