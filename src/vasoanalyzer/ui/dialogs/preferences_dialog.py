@@ -220,11 +220,16 @@ class PreferencesDialog(QDialog):
         snapshot_layout.setSpacing(8)
 
         self.snapshot_count_spin = QSpinBox()
-        self.snapshot_count_spin.setMinimum(5)
+        self.snapshot_count_spin.setMinimum(1)
         self.snapshot_count_spin.setMaximum(500)
-        self.snapshot_count_spin.setValue(10)
+        self.snapshot_count_spin.setValue(3)
         self.snapshot_count_spin.setSuffix(" snapshots")
         snapshot_layout.addRow("Keep last:", self.snapshot_count_spin)
+
+        self.embed_snapshots_checkbox = QCheckBox(
+            "Embed snapshot video into project (larger, fully portable)"
+        )
+        snapshot_layout.addRow("", self.embed_snapshots_checkbox)
 
         snapshot_help = QLabel(
             "<small>Projects keep multiple snapshots for recovery. Older snapshots are automatically "
@@ -411,7 +416,11 @@ class PreferencesDialog(QDialog):
         self.autosave_interval_combo.setCurrentIndex(interval_index)
 
         # Snapshots
-        self.snapshot_count_spin.setValue(self.settings.value("snapshots/keep_count", 10, type=int))
+        self.snapshot_count_spin.setValue(
+            self.settings.value("snapshots/keep_count", 3, type=int)
+        )
+        embed = self.settings.value("snapshots/embed_stacks", False, type=bool)
+        self.embed_snapshots_checkbox.setChecked(bool(embed))
 
         # Advanced
         self.auto_recovery_checkbox.setChecked(
@@ -450,6 +459,9 @@ class PreferencesDialog(QDialog):
 
         # Snapshots
         self.settings.setValue("snapshots/keep_count", self.snapshot_count_spin.value())
+        self.settings.setValue(
+            "snapshots/embed_stacks", self.embed_snapshots_checkbox.isChecked()
+        )
 
         # Advanced
         self.settings.setValue("recovery/enabled", self.auto_recovery_checkbox.isChecked())

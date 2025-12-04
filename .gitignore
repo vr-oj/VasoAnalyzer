@@ -1,0 +1,7 @@
+/scripts/__pycache__
+*.pyc
+/src/utils/__pycache__
+/src/vasoanalyzer/ui/windows/__pycache__
+*.pyc
+*.pyc
+.DS_Store

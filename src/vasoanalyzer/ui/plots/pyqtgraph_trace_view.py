@@ -55,7 +55,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # This is the single source of truth for scroll behavior
         view_box = PanOnlyViewBox(enableMenu=False)
         view_box.setMouseEnabled(x=True, y=False)  # Horizontal interactions only
-        view_box.setMouseMode(view_box.RectMode)  # Enable rectangle selection zoom
+        view_box.setMouseMode(view_box.PanMode)  # Default: grab to pan horizontally
 
         # Create plot widget with our custom ViewBox
         self._plot_widget = pg.PlotWidget(viewBox=view_box)
@@ -119,6 +119,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         # Click handling
         self._click_handler: Callable[[float, float, int, str, Any], None] | None = None
+        self._pin_items: list[tuple[pg.ScatterPlotItem, pg.TextItem]] = []
 
         # Initialize persistent hover label
         self._hover_text_item: pg.TextItem | None = None
@@ -139,6 +140,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         scene = self._plot_widget.scene()
         if scene is not None:
             scene.sigMouseClicked.connect(self._handle_mouse_clicked)
+
+    def view_box(self) -> PanOnlyViewBox:
+        """Return the underlying ViewBox for this trace view."""
+        return self._view_box
 
     def _init_hover_label(self) -> None:
         """Create a persistent hover label anchored to the plot."""
@@ -308,11 +313,17 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Set initial X range to full data range and render initial data
         if model is not None:
             x0, x1 = model.full_range
+            span = float(x1 - x0)
+
+            min_range = None
+            max_range = None
+            if span > 0:
+                min_range = max(span * 1e-6, 1e-6)
+                max_range = span
+
+            self._view_box.set_time_limits(x0, x1, min_x_range=min_range, max_x_range=max_range)
 
             # Constrain ViewBox to prevent panning beyond data boundaries
-            # setLimits restricts the user's ability to pan/zoom outside the specified range
-            self._view_box.setLimits(xMin=x0, xMax=x1)
-
             self._plot_item.setXRange(x0, x1, padding=0.02)
 
             # Render the initial data window
@@ -645,17 +656,6 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         finally:
             self._syncing_range = False
 
-    def set_ylim(self, y0: float, y1: float) -> None:
-        """Set Y-axis limits."""
-        self._plot_item.setYRange(y0, y1, padding=0)
-        trace_id = self._explicit_ylabel or self._mode or hex(id(self))
-        log.debug(
-            "[PLOT DEBUG] set_ylim trace=%s new_ylim=(%s, %s)",
-            trace_id,
-            y0,
-            y1,
-        )
-
     def get_xlim(self) -> tuple[float, float]:
         """Get current X-axis limits."""
         x_range = self._plot_item.viewRange()[0]
@@ -665,6 +665,20 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Get current Y-axis limits."""
         y_range = self._plot_item.viewRange()[1]
         return float(y_range[0]), float(y_range[1])
+
+    def set_ylim(self, y_min: float, y_max: float) -> None:
+        """Set the visible Y range using public ViewBox API."""
+        vb = self._view_box
+        vb.enableAutoRange(y=False)
+        vb.setRange(yRange=(float(y_min), float(y_max)), padding=0.0)
+        self._autoscale_y = False
+        trace_id = self._explicit_ylabel or self._mode or hex(id(self))
+        log.debug(
+            "[PLOT DEBUG] set_ylim trace=%s new_ylim=(%s, %s)",
+            trace_id,
+            y_min,
+            y_max,
+        )
 
     def autoscale_y(self) -> None:
         """Autoscale Y-axis to fit visible data."""
@@ -676,10 +690,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._apply_window(self._current_window)
 
     def set_autoscale_y(self, enabled: bool) -> None:
-        """Enable/disable Y-axis autoscaling."""
-        self._autoscale_y = enabled
+        """Enable/disable Y-axis autoscaling using public ViewBox API."""
+        vb = self._view_box
+        vb.enableAutoRange(y=bool(enabled))
         if enabled:
-            self.autoscale_y()
+            vb.autoRange()
+        self._autoscale_y = bool(enabled)
         trace_id = self._explicit_ylabel or self._mode or hex(id(self))
         log.debug("[PLOT DEBUG] set_autoscale_y trace=%s enabled=%s", trace_id, enabled)
 
@@ -691,6 +707,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Force a complete redraw."""
         if self._current_window is not None:
             self._apply_window(self._current_window)
+
+    def set_grid_visible(self, visible: bool) -> None:
+        """Toggle grid visibility."""
+        self._plot_item.showGrid(x=bool(visible), y=bool(visible))
 
     def current_window(self) -> TraceWindow | None:
         """Get the currently displayed data window."""
@@ -750,6 +770,51 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if not np.isfinite(ymin) or not np.isfinite(ymax):
             return None
         return ymin, ymax
+
+    def set_primary_line_style(
+        self,
+        color: str | None = None,
+        width: float | None = None,
+        style: str | None = None,
+    ) -> None:
+        """Update the primary line pen using Matplotlib-like arguments."""
+        if self.inner_curve is None:
+            return
+        pen_kwargs: dict[str, Any] = {}
+        if color is not None:
+            pen_kwargs["color"] = color
+        if width is not None:
+            pen_kwargs["width"] = float(width)
+        if style is not None:
+            style_map = {
+                "solid": Qt.SolidLine,
+                "dashed": Qt.DashLine,
+                "dashdot": Qt.DashDotLine,
+                "dotted": Qt.DotLine,
+            }
+            pen_kwargs["style"] = style_map.get(style, Qt.SolidLine)
+        if not pen_kwargs:
+            return
+        self.inner_curve.setPen(pg.mkPen(**pen_kwargs))
+
+    def clear_pins(self) -> None:
+        """Remove all pinned markers/labels from the plot."""
+        for marker, label in list(self._pin_items):
+            with contextlib.suppress(Exception):
+                self._plot_item.removeItem(marker)
+            with contextlib.suppress(Exception):
+                self._plot_item.removeItem(label)
+        self._pin_items.clear()
+
+    def add_pin(self, x: float, y: float, text: str) -> tuple[pg.ScatterPlotItem, pg.TextItem]:
+        """Add a pinned marker/label at the given data coordinates."""
+        marker = pg.ScatterPlotItem([x], [y], symbol="o", size=6)
+        label = pg.TextItem(text, anchor=(0, 1))
+        label.setPos(x, y)
+        self._plot_item.addItem(marker)
+        self._plot_item.addItem(label)
+        self._pin_items.append((marker, label))
+        return marker, label
 
     def set_xlabel(self, label: str) -> None:
         """Set X-axis label."""
@@ -873,6 +938,21 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             # Hide labels
             if self._event_labeler:
                 self._event_labeler.set_visible(False)
+
+    def set_event_labels_visible(self, visible: bool) -> None:
+        """Public setter for event label visibility."""
+        opts = self._event_labeler.options if self._event_labeler is not None else None
+        self.enable_event_labels(bool(visible), options=opts)
+
+    def are_event_labels_visible(self) -> bool:
+        """Return whether event labels are currently visible."""
+        return bool(self._event_labels_visible)
+
+    def event_label_options(self) -> LayoutOptionsV3 | None:
+        """Return current event labeler options if available."""
+        if self._event_labeler is None:
+            return None
+        return self._event_labeler.options
 
     def update_event_labels(self) -> None:
         """Update event label positions after view change."""

@@ -43,7 +43,10 @@ HEADER_TOOLTIPS = {
     "OD (µm)": "Outer diameter at the event",
     "Avg P (mmHg)": "Average pressure across the interval",
     "Set P (mmHg)": "Commanded set pressure",
-    "Frame": "Frame index if available",
+    "Trace idx (legacy)": (
+        "Imported from the events table; legacy trace/frame hint.\n"
+        "Trace/video sync is driven by event time (Time (s))."
+    ),
 }
 
 
@@ -214,7 +217,7 @@ class EventTableModel(QAbstractTableModel):
             headers.append("Avg P (mmHg)")
         if has_set_pressure:
             headers.append("Set P (mmHg)")
-        headers.append("Frame")
+        headers.append("Trace idx (legacy)")
         self._headers = headers
         self.set_review_states(list(review_states or []), suppress_layout=True)
         self.endResetModel()

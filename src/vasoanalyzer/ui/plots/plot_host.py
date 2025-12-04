@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import re
 import time
@@ -36,6 +37,8 @@ from vasoanalyzer.ui.simple_epoch_renderer import SimpleEpoch, SimpleEpochRender
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 __all__ = ["LayoutState", "PlotHost"]
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -548,6 +551,24 @@ class PlotHost:
 
     def current_window(self) -> tuple[float, float] | None:
         return self._current_window
+
+    def get_trace_view_range(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Return current (x_range, y_range) from the primary axis, if available."""
+        ax = self.primary_axis()
+        if ax is None:
+            return None
+        try:
+            xlim = cast(tuple[float, float], ax.get_xlim())
+            ylim = cast(tuple[float, float], ax.get_ylim())
+            x_range = (float(xlim[0]), float(xlim[1]))
+            y_range = (float(ylim[0]), float(ylim[1]))
+            log.debug("PlotHost.get_trace_view_range x=%s y=%s (event_times in seconds)", x_range, y_range)
+            return x_range, y_range
+        except Exception:
+            log.exception("Failed to fetch trace view range from PlotHost")
+            return None
 
     def full_range(self) -> tuple[float, float] | None:
         if self._model is None:

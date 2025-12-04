@@ -41,6 +41,7 @@ LIGHT_THEME = {
     "cursor_a": "#3366FF",
     "cursor_b": "#FF6B3D",
     "cursor_text": "#222222",
+    "snapshot_bg": "#2B2B2B",
 }
 
 DARK_THEME = dict(LIGHT_THEME)
@@ -85,6 +86,7 @@ DARK_THEME.update(
         "warning_bg": "#451A03",
         "warning_border": "#F97316",
         "warning_text": "#FDE68A",
+        "snapshot_bg": "#1F2933",
     }
 )
 

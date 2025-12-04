@@ -48,7 +48,7 @@ __all__ = [
 ]
 
 # Default snapshots retained when no preference is available
-DEFAULT_SNAPSHOT_KEEP_COUNT = 10
+DEFAULT_SNAPSHOT_KEEP_COUNT = 3
 
 
 # =============================================================================

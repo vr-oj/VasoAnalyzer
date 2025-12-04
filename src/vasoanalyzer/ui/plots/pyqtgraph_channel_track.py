@@ -83,6 +83,35 @@ class PyQtGraphChannelTrack:
         """Get the PyQtGraph widget for layout."""
         return self.view.get_widget()
 
+    def set_xlim(self, xmin: float, xmax: float) -> None:
+        """Set the visible X range for this track."""
+        self.view.set_xlim(xmin, xmax)
+
+    def set_ylim(self, ymin: float, ymax: float) -> None:
+        """Set the visible Y range for this track."""
+        self.view.set_ylim(ymin, ymax)
+
+    def set_grid_visible(self, visible: bool) -> None:
+        """Toggle grid visibility for this track."""
+        self.view.set_grid_visible(visible)
+
+    def clear_pins(self) -> None:
+        """Remove all pinned markers/labels."""
+        self.view.clear_pins()
+
+    def add_pin(self, x: float, y: float, text: str):
+        """Add a pin marker/label."""
+        return self.view.add_pin(x, y, text)
+
+    def set_primary_line_style(
+        self,
+        color: str | None = None,
+        width: float | None = None,
+        style: str | None = None,
+    ) -> None:
+        """Apply styling to the primary trace line."""
+        self.view.set_primary_line_style(color=color, width=width, style=style)
+
     @property
     def ax(self):
         """Get the plot axes (matplotlib compatibility).

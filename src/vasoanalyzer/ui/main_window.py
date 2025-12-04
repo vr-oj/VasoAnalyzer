@@ -3,6 +3,12 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
+# Snapshot viewer notes:
+# - Class: VasoAnalyzerApp (inline snapshot viewer built with QLabel + slider/controls).
+# - Created in: initUI() → vasoanalyzer.ui.shell.init_ui.init_ui builds snapshot_label/slider/controls.
+# - Data source: Sample.snapshots numpy stack or snapshot asset/path resolved via _ensure_sample_snapshots_loaded/_SnapshotLoadJob (npz/npy or TIFF via vasoanalyzer.io.tiffs.load_tiff); manual _load_snapshot_from_path also uses load_tiff then np.stack.
+# - Sync: trace["Time (s)"] is canonical. TIFF frames are aligned via trace["TiffPage"] → frame_trace_time and passed to SnapshotViewPG ImageView using xvals. jump_to_time(t) always consumes experiment seconds and mirrors the plot cursor + video.
+
 # mypy: ignore-errors
 
 # [A] ========================= IMPORTS AND GLOBAL CONFIG ============================
@@ -32,6 +38,7 @@ from PyQt5.QtCore import (
     QRunnable,
     QSettings,
     QSize,
+    QRectF,
     Qt,
     QThreadPool,
     QTimer,
@@ -124,11 +131,12 @@ from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
 from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
-from vasoanalyzer.ui.figure_composer import FigureComposerWindow
 from vasoanalyzer.ui.figure_composer_new import NewFigureComposerWindow
+from vasoanalyzer.ui.matplotlib_composer import MatplotlibComposerWindow
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
+from vasoanalyzer.ui.panels.snapshot_view_pg import SnapshotViewPG
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.theme import (
@@ -151,6 +159,20 @@ from .style_manager import PlotStyleManager
 from .update_checker import UpdateChecker
 
 log = logging.getLogger(__name__)
+_TIME_SYNC_DEBUG = bool(os.getenv("VA_TIME_SYNC_DEBUG"))
+
+
+def _log_time_sync(label: str, **fields) -> None:
+    """Conditional debug logger for time/frame sync flows."""
+
+    if not (_TIME_SYNC_DEBUG or log.isEnabledFor(logging.DEBUG)):
+        return
+    clean = {k: v for k, v in fields.items() if v is not None}
+    payload = ", ".join(f"{k}={v}" for k, v in clean.items())
+    if _TIME_SYNC_DEBUG:
+        log.info("[SYNC] %s %s", label, payload)
+    else:
+        log.debug("[SYNC] %s %s", label, payload)
 
 REVIEW_UNREVIEWED = "UNREVIEWED"
 REVIEW_CONFIRMED = "CONFIRMED"
@@ -239,7 +261,9 @@ class _SampleLoadJob(QRunnable):
 
                 from vasoanalyzer.storage.sqlite_store import ProjectStore
 
-                temp_store = ProjectStore(path=Path(self._staging_db_path), conn=thread_local_conn)
+                temp_store = ProjectStore(
+                    path=Path(self._staging_db_path), conn=thread_local_conn
+                )
 
                 # Wrap in a temporary repository
                 from vasoanalyzer.services.project_service import (
@@ -284,7 +308,9 @@ class _SampleLoadJob(QRunnable):
 
             if self._load_events:
                 self._emit_progress(70, "Loading events")
-                log.debug("Background job: loading events for dataset_id=%s", self._dataset_id)
+                log.debug(
+                    "Background job: loading events for dataset_id=%s", self._dataset_id
+                )
                 events_raw = repo.get_events(self._dataset_id)  # type: ignore[call-arg]
                 log.debug(
                     "Background job: loaded %d event rows",
@@ -295,7 +321,9 @@ class _SampleLoadJob(QRunnable):
 
             if self._load_results:
                 self._emit_progress(90, "Loading results")
-                analysis_results = project_module._load_sample_results(repo, self._dataset_id)
+                analysis_results = project_module._load_sample_results(
+                    repo, self._dataset_id
+                )
             self._emit_progress(100, "Finalizing")
         except Exception as exc:  # pragma: no cover - defensive UI logging
             self.signals.error.emit(self._token, self._sample, str(exc))
@@ -312,7 +340,9 @@ class _SampleLoadJob(QRunnable):
             if owned_ctx is not None:
                 close_project_ctx(owned_ctx)
 
-        self.signals.finished.emit(self._token, self._sample, trace_df, events_df, analysis_results)
+        self.signals.finished.emit(
+            self._token, self._sample, trace_df, events_df, analysis_results
+        )
 
 
 class _SnapshotLoadSignals(QObject):
@@ -470,11 +500,15 @@ class _SaveJob(QRunnable):
             if self._mode == "autosave":
                 self._emit_progress(20, "Autosaving project…")
                 autosave_path = autosave_project(self._project)
-                actual_path = autosave_path or path or getattr(self._project, "path", None)
+                actual_path = (
+                    autosave_path or path or getattr(self._project, "path", None)
+                )
                 self._emit_progress(80, "Writing autosave…")
             else:
                 self._emit_progress(20, "Serializing project…")
-                save_project_file(self._project, path=path, skip_optimize=self._skip_optimize)
+                save_project_file(
+                    self._project, path=path, skip_optimize=self._skip_optimize
+                )
                 actual_path = path or getattr(self._project, "path", None)
                 self._emit_progress(80, "Writing project…")
 
@@ -484,7 +518,9 @@ class _SaveJob(QRunnable):
         except Exception as exc:
             duration = time.perf_counter() - start
             self.signals.error.emit(str(exc))
-            self.signals.finished.emit(False, duration, path or getattr(self._project, "path", ""))
+            self.signals.finished.emit(
+                False, duration, path or getattr(self._project, "path", "")
+            )
         finally:
             # Ensure any store opened during the save is closed in the worker thread
             store = getattr(self._project, "_store", None)
@@ -611,10 +647,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.trace_data = None
         self.trace_file_path = None
         self.trace_model: TraceModel | None = None
+        self.trace_time: np.ndarray | None = None
+        self.frame_numbers: np.ndarray | None = None
+        self.frame_number_to_trace_idx: dict[int, int] = {}
+        self.frame_trace_time: np.ndarray | None = None
+        self.frame_trace_index: np.ndarray | None = None
         self.snapshot_frames = []
         self.frames_metadata = []
         self.frame_times = []
-        self.frame_trace_indices = []
         self.current_frame = 0
         self.snapshot_speed_multiplier = 1.0
         self.event_labels = []
@@ -642,7 +682,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.legend_settings = _copy_legend_settings(DEFAULT_LEGEND_SETTINGS)
         self.event_metadata = []
         self._last_event_import = {}
-        self._event_table_path = None  # path to the current sample's event table, if known
+        self._event_table_path = (
+            None  # path to the current sample's event table, if known
+        )
         self.sampling_rate_hz: float | None = None
         self.session_dirty = False
         self.last_autosave_path: str | None = None
@@ -657,13 +699,18 @@ class VasoAnalyzerApp(QMainWindow):
         self._active_save_path: str | None = None
         self._active_save_mode: str | None = None
         self._last_save_error: str | None = None
-        self._event_highlight_color = DEFAULT_STYLE.get("event_highlight_color", "#1D5CFF")
-        self._event_highlight_base_alpha = float(DEFAULT_STYLE.get("event_highlight_alpha", 0.95))
+        self._event_highlight_color = DEFAULT_STYLE.get(
+            "event_highlight_color", "#1D5CFF"
+        )
+        self._event_highlight_base_alpha = float(
+            DEFAULT_STYLE.get("event_highlight_alpha", 0.95)
+        )
         self._event_highlight_duration_ms = int(
             DEFAULT_STYLE.get("event_highlight_duration_ms", 2000)
         )
         self._event_highlight_elapsed_ms = 0
         self._event_highlight_timer = QTimer(self)
+        self._pg_time_sync_block = False
         self._event_highlight_timer.setSingleShot(False)
         self._event_highlight_timer.setInterval(40)
         self._event_highlight_timer.timeout.connect(self._on_event_highlight_tick)
@@ -690,7 +737,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.snapshot_viewer_action = None
         self.recent_files = []
         self.settings = QSettings("TykockiLab", "VasoAnalyzer")
-        self.onboarding_settings = QSettings(ONBOARDING_SETTINGS_ORG, ONBOARDING_SETTINGS_APP)
+        self.onboarding_settings = QSettings(
+            ONBOARDING_SETTINGS_ORG, ONBOARDING_SETTINGS_APP
+        )
         self._syncing_time_window = False
         self._axis_source_axis = None
         self._axis_xlim_cid: int | None = None
@@ -739,6 +788,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.zoom_dock = None
         self.scope_dock = None
         self.figure_composer = None
+        self._matplotlib_composer_windows: list[MatplotlibComposerWindow] = []
         self.current_experiment = None
         self.current_sample = None
         self._last_track_layout_sample_id: int | None = None
@@ -747,6 +797,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_meta: dict[str, Any] = {}
         self.data_cache: DataCache | None = None
         self._cache_root_hint: str | None = None
+        self.snapshot_view_pg: SnapshotViewPG | None = SnapshotViewPG(self)
+        if self.snapshot_view_pg is not None:
+            self.snapshot_view_pg.hide()
+            self.snapshot_view_pg.currentTimeChanged.connect(
+                self._on_snapshot_time_changed
+            )
         self._mirror_sources_enabled = False
         self._missing_assets: dict[tuple[int, str], MissingAsset] = {}
         self._relink_dialog: RelinkDialog | None = None
@@ -843,10 +899,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.itemChanged.connect(self.on_tree_item_changed)
         self.project_tree.itemSelectionChanged.connect(self.on_tree_selection_changed)
         self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
-        log.info("Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked")
+        log.info(
+            "Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked"
+        )
         # Single-click opens a sample; double-click is reserved for editing or opening figures
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.project_tree.customContextMenuRequested.connect(self.show_project_context_menu)
+        self.project_tree.customContextMenuRequested.connect(
+            self.show_project_context_menu
+        )
         self.project_tree.setAlternatingRowColors(True)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.project_dock)
         if hasattr(self, "showhide_menu"):
@@ -858,7 +918,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_toggle_btn.setCheckable(True)
         self.project_toggle_btn.setChecked(False)
         self.project_toggle_btn.setToolTip("Project")
-        self.project_toggle_btn.clicked.connect(lambda checked: self.project_dock.set_open(checked))
+        self.project_toggle_btn.clicked.connect(
+            lambda checked: self.project_dock.set_open(checked)
+        )
         self.project_dock.visibilityChanged.connect(self.project_toggle_btn.setChecked)
         self.toolbar.addWidget(self.project_toggle_btn)
         self.project_dock.hide()
@@ -891,13 +953,17 @@ class VasoAnalyzerApp(QMainWindow):
             self.showhide_menu.addAction(self.metadata_dock.toggleViewAction())
 
         # Keep toggle button state in sync with dock visibility.
-        self.metadata_dock.visibilityChanged.connect(self._on_metadata_visibility_changed)
+        self.metadata_dock.visibilityChanged.connect(
+            self._on_metadata_visibility_changed
+        )
 
         project_form = self.metadata_dock.project_form
         project_form.description_changed.connect(self.on_project_description_changed)
         project_form.tags_changed.connect(self.on_project_tags_changed)
         project_form.attachment_add_requested.connect(self.on_project_add_attachment)
-        project_form.attachment_remove_requested.connect(self.on_project_remove_attachment)
+        project_form.attachment_remove_requested.connect(
+            self.on_project_remove_attachment
+        )
         project_form.attachment_open_requested.connect(self.on_project_open_attachment)
 
         experiment_form = self.metadata_dock.experiment_form
@@ -907,7 +973,9 @@ class VasoAnalyzerApp(QMainWindow):
         sample_form = self.metadata_dock.sample_form
         sample_form.notes_changed.connect(self.on_sample_notes_changed)
         sample_form.attachment_add_requested.connect(self.on_sample_add_attachment)
-        sample_form.attachment_remove_requested.connect(self.on_sample_remove_attachment)
+        sample_form.attachment_remove_requested.connect(
+            self.on_sample_remove_attachment
+        )
         sample_form.attachment_open_requested.connect(self.on_sample_open_attachment)
 
         self.metadata_toggle_btn = QToolButton()
@@ -936,7 +1004,9 @@ class VasoAnalyzerApp(QMainWindow):
 
     def setup_scope_dock(self):
         self.scope_dock = ScopeDock(self)
-        self.scope_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
+        self.scope_dock.setAllowedAreas(
+            Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea
+        )
         self.addDockWidget(Qt.RightDockWidgetArea, self.scope_dock)
         self.scope_dock.hide()
 
@@ -973,7 +1043,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_state.clear()
         self._pending_sample_loads.clear()
         self._processing_pending_sample_loads = False
-        self._cache_root_hint = project.path if project and getattr(project, "path", None) else None
+        self._cache_root_hint = (
+            project.path if project and getattr(project, "path", None) else None
+        )
         self.data_cache = None
         self._missing_assets.clear()
         if self.action_relink_assets:
@@ -1001,7 +1073,9 @@ class VasoAnalyzerApp(QMainWindow):
             base_hint = self.current_project.path
         elif hint_path:
             try:
-                base_hint = Path(hint_path).expanduser().resolve(strict=False).parent.as_posix()
+                base_hint = (
+                    Path(hint_path).expanduser().resolve(strict=False).parent.as_posix()
+                )
             except Exception:
                 base_hint = Path(hint_path).expanduser().parent.as_posix()
         else:
@@ -1019,7 +1093,12 @@ class VasoAnalyzerApp(QMainWindow):
     def _project_base_dir(self) -> Path | None:
         if self.current_project and self.current_project.path:
             try:
-                return Path(self.current_project.path).expanduser().resolve(strict=False).parent
+                return (
+                    Path(self.current_project.path)
+                    .expanduser()
+                    .resolve(strict=False)
+                    .parent
+                )
             except Exception:
                 return Path(self.current_project.path).expanduser().parent
         return None
@@ -1032,7 +1111,9 @@ class VasoAnalyzerApp(QMainWindow):
             return None
         return f"{stat.st_size}-{int(stat.st_mtime)}"
 
-    def _update_sample_link_metadata(self, sample: SampleN, kind: str, path_obj: Path) -> None:
+    def _update_sample_link_metadata(
+        self, sample: SampleN, kind: str, path_obj: Path
+    ) -> None:
         path_attr = f"{kind}_path"
         hint_attr = f"{kind}_hint"
         relative_attr = f"{kind}_relative"
@@ -1177,7 +1258,9 @@ class VasoAnalyzerApp(QMainWindow):
         try:
             store = getattr(repo, "_store", None)
             handle = getattr(store, "handle", None) if store is not None else None
-            staging_path = getattr(handle, "staging_path", None) if handle is not None else None
+            staging_path = (
+                getattr(handle, "staging_path", None) if handle is not None else None
+            )
             if staging_path is not None:
                 staging_db_path = str(staging_path)
         except Exception:
@@ -1241,7 +1324,9 @@ class VasoAnalyzerApp(QMainWindow):
             self.statusBar().clearMessage()
 
     def _on_preload_error(self, _token: object, sample: SampleN, message: str) -> None:
-        log.debug("Preload error for %s: %s", getattr(sample, "name", "<unknown>"), message)
+        log.debug(
+            "Preload error for %s: %s", getattr(sample, "name", "<unknown>"), message
+        )
         self._preload_in_flight = max(0, self._preload_in_flight - 1)
         if self._preload_in_flight == 0 and self.statusBar() is not None:
             self.statusBar().clearMessage()
@@ -1421,8 +1506,12 @@ class VasoAnalyzerApp(QMainWindow):
                 target_dir = Path(base_dir) / f"{stem}_{counter}"
             try:
                 project = import_project_bundle(path, target_dir.as_posix())
-                project_path = project.path or target_dir.joinpath(f"{stem}.vaso").as_posix()
-                self.statusBar().showMessage(f"\u2713 Bundle unpacked to {target_dir}", 5000)
+                project_path = (
+                    project.path or target_dir.joinpath(f"{stem}.vaso").as_posix()
+                )
+                self.statusBar().showMessage(
+                    f"\u2713 Bundle unpacked to {target_dir}", 5000
+                )
             except Exception as exc:
                 QMessageBox.critical(
                     self,
@@ -1435,7 +1524,9 @@ class VasoAnalyzerApp(QMainWindow):
             if autosave_candidate:
                 if not is_valid_autosave_snapshot(autosave_candidate):
                     quarantine_autosave_snapshot(autosave_candidate)
-                    log.warning("Discarded corrupt autosave snapshot: %s", autosave_candidate)
+                    log.warning(
+                        "Discarded corrupt autosave snapshot: %s", autosave_candidate
+                    )
                     QMessageBox.warning(
                         self,
                         "Autosave Discarded",
@@ -1486,7 +1577,10 @@ class VasoAnalyzerApp(QMainWindow):
                     error_msg = str(exc)
 
                     # Check if this was a database corruption error
-                    if "corrupted" in error_msg.lower() or "malformed" in error_msg.lower():
+                    if (
+                        "corrupted" in error_msg.lower()
+                        or "malformed" in error_msg.lower()
+                    ):
                         # Check if project is in cloud storage
                         from vasoanalyzer.core.project import _is_cloud_storage_path
 
@@ -1566,7 +1660,10 @@ class VasoAnalyzerApp(QMainWindow):
                                 target_sample = first_exp.samples[0]
                                 for j in range(child.childCount()):
                                     sample_child = child.child(j)
-                                    if sample_child.data(0, Qt.UserRole) is target_sample:
+                                    if (
+                                        sample_child.data(0, Qt.UserRole)
+                                        is target_sample
+                                    ):
                                         first_sample_item = sample_child
                                         break
                             break
@@ -1574,7 +1671,10 @@ class VasoAnalyzerApp(QMainWindow):
             if first_sample_item is not None and tree:
                 tree.setCurrentItem(first_sample_item)
                 self.on_tree_item_clicked(first_sample_item, 0)
-            elif self.current_project.experiments and self.current_project.experiments[0].samples:
+            elif (
+                self.current_project.experiments
+                and self.current_project.experiments[0].samples
+            ):
                 first_sample = self.current_project.experiments[0].samples[0]
                 self.load_sample_into_view(first_sample)
             else:
@@ -1608,6 +1708,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         if not self.current_project:
             return
+
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        embed = settings.value("snapshots/embed_stacks", False, type=bool)
+        self.current_project.embed_snapshots = bool(embed)
 
         self.current_project.ui_state = self.gather_ui_state()
         if self.current_sample:
@@ -1649,7 +1753,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._save_progress_label.setText(message)
         self.statusBar().showMessage(message)
 
-    def _update_save_progress_bar(self, percent: int, message: str | None = None) -> None:
+    def _update_save_progress_bar(
+        self, percent: int, message: str | None = None
+    ) -> None:
         """Update save progress bar from worker signals."""
 
         clamped = max(0, min(100, percent))
@@ -1706,8 +1812,14 @@ class VasoAnalyzerApp(QMainWindow):
         status_bg = window.name()
         border = "#3a3a3a" if is_dark else "#c8c8c8"
         bar_bg = "#2a2a2a" if is_dark else "#e6e6e6"
-        chunk = highlight.name() if highlight.isValid() else ("#4da3ff" if is_dark else "#2f7de1")
-        text_color = text.name() if text.isValid() else ("#dcdcdc" if is_dark else "#202020")
+        chunk = (
+            highlight.name()
+            if highlight.isValid()
+            else ("#4da3ff" if is_dark else "#2f7de1")
+        )
+        text_color = (
+            text.name() if text.isValid() else ("#dcdcdc" if is_dark else "#202020")
+        )
 
         return {
             "status_bg": status_bg,
@@ -1734,7 +1846,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.statusBar().setStyleSheet(status_style)
         self._progress_bar.setStyleSheet(bar_style)
         self._save_progress_bar.setStyleSheet(bar_style)
-        self._save_progress_label.setStyleSheet(f"color: {colors['text']}; padding-right: 6px;")
+        self._save_progress_label.setStyleSheet(
+            f"color: {colors['text']}; padding-right: 6px;"
+        )
 
     def _start_background_save(
         self,
@@ -1768,7 +1882,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._last_save_error = None
         if mode != "autosave":
             self._set_save_actions_enabled(False)
-        progress_label = "Autosaving project…" if mode == "autosave" else "Saving project…"
+        progress_label = (
+            "Autosaving project…" if mode == "autosave" else "Saving project…"
+        )
         self._start_save_progress_bar(progress_label)
 
         project_snapshot = self._project_snapshot_for_save(project)
@@ -1802,7 +1918,9 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _on_save_finished(self, ok: bool, duration_sec: float, path: str) -> None:
         resolved_path = (
-            path or self._active_save_path or getattr(self.current_project, "path", None)
+            path
+            or self._active_save_path
+            or getattr(self.current_project, "path", None)
         )
         reason = self._active_save_reason or "manual"
         mode = self._active_save_mode or "manual"
@@ -1826,7 +1944,9 @@ class VasoAnalyzerApp(QMainWindow):
                     self.update_recent_projects(resolved_path)
                 self._finish_save_progress_bar(True, resolved_path, duration_sec)
                 reset_reason = (
-                    "manual save" if reason in ("manual", "save_as") else f"{reason} save"
+                    "manual save"
+                    if reason in ("manual", "save_as")
+                    else f"{reason} save"
                 )
                 self._reset_session_dirty(reason=reset_reason)
                 self._update_window_title()
@@ -1858,7 +1978,9 @@ class VasoAnalyzerApp(QMainWindow):
         if self.current_project and self.current_project.path:
             project_path = self.current_project.path
             log.info("Manual save requested path=%s", project_path)
-            self._start_background_save(project_path, skip_optimize=False, reason="manual")
+            self._start_background_save(
+                project_path, skip_optimize=False, reason="manual"
+            )
         elif self.current_project:
             self.save_project_file_as()
 
@@ -1933,7 +2055,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         default_stem = Path(self.current_project.path).with_suffix("").name
         default_path = (
-            Path(self.current_project.path).with_name(f"{default_stem}.vasopack").as_posix()
+            Path(self.current_project.path)
+            .with_name(f"{default_stem}.vasopack")
+            .as_posix()
         )
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -1989,7 +2113,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         stem = Path(self.current_project.path).with_suffix("").name
         default_path = (
-            Path(self.current_project.path).with_name(f"{stem}.shareable.vaso").as_posix()
+            Path(self.current_project.path)
+            .with_name(f"{stem}.shareable.vaso")
+            .as_posix()
         )
         dest, _ = QFileDialog.getSaveFileName(
             self,
@@ -2019,7 +2145,9 @@ class VasoAnalyzerApp(QMainWindow):
             )
             return
 
-        self.statusBar().showMessage(f"\u2713 Shareable project saved: {exported}", 5000)
+        self.statusBar().showMessage(
+            f"\u2713 Shareable project saved: {exported}", 5000
+        )
 
     def _run_deferred_autosave(self):
         reason = self._pending_autosave_reason or "deferred"
@@ -2027,7 +2155,9 @@ class VasoAnalyzerApp(QMainWindow):
         if self.current_project and self.current_project.path:
             self.auto_save_project(reason=reason)
 
-    def request_deferred_autosave(self, delay_ms: int = 2000, *, reason: str = "deferred") -> None:
+    def request_deferred_autosave(
+        self, delay_ms: int = 2000, *, reason: str = "deferred"
+    ) -> None:
         """Schedule an autosave after ``delay_ms`` to coalesce rapid edits."""
 
         if not self.current_project or not self.current_project.path:
@@ -2129,22 +2259,30 @@ class VasoAnalyzerApp(QMainWindow):
                         Qt.UserRole,
                         {"type": "figure_folder", "sample": s, "experiment": exp},
                     )
-                    figures_root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                    figures_root.setIcon(
+                        0, self.style().standardIcon(QStyle.SP_DirIcon)
+                    )
                     item.addChild(figures_root)
 
                     # Add NEW figure composer figures
                     if has_new_figures:
-                        log.info(f"Adding {len(s.figure_configs)} new figure(s) to tree")
+                        log.info(
+                            f"Adding {len(s.figure_configs)} new figure(s) to tree"
+                        )
                         for fig_id, fig_data in s.figure_configs.items():
                             fig_name = fig_data.get("figure_name", fig_id)
                             log.info(f"Adding new figure: {fig_name} (ID: {fig_id})")
                             fig_item = QTreeWidgetItem([f"{fig_name} [New]"])
-                            fig_item.setData(0, Qt.UserRole, ("figure", s, fig_id, fig_data))
+                            fig_item.setData(
+                                0, Qt.UserRole, ("figure", s, fig_id, fig_data)
+                            )
                             # Make figure items NOT editable so double-click works
                             fig_item.setFlags(fig_item.flags() & ~Qt.ItemIsEditable)
                             fig_item.setIcon(
                                 0,
-                                self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
+                                self.style().standardIcon(
+                                    QStyle.SP_FileDialogDetailedView
+                                ),
                             )
                             fig_item.setToolTip(
                                 0,
@@ -2156,8 +2294,14 @@ class VasoAnalyzerApp(QMainWindow):
                     if has_old_figures:
                         for idx, slide in enumerate(slides, start=1):
                             slide_name = slide.get("name") or f"Figure {idx}"
-                            timestamp = slide.get("updated_at") or slide.get("created_at")
-                            slide_label = f"{slide_name} ({timestamp})" if timestamp else slide_name
+                            timestamp = slide.get("updated_at") or slide.get(
+                                "created_at"
+                            )
+                            slide_label = (
+                                f"{slide_name} ({timestamp})"
+                                if timestamp
+                                else slide_name
+                            )
                             slide_item = QTreeWidgetItem([f"{slide_label} [Legacy]"])
                             slide_item.setData(
                                 0,
@@ -2171,7 +2315,9 @@ class VasoAnalyzerApp(QMainWindow):
                             )
                             slide_item.setIcon(
                                 0,
-                                self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
+                                self.style().standardIcon(
+                                    QStyle.SP_FileDialogDetailedView
+                                ),
                             )
                             figures_root.addChild(slide_item)
         self.project_tree.expandAll()
@@ -2227,7 +2373,9 @@ class VasoAnalyzerApp(QMainWindow):
         self._select_tree_item_for_sample(first_sample)
 
     def _schedule_missing_asset_scan(self) -> None:
-        if self.current_project is None or not getattr(self.current_project, "experiments", None):
+        if self.current_project is None or not getattr(
+            self.current_project, "experiments", None
+        ):
             return
         if getattr(self.current_project, "path", None) is None:
             return
@@ -2270,7 +2418,9 @@ class VasoAnalyzerApp(QMainWindow):
             self.action_relink_assets.setEnabled(bool(self._missing_assets))
 
         snapshot = (len(sample_assets), len(project_messages))
-        if snapshot != self._last_missing_assets_snapshot and (sample_assets or project_messages):
+        if snapshot != self._last_missing_assets_snapshot and (
+            sample_assets or project_messages
+        ):
             self._report_missing_assets(sample_assets, project_messages)
             self._last_missing_assets_snapshot = snapshot
 
@@ -2313,7 +2463,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Debug: Log all clicks
         if isinstance(obj, tuple) and len(obj) >= 1:
-            log.info(f"Single-clicked tree item: {obj[0]} (tuple with {len(obj)} elements)")
+            log.info(
+                f"Single-clicked tree item: {obj[0]} (tuple with {len(obj)} elements)"
+            )
 
         # Handle figure items - open in composer with single-click
         if isinstance(obj, tuple) and len(obj) >= 4 and obj[0] == "figure":
@@ -2451,7 +2603,9 @@ class VasoAnalyzerApp(QMainWindow):
         if isinstance(obj, SampleN):
             obj.name = name
             has_data = bool(
-                obj.trace_path or obj.trace_data is not None or obj.dataset_id is not None
+                obj.trace_path
+                or obj.trace_data is not None
+                or obj.dataset_id is not None
             )
             status = "\u2713" if has_data else "\u2717"
             self.project_tree.blockSignals(True)
@@ -2700,7 +2854,9 @@ class VasoAnalyzerApp(QMainWindow):
         dataset_id = getattr(sample, "dataset_id", None)
 
         trace_source = (
-            trace_df if isinstance(trace_df, pd.DataFrame) else getattr(sample, "trace_data", None)
+            trace_df
+            if isinstance(trace_df, pd.DataFrame)
+            else getattr(sample, "trace_data", None)
         )
         if not isinstance(trace_source, pd.DataFrame):
             return
@@ -2749,187 +2905,196 @@ class VasoAnalyzerApp(QMainWindow):
 
     def load_sample_into_view(self, sample: SampleN):
         """Load a sample's trace and events into the main view."""
-        log.debug("Loading sample %s", sample.name)
+        t0 = time.perf_counter()
+        try:
+            log.debug("Loading sample %s", sample.name)
 
-        if self.current_sample and self.current_sample is not sample:
-            state = self.gather_sample_state()
-            self.current_sample.ui_state = state
-            self.project_state[id(self.current_sample)] = state
+            if self.current_sample and self.current_sample is not sample:
+                state = self.gather_sample_state()
+                self.current_sample.ui_state = state
+                self.project_state[id(self.current_sample)] = state
 
-        self.current_sample = sample
-        self._sample_summary_logged = False
-        self._last_track_layout_sample_id = None
-        self._select_tree_item_for_sample(sample)
+            self.current_sample = sample
+            self._sample_summary_logged = False
+            self._last_track_layout_sample_id = None
+            self._select_tree_item_for_sample(sample)
 
-        token = object()
-        self._current_sample_token = token
+            token = object()
+            self._current_sample_token = token
 
-        # Validate cache - check if cached data belongs to current dataset_id
-        # If a dataset was just loaded and the cache id never set, adopt the current dataset_id
-        if (
-            sample.trace_data is not None
-            and getattr(sample, "_trace_cache_dataset_id", None) is None
-        ):
-            sample._trace_cache_dataset_id = sample.dataset_id
-        if (
-            sample.events_data is not None
-            and getattr(sample, "_events_cache_dataset_id", None) is None
-        ):
-            sample._events_cache_dataset_id = sample.dataset_id
+            # Validate cache - check if cached data belongs to current dataset_id
+            # If a dataset was just loaded and the cache id never set, adopt the current dataset_id
+            if (
+                sample.trace_data is not None
+                and getattr(sample, "_trace_cache_dataset_id", None) is None
+            ):
+                sample._trace_cache_dataset_id = sample.dataset_id
+            if (
+                sample.events_data is not None
+                and getattr(sample, "_events_cache_dataset_id", None) is None
+            ):
+                sample._events_cache_dataset_id = sample.dataset_id
 
-        trace_cache_valid = (
-            sample.trace_data is not None
-            and getattr(sample, "_trace_cache_dataset_id", None) == sample.dataset_id
-        )
-        events_cache_valid = (
-            sample.events_data is not None
-            and getattr(sample, "_events_cache_dataset_id", None) == sample.dataset_id
-        )
-
-        # Invalidate stale cache
-        if sample.trace_data is not None and not trace_cache_valid:
-            log.warning(
-                "CACHE_INVALID: trace cache for '%s' invalid (dataset_id=%s, cached_id=%s), clearing",
-                sample.name,
-                sample.dataset_id,
-                getattr(sample, "_trace_cache_dataset_id", None),
+            trace_cache_valid = (
+                sample.trace_data is not None
+                and getattr(sample, "_trace_cache_dataset_id", None) == sample.dataset_id
             )
-            sample.trace_data = None
-            sample._trace_cache_dataset_id = None
-
-        if sample.events_data is not None and not events_cache_valid:
-            log.warning(
-                "CACHE_INVALID: events cache for '%s' invalid (dataset_id=%s, cached_id=%s), clearing",
-                sample.name,
-                sample.dataset_id,
-                getattr(sample, "_events_cache_dataset_id", None),
-            )
-            sample.events_data = None
-            sample._events_cache_dataset_id = None
-
-        needs_trace = sample.trace_data is None and sample.dataset_id is not None
-        needs_events = sample.events_data is None and sample.dataset_id is not None
-        needs_results = (
-            sample.analysis_results is None
-            and sample.dataset_id is not None
-            and (sample.analysis_result_keys is None or bool(sample.analysis_result_keys))
-        )
-
-        # Prevent duplicate loads for the same dataset
-        if (
-            sample.dataset_id is not None
-            and sample.dataset_id in self._loading_dataset_ids
-            and (needs_trace or needs_events or needs_results)
-        ):
-            log.info(
-                "DATASET_LOAD_SKIP: dataset_id=%s already loading, skipping duplicate load request",
-                sample.dataset_id,
-            )
-            return
-
-        ctx = getattr(self, "project_ctx", None)
-        log.debug("load_sample_into_view: ctx type=%s ctx=%s", type(ctx), ctx)
-
-        project_path = (
-            ctx.path
-            if isinstance(ctx, ProjectContext)
-            else getattr(self.current_project, "path", None)
-        )
-        repo = ctx.repo if isinstance(ctx, ProjectContext) else None
-
-        # Extract staging DB path for thread-safe access
-        staging_db_path: str | None = None
-        if repo is not None:
-            try:
-                # Try to get staging path from the store's handle
-                store = getattr(repo, "_store", None)
-                if store is not None:
-                    handle = getattr(store, "handle", None)
-                    if handle is not None:
-                        staging_path = getattr(handle, "staging_path", None)
-                        if staging_path is not None:
-                            staging_db_path = str(staging_path)
-                            log.debug(
-                                "Extracted staging DB path for thread-safe access: %s",
-                                staging_db_path,
-                            )
-            except Exception as e:
-                log.warning(f"Could not extract staging DB path: {e}")
-
-        log.debug(
-            "load_sample_into_view: repo=%s project_path=%s needs_events=%s dataset_id=%s",
-            repo,
-            project_path,
-            needs_events,
-            sample.dataset_id,
-        )
-
-        # CRITICAL: If repo is None but we have a project context, something is wrong
-        if repo is None and ctx is not None:
-            log.warning("Repo is None but project context exists: %s", ctx)
-        if (
-            repo is None
-            and project_path
-            and sample.dataset_id is not None
-            and (needs_trace or needs_events or needs_results)
-        ):
-            if self._queue_sample_load_until_context(sample):
-                status = "Preparing project resources…"
-                self.statusBar().showMessage(status, 2000)
-                return
-            log.warning(
-                "⚠️  Unable to queue sample '%s' for deferred loading; proceeding without repo",
-                sample.name,
-            )
-        if repo is None and project_path and needs_events:
-            log.warning(
-                "Background job will create a NEW project context which means a NEW staging database; "
-                "events may not be found."
+            events_cache_valid = (
+                sample.events_data is not None
+                and getattr(sample, "_events_cache_dataset_id", None) == sample.dataset_id
             )
 
-        load_async = bool((repo or project_path) and (needs_trace or needs_events or needs_results))
+            # Invalidate stale cache
+            if sample.trace_data is not None and not trace_cache_valid:
+                log.warning(
+                    "CACHE_INVALID: trace cache for '%s' invalid (dataset_id=%s, cached_id=%s), clearing",
+                    sample.name,
+                    sample.dataset_id,
+                    getattr(sample, "_trace_cache_dataset_id", None),
+                )
+                sample.trace_data = None
+                sample._trace_cache_dataset_id = None
 
-        log.info(
-            "DATASET_LOAD: sample='%s' dataset_id=%s cached=(trace=%s, events=%s) "
-            "needs=(trace=%s, events=%s, results=%s) load_async=%s",
-            sample.name,
-            sample.dataset_id,
-            sample.trace_data is not None,
-            sample.events_data is not None,
-            needs_trace,
-            needs_events,
-            needs_results,
-            load_async,
-        )
+            if sample.events_data is not None and not events_cache_valid:
+                log.warning(
+                    "CACHE_INVALID: events cache for '%s' invalid (dataset_id=%s, cached_id=%s), clearing",
+                    sample.name,
+                    sample.dataset_id,
+                    getattr(sample, "_events_cache_dataset_id", None),
+                )
+                sample.events_data = None
+                sample._events_cache_dataset_id = None
 
-        self._start_sample_load_progress(sample.name)
-        self._prepare_sample_view(sample)
+            needs_trace = sample.trace_data is None and sample.dataset_id is not None
+            needs_events = sample.events_data is None and sample.dataset_id is not None
+            needs_results = (
+                sample.analysis_results is None
+                and sample.dataset_id is not None
+                and (
+                    sample.analysis_result_keys is None or bool(sample.analysis_result_keys)
+                )
+            )
 
-        if load_async:
-            # Mark this dataset as loading
-            if sample.dataset_id is not None:
-                self._loading_dataset_ids.add(sample.dataset_id)
-                log.debug(
-                    "DATASET_LOAD_START: dataset_id=%s added to in-flight set",
+            # Prevent duplicate loads for the same dataset
+            if (
+                sample.dataset_id is not None
+                and sample.dataset_id in self._loading_dataset_ids
+                and (needs_trace or needs_events or needs_results)
+            ):
+                log.info(
+                    "DATASET_LOAD_SKIP: dataset_id=%s already loading, skipping duplicate load request",
                     sample.dataset_id,
                 )
+                return
 
-            self.statusBar().showMessage(f"Loading {sample.name}…", 2000)
-            self._begin_sample_load_job(
-                sample,
-                token,
+            ctx = getattr(self, "project_ctx", None)
+            log.debug("load_sample_into_view: ctx type=%s ctx=%s", type(ctx), ctx)
+
+            project_path = (
+                ctx.path
+                if isinstance(ctx, ProjectContext)
+                else getattr(self.current_project, "path", None)
+            )
+            repo = ctx.repo if isinstance(ctx, ProjectContext) else None
+
+            # Extract staging DB path for thread-safe access
+            staging_db_path: str | None = None
+            if repo is not None:
+                try:
+                    # Try to get staging path from the store's handle
+                    store = getattr(repo, "_store", None)
+                    if store is not None:
+                        handle = getattr(store, "handle", None)
+                        if handle is not None:
+                            staging_path = getattr(handle, "staging_path", None)
+                            if staging_path is not None:
+                                staging_db_path = str(staging_path)
+                                log.debug(
+                                    "Extracted staging DB path for thread-safe access: %s",
+                                    staging_db_path,
+                                )
+                except Exception as e:
+                    log.warning(f"Could not extract staging DB path: {e}")
+
+            log.debug(
+                "load_sample_into_view: repo=%s project_path=%s needs_events=%s dataset_id=%s",
                 repo,
                 project_path,
-                load_trace=needs_trace,
-                load_events=needs_events,
-                load_results=needs_results,
-                staging_db_path=staging_db_path,
+                needs_events,
+                sample.dataset_id,
             )
-            return
 
-        self._log_sample_data_summary(sample)
-        self._render_sample(sample)
-        self._finish_sample_load_progress()
+            # CRITICAL: If repo is None but we have a project context, something is wrong
+            if repo is None and ctx is not None:
+                log.warning("Repo is None but project context exists: %s", ctx)
+            if (
+                repo is None
+                and project_path
+                and sample.dataset_id is not None
+                and (needs_trace or needs_events or needs_results)
+            ):
+                if self._queue_sample_load_until_context(sample):
+                    status = "Preparing project resources…"
+                    self.statusBar().showMessage(status, 2000)
+                    return
+                log.warning(
+                    "⚠️  Unable to queue sample '%s' for deferred loading; proceeding without repo",
+                    sample.name,
+                )
+            if repo is None and project_path and needs_events:
+                log.warning(
+                    "Background job will create a NEW project context which means a NEW staging database; "
+                    "events may not be found."
+                )
+
+            load_async = bool(
+                (repo or project_path) and (needs_trace or needs_events or needs_results)
+            )
+
+            log.info(
+                "DATASET_LOAD: sample='%s' dataset_id=%s cached=(trace=%s, events=%s) "
+                "needs=(trace=%s, events=%s, results=%s) load_async=%s",
+                sample.name,
+                sample.dataset_id,
+                sample.trace_data is not None,
+                sample.events_data is not None,
+                needs_trace,
+                needs_events,
+                needs_results,
+                load_async,
+            )
+
+            self._start_sample_load_progress(sample.name)
+            self._prepare_sample_view(sample)
+
+            if load_async:
+                # Mark this dataset as loading
+                if sample.dataset_id is not None:
+                    self._loading_dataset_ids.add(sample.dataset_id)
+                    log.debug(
+                        "DATASET_LOAD_START: dataset_id=%s added to in-flight set",
+                        sample.dataset_id,
+                    )
+
+                self.statusBar().showMessage(f"Loading {sample.name}…", 2000)
+                self._begin_sample_load_job(
+                    sample,
+                    token,
+                    repo,
+                    project_path,
+                    load_trace=needs_trace,
+                    load_events=needs_events,
+                    load_results=needs_results,
+                    staging_db_path=staging_db_path,
+                )
+                return
+
+            self._log_sample_data_summary(sample)
+            self._render_sample(sample)
+            self._finish_sample_load_progress()
+
+        finally:
+            log.debug("load_sample_into_view completed in %.3f s", time.perf_counter() - t0)
 
     def _prepare_sample_view(self, sample: SampleN) -> None:
         log.debug(
@@ -3035,7 +3200,11 @@ class VasoAnalyzerApp(QMainWindow):
                 "DATASET_LOAD_DISCARDED: sample='%s' dataset_id=%s reason=%s current_sample='%s'",
                 sample.name,
                 sample.dataset_id,
-                ("token_mismatch" if token != self._current_sample_token else "sample_changed"),
+                (
+                    "token_mismatch"
+                    if token != self._current_sample_token
+                    else "sample_changed"
+                ),
                 getattr(self.current_sample, "name", None),
             )
             # Clear any partial cache from this discarded load to prevent corruption
@@ -3095,7 +3264,9 @@ class VasoAnalyzerApp(QMainWindow):
             (time.perf_counter() - t0) * 1000,
         )
 
-    def _on_sample_load_error(self, token: object, sample: SampleN, message: str) -> None:
+    def _on_sample_load_error(
+        self, token: object, sample: SampleN, message: str
+    ) -> None:
         # Remove from in-flight tracking
         if sample.dataset_id is not None:
             self._loading_dataset_ids.discard(sample.dataset_id)
@@ -3127,7 +3298,9 @@ class VasoAnalyzerApp(QMainWindow):
             )
             style = None
             if isinstance(sample.ui_state, dict):
-                style = sample.ui_state.get("style_settings") or sample.ui_state.get("plot_style")
+                style = sample.ui_state.get("style_settings") or sample.ui_state.get(
+                    "plot_style"
+                )
             merged_style = {**DEFAULT_STYLE, **style} if style else DEFAULT_STYLE.copy()
             self._style_holder = _StyleHolder(merged_style.copy())
             self._style_manager.replace(merged_style)
@@ -3177,7 +3350,9 @@ class VasoAnalyzerApp(QMainWindow):
                 )
                 prefix = "Sample"
                 tooltip = (
-                    sample.name if getattr(sample, "dataset_id", None) is not None else trace_source
+                    sample.name
+                    if getattr(sample, "dataset_id", None) is not None
+                    else trace_source
                 )
                 # Only probe filesystem when not embedded
                 if (
@@ -3200,7 +3375,9 @@ class VasoAnalyzerApp(QMainWindow):
                 # If events are embedded in the repo but not materialised on the sample, fetch them now.
                 if sample.events_data is None and sample.dataset_id is not None:
                     repo_ctx = getattr(self, "project_ctx", None)
-                    repo = repo_ctx.repo if isinstance(repo_ctx, ProjectContext) else None
+                    repo = (
+                        repo_ctx.repo if isinstance(repo_ctx, ProjectContext) else None
+                    )
                     get_events = getattr(repo, "get_events", None)
                     if callable(get_events):
                         with contextlib.suppress(Exception):
@@ -3216,7 +3393,9 @@ class VasoAnalyzerApp(QMainWindow):
                     if not resolved_events or not Path(resolved_events).exists():
                         raise FileNotFoundError(str(sample.events_path))
                     event_cache = cache or self._ensure_data_cache(resolved_events)
-                    labels, times, frames = load_events(resolved_events, cache=event_cache)
+                    labels, times, frames = load_events(
+                        resolved_events, cache=event_cache
+                    )
                     sample.events_path = resolved_events
                     self._clear_missing_asset(sample, "events")
                 else:
@@ -3258,6 +3437,7 @@ class VasoAnalyzerApp(QMainWindow):
 
             try:
                 self.trace_data = self._prepare_trace_dataframe(trace)
+                self._update_trace_sync_state()
                 self._layout_log_ready = True
                 self._reset_channel_view_defaults()
                 self.xlim_full = None
@@ -3266,7 +3446,13 @@ class VasoAnalyzerApp(QMainWindow):
                 self.compute_frame_trace_indices()
                 t_ev = time.perf_counter()
                 self.load_project_events(
-                    labels, times, frames, diam, od, refresh_plot=False, auto_export=True
+                    labels,
+                    times,
+                    frames,
+                    diam,
+                    od,
+                    refresh_plot=False,
+                    auto_export=True,
                 )
                 log.info(
                     "Timing: load_project_events for '%s' took %.2f ms",
@@ -3335,7 +3521,9 @@ class VasoAnalyzerApp(QMainWindow):
             self._maybe_prompt_event_review()
 
     def _update_snapshot_viewer_state(self, sample: SampleN) -> None:
-        has_stack = isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0
+        has_stack = (
+            isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0
+        )
         asset_available = bool(
             sample.snapshot_role and sample.asset_roles.get(sample.snapshot_role)
         )
@@ -3360,7 +3548,10 @@ class VasoAnalyzerApp(QMainWindow):
         if isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0:
             return sample.snapshots
 
-        if self._snapshot_load_token is not None and self._snapshot_loading_sample is sample:
+        if (
+            self._snapshot_load_token is not None
+            and self._snapshot_loading_sample is sample
+        ):
             return None
 
         project_path = getattr(self.current_project, "path", None)
@@ -3392,7 +3583,10 @@ class VasoAnalyzerApp(QMainWindow):
         stack: np.ndarray | None,
         error: str | None,
     ) -> None:
-        if token != self._snapshot_load_token or sample is not self._snapshot_loading_sample:
+        if (
+            token != self._snapshot_load_token
+            or sample is not self._snapshot_loading_sample
+        ):
             return
 
         self._snapshot_load_token = None
@@ -3403,7 +3597,10 @@ class VasoAnalyzerApp(QMainWindow):
             if sample is self.current_sample:
                 should_show = bool(
                     self._snapshot_viewer_pending_open
-                    or (self.snapshot_viewer_action and self.snapshot_viewer_action.isChecked())
+                    or (
+                        self.snapshot_viewer_action
+                        and self.snapshot_viewer_action.isChecked()
+                    )
                 )
                 if should_show:
                     try:
@@ -3434,7 +3631,9 @@ class VasoAnalyzerApp(QMainWindow):
     def _open_samples_in_dual_view_legacy(self, samples):
         """Display two samples stacked vertically in a single window."""
         if len(samples) != 2:
-            QMessageBox.warning(self, "Dual View", "Please select exactly two datasets.")
+            QMessageBox.warning(
+                self, "Dual View", "Please select exactly two datasets."
+            )
             return
 
         class DualViewWindow(QMainWindow):
@@ -3449,7 +3648,9 @@ class VasoAnalyzerApp(QMainWindow):
                 splitter = QSplitter(Qt.Vertical, self)
 
                 parent_style = (
-                    parent.get_current_plot_style() if parent is not None else DEFAULT_STYLE.copy()
+                    parent.get_current_plot_style()
+                    if parent is not None
+                    else DEFAULT_STYLE.copy()
                 )
 
                 for index, sample in enumerate(pair):
@@ -3474,7 +3675,9 @@ class VasoAnalyzerApp(QMainWindow):
                 self.setStatusBar(status)
                 self.cursor_label = QLabel("Cursor: —")
                 status.addWidget(self.cursor_label, 1)
-                self.delta_label = QLabel("Δ metrics: add ≥2 inner-diameter pins in each view")
+                self.delta_label = QLabel(
+                    "Δ metrics: add ≥2 inner-diameter pins in each view"
+                )
                 status.addPermanentWidget(self.delta_label, 0)
                 self._refresh_metrics()
 
@@ -3504,12 +3707,16 @@ class VasoAnalyzerApp(QMainWindow):
 
             def _init_cursor_guides(self, view: "VasoAnalyzerApp") -> None:
                 color = view.get_current_plot_style().get("event_color", "#d43d51")
-                primary = view.ax.axvline(view.ax.get_xlim()[0], color=color, alpha=0.35)
+                primary = view.ax.axvline(
+                    view.ax.get_xlim()[0], color=color, alpha=0.35
+                )
                 primary.set_linestyle("--")
                 primary.set_visible(False)
                 secondary = None
                 if view.ax2 is not None:
-                    secondary = view.ax2.axvline(view.ax2.get_xlim()[0], color=color, alpha=0.25)
+                    secondary = view.ax2.axvline(
+                        view.ax2.get_xlim()[0], color=color, alpha=0.25
+                    )
                     secondary.set_linestyle(":")
                     secondary.set_visible(False)
                 self._cursor_guides.append({"primary": primary, "secondary": secondary})
@@ -3543,7 +3750,9 @@ class VasoAnalyzerApp(QMainWindow):
                     return
 
                 x = event.xdata
-                for guides, target in zip(self._cursor_guides, self.views, strict=False):
+                for guides, target in zip(
+                    self._cursor_guides, self.views, strict=False
+                ):
                     guides["primary"].set_xdata((x, x))
                     guides["primary"].set_visible(True)
                     if guides["secondary"] is not None:
@@ -3592,7 +3801,8 @@ class VasoAnalyzerApp(QMainWindow):
                             round(px, 4)
                             for marker, _ in view.pinned_points
                             for px in [_pin_x(marker)]
-                            if px is not None and getattr(marker, "trace_type", "inner") == "inner"
+                            if px is not None
+                            and getattr(marker, "trace_type", "inner") == "inner"
                         )
                     )
                     signatures.append(pins)
@@ -3608,7 +3818,9 @@ class VasoAnalyzerApp(QMainWindow):
 
                 metrics = [view.compute_interval_metrics() for view in self.views]
                 if any(m is None for m in metrics):
-                    self.delta_label.setText("Δ metrics: add ≥2 inner-diameter pins in each view")
+                    self.delta_label.setText(
+                        "Δ metrics: add ≥2 inner-diameter pins in each view"
+                    )
                     return
 
                 delta_baseline = metrics[0]["baseline"] - metrics[1]["baseline"]
@@ -3732,7 +3944,9 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_experiment = exp
             self.refresh_project_tree()
 
-    def _rename_project_figure(self, sample: SampleN, figure_id: str, fig_data: dict) -> None:
+    def _rename_project_figure(
+        self, sample: SampleN, figure_id: str, fig_data: dict
+    ) -> None:
         """Rename a saved figure from the project tree."""
         if sample is None or not getattr(sample, "figure_configs", None):
             return
@@ -3784,7 +3998,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.refresh_project_tree()
 
     def delete_experiment(self, experiment: Experiment) -> None:
-        if not self.current_project or experiment not in self.current_project.experiments:
+        if (
+            not self.current_project
+            or experiment not in self.current_project.experiments
+        ):
             return
 
         sample_count = len(experiment.samples)
@@ -3970,7 +4187,9 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         # Import selected files
-        success_count, error_count, _ = self._import_candidates(selected, target_experiment)
+        success_count, error_count, _ = self._import_candidates(
+            selected, target_experiment
+        )
         log.info(
             "UI: Folder import finished for %s (success=%d errors=%d)",
             folder_path,
@@ -4001,13 +4220,15 @@ class VasoAnalyzerApp(QMainWindow):
                     candidate.events_file or "(auto / none)",
                 )
 
-                df, labels, times, frames, diam, od_diam, import_meta = load_trace_and_events(
-                    candidate.trace_file
+                df, labels, times, frames, diam, od_diam, import_meta = (
+                    load_trace_and_events(candidate.trace_file)
                 )
                 sample.trace_data = df
 
                 # Update metadata for trace
-                trace_obj = Path(candidate.trace_file).expanduser().resolve(strict=False)
+                trace_obj = (
+                    Path(candidate.trace_file).expanduser().resolve(strict=False)
+                )
                 self._update_sample_link_metadata(sample, "trace", trace_obj)
 
                 # Store file signature for change detection
@@ -4033,14 +4254,16 @@ class VasoAnalyzerApp(QMainWindow):
                         if "Avg Pressure (mmHg)" in df.columns:
                             arr_avg_p = df["Avg Pressure (mmHg)"].values
                             p_avg_vals = [
-                                float(arr_avg_p[int(np.argmin(np.abs(arr_t - t)))]) for t in times
+                                float(arr_avg_p[int(np.argmin(np.abs(arr_t - t)))])
+                                for t in times
                             ]
                             events_data["p_avg"] = p_avg_vals
 
                         if "Set Pressure (mmHg)" in df.columns:
                             arr_set_p = df["Set Pressure (mmHg)"].values
                             p1_vals = [
-                                float(arr_set_p[int(np.argmin(np.abs(arr_t - t)))]) for t in times
+                                float(arr_set_p[int(np.argmin(np.abs(arr_t - t)))])
+                                for t in times
                             ]
                             events_data["p1"] = p1_vals
 
@@ -4048,7 +4271,11 @@ class VasoAnalyzerApp(QMainWindow):
 
                     # Also store the CSV path metadata if available
                     if candidate.events_file and os.path.exists(candidate.events_file):
-                        event_obj = Path(candidate.events_file).expanduser().resolve(strict=False)
+                        event_obj = (
+                            Path(candidate.events_file)
+                            .expanduser()
+                            .resolve(strict=False)
+                        )
                         self._update_sample_link_metadata(sample, "events", event_obj)
                         sample.events_sig = get_file_signature(candidate.events_file)
 
@@ -4094,7 +4321,9 @@ class VasoAnalyzerApp(QMainWindow):
                 if len(errors) > 5:
                     message += f"\n... and {len(errors) - 5} more"
             QMessageBox.warning(self, "Import Complete with Errors", message)
-        log.debug("Folder import summary: %d success, %d errors", success_count, error_count)
+        log.debug(
+            "Folder import summary: %d success, %d errors", success_count, error_count
+        )
         return success_count, error_count, errors
 
     def delete_sample(self, sample: SampleN):
@@ -4156,7 +4385,11 @@ class VasoAnalyzerApp(QMainWindow):
 
             current_theme = getattr(theme_module, "CURRENT_THEME", None)
             dark_theme = getattr(theme_module, "DARK_THEME", None)
-            if current_theme is not None and dark_theme is not None and current_theme is dark_theme:
+            if (
+                current_theme is not None
+                and dark_theme is not None
+                and current_theme is dark_theme
+            ):
                 name, ext = os.path.splitext(filename)
                 dark_filename = f"{name}_Dark{ext}"
                 candidate = resource_path("icons", dark_filename)
@@ -4206,7 +4439,9 @@ class VasoAnalyzerApp(QMainWindow):
         if self.trace_data is None:
             return
 
-        primary_ax = self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        primary_ax = (
+            self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        )
         if primary_ax is None and self.ax is not None:
             primary_ax = self.ax
         if primary_ax is None:
@@ -4446,7 +4681,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
         self.action_theme_dark = QAction("Dark", self, checkable=True)
         self.action_theme_auto = QAction("Auto (System)", self, checkable=True)
-        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
+        self.action_theme_light.triggered.connect(
+            lambda: self.set_color_scheme("light")
+        )
         self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
         self.action_theme_auto.triggered.connect(lambda: self.set_color_scheme("auto"))
         theme_menu.addAction(self.action_theme_light)
@@ -4503,6 +4740,16 @@ class VasoAnalyzerApp(QMainWindow):
         self.snapshot_viewer_action = snap_vw
         self.event_table_action = evt_tbl
 
+        view_menu.addSeparator()
+        self.action_use_pg_snapshot = QAction(
+            "Use PyQtGraph snapshot viewer", self
+        )
+        self.action_use_pg_snapshot.setCheckable(True)
+        self.action_use_pg_snapshot.setChecked(True)
+        self.action_use_pg_snapshot.toggled.connect(self._on_toggle_pg_snapshot_viewer)
+        view_menu.addAction(self.action_use_pg_snapshot)
+        # TODO: Phase 2 – make PG snapshot viewer the default (checked) and keep legacy as fallback toggle.
+
         shortcut = "Meta+M" if sys.platform == "darwin" else "Ctrl+M"
         self.action_snapshot_metadata = QAction("Metadata…", self)
         self.action_snapshot_metadata.setShortcut(shortcut)
@@ -4519,10 +4766,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.od_toggle_act = QAction("Outer", self, checkable=True, checked=True)
         self.od_toggle_act.setStatusTip("Show outer diameter trace")
         self.od_toggle_act.setToolTip("Toggle outer diameter trace")
-        self.avg_pressure_toggle_act = QAction("Pressure", self, checkable=True, checked=True)
+        self.avg_pressure_toggle_act = QAction(
+            "Pressure", self, checkable=True, checked=True
+        )
         self.avg_pressure_toggle_act.setStatusTip("Show pressure trace")
         self.avg_pressure_toggle_act.setToolTip("Toggle pressure trace")
-        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=False)
+        self.set_pressure_toggle_act = QAction(
+            "Set Pressure", self, checkable=True, checked=False
+        )
         self.set_pressure_toggle_act.setStatusTip("Show set pressure trace")
         self.set_pressure_toggle_act.setToolTip("Toggle set pressure trace")
         self.id_toggle_act.setShortcut("I")
@@ -4583,6 +4834,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
         self.action_figure_composer.triggered.connect(self.open_new_figure_composer)
         tools_menu.addAction(self.action_figure_composer)
+
+        self.action_matplotlib_composer = QAction("Matplotlib Composer…", self)
+        self.action_matplotlib_composer.setShortcut("Ctrl+Alt+M")
+        self.action_matplotlib_composer.triggered.connect(self.open_matplotlib_composer)
+        tools_menu.addAction(self.action_matplotlib_composer)
 
         tools_menu.addSeparator()
 
@@ -4688,7 +4944,9 @@ class VasoAnalyzerApp(QMainWindow):
             action = QAction(label, self)
             action.setToolTip(path)
             action.triggered.connect(
-                lambda checked=False, p=path: self.load_trace_and_events(p, source="recent_file")
+                lambda checked=False, p=path: self.load_trace_and_events(
+                    p, source="recent_file"
+                )
             )
             self.recent_menu.addAction(action)
 
@@ -4698,7 +4956,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_menu.addAction(clear_action)
 
     def build_recent_projects_menu(self):
-        if not hasattr(self, "recent_projects_menu") or self.recent_projects_menu is None:
+        if (
+            not hasattr(self, "recent_projects_menu")
+            or self.recent_projects_menu is None
+        ):
             return
         self.recent_projects_menu.clear()
 
@@ -4740,7 +5001,10 @@ class VasoAnalyzerApp(QMainWindow):
                 with contextlib.suppress(Exception):
                     sc.removeItem(artist)
                 return
-        if getattr(artist, "figure", None) is None and getattr(artist, "axes", None) is None:
+        if (
+            getattr(artist, "figure", None) is None
+            and getattr(artist, "axes", None) is None
+        ):
             return
         try:
             artist.remove()
@@ -4758,7 +5022,12 @@ class VasoAnalyzerApp(QMainWindow):
             get_data = getattr(marker, "getData", None)
             if callable(get_data):
                 xdata, ydata = get_data()
-                if xdata is not None and len(xdata) > 0 and ydata is not None and len(ydata) > 0:
+                if (
+                    xdata is not None
+                    and len(xdata) > 0
+                    and ydata is not None
+                    and len(ydata) > 0
+                ):
                     return float(xdata[0]), float(ydata[0])
         except Exception:
             return None
@@ -4781,7 +5050,9 @@ class VasoAnalyzerApp(QMainWindow):
             return None
         return best_idx
 
-    def _add_pyqtgraph_pin(self, track_id: str, x: float, y: float, trace_type: str = "inner"):
+    def _add_pyqtgraph_pin(
+        self, track_id: str, x: float, y: float, trace_type: str = "inner"
+    ):
         plot_host = getattr(self, "plot_host", None)
         if plot_host is None or not hasattr(plot_host, "track"):
             return
@@ -4859,7 +5130,9 @@ class VasoAnalyzerApp(QMainWindow):
     # Update reopen_previous_plot to reload all elements
     def reopen_previous_plot(self):
         if not os.path.exists(PREVIOUS_PLOT_PATH):
-            QMessageBox.warning(self, "No Previous Plot", "No previously saved plot was found.")
+            QMessageBox.warning(
+                self, "No Previous Plot", "No previously saved plot was found."
+            )
             return
 
         self.load_pickle_session(PREVIOUS_PLOT_PATH)
@@ -4992,7 +5265,9 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         # Check if we're in the snooze period
-        remind_later_timestamp = self.settings.value("updates/remind_later_until", 0, type=int)
+        remind_later_timestamp = self.settings.value(
+            "updates/remind_later_until", 0, type=int
+        )
         if remind_later_timestamp > 0:
             current_time = int(time.time())
             if current_time < remind_later_timestamp:
@@ -5009,7 +5284,9 @@ class VasoAnalyzerApp(QMainWindow):
         """
         self._start_update_check(silent=False)
 
-    def _on_update_check_completed(self, silent: bool, latest: object, error: object) -> None:
+    def _on_update_check_completed(
+        self, silent: bool, latest: object, error: object
+    ) -> None:
         import time
 
         self._update_check_in_progress = False
@@ -5042,7 +5319,9 @@ class VasoAnalyzerApp(QMainWindow):
                 self.statusBar().showMessage("Update notifications disabled", 3000)
             elif user_choice == UpdateDialog.REMIND_LATER:
                 # User chose to be reminded in 7 days
-                snooze_until = int(time.time()) + (7 * 24 * 60 * 60)  # 7 days in seconds
+                snooze_until = int(time.time()) + (
+                    7 * 24 * 60 * 60
+                )  # 7 days in seconds
                 self.settings.setValue("updates/remind_later_until", snooze_until)
                 self.statusBar().showMessage("Will remind you in 7 days", 3000)
             else:
@@ -5200,7 +5479,9 @@ class VasoAnalyzerApp(QMainWindow):
             return float("nan"), float("nan")
         subset = values
         if (
-            isinstance(mask, np.ndarray) and mask.dtype == bool and mask.size == values.size
+            isinstance(mask, np.ndarray)
+            and mask.dtype == bool
+            and mask.size == values.size
         ) and mask.any():
             subset = values[mask]
         subset = subset[np.isfinite(subset)]
@@ -5370,14 +5651,19 @@ class VasoAnalyzerApp(QMainWindow):
         payload = dict(meta or {})
         state = payload.get("review_state")
         if isinstance(state, str) and state.strip():
-            payload["review_state"] = state.strip().upper().replace(" ", "_").replace("-", "_")
+            payload["review_state"] = (
+                state.strip().upper().replace(" ", "_").replace("-", "_")
+            )
         else:
             payload["review_state"] = REVIEW_UNREVIEWED
         return payload
 
     def _current_review_states(self) -> list[str]:
         self._normalize_event_label_meta(len(self.event_table_data))
-        return [meta.get("review_state", REVIEW_UNREVIEWED) for meta in self.event_label_meta]
+        return [
+            meta.get("review_state", REVIEW_UNREVIEWED)
+            for meta in self.event_label_meta
+        ]
 
     def _maybe_prompt_event_review(self) -> None:
         """
@@ -5395,7 +5681,9 @@ class VasoAnalyzerApp(QMainWindow):
             return
 
         review_states = (
-            self._current_review_states() if hasattr(self, "_current_review_states") else []
+            self._current_review_states()
+            if hasattr(self, "_current_review_states")
+            else []
         )
         if not review_states:
             return
@@ -5476,7 +5764,9 @@ class VasoAnalyzerApp(QMainWindow):
         set_val = _sample_column(self._trace_label_for("p2"))
         return (id_val, od_val, avg_val, set_val)
 
-    def _insert_event_meta(self, index: int, meta: dict[str, Any] | None = None) -> None:
+    def _insert_event_meta(
+        self, index: int, meta: dict[str, Any] | None = None
+    ) -> None:
         payload = self._with_default_review_state(meta)
         if not hasattr(self, "event_label_meta"):
             self.event_label_meta = [payload]
@@ -5574,7 +5864,9 @@ class VasoAnalyzerApp(QMainWindow):
         for idx, state in enumerate(existing_states):
             if idx < len(new_meta):
                 new_meta[idx]["review_state"] = state
-        self.event_label_meta = [self._with_default_review_state(entry) for entry in new_meta]
+        self.event_label_meta = [
+            self._with_default_review_state(entry) for entry in new_meta
+        ]
         self._normalize_event_label_meta(len(self.event_label_meta))
 
         # Update table rows in-place so the UI reflects any text edits.
@@ -5596,9 +5888,13 @@ class VasoAnalyzerApp(QMainWindow):
         # Rebuild annotations and tooltips to reflect the new text.
         annotations: list[AnnotationSpec] = []
         metadata_entries: list[dict[str, Any]] = []
-        has_outer = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        has_outer = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
         for idx, label in enumerate(new_labels):
-            time_val = float(self.event_times[idx]) if idx < len(self.event_times) else 0.0
+            time_val = (
+                float(self.event_times[idx]) if idx < len(self.event_times) else 0.0
+            )
             annotations.append(AnnotationSpec(time_s=time_val, label=label))
 
             tooltip_parts = [label, f"{time_val:.2f} s"]
@@ -5636,7 +5932,9 @@ class VasoAnalyzerApp(QMainWindow):
                 labels=self.event_labels,
                 label_meta=self.event_label_meta,
             )
-            visible_entries = self.event_annotations if self._annotation_lane_visible else []
+            visible_entries = (
+                self.event_annotations if self._annotation_lane_visible else []
+            )
             plot_host.set_annotation_entries(visible_entries)
             self._refresh_event_annotation_artists()
         self.mark_session_dirty()
@@ -5652,15 +5950,50 @@ class VasoAnalyzerApp(QMainWindow):
             action.blockSignals(True)
             action.setChecked(visible)
             action.blockSignals(False)
-        log.debug("UI: Event table visibility updated to %s (source=%s)", visible, source)
+        log.debug(
+            "UI: Event table visibility updated to %s (source=%s)", visible, source
+        )
 
     def toggle_event_table(self, checked: bool):
         self._set_event_table_visible(bool(checked), source="user")
 
+    def _use_pg_snapshot_viewer(self) -> bool:
+        action = getattr(self, "action_use_pg_snapshot", None)
+        return bool(action and action.isChecked() and self.snapshot_view_pg is not None)
+
+    def _apply_snapshot_view_mode(self, should_show: bool) -> None:
+        use_pg = self._use_pg_snapshot_viewer()
+        stack = getattr(self, "snapshot_stack", None)
+        if stack is not None:
+            target_widget = None
+            if use_pg and self.snapshot_view_pg is not None:
+                target_widget = self.snapshot_view_pg
+            elif not use_pg:
+                target_widget = self.snapshot_label
+            if target_widget is not None:
+                stack.setCurrentWidget(target_widget)
+            stack.setVisible(should_show)
+        pg_widget = getattr(self, "snapshot_view_pg", None)
+        if pg_widget is not None:
+            pg_widget.setVisible(bool(should_show and use_pg))
+
+        legacy_widgets = (
+            getattr(self, "snapshot_label", None),
+            getattr(self, "slider", None),
+            getattr(self, "snapshot_controls", None),
+        )
+        for widget in legacy_widgets:
+            if widget is not None:
+                widget.setVisible(bool(should_show and not use_pg))
+
     def toggle_snapshot_viewer(self, checked: bool):
         if not checked:
             self._snapshot_viewer_pending_open = False
-        if checked and not self.snapshot_frames and isinstance(self.current_sample, SampleN):
+        if (
+            checked
+            and not self.snapshot_frames
+            and isinstance(self.current_sample, SampleN)
+        ):
             stack = self._ensure_sample_snapshots_loaded(self.current_sample)
             if stack is not None:
                 try:
@@ -5689,13 +6022,23 @@ class VasoAnalyzerApp(QMainWindow):
         if self.snapshot_card:
             self.snapshot_card.setVisible(should_show)
 
-        self.snapshot_label.setVisible(should_show)
-        self.slider.setVisible(should_show)
-        self.snapshot_controls.setVisible(should_show)
+        self._apply_snapshot_view_mode(should_show)
 
         if not should_show:
             self.set_snapshot_metadata_visible(False)
 
+        self._update_metadata_button_state()
+
+    def _on_toggle_pg_snapshot_viewer(self, use_pg: bool) -> None:
+        """
+        Toggle between the legacy snapshot viewer and SnapshotViewPG.
+        Phase 2: swap visibility only; both widgets share the same data.
+        """
+
+        card_visible = bool(getattr(self, "snapshot_card", None))
+        if card_visible:
+            card_visible = bool(self.snapshot_card.isVisible())
+        self._apply_snapshot_view_mode(card_visible)
         self._update_metadata_button_state()
 
     def _outer_channel_available(self) -> bool:
@@ -5735,7 +6078,9 @@ class VasoAnalyzerApp(QMainWindow):
             in_columns,
         )
         effective_label = label
-        canonical_label = getattr(project_module, "P2_CANONICAL_LABEL", "Set Pressure (mmHg)")
+        canonical_label = getattr(
+            project_module, "P2_CANONICAL_LABEL", "Set Pressure (mmHg)"
+        )
         if not in_columns and canonical_label in self.trace_data.columns:
             log.info(
                 "UI: set-pressure fallback -> using canonical %r even though label=%r",
@@ -5773,7 +6118,9 @@ class VasoAnalyzerApp(QMainWindow):
                         return project_module.normalize_p2_label(candidate)
                     return candidate
         if key == "p2":
-            return project_module.normalize_p2_label(default_labels.get(key, "Set Pressure (mmHg)"))
+            return project_module.normalize_p2_label(
+                default_labels.get(key, "Set Pressure (mmHg)")
+            )
         return default_labels.get(key, key)
 
     def _current_channel_presence(self) -> tuple[bool, bool]:
@@ -5809,7 +6156,10 @@ class VasoAnalyzerApp(QMainWindow):
     ) -> None:
         if outer_supported is None:
             outer_supported = self._outer_channel_available()
-        if self.id_toggle_act is not None and self.id_toggle_act.isChecked() != inner_on:
+        if (
+            self.id_toggle_act is not None
+            and self.id_toggle_act.isChecked() != inner_on
+        ):
             self.id_toggle_act.blockSignals(True)
             self.id_toggle_act.setChecked(inner_on)
             self.id_toggle_act.blockSignals(False)
@@ -5906,7 +6256,8 @@ class VasoAnalyzerApp(QMainWindow):
             if has_avg:
                 desired_avg = (
                     self.avg_pressure_toggle_act.isChecked()
-                    if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act
+                    if hasattr(self, "avg_pressure_toggle_act")
+                    and self.avg_pressure_toggle_act
                     else True
                 )
                 host.set_channel_visible("avg_pressure", bool(desired_avg))
@@ -5915,7 +6266,8 @@ class VasoAnalyzerApp(QMainWindow):
             if has_set:
                 desired_set = (
                     self.set_pressure_toggle_act.isChecked()
-                    if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act
+                    if hasattr(self, "set_pressure_toggle_act")
+                    and self.set_pressure_toggle_act
                     else False  # Default: hide Set Pressure track
                 )
                 host.set_channel_visible("set_pressure", bool(desired_set))
@@ -5950,10 +6302,12 @@ class VasoAnalyzerApp(QMainWindow):
             avg_track = host.track("avg_pressure") if has_avg else None
             set_track = host.track("set_pressure") if has_set else None
 
-            ordered_tracks = [t for t in (inner_track, outer_track, avg_track, set_track) if t]
-            primary_track = next((t for t in ordered_tracks if t.is_visible()), None) or (
-                ordered_tracks[0] if ordered_tracks else None
-            )
+            ordered_tracks = [
+                t for t in (inner_track, outer_track, avg_track, set_track) if t
+            ]
+            primary_track = next(
+                (t for t in ordered_tracks if t.is_visible()), None
+            ) or (ordered_tracks[0] if ordered_tracks else None)
 
             self.ax = primary_track.ax if primary_track else None
             self.ax2 = outer_track.ax if inner_track and outer_track else None
@@ -6005,12 +6359,14 @@ class VasoAnalyzerApp(QMainWindow):
         # Add pressure tracks if available and toggled on
         avg_pressure_on = (
             self.avg_pressure_toggle_act.isChecked()
-            if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act is not None
+            if hasattr(self, "avg_pressure_toggle_act")
+            and self.avg_pressure_toggle_act is not None
             else True
         )
         set_pressure_on = (
             self.set_pressure_toggle_act.isChecked()
-            if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act is not None
+            if hasattr(self, "set_pressure_toggle_act")
+            and self.set_pressure_toggle_act is not None
             else False
         )
 
@@ -6116,10 +6472,14 @@ class VasoAnalyzerApp(QMainWindow):
             # Get current inner/outer state
             previous_inner, previous_outer = self._current_channel_presence()
             inner_on = (
-                self.id_toggle_act.isChecked() if self.id_toggle_act is not None else previous_inner
+                self.id_toggle_act.isChecked()
+                if self.id_toggle_act is not None
+                else previous_inner
             )
             outer_on = (
-                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else previous_outer
+                self.od_toggle_act.isChecked()
+                if self.od_toggle_act is not None
+                else previous_outer
             )
 
             self._rebuild_channel_layout(inner_on, outer_on)
@@ -6131,10 +6491,14 @@ class VasoAnalyzerApp(QMainWindow):
         outer_supported = self._outer_channel_available()
         previous_inner, previous_outer = self._current_channel_presence()
         inner_on = (
-            self.id_toggle_act.isChecked() if self.id_toggle_act is not None else previous_inner
+            self.id_toggle_act.isChecked()
+            if self.id_toggle_act is not None
+            else previous_inner
         )
         outer_on = (
-            self.od_toggle_act.isChecked() if self.od_toggle_act is not None else previous_outer
+            self.od_toggle_act.isChecked()
+            if self.od_toggle_act is not None
+            else previous_outer
         )
 
         if channel == "inner":
@@ -6192,7 +6556,9 @@ class VasoAnalyzerApp(QMainWindow):
                 inner_visible = bool(checked)
             else:
                 if checked and not has_outer:
-                    self._apply_toggle_state(inner_visible, False, outer_supported=False)
+                    self._apply_toggle_state(
+                        inner_visible, False, outer_supported=False
+                    )
                     self._update_trace_controls_state()
                     return
                 outer_visible = bool(checked)
@@ -6204,7 +6570,9 @@ class VasoAnalyzerApp(QMainWindow):
                 outer_supported=has_outer,
             )
 
-            self._apply_toggle_state(inner_visible, outer_visible, outer_supported=has_outer)
+            self._apply_toggle_state(
+                inner_visible, outer_visible, outer_supported=has_outer
+            )
             host.set_channel_visible("inner", inner_visible)
             host.set_channel_visible("outer", outer_visible)
 
@@ -6371,7 +6739,9 @@ class VasoAnalyzerApp(QMainWindow):
         hide = bool(getattr(dialog, "hide_for_version", False))
 
         self.onboarding_settings.setValue("ui/show_welcome", not hide)
-        self.onboarding_settings.setValue("general/show_onboarding", "false" if hide else "true")
+        self.onboarding_settings.setValue(
+            "general/show_onboarding", "false" if hide else "true"
+        )
 
         if getattr(self, "_welcome_dialog", None) is dialog:
             self._welcome_dialog = None
@@ -6403,7 +6773,9 @@ class VasoAnalyzerApp(QMainWindow):
             "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.",
         )
 
-    def delete_selected_events(self, checked: bool = False, *, indices: list[int] | None = None):
+    def delete_selected_events(
+        self, checked: bool = False, *, indices: list[int] | None = None
+    ):
         """Delete selected events."""
         if indices is None:
             selection = self.event_table.selectionModel()
@@ -6519,7 +6891,9 @@ class VasoAnalyzerApp(QMainWindow):
         except Exception:
             return
         current_name = (
-            CURRENT_THEME.get("name") if isinstance(CURRENT_THEME, dict) else CURRENT_THEME
+            CURRENT_THEME.get("name")
+            if isinstance(CURRENT_THEME, dict)
+            else CURRENT_THEME
         )
         print(f"[THEME-DEBUG] After set_theme_mode, CURRENT_THEME={current_name!r}")
 
@@ -6669,7 +7043,9 @@ class VasoAnalyzerApp(QMainWindow):
         toolbar.setIconSize(QSize(24, 24))
         toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
 
-        self.home_action = QAction(QIcon(self.icon_path("Home.svg")), "Home screen", self)
+        self.home_action = QAction(
+            QIcon(self.icon_path("Home.svg")), "Home screen", self
+        )
         self.home_action.setToolTip("Show the startup home screen")
         self.home_action.triggered.connect(self.show_home_screen)
         self.home_action.setVisible(False)
@@ -6678,7 +7054,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_trace_action = QAction(
             QIcon(self.icon_path("folder-open.svg")), "Open trace…", self
         )
-        self.load_trace_action.setToolTip("Open a CSV trace file and auto-detect matching events")
+        self.load_trace_action.setToolTip(
+            "Open a CSV trace file and auto-detect matching events"
+        )
         self.load_trace_action.setShortcut(QKeySequence.Open)
         self.load_trace_action.triggered.connect(self._handle_load_trace)
 
@@ -6688,20 +7066,26 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_snapshot_action.setToolTip("Load Vasotracker _Result.tiff snapshot")
         self.load_snapshot_action.triggered.connect(self.load_snapshot)
 
-        self.excel_action = QAction(QIcon(self.icon_path("chart-bar.svg")), "Excel mapper…", self)
+        self.excel_action = QAction(
+            QIcon(self.icon_path("chart-bar.svg")), "Excel mapper…", self
+        )
         self.excel_action.setToolTip("Map events to an Excel template")
         self.excel_action.setEnabled(False)
         self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
 
         self.review_events_action = QAction(QIcon(), "Review Events…", self)
-        self.review_events_action.setToolTip("Step through events to confirm or flag values")
+        self.review_events_action.setToolTip(
+            "Step through events to confirm or flag values"
+        )
         self.review_events_action.setEnabled(False)
         self.review_events_action.triggered.connect(self._launch_event_review_wizard)
 
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Load events…", self
         )
-        self.load_events_action.setToolTip("Load an events table without reloading the trace")
+        self.load_events_action.setToolTip(
+            "Load an events table without reloading the trace"
+        )
         self.load_events_action.setEnabled(False)
         self.load_events_action.triggered.connect(self._handle_load_events)
 
@@ -6726,7 +7110,9 @@ class VasoAnalyzerApp(QMainWindow):
         toolbar.addAction(self.review_events_action)
         toolbar.addAction(self.action_figure_composer)
 
-        self.save_session_action = QAction(QIcon(self.icon_path("Save.svg")), "Save Project", self)
+        self.save_session_action = QAction(
+            QIcon(self.icon_path("Save.svg")), "Save Project", self
+        )
         self.save_session_action.setToolTip("Save the current project")
         self.save_session_action.setShortcut(QKeySequence.Save)
         self.save_session_action.triggered.connect(self.save_project_file)
@@ -6736,7 +7122,9 @@ class VasoAnalyzerApp(QMainWindow):
             QIcon(self.icon_path("info-circle.svg")), "Welcome guide", self
         )
         self.welcome_action.setToolTip("Open the welcome guide")
-        self.welcome_action.triggered.connect(lambda: self.show_welcome_guide(modal=False))
+        self.welcome_action.triggered.connect(
+            lambda: self.show_welcome_guide(modal=False)
+        )
         toolbar.addAction(self.welcome_action)
 
         toolbar.addWidget(self.trace_file_label)
@@ -6867,8 +7255,10 @@ class VasoAnalyzerApp(QMainWindow):
                 isinstance(layout, dict)
                 and isinstance(current, dict)
                 and layout.get("order") == current.get("order")
-                and dict(layout.get("height_ratios", {})) == dict(current.get("height_ratios", {}))
-                and dict(layout.get("visibility", {})) == dict(current.get("visibility", {}))
+                and dict(layout.get("height_ratios", {}))
+                == dict(current.get("height_ratios", {}))
+                and dict(layout.get("visibility", {}))
+                == dict(current.get("visibility", {}))
             ):
                 self._pending_plot_layout = None
                 return
@@ -7102,7 +7492,9 @@ class VasoAnalyzerApp(QMainWindow):
             status = ""
             if hasattr(self, "trace_file_label"):
                 status = self.trace_file_label.property("_full_status_text") or ""
-            tooltip = f"Return to workspace · {status}" if status else "Return to workspace"
+            tooltip = (
+                f"Return to workspace · {status}" if status else "Return to workspace"
+            )
             self.home_resume_btn.setToolTip(tooltip)
         else:
             self.home_resume_btn.setToolTip("Return to workspace")
@@ -7232,7 +7624,9 @@ QPushButton[isGhost="true"]:hover {{
         self.trace_file_label.setToolTip(tooltip)
         self._update_status_chip()
 
-    def _update_status_chip(self, label: str | None = None, tooltip: str | None = None) -> None:
+    def _update_status_chip(
+        self, label: str | None = None, tooltip: str | None = None
+    ) -> None:
         if label is not None:
             self._status_base_label = label
         if tooltip is not None:
@@ -7244,7 +7638,9 @@ QPushButton[isGhost="true"]:hover {{
 
         if self.trace_file_label.width() > 0:
             metrics = QFontMetrics(self.trace_file_label.font())
-            display = metrics.elidedText(full_text, Qt.ElideMiddle, self.trace_file_label.width())
+            display = metrics.elidedText(
+                full_text, Qt.ElideMiddle, self.trace_file_label.width()
+            )
         else:
             display = full_text
         self.trace_file_label.setText(display)
@@ -7331,19 +7727,25 @@ QPushButton[isGhost="true"]:hover {{
             trace["Time (s)"] = pd.to_numeric(trace["Time (s)"], errors="coerce")
 
         if "Inner Diameter" in trace.columns:
-            trace["Inner Diameter"] = pd.to_numeric(trace["Inner Diameter"], errors="coerce")
+            trace["Inner Diameter"] = pd.to_numeric(
+                trace["Inner Diameter"], errors="coerce"
+            )
             inner_raw_name = "Inner Diameter (raw)"
             inner_clean_name = "Inner Diameter (clean)"
             inner_values = trace["Inner Diameter"].to_numpy(dtype=float, copy=True)
 
             if inner_raw_name in trace.columns:
-                trace[inner_raw_name] = pd.to_numeric(trace[inner_raw_name], errors="coerce")
+                trace[inner_raw_name] = pd.to_numeric(
+                    trace[inner_raw_name], errors="coerce"
+                )
             else:
                 insert_at = trace.columns.get_loc("Inner Diameter") + 1
                 trace.insert(insert_at, inner_raw_name, inner_values.copy())
 
             if inner_clean_name in trace.columns:
-                trace[inner_clean_name] = pd.to_numeric(trace[inner_clean_name], errors="coerce")
+                trace[inner_clean_name] = pd.to_numeric(
+                    trace[inner_clean_name], errors="coerce"
+                )
             else:
                 insert_at = (
                     trace.columns.get_loc(inner_raw_name) + 1
@@ -7352,19 +7754,25 @@ QPushButton[isGhost="true"]:hover {{
                 )
                 trace.insert(insert_at, inner_clean_name, inner_values.copy())
         if "Outer Diameter" in trace.columns:
-            trace["Outer Diameter"] = pd.to_numeric(trace["Outer Diameter"], errors="coerce")
+            trace["Outer Diameter"] = pd.to_numeric(
+                trace["Outer Diameter"], errors="coerce"
+            )
             outer_raw_name = "Outer Diameter (raw)"
             outer_clean_name = "Outer Diameter (clean)"
             outer_values = trace["Outer Diameter"].to_numpy(dtype=float, copy=True)
 
             if outer_raw_name in trace.columns:
-                trace[outer_raw_name] = pd.to_numeric(trace[outer_raw_name], errors="coerce")
+                trace[outer_raw_name] = pd.to_numeric(
+                    trace[outer_raw_name], errors="coerce"
+                )
             else:
                 insert_at = trace.columns.get_loc("Outer Diameter") + 1
                 trace.insert(insert_at, outer_raw_name, outer_values.copy())
 
             if outer_clean_name in trace.columns:
-                trace[outer_clean_name] = pd.to_numeric(trace[outer_clean_name], errors="coerce")
+                trace[outer_clean_name] = pd.to_numeric(
+                    trace[outer_clean_name], errors="coerce"
+                )
             else:
                 insert_at = (
                     trace.columns.get_loc(outer_raw_name) + 1
@@ -7375,6 +7783,35 @@ QPushButton[isGhost="true"]:hover {{
 
         trace.attrs.setdefault("edit_log", [])
         return trace
+
+    def _update_trace_sync_state(self) -> None:
+        """Cache canonical trace time + frame mappings for sync."""
+
+        self.trace_time = None
+        self.frame_numbers = None
+        self.frame_number_to_trace_idx = {}
+        self.frame_trace_time = None
+        self.frame_trace_index = None
+        self.frame_times = []
+
+        if self.trace_data is None:
+            return
+
+        if "Time (s)" in self.trace_data.columns:
+            with contextlib.suppress(Exception):
+                self.trace_time = self.trace_data["Time (s)"].to_numpy(dtype=float)
+
+        if "FrameNumber" in self.trace_data.columns:
+            try:
+                series = pd.to_numeric(self.trace_data["FrameNumber"], errors="coerce")
+                self.frame_numbers = series.to_numpy()
+                self.frame_number_to_trace_idx = {
+                    int(fn): int(i)
+                    for i, fn in enumerate(self.frame_numbers)
+                    if pd.notna(fn)
+                }
+            except Exception:
+                log.debug("Unable to build frame→trace mapping", exc_info=True)
 
     def _get_trace_model_for_sample(self, sample: SampleN | None) -> TraceModel:
         """Return a TraceModel for the current trace_data, using a per-dataset cache."""
@@ -7407,7 +7844,10 @@ QPushButton[isGhost="true"]:hover {{
         else:
             self.trace_data["Inner Diameter (raw)"] = inner_raw
 
-        if self.trace_model.outer_full is not None and "Outer Diameter" in self.trace_data.columns:
+        if (
+            self.trace_model.outer_full is not None
+            and "Outer Diameter" in self.trace_data.columns
+        ):
             outer_clean = self.trace_model.outer_full.copy()
             self.trace_data.loc[:, "Outer Diameter"] = outer_clean
             if "Outer Diameter (clean)" in self.trace_data.columns:
@@ -7418,7 +7858,9 @@ QPushButton[isGhost="true"]:hover {{
                         self.trace_model.outer_raw.copy()
                     )
                 else:
-                    self.trace_data["Outer Diameter (raw)"] = self.trace_model.outer_raw.copy()
+                    self.trace_data["Outer Diameter (raw)"] = (
+                        self.trace_model.outer_raw.copy()
+                    )
 
         serialized_log = serialize_edit_log(self.trace_model.edit_log)
         self.trace_data.attrs["edit_log"] = serialized_log
@@ -7477,9 +7919,7 @@ QPushButton[isGhost="true"]:hover {{
                     }
                 )
             )
-            message = (
-                f"Edited {point_count} points ({percent:.3f}%) [{channel_label}] — Undo available"
-            )
+            message = f"Edited {point_count} points ({percent:.3f}%) [{channel_label}] — Undo available"
         else:
             message = (
                 f"Edited {summary.point_count} points "
@@ -7502,7 +7942,9 @@ QPushButton[isGhost="true"]:hover {{
         channels = ", ".join(
             sorted({"ID" if action.channel == "inner" else "OD" for action in removed})
         )
-        self.statusBar().showMessage(f"Point edits undone ({point_count} pts) [{channels}]", 6000)
+        self.statusBar().showMessage(
+            f"Point edits undone ({point_count} pts) [{channels}]", 6000
+        )
 
     def _on_edit_points_triggered(self) -> None:
         if self.trace_model is None:
@@ -7512,7 +7954,9 @@ QPushButton[isGhost="true"]:hover {{
         channels: list[tuple[str, str]] = []
         has_outer = self.trace_model.outer_full is not None
         inner_visible = self.id_toggle_act is None or self.id_toggle_act.isChecked()
-        outer_visible = has_outer and (self.od_toggle_act is None or self.od_toggle_act.isChecked())
+        outer_visible = has_outer and (
+            self.od_toggle_act is None or self.od_toggle_act.isChecked()
+        )
 
         if inner_visible:
             channels.append(("inner", "Inner Diameter (ID)"))
@@ -7534,7 +7978,9 @@ QPushButton[isGhost="true"]:hover {{
         menu = QMenu(self)
         for channel_key, label in channels:
             action = menu.addAction(label)
-            action.triggered.connect(lambda _, key=channel_key: self._launch_point_editor(key))
+            action.triggered.connect(
+                lambda _, key=channel_key: self._launch_point_editor(key)
+            )
         menu.exec_(QCursor.pos())
 
     def _launch_point_editor(self, channel: str) -> None:
@@ -7586,7 +8032,9 @@ QPushButton[isGhost="true"]:hover {{
         command = PointEditCommand(self, actions, summary)
         self.undo_stack.push(command)
 
-    def _channel_has_data_in_window(self, channel: str, window: tuple[float, float]) -> bool:
+    def _channel_has_data_in_window(
+        self, channel: str, window: tuple[float, float]
+    ) -> bool:
         """Return True if the channel has any samples inside the window."""
         if self.trace_model is None:
             return False
@@ -7682,7 +8130,9 @@ QPushButton[isGhost="true"]:hover {{
         if hasattr(self, "home_recent_projects_layout"):
             layout = self.home_recent_projects_layout
             self._clear_layout(layout)
-            projects = [p for p in (self.recent_projects or []) if isinstance(p, str) and p]
+            projects = [
+                p for p in (self.recent_projects or []) if isinstance(p, str) and p
+            ]
             has_projects = bool(projects)
             if hasattr(self, "home_clear_projects_button"):
                 self.home_clear_projects_button.setVisible(has_projects)
@@ -7818,7 +8268,9 @@ QPushButton[isGhost="true"]:hover {{
     def _on_autoscale_triggered(self) -> None:
         """Handle autoscale button click - reset to full time range and autoscale Y axes."""
         if hasattr(self, "_logger"):
-            self._logger.debug("Toolbar autoscale: reset to full range and autoscale all tracks")
+            self._logger.debug(
+                "Toolbar autoscale: reset to full range and autoscale all tracks"
+            )
         if not hasattr(self, "plot_host"):
             return
 
@@ -7942,7 +8394,9 @@ QPushButton[isGhost="true"]:hover {{
         Ensures legacy lane is disabled when helper is active.
         """
         incoming = mode if mode is not None else self._event_label_mode
-        mapped = {"auto": "vertical", "all": "horizontal_outside"}.get(incoming, incoming)
+        mapped = {"auto": "vertical", "all": "horizontal_outside"}.get(
+            incoming, incoming
+        )
         self._event_label_mode = mapped
 
         # Always tear down the legacy annotation lane FIRST
@@ -7960,7 +8414,9 @@ QPushButton[isGhost="true"]:hover {{
 
         # Using the new helper: ensure per-track lines are *disabled* (helper draws its own)
         plot_host.use_track_event_lines(False)
-        plot_host.set_event_label_mode(self._event_label_mode)  # rebuilds helper & xlim callbacks
+        plot_host.set_event_label_mode(
+            self._event_label_mode
+        )  # rebuilds helper & xlim callbacks
         self._refresh_event_annotation_artists()
         self.canvas.draw_idle()
         self._sync_event_controls()
@@ -8012,7 +8468,8 @@ QPushButton[isGhost="true"]:hover {{
 
     def _update_trace_controls_state(self) -> None:
         has_trace = (
-            self.trace_data is not None and getattr(self.trace_data, "empty", False) is False
+            self.trace_data is not None
+            and getattr(self.trace_data, "empty", False) is False
         )
         if self.id_toggle_act is not None:
             self.id_toggle_act.setEnabled(has_trace)
@@ -8138,6 +8595,7 @@ QPushButton[isGhost="true"]:hover {{
         ) = load_trace_and_events(trace_path, cache=cache)
 
         self.trace_data = self._prepare_trace_dataframe(df)
+        self._update_trace_sync_state()
         self._reset_channel_view_defaults()
         self._last_event_import = import_meta or {}
         self.trace_file_path = trace_path
@@ -8148,7 +8606,9 @@ QPushButton[isGhost="true"]:hover {{
         self.show_analysis_workspace()
 
         if labels:
-            self.load_project_events(labels, times, frames, diam, od_diam, auto_export=True)
+            self.load_project_events(
+                labels, times, frames, diam, od_diam, auto_export=True
+            )
             event_file = import_meta.get("event_file") if import_meta else None
             if event_file:
                 self._event_table_path = str(event_file)
@@ -8208,7 +8668,9 @@ QPushButton[isGhost="true"]:hover {{
 
         return self.trace_data
 
-    def load_trace_and_events(self, file_path=None, tiff_path=None, *, source: str = "manual"):
+    def load_trace_and_events(
+        self, file_path=None, tiff_path=None, *, source: str = "manual"
+    ):
         # --- Prep ---
         snapshots = None
         self._clear_canvas_and_table()
@@ -8224,7 +8686,9 @@ QPushButton[isGhost="true"]:hover {{
         try:
             self.load_trace_and_event_files(file_path)
         except Exception as e:
-            QMessageBox.critical(self, "Trace Load Error", f"Failed to load trace file:\n{e}")
+            QMessageBox.critical(
+                self, "Trace Load Error", f"Failed to load trace file:\n{e}"
+            )
             return
 
         # 3) Remember in Recent Files
@@ -8255,7 +8719,9 @@ QPushButton[isGhost="true"]:hover {{
                 self.load_snapshots(snapshots)
                 self.toggle_snapshot_viewer(True)
             except Exception as e:
-                QMessageBox.warning(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
+                QMessageBox.warning(
+                    self, "TIFF Load Error", f"Failed to load TIFF:\n{e}"
+                )
 
         # 6) If a project and experiment are active, auto-add this dataset
         target_experiment: Experiment | None = None
@@ -8306,7 +8772,9 @@ QPushButton[isGhost="true"]:hover {{
                 3000,
             )
             embedded_rows = (
-                len(self.trace_data.index) if isinstance(self.trace_data, pd.DataFrame) else 0
+                len(self.trace_data.index)
+                if isinstance(self.trace_data, pd.DataFrame)
+                else 0
             )
             event_count = len(self.event_labels or [])
             log.debug(
@@ -8346,7 +8814,9 @@ QPushButton[isGhost="true"]:hover {{
 
     def populate_table(self):
         has_data = bool(self.event_table_data)
-        has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        has_od = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
         avg_label = self._trace_label_for("p_avg")
         set_label = self._trace_label_for("p2")
         has_avg_p = self.trace_data is not None and avg_label in self.trace_data.columns
@@ -8363,14 +8833,19 @@ QPushButton[isGhost="true"]:hover {{
         self._update_event_table_presence_state(has_data)
 
     def _launch_event_review_wizard(self) -> None:
-        if self._event_review_wizard is not None and self._event_review_wizard.isVisible():
+        if (
+            self._event_review_wizard is not None
+            and self._event_review_wizard.isVisible()
+        ):
             with contextlib.suppress(Exception):
                 self._event_review_wizard.raise_()
                 self._event_review_wizard.activateWindow()
             return
 
         if not self.event_table_data:
-            QMessageBox.information(self, "No Events", "Load events before starting a review.")
+            QMessageBox.information(
+                self, "No Events", "Load events before starting a review."
+            )
             return
 
         events = [tuple(row) for row in self.event_table_data]
@@ -8381,7 +8856,9 @@ QPushButton[isGhost="true"]:hover {{
             try:
                 self._focus_event_row(int(idx), source="wizard")
             except Exception:
-                log.debug("Unable to focus event row %s from wizard", idx, exc_info=True)
+                log.debug(
+                    "Unable to focus event row %s from wizard", idx, exc_info=True
+                )
 
         dialog = EventReviewWizard(
             self,
@@ -8435,7 +8912,10 @@ QPushButton[isGhost="true"]:hover {{
         has_data = bool(getattr(self, "event_table_data", None))
         if hasattr(self, "excel_action") and self.excel_action is not None:
             self.excel_action.setEnabled(has_data)
-        if hasattr(self, "review_events_action") and self.review_events_action is not None:
+        if (
+            hasattr(self, "review_events_action")
+            and self.review_events_action is not None
+        ):
             self.review_events_action.setEnabled(has_data)
         action_map = getattr(self, "action_map_excel", None)
         if action_map is not None:
@@ -8443,6 +8923,62 @@ QPushButton[isGhost="true"]:hover {{
         action_export = getattr(self, "action_export_excel", None)
         if action_export is not None:
             action_export.setEnabled(has_data)
+
+    def _derive_frame_trace_time(
+        self, n_frames: int
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """
+        Use trace_df["TiffPage"] to produce canonical frame→time mapping.
+
+        Returns (frame_trace_index, frame_trace_time) or (None, None) when unavailable.
+        """
+
+        self.frame_trace_index = None
+        self.frame_trace_time = None
+        self.frame_times = []
+
+        if (
+            self.trace_data is None
+            or "TiffPage" not in self.trace_data.columns
+            or "Time (s)" not in self.trace_data.columns
+        ):
+            return None, None
+
+        try:
+            tiff_rows = self.trace_data[self.trace_data["TiffPage"].notna()].copy()
+            if tiff_rows.empty:
+                return None, None
+            tiff_rows.loc[:, "TiffPage"] = pd.to_numeric(
+                tiff_rows["TiffPage"], errors="coerce"
+            )
+            tiff_rows = tiff_rows[tiff_rows["TiffPage"].notna()]
+            tiff_rows = tiff_rows.sort_values("TiffPage")
+
+            frame_indices = tiff_rows["TiffPage"].to_numpy(dtype=int)
+            frame_trace_index = tiff_rows.index.to_numpy(dtype=int)
+            frame_trace_time = tiff_rows["Time (s)"].to_numpy(dtype=float)
+
+            if len(frame_trace_time) != n_frames or len(frame_trace_index) != n_frames:
+                log.error(
+                    "TIFF sync mismatch: trace provides %d mapped frames, stack has %d",
+                    len(frame_trace_time),
+                    n_frames,
+                )
+                return None, None
+            if not np.array_equal(frame_indices, np.arange(n_frames)):
+                log.error(
+                    "TIFF sync mismatch: TiffPage values are not sequential 0..%d",
+                    n_frames - 1,
+                )
+                return None, None
+
+            self.frame_trace_index = frame_trace_index
+            self.frame_trace_time = frame_trace_time
+            self.frame_times = frame_trace_time.tolist()
+            return frame_trace_index, frame_trace_time
+        except Exception:
+            log.exception("Failed to derive frame_trace_time from trace metadata")
+            return None, None
 
     def _load_snapshot_from_path(self, file_path: str) -> bool:
         """Load a snapshot TIFF from ``file_path`` and update the viewer."""
@@ -8461,7 +8997,9 @@ QPushButton[isGhost="true"]:hover {{
                         valid_metadata.append({})
 
             if len(valid_frames) < len(frames):
-                QMessageBox.warning(self, "TIFF Warning", "Skipped empty or corrupted TIFF frames.")
+                QMessageBox.warning(
+                    self, "TIFF Warning", "Skipped empty or corrupted TIFF frames."
+                )
 
             if not valid_frames:
                 QMessageBox.warning(
@@ -8474,37 +9012,91 @@ QPushButton[isGhost="true"]:hover {{
             self.snapshot_frames = valid_frames
             self.frames_metadata = valid_metadata
 
-            if self.frames_metadata:
-                first_meta = self.frames_metadata[0] or {}
-                found = False
-                for key in ("Rec_intvl", "FrameInterval", "FrameTime"):
-                    if key in first_meta:
-                        try:
-                            val = float(str(first_meta[key]).replace("ms", "").strip())
-                            if val > 1:
-                                val /= 1000.0
-                            if val > 0:
-                                self.recording_interval = val
-                                found = True
-                        except (ValueError, TypeError):
-                            pass
-                        break
-                if not found:
-                    self.recording_interval = 0.14
-            else:
-                self.recording_interval = 0.14
+            first_meta: dict[str, Any] = self.frames_metadata[0] or {} if self.frames_metadata else {}
+            frame_trace_index, frame_trace_time = self._derive_frame_trace_time(
+                len(self.snapshot_frames)
+            )
 
-            self.frame_times = []
-            if self.frames_metadata:
-                for idx, meta in enumerate(self.frames_metadata):
-                    self.frame_times.append(meta.get("FrameTime", idx * self.recording_interval))
+            # Canonical path: use trace["TiffPage"] to align frames to Time (s)
+            if frame_trace_time is not None:
+                self.recording_interval = None
+                _log_time_sync(
+                    "VIDEO_LOAD",
+                    sample=getattr(self.current_sample, "name", None),
+                    path=os.path.basename(file_path),
+                    frames=len(self.snapshot_frames),
+                    frame_time_0=frame_trace_time[0] if len(frame_trace_time) else None,
+                    frame_time_last=frame_trace_time[-1] if len(frame_trace_time) else None,
+                    meta_keys=",".join(sorted((first_meta or {}).keys())),
+                )
             else:
-                for idx in range(len(self.snapshot_frames)):
-                    self.frame_times.append(idx * self.recording_interval)
+                # Legacy fallback: approximate frame times from metadata if sync columns are missing
+                self.recording_interval = 0.14
+                if self.frames_metadata:
+                    found = False
+                    for key in ("Rec_intvl", "FrameInterval", "FrameTime"):
+                        if key in first_meta:
+                            try:
+                                val = float(str(first_meta[key]).replace("ms", "").strip())
+                                if val > 1:
+                                    val /= 1000.0
+                                if val > 0:
+                                    self.recording_interval = val
+                                    found = True
+                            except (ValueError, TypeError):
+                                pass
+                            break
+                    if not found:
+                        self.recording_interval = 0.14
+
+                def _coerce_frame_time(meta_val: Any, idx_val: int) -> float:
+                    """Normalize frame time to seconds."""
+
+                    if meta_val is None:
+                        return idx_val * float(self.recording_interval)
+                    raw = str(meta_val).strip()
+                    has_ms = "ms" in raw.lower()
+                    try:
+                        numeric = float(
+                            raw.replace("ms", "").replace("MS", "").replace("s", "")
+                        )
+                    except (TypeError, ValueError):
+                        return idx_val * float(self.recording_interval)
+                    is_probably_ms = has_ms or (
+                        numeric > 10 and float(self.recording_interval or 0) < 1.0
+                    )
+                    if is_probably_ms:
+                        numeric /= 1000.0
+                    return numeric
+
+                self.frame_times = []
+                if self.frames_metadata:
+                    for idx, meta in enumerate(self.frames_metadata):
+                        self.frame_times.append(
+                            _coerce_frame_time(meta.get("FrameTime"), idx)
+                        )
+                else:
+                    for idx in range(len(self.snapshot_frames)):
+                        self.frame_times.append(idx * float(self.recording_interval))
+
+                _log_time_sync(
+                    "VIDEO_LOAD_LEGACY",
+                    sample=getattr(self.current_sample, "name", None),
+                    path=os.path.basename(file_path),
+                    frames=len(self.snapshot_frames),
+                    interval=f"{self.recording_interval:.4f}",
+                    frame_time_0=self.frame_times[0] if self.frame_times else None,
+                    frame_time_1=self.frame_times[1] if len(self.frame_times) > 1 else None,
+                    meta_keys=",".join(sorted((first_meta or {}).keys())),
+                )
 
             self.compute_frame_trace_indices()
+            canonical_times = (
+                frame_trace_time if frame_trace_time is not None else np.asarray(self.frame_times, dtype=float)
+            )
+            self._update_pg_snapshot_viewer(self.snapshot_frames, canonical_times)
 
-            self.display_frame(0)
+            self._set_snapshot_frame(0)
             self.slider.setMinimum(0)
             self.slider.setMaximum(len(self.snapshot_frames) - 1)
             self.slider.setValue(0)
@@ -8575,6 +9167,7 @@ QPushButton[isGhost="true"]:hover {{
         if od is not None:
             data["Outer Diameter"] = od
         self.trace_data = self._prepare_trace_dataframe(pd.DataFrame(data))
+        self._update_trace_sync_state()
         self._reset_channel_view_defaults()
         self.compute_frame_trace_indices()
         self.xlim_full = None
@@ -8587,7 +9180,9 @@ QPushButton[isGhost="true"]:hover {{
 
     def load_events(self, labels, diam_before, od_before=None):
         self.event_labels = list(labels)
-        self.event_label_meta = [self._with_default_review_state(None) for _ in self.event_labels]
+        self.event_label_meta = [
+            self._with_default_review_state(None) for _ in self.event_labels
+        ]
         self.event_table_data = []
         has_od = od_before is not None
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
@@ -8599,6 +9194,19 @@ QPushButton[isGhost="true"]:hover {{
         ):
             self.event_table_data.append((lbl, 0.0, diam, od, None, None, 0))
         self.populate_table()
+
+    def _trace_time_for_frame_number(self, frame: int | float | None) -> float | None:
+        """Return canonical trace time for a given camera frame number."""
+
+        if frame is None or pd.isna(frame):
+            return None
+        frame_int = int(frame)
+        idx = self.frame_number_to_trace_idx.get(frame_int)
+        if idx is None or self.trace_time is None:
+            return None
+        if idx < 0 or idx >= len(self.trace_time):
+            return None
+        return float(self.trace_time[idx])
 
     def load_project_events(
         self,
@@ -8617,28 +9225,60 @@ QPushButton[isGhost="true"]:hover {{
             len(labels) if labels else 0,
         )
         self.event_labels = list(labels)
-        self.event_label_meta = [self._with_default_review_state(None) for _ in self.event_labels]
-        if times is not None:
-            self.event_times = pd.to_numeric(times, errors="coerce").tolist()
+        self.event_label_meta = [
+            self._with_default_review_state(None) for _ in self.event_labels
+        ]
+        raw_times = (
+            pd.to_numeric(times, errors="coerce").tolist() if times is not None else []
+        )
+        raw_frame_series = (
+            pd.to_numeric(pd.Series(frames), errors="coerce") if frames is not None else None
+        )
+        if raw_frame_series is not None:
+            raw_frame_values = raw_frame_series.tolist()
         else:
-            self.event_times = []
+            raw_frame_values = [None] * len(self.event_labels)
+        raw_frame_list: list[int | None] = [
+            int(val) if pd.notna(val) else None for val in raw_frame_values
+        ]
 
-        if frames is not None:
-            self.event_frames = (
-                pd.to_numeric(pd.Series(frames), errors="coerce").fillna(0).astype(int).tolist()
-            )
-        else:
-            self.event_frames = [0] * len(self.event_times)
+        resolved_times: list[float] = []
+        resolved_frames: list[int | None] = []
+        unsynced_events = 0
+        for idx_ev, lbl in enumerate(self.event_labels):
+            frame_val = raw_frame_list[idx_ev] if idx_ev < len(raw_frame_list) else None
+            time_val = raw_times[idx_ev] if idx_ev < len(raw_times) else np.nan
+            resolved_frames.append(frame_val)
+            mapped_time = self._trace_time_for_frame_number(frame_val)
+            if mapped_time is not None:
+                resolved_times.append(mapped_time)
+            else:
+                try:
+                    resolved_times.append(float(time_val))
+                except (TypeError, ValueError):
+                    resolved_times.append(np.nan)
+                    if frame_val is not None:
+                        unsynced_events += 1
+
+        if unsynced_events:
+            log.warning("Events: %d rows had frame numbers with no trace match", unsynced_events)
+
+        self.event_times = resolved_times
+        self.event_frames = [
+            int(fr) if fr is not None else 0 for fr in resolved_frames
+        ]
 
         self.event_table_data = []
         annotation_entries: list[AnnotationSpec] = []
         event_meta: list[dict[str, Any]] = []
 
-        has_od = od_before is not None or "Outer Diameter" in self.trace_data.columns
+        has_od = od_before is not None or (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
         avg_label = self._trace_label_for("p_avg")
         set_label = self._trace_label_for("p2")
-        has_avg_pressure = avg_label in self.trace_data.columns
-        has_set_pressure = set_label in self.trace_data.columns
+        has_avg_pressure = self.trace_data is not None and avg_label in self.trace_data.columns
+        has_set_pressure = self.trace_data is not None and set_label in self.trace_data.columns
 
         if self.trace_data is not None and self.event_times:
             arr_t = self.trace_data["Time (s)"].values
@@ -8657,14 +9297,14 @@ QPushButton[isGhost="true"]:hover {{
                 zip(
                     self.event_labels,
                     self.event_times,
-                    self.event_frames,
+                    resolved_frames,
                     strict=False,
                 )
             ):
                 if pd.isna(t):
                     continue
                 idx = int(np.argmin(np.abs(arr_t - t)))
-                frame_number = int(fr) if self.event_frames else idx
+                frame_number = int(fr) if fr is not None else idx
 
                 # Sample a value before the *next* event (or before trace end)
                 if len(self.event_times) > 1 and idx_ev < len(self.event_times) - 1:
@@ -8676,12 +9316,16 @@ QPushButton[isGhost="true"]:hover {{
                         t_sample = float(t) + gap * 0.6
                     else:
                         lookback = min(5.0, max(1.0, gap / 2.0, default_offset_sec))
-                        lookback = min(lookback, gap - 0.05) if gap > 0.05 else gap * 0.5
+                        lookback = (
+                            min(lookback, gap - 0.05) if gap > 0.05 else gap * 0.5
+                        )
                         t_sample = float(next_t) - lookback
                 else:
                     t_sample = float(time_trace.iloc[-1]) - default_offset_sec
                 # Clamp sample time within trace range
-                t_sample = max(float(time_trace.iloc[0]), min(t_sample, float(time_trace.iloc[-1])))
+                t_sample = max(
+                    float(time_trace.iloc[0]), min(t_sample, float(time_trace.iloc[-1]))
+                )
 
                 idx_pre = int(np.argmin(np.abs(arr_t - t_sample)))
 
@@ -8708,7 +9352,7 @@ QPushButton[isGhost="true"]:hover {{
                         od_val_sample,
                         avg_p_val_sample,
                         set_p_val_sample,
-                        int(fr),
+                        int(fr) if fr is not None else frame_number,
                     )
                 )
 
@@ -8744,7 +9388,9 @@ QPushButton[isGhost="true"]:hover {{
                 if pd.isna(t):
                     continue
                 od_val = (
-                    float(od_before[self.event_labels.index(lbl)]) if has_od and od_before else None
+                    float(od_before[self.event_labels.index(lbl)])
+                    if has_od and od_before
+                    else None
                 )
                 # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
                 self.event_table_data.append(
@@ -8783,17 +9429,60 @@ QPushButton[isGhost="true"]:hover {{
             len(self.event_table_data),
         )
 
+    def _update_pg_snapshot_viewer(
+        self, stack: np.ndarray | Sequence[np.ndarray], frame_times: Sequence[float] | None
+    ) -> None:
+        """Mirror snapshot data into the PyQtGraph viewer."""
+
+        if self.snapshot_view_pg is None:
+            return
+
+        try:
+            arr = stack if isinstance(stack, np.ndarray) else np.stack(stack)
+        except Exception:
+            log.debug("Failed to coerce snapshot stack for PG viewer", exc_info=True)
+            return
+
+        times_array = None
+        if frame_times is not None:
+            with contextlib.suppress(Exception):
+                times_array = np.asarray(frame_times, dtype=float)
+                if times_array.shape[0] != arr.shape[0]:
+                    log.warning(
+                        "PG viewer: frame_times length %d != stack frames %d; dropping xvals",
+                        times_array.shape[0],
+                        arr.shape[0],
+                    )
+                    times_array = None
+
+        try:
+            self.snapshot_view_pg.set_stack(arr, frame_trace_time=times_array)
+        except Exception:
+            log.exception("Failed to update SnapshotViewPG with new stack")
+
     def load_snapshots(self, stack):
         self.snapshot_frames = [frame for frame in stack]
         if self.snapshot_frames:
-            self.frame_times = [
-                idx * self.recording_interval for idx in range(len(self.snapshot_frames))
-            ]
+            canonical_times = None
+            frame_trace_index, frame_trace_time = self._derive_frame_trace_time(
+                len(self.snapshot_frames)
+            )
+            if frame_trace_time is not None:
+                canonical_times = frame_trace_time
+                self.recording_interval = None
+            else:
+                self.frame_times = [
+                    idx * self.recording_interval
+                    for idx in range(len(self.snapshot_frames))
+                ]
+                canonical_times = np.asarray(self.frame_times, dtype=float)
+
             self.compute_frame_trace_indices()
+            self._update_pg_snapshot_viewer(stack, canonical_times)
             self.slider.setMinimum(0)
             self.slider.setMaximum(len(self.snapshot_frames) - 1)
             self.slider.setValue(0)
-            self.display_frame(0)
+            self._set_snapshot_frame(0)
             self.prev_frame_btn.setEnabled(True)
             self.next_frame_btn.setEnabled(True)
             self.play_pause_btn.setEnabled(True)
@@ -8803,26 +9492,161 @@ QPushButton[isGhost="true"]:hover {{
             self._configure_snapshot_timer()
 
     def compute_frame_trace_indices(self):
-        """Map each frame time to the closest index in the loaded trace."""
-        if self.trace_data is None or not self.frame_times:
-            self.frame_trace_indices = []
+        """Map each frame to the nearest trace index using canonical times."""
+
+        self.frame_trace_indices = []
+        self.frame_trace_index = None
+
+        if self.trace_time is None:
             return
 
-        t_trace = self.trace_data["Time (s)"].values
-        frame_times = np.asarray(self.frame_times, dtype=float)
-
-        if len(frame_times) > 1:
-            dt_trace = float(t_trace[-1]) - float(t_trace[0])
-            dt_frames = float(frame_times[-1]) - float(frame_times[0])
-            scale = dt_trace / dt_frames if dt_frames != 0 else 1.0
+        if self.frame_trace_time is not None and len(self.frame_trace_time):
+            times = np.asarray(self.frame_trace_time, dtype=float)
+        elif self.frame_times:
+            times = np.asarray(self.frame_times, dtype=float)
         else:
-            scale = 1.0
+            return
 
-        adjusted = (frame_times - frame_times[0]) * scale + t_trace[0]
-
-        idx = np.searchsorted(t_trace, adjusted, side="left")
-        idx = np.clip(idx, 0, len(t_trace) - 1)
+        idx = np.searchsorted(self.trace_time, times, side="left")
+        idx = np.clip(idx, 0, len(self.trace_time) - 1)
+        self.frame_trace_index = idx
         self.frame_trace_indices = idx
+
+    def _propagate_time_to_snapshot_pg(self, time_value: float | None) -> None:
+        """Mirror the current time cursor into the PG snapshot viewer."""
+
+        if time_value is None or self.snapshot_view_pg is None:
+            return
+        if not self._use_pg_snapshot_viewer():
+            return
+        if self._pg_time_sync_block:
+            return
+        try:
+            self._pg_time_sync_block = True
+            self.snapshot_view_pg.set_current_time(float(time_value))
+        finally:
+            self._pg_time_sync_block = False
+
+    def _on_snapshot_time_changed(self, time_s: float) -> None:
+        """
+        User moved the PG snapshot timeline; update the main time cursor & dependent UI.
+        """
+
+        if self._pg_time_sync_block:
+            return
+        self._pg_time_sync_block = True
+        try:
+            self.jump_to_time(
+                float(time_s),
+                from_playback=True,
+                from_frame_change=True,
+                source="video",
+            )
+        finally:
+            self._pg_time_sync_block = False
+
+    def _time_for_frame(self, idx: int) -> float | None:
+        """Return canonical seconds for the given frame index."""
+
+        if self.frame_trace_time is not None and idx < len(self.frame_trace_time):
+            try:
+                return float(self.frame_trace_time[idx])
+            except (TypeError, ValueError):
+                return None
+
+        if self.frame_times and idx < len(self.frame_times):
+            try:
+                return float(self.frame_times[idx])
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _frame_index_for_time_canonical(self, time_value: float) -> int | None:
+        """Nearest frame index for a canonical time (seconds)."""
+
+        if not self.snapshot_frames:
+            return None
+
+        try:
+            t_val = float(time_value)
+        except (TypeError, ValueError):
+            return None
+
+        times = None
+        if self.frame_trace_time is not None and len(self.frame_trace_time):
+            times = np.asarray(self.frame_trace_time, dtype=float)
+        elif self.frame_times:
+            with contextlib.suppress(Exception):
+                times = np.asarray(self.frame_times, dtype=float)
+
+        if times is None or times.size == 0:
+            return None
+
+        idx = int(np.argmin(np.abs(times - t_val)))
+        return idx
+
+    def jump_to_time(
+        self,
+        t: float,
+        *,
+        from_event: bool = False,
+        from_playback: bool = False,
+        from_frame_change: bool = False,
+        source: str | None = None,
+    ) -> None:
+        """
+        Canonical time jump (seconds) that updates trace and video consistently.
+        """
+
+        try:
+            t_val = float(t)
+        except (TypeError, ValueError):
+            return
+
+        src_label = source or (
+            "event"
+            if from_event
+            else "video"
+            if from_playback
+            else "manual"
+        )
+
+        _log_time_sync(
+            "JUMP_TO_TIME",
+            t=t_val,
+            source=src_label,
+        )
+
+        resolved_time = t_val
+        if self.trace_time is not None and len(self.trace_time):
+            idx_trace = int(np.searchsorted(self.trace_time, t_val))
+            idx_trace = max(0, min(idx_trace, len(self.trace_time) - 1))
+            resolved_time = float(self.trace_time[idx_trace])
+            self._time_cursor_time = resolved_time
+        else:
+            self._time_cursor_time = t_val
+
+        # Update trace cursor + highlight.
+        self._highlight_selected_event(resolved_time)
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None:
+            if hasattr(plot_host, "center_on_time"):
+                with contextlib.suppress(Exception):
+                    plot_host.center_on_time(resolved_time)
+            if hasattr(plot_host, "set_time_cursor"):
+                with contextlib.suppress(Exception):
+                    plot_host.set_time_cursor(resolved_time, visible=True)
+
+        frame_idx = self._frame_index_for_time_canonical(resolved_time)
+        if frame_idx is not None:
+            self.current_frame = frame_idx
+
+        # Map to nearest frame only when we are not already handling a frame change.
+        if not from_frame_change and self.snapshot_frames:
+            if self._use_pg_snapshot_viewer():
+                self._propagate_time_to_snapshot_pg(resolved_time)
+            elif frame_idx is not None:
+                self.set_current_frame(frame_idx, from_jump=True)
 
     def apply_style(self, style):
         self._apply_time_window(style.get("xlim", self.ax.get_xlim()))
@@ -8836,7 +9660,7 @@ QPushButton[isGhost="true"]:hover {{
         self.update_scroll_slider()
         self.canvas.draw_idle()
 
-    def set_current_frame(self, idx):
+    def set_current_frame(self, idx, *, from_jump: bool = False):
         if not self.snapshot_frames:
             return
         idx = max(0, min(int(idx), len(self.snapshot_frames) - 1))
@@ -8845,6 +9669,14 @@ QPushButton[isGhost="true"]:hover {{
             self.slider.setValue(idx)
             self.slider.blockSignals(False)
         self._apply_frame_change(idx)
+
+    def _set_snapshot_frame(self, idx: int) -> None:
+        """Update the active snapshot viewer (legacy QLabel or PG)."""
+        if self._use_pg_snapshot_viewer() and self.snapshot_view_pg is not None:
+            with contextlib.suppress(Exception):
+                self.snapshot_view_pg.set_frame_index(idx)
+            return
+        self.display_frame(idx)
 
     def display_frame(self, index):
         if not self.snapshot_frames:
@@ -8869,29 +9701,54 @@ QPushButton[isGhost="true"]:hover {{
             elif frame.ndim == 3:
                 height, width, channels = frame.shape
                 if channels == 3:
-                    q_img = QImage(frame.data, width, height, 3 * width, QImage.Format_RGB888)
+                    q_img = QImage(
+                        frame.data, width, height, 3 * width, QImage.Format_RGB888
+                    )
                 else:
                     raise ValueError(f"Unsupported TIFF frame format: {frame.shape}")
             else:
                 raise ValueError(f"Unknown TIFF frame dimensions: {frame.shape}")
+            log.info(
+                "LegacySnapshotView: frame shape=%s bytesPerLine=%s",
+                getattr(frame, "shape", None),
+                q_img.bytesPerLine(),
+            )
 
             target_width = self.event_table.viewport().width()
             if target_width <= 0:
                 target_width = self.snapshot_label.width()
-            pix = QPixmap.fromImage(q_img).scaledToWidth(target_width, Qt.SmoothTransformation)
+            pix = QPixmap.fromImage(q_img).scaledToWidth(
+                target_width, Qt.SmoothTransformation
+            )
             self.snapshot_label.setFixedSize(pix.width(), pix.height())
             self.snapshot_label.setPixmap(pix)
+            default_rect = QRectF(0, 0, float(width), float(height))
+            log.info(
+                "LegacySnapshotView.default_rect: frame=%d rect=%s target_width=%d orig=%dx%d scaled=%dx%d",
+                index,
+                default_rect,
+                target_width,
+                width,
+                height,
+                pix.width(),
+                pix.height(),
+            )
         except Exception as e:
             log.error("Error displaying frame %s: %s", index, e)
 
     def update_snapshot_size(self):
         if not self.snapshot_frames:
             return
-        self.display_frame(self.current_frame)
+        if not self._use_pg_snapshot_viewer():
+            self.display_frame(self.current_frame)
 
     def eventFilter(self, source, event):
         event_table = getattr(self, "event_table", None)
-        if event_table is not None and source is event_table and event.type() == QEvent.Resize:
+        if (
+            event_table is not None
+            and source is event_table
+            and event.type() == QEvent.Resize
+        ):
             QTimer.singleShot(0, self.update_snapshot_size)
         elif source is self.trace_file_label and event.type() == QEvent.Resize:
             QTimer.singleShot(0, self._update_status_chip)
@@ -8906,25 +9763,35 @@ QPushButton[isGhost="true"]:hover {{
 
     def _apply_frame_change(self, idx: int):
         self.current_frame = idx
-        self.display_frame(idx)
-        frame_time = None
-        if self.frame_times and idx < len(self.frame_times):
-            with contextlib.suppress(Exception):
-                frame_time = float(self.frame_times[idx])
-        if frame_time is None and self.recording_interval:
-            with contextlib.suppress(Exception):
-                frame_time = idx * float(self.recording_interval)
+        self._set_snapshot_frame(idx)
+        frame_time = self._time_for_frame(idx)
 
-        if frame_time is not None:
-            # Mirror event-table behavior: jump the trace to the corresponding time cursor.
-            if self._plot_host_is_pyqtgraph():
-                plot_host = getattr(self, "plot_host", None)
-                if plot_host is not None and hasattr(plot_host, "center_on_time"):
-                    with contextlib.suppress(Exception):
-                        plot_host.center_on_time(frame_time)
-            # Update the time cursor highlight so the trace reflects the selected frame.
+        trace_idx = None
+        trace_time = None
+        if self.frame_trace_index is not None and idx < len(self.frame_trace_index):
+            trace_idx = int(self.frame_trace_index[idx])
+            if self.trace_time is not None and trace_idx < len(self.trace_time):
+                trace_time = float(self.trace_time[trace_idx])
+        elif self.trace_time is not None and frame_time is not None:
             with contextlib.suppress(Exception):
-                self._highlight_selected_event(frame_time)
+                trace_idx = int(np.searchsorted(self.trace_time, frame_time))
+                trace_idx = max(0, min(trace_idx, len(self.trace_time) - 1))
+                trace_time = float(self.trace_time[trace_idx])
+
+        _log_time_sync(
+            "PLAYBACK_FRAME",
+            idx=idx,
+            frame_time=frame_time,
+            trace_idx=trace_idx,
+            trace_time=trace_time,
+        )
+        if frame_time is not None:
+            self.jump_to_time(
+                float(frame_time),
+                from_playback=True,
+                from_frame_change=True,
+                source="video",
+            )
 
         self.update_slider_marker()
         self._update_snapshot_status(idx)
@@ -8938,7 +9805,12 @@ QPushButton[isGhost="true"]:hover {{
 
         frame_number = idx + 1
         timestamp = None
-        if self.frame_times and idx < len(self.frame_times):
+        if self.frame_trace_time is not None and idx < len(self.frame_trace_time):
+            try:
+                timestamp = float(self.frame_trace_time[idx])
+            except (TypeError, ValueError):
+                timestamp = None
+        elif self.frame_times and idx < len(self.frame_times):
             try:
                 timestamp = float(self.frame_times[idx])
             except (TypeError, ValueError):
@@ -8952,7 +9824,9 @@ QPushButton[isGhost="true"]:hover {{
         if timestamp is None:
             self.snapshot_time_label.setText(f"Frame {frame_number} / {total}")
         else:
-            self.snapshot_time_label.setText(f"Frame {frame_number} / {total} @ {timestamp:.2f} s")
+            self.snapshot_time_label.setText(
+                f"Frame {frame_number} / {total} @ {timestamp:.2f} s"
+            )
 
     def _update_metadata_display(self, idx: int) -> None:
         self._update_metadata_button_state()
@@ -8994,11 +9868,22 @@ QPushButton[isGhost="true"]:hover {{
 
         self.metadata_details_label.setText("<br>".join(lines))
 
+    def _snapshot_view_visible(self) -> bool:
+        pg_visible = bool(
+            getattr(self, "snapshot_view_pg", None)
+            and self.snapshot_view_pg.isVisible()
+        )
+        legacy_visible = bool(
+            getattr(self, "snapshot_label", None)
+            and self.snapshot_label.isVisible()
+        )
+        return pg_visible or legacy_visible
+
     def _update_metadata_button_state(self) -> None:
         action = getattr(self, "action_snapshot_metadata", None)
         has_metadata = bool(getattr(self, "frames_metadata", []))
         has_frames = bool(self.snapshot_frames)
-        enabled = has_metadata and has_frames and self.snapshot_label.isVisible()
+        enabled = has_metadata and has_frames and self._snapshot_view_visible()
 
         if action is not None:
             action.setEnabled(enabled)
@@ -9006,14 +9891,14 @@ QPushButton[isGhost="true"]:hover {{
                 action.blockSignals(True)
                 action.setChecked(False)
                 action.blockSignals(False)
-                action.setText("Metadata…")
+            action.setText("Metadata…")
 
         if not enabled:
             self.metadata_panel.hide()
             self.metadata_details_label.setText("No metadata available.")
             return
 
-        is_visible = self.snapshot_label.isVisible()
+        is_visible = self._snapshot_view_visible()
         should_show = bool(action and action.isChecked() and enabled)
         self.metadata_panel.setVisible(should_show)
         if not should_show and not is_visible:
@@ -9066,10 +9951,18 @@ QPushButton[isGhost="true"]:hover {{
             self._configure_snapshot_timer()
 
     def _configure_snapshot_timer(self) -> None:
-        try:
-            interval = float(self.recording_interval)
-        except (TypeError, ValueError):
-            interval = 0.14
+        interval = None
+        if self.frame_trace_time is not None and len(self.frame_trace_time) > 1:
+            with contextlib.suppress(Exception):
+                diffs = np.diff(self.frame_trace_time)
+                finite = diffs[np.isfinite(diffs)]
+                if finite.size:
+                    interval = float(np.median(finite))
+        if interval is None:
+            try:
+                interval = float(self.recording_interval)
+            except (TypeError, ValueError):
+                interval = 0.14
 
         if not interval:
             interval = 0.14
@@ -9086,6 +9979,10 @@ QPushButton[isGhost="true"]:hover {{
         interval_ms = max(20, int(round(effective_interval * 1000)))
         self.snapshot_timer.setInterval(interval_ms)
 
+    # Playback controller:
+    # - current_frame stored in self.current_frame; slider.valueChanged -> change_frame -> _apply_frame_change -> _set_snapshot_frame(...)
+    # - snapshot_timer.timeout -> advance_snapshot_frame -> set_current_frame(...) follows same path
+    # - play/pause + speed toggle snapshot_timer state; _set_snapshot_frame dispatches to PG or legacy viewer.
     def _set_playback_state(self, playing: bool) -> None:
         if not hasattr(self, "snapshot_timer"):
             return
@@ -9140,7 +10037,11 @@ QPushButton[isGhost="true"]:hover {{
     def set_snapshot_metadata_visible(self, visible: bool) -> None:
         action = getattr(self, "action_snapshot_metadata", None)
         has_metadata = bool(getattr(self, "frames_metadata", []))
-        can_show = has_metadata and bool(self.snapshot_frames) and self.snapshot_label.isVisible()
+        can_show = (
+            has_metadata
+            and bool(self.snapshot_frames)
+            and self._snapshot_view_visible()
+        )
         should_show = bool(visible) and can_show
 
         if action is not None and action.isChecked() != should_show:
@@ -9192,13 +10093,23 @@ QPushButton[isGhost="true"]:hover {{
         idx = self.slider.value()
 
         # 2) Lookup the timestamp for this frame
-        if len(self.frame_trace_indices) > 0 and idx < len(self.frame_trace_indices):
-            trace_idx = self.frame_trace_indices[idx]
-            t_current = self.trace_data["Time (s)"].iat[trace_idx]
+        t_current = None
+        if self.frame_trace_index is not None and idx < len(self.frame_trace_index):
+            trace_idx = int(self.frame_trace_index[idx])
+            if self.trace_time is not None and trace_idx < len(self.trace_time):
+                t_current = float(self.trace_time[trace_idx])
+            elif self.trace_data is not None:
+                with contextlib.suppress(Exception):
+                    t_current = float(self.trace_data["Time (s)"].iat[trace_idx])
+        elif self.frame_trace_time is not None and idx < len(self.frame_trace_time):
+            t_current = float(self.frame_trace_time[idx])
         elif idx < len(self.frame_times):
-            t_current = self.frame_times[idx]
-        else:
+            t_current = float(self.frame_times[idx])
+        elif self.recording_interval:
             t_current = idx * self.recording_interval
+
+        if t_current is None:
+            return
 
         # 3) Drive the shared time cursor overlay (fallback on legacy per-axis markers)
         self._time_cursor_time = float(t_current)
@@ -9237,9 +10148,15 @@ QPushButton[isGhost="true"]:hover {{
 
     def populate_event_table_from_df(self, df):
         rows = []
-        has_od = any(col.lower().startswith("od") or "outer" in col.lower() for col in df.columns)
-        has_avg_p = any("avg" in col.lower() and "pressure" in col.lower() for col in df.columns)
-        has_set_p = any("set" in col.lower() and "pressure" in col.lower() for col in df.columns)
+        has_od = any(
+            col.lower().startswith("od") or "outer" in col.lower() for col in df.columns
+        )
+        has_avg_p = any(
+            "avg" in col.lower() and "pressure" in col.lower() for col in df.columns
+        )
+        has_set_p = any(
+            "set" in col.lower() and "pressure" in col.lower() for col in df.columns
+        )
 
         for _, item in df.iterrows():
             label = item.get("EventLabel", item.get("Event", ""))
@@ -9267,7 +10184,9 @@ QPushButton[isGhost="true"]:hover {{
 
             avg_p_val = None
             if has_avg_p:
-                avg_p_val = item.get("Avg P (mmHg)", item.get("Avg Pressure (mmHg)", None))
+                avg_p_val = item.get(
+                    "Avg P (mmHg)", item.get("Avg Pressure (mmHg)", None)
+                )
                 try:
                     avg_p_val = float(avg_p_val) if avg_p_val is not None else None
                 except (TypeError, ValueError):
@@ -9275,7 +10194,9 @@ QPushButton[isGhost="true"]:hover {{
 
             set_p_val = None
             if has_set_p:
-                set_p_val = item.get("Set P (mmHg)", item.get("Set Pressure (mmHg)", None))
+                set_p_val = item.get(
+                    "Set P (mmHg)", item.get("Set Pressure (mmHg)", None)
+                )
                 try:
                     set_p_val = float(set_p_val) if set_p_val is not None else None
                 except (TypeError, ValueError):
@@ -9287,7 +10208,9 @@ QPushButton[isGhost="true"]:hover {{
                 frame_val = 0
 
             # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
-            rows.append((str(label), time_val, id_val, od_val, avg_p_val, set_p_val, frame_val))
+            rows.append(
+                (str(label), time_val, id_val, od_val, avg_p_val, set_p_val, frame_val)
+            )
 
         self.event_table_data = rows
         self.event_label_meta = [self._with_default_review_state(None) for _ in rows]
@@ -9327,18 +10250,24 @@ QPushButton[isGhost="true"]:hover {{
 
         # Check if we're using PyQtGraph renderer
         plot_host = getattr(self, "plot_host", None)
-        is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+        is_pyqtgraph = (
+            plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+        )
 
         # PyQtGraph doesn't support matplotlib-style annotations
         # For now, disable hover annotations when using PyQtGraph
         # TODO: Implement PyQtGraph-specific hover feedback using TextItem
+        # NOTE: This hover/pin path is Matplotlib-only; Phase 3 should replace
+        # it with a PyQtGraph-native implementation or remove the legacy branch.
         if is_pyqtgraph:
             self.hover_annotation_id = None
             self.hover_annotation_od = None
             return
 
         # Matplotlib-specific hover annotations
-        line_color = CURRENT_THEME.get("cursor_line", CURRENT_THEME.get("grid_color", "#6e7687"))
+        line_color = CURRENT_THEME.get(
+            "cursor_line", CURRENT_THEME.get("grid_color", "#6e7687")
+        )
 
         def _make_annotation(target_ax):
             return target_ax.annotate(
@@ -9494,7 +10423,11 @@ QPushButton[isGhost="true"]:hover {{
             return
 
         csv_files = [p for p in files if p.lower().endswith(".csv")]
-        tiff_files = [p for p in files if p.lower().endswith(".tif") or p.lower().endswith(".tiff")]
+        tiff_files = [
+            p
+            for p in files
+            if p.lower().endswith(".tif") or p.lower().endswith(".tiff")
+        ]
 
         if csv_files:
             event.acceptProposedAction()
@@ -9531,6 +10464,7 @@ QPushButton[isGhost="true"]:hover {{
                 import pandas as pd
 
                 self.trace_data = self._prepare_trace_dataframe(pd.DataFrame(td))
+                self._update_trace_sync_state()
             else:
                 self.trace_data = None
             self.event_labels = state.get("event_labels", [])
@@ -9547,18 +10481,31 @@ QPushButton[isGhost="true"]:hover {{
             self.update_plot(track_limits=False)
 
             # Restore axis labels, limits, grid
+            is_pg = self._plot_host_is_pyqtgraph()
             self._set_shared_xlabel(state.get("xlabel", "Time (s)"))
-            self.ax.set_ylabel(state.get("ylabel", "Inner Diameter (µm)"))
-            self._apply_time_window(state.get("xlim", self.ax.get_xlim()))
-            self.ax.set_ylim(*state.get("ylim", self.ax.get_ylim()))
+            if not is_pg and self.ax is not None:
+                self.ax.set_ylabel(state.get("ylabel", "Inner Diameter (µm)"))
+            self._apply_time_window(state.get("xlim", self.ax.get_xlim() if self.ax else None))
+            if is_pg:
+                inner_track = self.plot_host.track("inner") if hasattr(self, "plot_host") else None
+                if inner_track is not None:
+                    ylim = state.get("ylim")
+                    if ylim:
+                        inner_track.set_ylim(*ylim)
+            elif self.ax is not None:
+                self.ax.set_ylim(*state.get("ylim", self.ax.get_ylim()))
             self.grid_visible = state.get("grid_visible", True)
-            axes = self.plot_host.axes() if hasattr(self, "plot_host") else [self.ax]
-            axes = [axis for axis in axes if axis is not None]
-            for axis in axes:
-                if self.grid_visible:
-                    axis.grid(True, color=CURRENT_THEME["grid_color"])
-                else:
-                    axis.grid(False)
+            if is_pg:
+                for track in getattr(self.plot_host, "tracks", lambda: [])():
+                    track.set_grid_visible(self.grid_visible)
+            else:
+                axes = self.plot_host.axes() if hasattr(self, "plot_host") else [self.ax]
+                axes = [axis for axis in axes if axis is not None]
+                for axis in axes:
+                    if self.grid_visible:
+                        axis.grid(True, color=CURRENT_THEME["grid_color"])
+                    else:
+                        axis.grid(False)
 
             # Ensure full-view limits are available for Home/Zoom Out
             if self.xlim_full is None:
@@ -9566,11 +10513,18 @@ QPushButton[isGhost="true"]:hover {{
             if self.ylim_full is None:
                 self.ylim_full = self.ax.get_ylim()
 
-            # Re-plot pinned points (only for matplotlib renderer)
+            # Re-plot pinned points for the active renderer
             self.pinned_points.clear()
-            plot_host = getattr(self, "plot_host", None)
-            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
-            if not is_pyqtgraph:
+            if is_pg:
+                inner_track = self.plot_host.track("inner") if hasattr(self, "plot_host") else None
+                if inner_track is not None:
+                    inner_track.clear_pins()
+                    for x, y in state.get("pinned_points", []):
+                        marker, label = inner_track.add_pin(
+                            x, y, f"{x:.2f} s\n{y:.1f} µm"
+                        )
+                        self.pinned_points.append((marker, label))
+            else:
                 for x, y in state.get("pinned_points", []):
                     marker = self.ax.plot(x, y, "ro", markersize=6)[0]
                     label = self.ax.annotate(
@@ -9632,7 +10586,9 @@ QPushButton[isGhost="true"]:hover {{
             trace_path,
             tiff_path or "auto-prompt",
         )
-        self.load_trace_and_events(file_path=trace_path, tiff_path=tiff_path, source=source)
+        self.load_trace_and_events(
+            file_path=trace_path, tiff_path=tiff_path, source=source
+        )
 
     def _handle_load_events(self):
         if self.trace_data is None:
@@ -9655,182 +10611,192 @@ QPushButton[isGhost="true"]:hover {{
 
     # [E] ========================= PLOTTING AND EVENT SYNC ============================
     def update_plot(self, track_limits: bool = True):
-        if self.trace_data is None:
-            return
-
-        has_outer = (
-            "Outer Diameter" in self.trace_data.columns
-            and not self.trace_data["Outer Diameter"].isna().all()
-        )
-
-        inner_requested = self.id_toggle_act.isChecked() if self.id_toggle_act is not None else True
-        outer_requested = (
-            self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False
-        )
-        inner_visible, outer_visible = self._ensure_valid_channel_selection(
-            inner_requested,
-            outer_requested,
-            toggled="inner",
-            outer_supported=has_outer,
-        )
-
-        self._apply_toggle_state(inner_visible, outer_visible, outer_supported=has_outer)
-        self._update_trace_controls_state()
-        self._rebuild_channel_layout(inner_visible, outer_visible, redraw=False)
-        self._apply_pending_plot_layout()
-
-        inner_track = self.plot_host.track("inner") if inner_visible else None
-        outer_track = self.plot_host.track("outer") if outer_visible else None
-        primary_track = inner_track or outer_track
-        if primary_track is None:
-            log.error("No channels available after layout rebuild")
-            return
-
-        self.ax = primary_track.ax
-        self.ax2 = outer_track.ax if inner_track and outer_track else None
-        self._bind_primary_axis_callbacks()
-        self._init_hover_artists()
-
-        self.event_text_objects = []
-        sample = getattr(self, "current_sample", None)
-        dataset_id = getattr(sample, "dataset_id", None)
-        cached_window = None
-        if dataset_id is not None:
-            cached_window = self._window_cache.get(dataset_id)
-        prev_window = cached_window or self.plot_host.current_window()
+        t0 = time.perf_counter()
         try:
-            self.trace_model = self._get_trace_model_for_sample(self.current_sample)
-        except Exception:
-            log.exception("Failed to build trace model from dataframe")
-            return
+            if self.trace_data is None:
+                return
 
-        self.plot_host.set_trace_model(self.trace_model)
-        if self.zoom_dock:
-            self.zoom_dock.set_trace_model(self.trace_model)
-        if self.scope_dock:
-            self.scope_dock.set_trace_model(self.trace_model)
-        if track_limits or prev_window is None:
-            # Default initial view: first 1800 seconds (30 minutes)
-            # This provides a useful detailed view instead of showing entire trace
-            full_range = self.trace_model.full_range
-            default_window_duration = 1800.0  # seconds
-            if full_range[1] - full_range[0] > default_window_duration:
-                target_window = (full_range[0], full_range[0] + default_window_duration)
-                log.info(
-                    "Initial load: showing first %.0f seconds of %.0f second trace",
-                    default_window_duration,
-                    full_range[1] - full_range[0],
-                )
-            else:
-                # Short recording - show full range
-                target_window = full_range
-        else:
-            target_window = prev_window
-        self.plot_host.set_time_window(*target_window)
-        # NOTE: Removed redundant autoscale_all() call here - set_time_window() already
-        # performs autoscaling internally via _apply_window(). Calling autoscale_all()
-        # again causes double rendering of all tracks, which is especially slow for
-        # datasets with multiple pressure channels (4 tracks × 2 = 8 expensive updates).
-        # This was causing 9+ second load times for multi-track datasets.
-        # if track_limits and prev_window is None:
-        #     self.plot_host.autoscale_all()
-        self._refresh_zoom_window()
-
-        self.trace_line = None
-        self.inner_line = None
-        if inner_track is not None:
-            self.trace_line = inner_track.primary_line
-            self.inner_line = self.trace_line
-            if self.trace_line is not None:
-                self.trace_line.set_visible(inner_visible)
-
-        if outer_track is not None:
-            self.od_line = outer_track.primary_line
-            self.outer_line = self.od_line
-            if self.od_line is not None:
-                self.od_line.set_visible(outer_visible)
-            if self.trace_line is None:
-                self.trace_line = self.od_line
-        else:
-            self.od_line = None
-            self.outer_line = None
-
-        for axis in self.plot_host.axes():
-            if self.grid_visible:
-                axis.grid(True, color=CURRENT_THEME["grid_color"])
-            else:
-                axis.grid(False)
-
-        time_full = self.trace_model.time_full
-        if time_full.size:
-            self.xlim_full = (float(time_full[0]), float(time_full[-1]))
-        inner_full = self.trace_model.inner_full
-        if inner_full.size:
-            inner_min = float(np.nanmin(inner_full))
-            inner_max = float(np.nanmax(inner_full))
-            self.ylim_full = (inner_min, inner_max)
-
-        # Plot events if available
-        if self.event_labels and self.event_times:
-            self._ensure_event_meta_length(len(self.event_labels))
-            self.plot_host.set_events(
-                self.event_times,
-                labels=self.event_labels,
-                label_meta=self.event_label_meta,
+            has_outer = (
+                "Outer Diameter" in self.trace_data.columns
+                and not self.trace_data["Outer Diameter"].isna().all()
             )
-            # Enable event label rendering (critical - without this labels stay hidden!)
-            self.plot_host.set_event_labels_visible(True)
-            annotations = self.event_annotations or []
-            self._annotation_lane_visible = True
-            self.plot_host.set_annotation_entries(annotations)
-            self._refresh_event_annotation_artists()
-        else:
-            self.plot_host.set_events([], labels=[], label_meta=[])
-            # Disable event label rendering when no events
-            self.plot_host.set_event_labels_visible(False)
-            self.event_table_data = []
-            self.event_metadata = []
+
+            inner_requested = (
+                self.id_toggle_act.isChecked() if self.id_toggle_act is not None else True
+            )
+            outer_requested = (
+                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False
+            )
+            inner_visible, outer_visible = self._ensure_valid_channel_selection(
+                inner_requested,
+                outer_requested,
+                toggled="inner",
+                outer_supported=has_outer,
+            )
+
+            self._apply_toggle_state(
+                inner_visible, outer_visible, outer_supported=has_outer
+            )
+            self._update_trace_controls_state()
+            self._rebuild_channel_layout(inner_visible, outer_visible, redraw=False)
+            self._apply_pending_plot_layout()
+
+            inner_track = self.plot_host.track("inner") if inner_visible else None
+            outer_track = self.plot_host.track("outer") if outer_visible else None
+            primary_track = inner_track or outer_track
+            if primary_track is None:
+                log.error("No channels available after layout rebuild")
+                return
+
+            self.ax = primary_track.ax
+            self.ax2 = outer_track.ax if inner_track and outer_track else None
+            self._bind_primary_axis_callbacks()
+            self._init_hover_artists()
+
             self.event_text_objects = []
-            self.event_annotations = []
-            self.event_label_meta = []
-            self._annotation_lane_visible = True
-            self.plot_host.set_annotation_entries([])
-            self._refresh_event_annotation_artists()
-
-        self._update_trace_controls_state()
-        self._refresh_plot_legend()
-        self.canvas.setToolTip("")
-
-        # Apply plot style (defaults on first load) - defer draw to avoid redundant redraws
-        self.apply_plot_style(self.get_current_plot_style(), persist=False, draw=False)
-        self._apply_pending_pyqtgraph_track_state()
-        self.canvas.draw_idle()
-
-        # Cache the current window for this dataset to avoid re-autoscaling on next load
-        sample = getattr(self, "current_sample", None)
-        dsid = getattr(sample, "dataset_id", None)
-        if dsid is not None:
-            window = self.plot_host.current_window() if hasattr(self, "plot_host") else None
-            if window is not None:
-                self._window_cache[dsid] = window
-
-        # Force the shared X-axis to be visible even on initial load (pyqtgraph)
-        plot_host = getattr(self, "plot_host", None)
-        if plot_host is not None:
+            sample = getattr(self, "current_sample", None)
+            dataset_id = getattr(sample, "dataset_id", None)
+            cached_window = None
+            if dataset_id is not None:
+                cached_window = self._window_cache.get(dataset_id)
+            prev_window = cached_window or self.plot_host.current_window()
             try:
-                updater = getattr(plot_host, "_update_bottom_axis_assignments", None)
-                if callable(updater):
-                    updater()
-                bottom_axis = getattr(plot_host, "bottom_axis", lambda: None)()
-                if bottom_axis is not None:
-                    with contextlib.suppress(Exception):
-                        bottom_axis.setVisible(True)
-                        bottom_axis.setStyle(showValues=True, tickLength=5)
-                        bottom_axis.setLabel(self._shared_xlabel or "Time (s)")
-                        bottom_axis.showLabel(True)
+                self.trace_model = self._get_trace_model_for_sample(self.current_sample)
             except Exception:
-                log.debug("Failed to force bottom axis visibility", exc_info=True)
+                log.exception("Failed to build trace model from dataframe")
+                return
 
+            self.plot_host.set_trace_model(self.trace_model)
+            if self.zoom_dock:
+                self.zoom_dock.set_trace_model(self.trace_model)
+            if self.scope_dock:
+                self.scope_dock.set_trace_model(self.trace_model)
+            if track_limits or prev_window is None:
+                # Default initial view: first 1800 seconds (30 minutes)
+                # This provides a useful detailed view instead of showing entire trace
+                full_range = self.trace_model.full_range
+                default_window_duration = 1800.0  # seconds
+                if full_range[1] - full_range[0] > default_window_duration:
+                    target_window = (full_range[0], full_range[0] + default_window_duration)
+                    log.info(
+                        "Initial load: showing first %.0f seconds of %.0f second trace",
+                        default_window_duration,
+                        full_range[1] - full_range[0],
+                    )
+                else:
+                    # Short recording - show full range
+                    target_window = full_range
+            else:
+                target_window = prev_window
+            self.plot_host.set_time_window(*target_window)
+            # NOTE: Removed redundant autoscale_all() call here - set_time_window() already
+            # performs autoscaling internally via _apply_window(). Calling autoscale_all()
+            # again causes double rendering of all tracks, which is especially slow for
+            # datasets with multiple pressure channels (4 tracks × 2 = 8 expensive updates).
+            # This was causing 9+ second load times for multi-track datasets.
+            # if track_limits and prev_window is None:
+            #     self.plot_host.autoscale_all()
+            self._refresh_zoom_window()
+
+            self.trace_line = None
+            self.inner_line = None
+            if inner_track is not None:
+                self.trace_line = inner_track.primary_line
+                self.inner_line = self.trace_line
+                if self.trace_line is not None:
+                    self.trace_line.set_visible(inner_visible)
+
+            if outer_track is not None:
+                self.od_line = outer_track.primary_line
+                self.outer_line = self.od_line
+                if self.od_line is not None:
+                    self.od_line.set_visible(outer_visible)
+                if self.trace_line is None:
+                    self.trace_line = self.od_line
+            else:
+                self.od_line = None
+                self.outer_line = None
+
+            for axis in self.plot_host.axes():
+                if self.grid_visible:
+                    axis.grid(True, color=CURRENT_THEME["grid_color"])
+                else:
+                    axis.grid(False)
+
+            time_full = self.trace_model.time_full
+            if time_full.size:
+                self.xlim_full = (float(time_full[0]), float(time_full[-1]))
+            inner_full = self.trace_model.inner_full
+            if inner_full.size:
+                inner_min = float(np.nanmin(inner_full))
+                inner_max = float(np.nanmax(inner_full))
+                self.ylim_full = (inner_min, inner_max)
+
+            # Plot events if available
+            if self.event_labels and self.event_times:
+                self._ensure_event_meta_length(len(self.event_labels))
+                self.plot_host.set_events(
+                    self.event_times,
+                    labels=self.event_labels,
+                    label_meta=self.event_label_meta,
+                )
+                # Enable event label rendering (critical - without this labels stay hidden!)
+                self.plot_host.set_event_labels_visible(True)
+                annotations = self.event_annotations or []
+                self._annotation_lane_visible = True
+                self.plot_host.set_annotation_entries(annotations)
+                self._refresh_event_annotation_artists()
+            else:
+                self.plot_host.set_events([], labels=[], label_meta=[])
+                # Disable event label rendering when no events
+                self.plot_host.set_event_labels_visible(False)
+                self.event_table_data = []
+                self.event_metadata = []
+                self.event_text_objects = []
+                self.event_annotations = []
+                self.event_label_meta = []
+                self._annotation_lane_visible = True
+                self.plot_host.set_annotation_entries([])
+                self._refresh_event_annotation_artists()
+
+            self._update_trace_controls_state()
+            self._refresh_plot_legend()
+            self.canvas.setToolTip("")
+
+            # Apply plot style (defaults on first load) - defer draw to avoid redundant redraws
+            self.apply_plot_style(self.get_current_plot_style(), persist=False, draw=False)
+            self._apply_pending_pyqtgraph_track_state()
+            self.canvas.draw_idle()
+
+            # Cache the current window for this dataset to avoid re-autoscaling on next load
+            sample = getattr(self, "current_sample", None)
+            dsid = getattr(sample, "dataset_id", None)
+            if dsid is not None:
+                window = (
+                    self.plot_host.current_window() if hasattr(self, "plot_host") else None
+                )
+                if window is not None:
+                    self._window_cache[dsid] = window
+
+            # Force the shared X-axis to be visible even on initial load (pyqtgraph)
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None:
+                try:
+                    updater = getattr(plot_host, "_update_bottom_axis_assignments", None)
+                    if callable(updater):
+                        updater()
+                    bottom_axis = getattr(plot_host, "bottom_axis", lambda: None)()
+                    if bottom_axis is not None:
+                        with contextlib.suppress(Exception):
+                            bottom_axis.setVisible(True)
+                            bottom_axis.setStyle(showValues=True, tickLength=5)
+                            bottom_axis.setLabel(self._shared_xlabel or "Time (s)")
+                            bottom_axis.showLabel(True)
+                except Exception:
+                    log.debug("Failed to force bottom axis visibility", exc_info=True)
+
+        finally:
+            log.debug("update_plot completed in %.3f s", time.perf_counter() - t0)
     def _refresh_plot_legend(self):
         if not hasattr(self, "ax"):
             return
@@ -9876,7 +10842,9 @@ QPushButton[isGhost="true"]:hover {{
             labels_defaults["outer"] = LEGEND_LABEL_DEFAULTS.get("outer", "Outer")
 
         labels_current = {}
-        stored_labels = (current_settings.get("labels") or {}) if current_settings else {}
+        stored_labels = (
+            (current_settings.get("labels") or {}) if current_settings else {}
+        )
         for key, default_value in labels_defaults.items():
             value = stored_labels.get(key, default_value)
             labels_current[key] = value
@@ -9914,7 +10882,9 @@ QPushButton[isGhost="true"]:hover {{
 
     def _plot_host_is_pyqtgraph(self) -> bool:
         plot_host = getattr(self, "plot_host", None)
-        return bool(plot_host is not None and plot_host.get_render_backend() == "pyqtgraph")
+        return bool(
+            plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+        )
 
     def _attach_plot_host_window_listener(self) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -10022,7 +10992,9 @@ QPushButton[isGhost="true"]:hover {{
         if getattr(self, "_syncing_time_window", False):
             return
 
-        primary_ax = self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        primary_ax = (
+            self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        )
         if primary_ax is None and self.ax is not None:
             primary_ax = self.ax
         if primary_ax is None:
@@ -10078,7 +11050,9 @@ QPushButton[isGhost="true"]:hover {{
         if self.trace_data is None:
             return
 
-        primary_ax = self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        primary_ax = (
+            self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        )
         if primary_ax is None and self.ax is not None:
             primary_ax = self.ax
         if primary_ax is None:
@@ -10190,24 +11164,33 @@ QPushButton[isGhost="true"]:hover {{
                 self.event_table.selectRow(row)
                 self.event_table.scrollTo(index)
 
+        frame_idx_raw = self._frame_index_from_event_row(row)
+        frame_idx = frame_idx_raw
+        frame_idx_from_time = None
+        if frame_idx is None and event_time is not None:
+            frame_idx_from_time = self._frame_index_for_time_canonical(event_time)
+            frame_idx = frame_idx_from_time
+
+        _log_time_sync(
+            "EVENT_FOCUS",
+            source=source,
+            row=row,
+            event_time=event_time,
+            frame_from_row=frame_idx_raw,
+            frame_from_time=frame_idx_from_time,
+            target_frame=frame_idx,
+        )
+
         if event_time is not None:
-            self._highlight_selected_event(event_time)
-            if self._plot_host_is_pyqtgraph():
-                plot_host = getattr(self, "plot_host", None)
-                if plot_host is not None and hasattr(plot_host, "center_on_time"):
-                    with contextlib.suppress(Exception):
-                        plot_host.center_on_time(event_time)
+            self.jump_to_time(event_time, from_event=True, source="event")
+        elif frame_idx is not None and self.snapshot_frames:
+            frame_time = self._time_for_frame(frame_idx)
+            if frame_time is not None:
+                self.jump_to_time(frame_time, from_event=True, source="event")
+            else:
+                self.set_current_frame(frame_idx, from_jump=True)
         else:
             self._clear_event_highlight()
-
-        frame_idx = self._frame_index_from_event_row(row)
-        if frame_idx is None and event_time is not None:
-            frame_idx = self._frame_index_for_time(event_time)
-
-        if frame_idx is not None and self.snapshot_frames:
-            self.set_current_frame(frame_idx)
-        elif event_time is not None:
-            self.update_slider_marker()
 
     def _highlight_selected_event(self, event_time: float) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -10231,6 +11214,7 @@ QPushButton[isGhost="true"]:hover {{
             interval = max(16, min(100, self._event_highlight_duration_ms // 30 or 16))
             self._event_highlight_timer.setInterval(interval)
             self._event_highlight_timer.start()
+        self._propagate_time_to_snapshot_pg(event_time)
 
     def _clear_event_highlight(self) -> None:
         timer = getattr(self, "_event_highlight_timer", None)
@@ -10252,16 +11236,27 @@ QPushButton[isGhost="true"]:hover {{
             return
         interval = self._event_highlight_timer.interval()
         self._event_highlight_elapsed_ms += interval
-        progress = self._event_highlight_elapsed_ms / float(self._event_highlight_duration_ms)
+        progress = self._event_highlight_elapsed_ms / float(
+            self._event_highlight_duration_ms
+        )
         if progress >= 1.0:
             self._event_highlight_timer.stop()
             plot_host.highlight_event(None, visible=False)
             plot_host.set_event_highlight_alpha(self._event_highlight_base_alpha)
             return
         remaining = max(0.0, 1.0 - progress)
-        plot_host.set_event_highlight_alpha(self._event_highlight_base_alpha * remaining)
+        plot_host.set_event_highlight_alpha(
+            self._event_highlight_base_alpha * remaining
+        )
 
     def _frame_index_from_event_row(self, row: int) -> int | None:
+        """
+        Return the legacy trace/frame hint from the event table, if present.
+
+        This value comes from imported event tables and is not the canonical
+        video frame. Event sync is driven by event time.
+        """
+
         if not (0 <= row < len(self.event_table_data)):
             return None
 
@@ -10281,16 +11276,7 @@ QPushButton[isGhost="true"]:hover {{
         return frame_idx
 
     def _frame_index_for_time(self, time_value: float) -> int | None:
-        if not self.frame_times:
-            return None
-        try:
-            times = np.asarray(self.frame_times, dtype=float)
-        except (TypeError, ValueError):
-            return None
-        if times.size == 0:
-            return None
-        idx = int(np.argmin(np.abs(times - time_value)))
-        return idx
+        return self._frame_index_for_time_canonical(time_value)
 
     def _nearest_event_index(self, time_value: float) -> int | None:
         if not self.event_times:
@@ -10484,7 +11470,9 @@ QPushButton[isGhost="true"]:hover {{
 
             # PyQtGraph doesn't support matplotlib-style pinned points yet
             plot_host = getattr(self, "plot_host", None)
-            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            is_pyqtgraph = (
+                plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            )
             if is_pyqtgraph:
                 # TODO: Implement PyQtGraph-compatible pinned points
                 return
@@ -10529,7 +11517,9 @@ QPushButton[isGhost="true"]:hover {{
             self.canvas.draw_idle()
             self.mark_session_dirty()
 
-    def _handle_pyqtgraph_click(self, track_id: str, x: float, y: float, button: int, event=None):
+    def _handle_pyqtgraph_click(
+        self, track_id: str, x: float, y: float, button: int, event=None
+    ):
         """Handle clicks from PyQtGraph tracks for pin interactions."""
         if self.trace_data is None:
             return
@@ -10537,7 +11527,11 @@ QPushButton[isGhost="true"]:hover {{
         is_right = button == 3
 
         wizard = getattr(self, "_event_review_wizard", None)
-        if wizard is not None and wizard.isVisible() and (button == 1 or button == Qt.LeftButton):
+        if (
+            wizard is not None
+            and wizard.isVisible()
+            and (button == 1 or button == Qt.LeftButton)
+        ):
             try:
                 wizard.handle_trace_click(x)
             except Exception:
@@ -10641,7 +11635,10 @@ QPushButton[isGhost="true"]:hover {{
             )
 
             if confirm == QMessageBox.Yes:
-                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                has_od = (
+                    self.trace_data is not None
+                    and "Outer Diameter" in self.trace_data.columns
+                )
                 old_value = self.event_table_data[index][2]
                 self.last_replaced_event = (index, old_value)
                 if has_od:
@@ -10661,18 +11658,24 @@ QPushButton[isGhost="true"]:hover {{
                         round(y, 2),
                         frame_num,
                     )
-                self.event_table_controller.update_row(index, self.event_table_data[index])
+                self.event_table_controller.update_row(
+                    index, self.event_table_data[index]
+                )
                 self._mark_row_edited(index)
                 self.auto_export_table()
                 self.mark_session_dirty()
 
     def prompt_add_event(self, x, y, trace_type="inner"):
         if not self.event_table_data:
-            QMessageBox.warning(self, "No Events", "You must load events before adding new ones.")
+            QMessageBox.warning(
+                self, "No Events", "You must load events before adding new ones."
+            )
             return
 
         # Build label options and insertion points
-        insert_labels = [f"{label} at {t:.2f}s" for label, t, *_ in self.event_table_data]
+        insert_labels = [
+            f"{label} at {t:.2f}s" for label, t, *_ in self.event_table_data
+        ]
         insert_labels.append("↘️ Add to end")  # final option
 
         selected, ok = QInputDialog.getItem(
@@ -10697,10 +11700,9 @@ QPushButton[isGhost="true"]:hover {{
 
         insert_idx = insert_labels.index(selected)
 
-        # Calculate frame number based on time
-        frame_number = int(x / self.recording_interval)
-
-        has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        has_od = (
+            self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+        )
         avg_label = self._trace_label_for("p_avg")
         set_label = self._trace_label_for("p2")
         has_avg_p = self.trace_data is not None and avg_label in self.trace_data.columns
@@ -10717,6 +11719,8 @@ QPushButton[isGhost="true"]:hover {{
             od_val = y
         else:
             id_val = y
+
+        frame_number = idx  # store nearest trace index as frame hint
 
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
         new_entry = (
@@ -10774,19 +11778,26 @@ QPushButton[isGhost="true"]:hover {{
         if not l_ok or not label.strip():
             return
 
-        t_val, t_ok = QInputDialog.getDouble(self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2)
+        t_val, t_ok = QInputDialog.getDouble(
+            self, "Event Time", "Time (s):", 0.0, 0, 1e6, 2
+        )
         if not t_ok:
             return
 
-        id_val, id_ok = QInputDialog.getDouble(self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2)
+        id_val, id_ok = QInputDialog.getDouble(
+            self, "Inner Diameter", "ID (µm):", 0.0, 0, 1e6, 2
+        )
         if not id_ok:
             return
 
         insert_idx = insert_labels.index(selected)
-        frame_number = int(t_val / self.recording_interval)
+        arr_t = self.trace_data["Time (s)"].values
+        frame_number = int(np.argmin(np.abs(arr_t - t_val)))
         od_val = None
         if has_od:
-            od_val, ok = QInputDialog.getDouble(self, "Outer Diameter", "OD (µm):", 0.0, 0, 1e6, 2)
+            od_val, ok = QInputDialog.getDouble(
+                self, "Outer Diameter", "OD (µm):", 0.0, 0, 1e6, 2
+            )
             if not ok:
                 return
 
@@ -10824,7 +11835,11 @@ QPushButton[isGhost="true"]:hover {{
     # [H] ========================= HOVER LABEL AND CURSOR SYNC ===========================
     def update_hover_label(self, event):
         valid_axes = [ax for ax in (self.ax, self.ax2) if ax is not None]
-        if event.inaxes not in valid_axes or self.trace_data is None or event.xdata is None:
+        if (
+            event.inaxes not in valid_axes
+            or self.trace_data is None
+            or event.xdata is None
+        ):
             self._last_hover_time = None
             self.canvas.setToolTip("")
             self._hide_hover_feedback()
@@ -10903,7 +11918,9 @@ QPushButton[isGhost="true"]:hover {{
         if self.trace_data is None:
             return
 
-        primary_ax = self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        primary_ax = (
+            self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
+        )
         if primary_ax is None and self.ax is not None:
             primary_ax = self.ax
         if primary_ax is None:
@@ -11013,7 +12030,9 @@ QPushButton[isGhost="true"]:hover {{
 
         plot_host = getattr(self, "plot_host", None)
         if plot_host is None:
-            QMessageBox.warning(self, "No Plot Available", "No PyQtGraph plot is currently loaded.")
+            QMessageBox.warning(
+                self, "No Plot Available", "No PyQtGraph plot is currently loaded."
+            )
             return
 
         dialog = PyQtGraphSettingsDialog(self, plot_host)
@@ -11048,7 +12067,9 @@ QPushButton[isGhost="true"]:hover {{
             self.figure_composer = FigureComposerWindow(self)
             # Connect signals
             self.figure_composer.studio_closed.connect(self._on_figure_composer_closed)
-            self.figure_composer.preset_saved.connect(self._on_figure_composer_preset_saved)
+            self.figure_composer.preset_saved.connect(
+                self._on_figure_composer_preset_saved
+            )
             self.figure_composer.figure_state_saved.connect(self._on_figure_state_saved)
 
         # Load user presets from project (if available)
@@ -11098,7 +12119,9 @@ QPushButton[isGhost="true"]:hover {{
         # Load user presets into preset library
         if hasattr(self.figure_composer, "_preset_library_dock"):
             built_in = self.figure_composer._preset_library_dock._built_in_presets
-            self.figure_composer._preset_library_dock.set_presets(user_presets, built_in)
+            self.figure_composer._preset_library_dock.set_presets(
+                user_presets, built_in
+            )
 
         # Show window
         self.figure_composer.show()
@@ -11124,7 +12147,9 @@ QPushButton[isGhost="true"]:hover {{
             return
 
         # Create and show new composer
-        new_composer = NewFigureComposerWindow(trace_model=self.trace_model, parent=self)
+        new_composer = NewFigureComposerWindow(
+            trace_model=self.trace_model, parent=self
+        )
 
         # Load existing figure if provided
         if figure_id and figure_data:
@@ -11136,6 +12161,58 @@ QPushButton[isGhost="true"]:hover {{
         new_composer.show()
         new_composer.raise_()
         new_composer.activateWindow()
+
+    def open_matplotlib_composer(self, checked: bool = False) -> None:
+        """Launch the lightweight Matplotlib composer."""
+        if self.trace_model is None:
+            QMessageBox.information(
+                self, "Matplotlib Composer", "No trace is currently loaded."
+            )
+            return
+
+        event_times = getattr(self, "event_times", None)
+        event_labels = getattr(self, "event_labels", None)
+        style = (
+            self.get_current_plot_style()
+            if hasattr(self, "get_current_plot_style")
+            else {}
+        )
+        event_color = style.get("event_color") if isinstance(style, dict) else None
+        event_colors = [event_color] if event_color else None
+
+        x_range = None
+        y_range = None
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "get_trace_view_range"):
+            try:
+                view_range = plot_host.get_trace_view_range()
+                if view_range is not None:
+                    x_range, y_range = view_range
+                    log.debug(
+                        "MatplotlibComposer initial ranges x=%s y=%s", x_range, y_range
+                    )
+            except Exception:
+                x_range = y_range = None
+
+        window = MatplotlibComposerWindow(
+            trace_model=self.trace_model,
+            event_times=event_times,
+            event_labels=event_labels,
+            event_colors=event_colors,
+            event_frames=getattr(self, "event_frames", None),
+            initial_x_range=x_range,
+            initial_y_range=y_range,
+            parent=self,
+        )
+        self._matplotlib_composer_windows.append(window)
+        window.destroyed.connect(
+            lambda _=None, w=window: self._matplotlib_composer_windows.remove(w)
+            if w in self._matplotlib_composer_windows
+            else None
+        )
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _on_figure_saved_to_project(self, figure_id: str, figure_data: dict):
         """Handle when a figure is saved to the project.
@@ -11149,7 +12226,9 @@ QPushButton[isGhost="true"]:hover {{
         # The figure is already saved to current_sample.figure_configs by the composer
         # Refresh the tree to show the new/updated figure
         if self.current_project:
-            log.info(f"Refreshing project tree for project: {self.current_project.name}")
+            log.info(
+                f"Refreshing project tree for project: {self.current_project.name}"
+            )
             self.refresh_project_tree()
             log.info(
                 f"Figure '{figure_data.get('figure_name', figure_id)}' saved and tree refreshed"
@@ -11170,7 +12249,11 @@ QPushButton[isGhost="true"]:hover {{
             # Check if preset with same name exists (update vs add)
             presets = self.current_project.ui_state["publication_presets"]
             existing_idx = next(
-                (i for i, p in enumerate(presets) if p.get("name") == preset.get("name")),
+                (
+                    i
+                    for i, p in enumerate(presets)
+                    if p.get("name") == preset.get("name")
+                ),
                 None,
             )
 
@@ -11188,7 +12271,9 @@ QPushButton[isGhost="true"]:hover {{
             self.figure_composer.deleteLater()
             self.figure_composer = None
 
-    def _prompt_figure_slide_selection(self, sample) -> tuple[dict[str, Any] | None, bool]:
+    def _prompt_figure_slide_selection(
+        self, sample
+    ) -> tuple[dict[str, Any] | None, bool]:
         """Prompt user to choose an existing slide or create a new one."""
         slides = self._get_sample_figure_slides(sample, create=False)
         if not slides:
@@ -11218,7 +12303,9 @@ QPushButton[isGhost="true"]:hover {{
             return None, False
         return slide_refs[selected_index - 1], False
 
-    def _get_sample_figure_slides(self, sample, *, create: bool) -> list[dict[str, Any]]:
+    def _get_sample_figure_slides(
+        self, sample, *, create: bool
+    ) -> list[dict[str, Any]]:
         """Return the mutable list of figure slides stored on the sample."""
         if sample is None:
             return []
@@ -11248,7 +12335,9 @@ QPushButton[isGhost="true"]:hover {{
         payload = copy.deepcopy(state.get("payload") or {})
         slide_name = state.get("name") or "Untitled Figure"
         now = datetime.utcnow().isoformat(timespec="seconds")
-        existing = next((entry for entry in slides if entry.get("id") == slide_id), None)
+        existing = next(
+            (entry for entry in slides if entry.get("id") == slide_id), None
+        )
         if existing:
             existing.update(
                 {
@@ -11273,7 +12362,9 @@ QPushButton[isGhost="true"]:hover {{
         self.refresh_project_tree()
         self._clear_pending_figure_state()
 
-    def _set_pending_figure_state(self, sample: SampleN, slide: Mapping[str, Any]) -> None:
+    def _set_pending_figure_state(
+        self, sample: SampleN, slide: Mapping[str, Any]
+    ) -> None:
         self._pending_figure_sample = sample
         self._pending_figure_state = copy.deepcopy(slide)
 
@@ -11521,14 +12612,22 @@ QPushButton[isGhost="true"]:hover {{
         od_line=None,
     ):
         # Use cache only when called with default parameters (most common case)
-        use_cache = all(p is None for p in [ax, ax2, event_text_objects, pinned_points, od_line])
-        if use_cache and not self._snapshot_style_dirty and self._cached_snapshot_style is not None:
+        use_cache = all(
+            p is None for p in [ax, ax2, event_text_objects, pinned_points, od_line]
+        )
+        if (
+            use_cache
+            and not self._snapshot_style_dirty
+            and self._cached_snapshot_style is not None
+        ):
             return self._cached_snapshot_style.copy()
 
         ax = ax or self.ax
         ax2 = self.ax2 if ax2 is None else ax2
         event_text_objects = (
-            self.event_text_objects if event_text_objects is None else event_text_objects
+            self.event_text_objects
+            if event_text_objects is None
+            else event_text_objects
         )
         pinned_points = self.pinned_points if pinned_points is None else pinned_points
         od_line = od_line if od_line is not None else getattr(self, "od_line", None)
@@ -11560,12 +12659,20 @@ QPushButton[isGhost="true"]:hover {{
         tick_font_size = (
             x_tick_labels[0].get_fontsize()
             if x_tick_labels
-            else (y_tick_labels[0].get_fontsize() if y_tick_labels else style["tick_font_size"])
+            else (
+                y_tick_labels[0].get_fontsize()
+                if y_tick_labels
+                else style["tick_font_size"]
+            )
         )
         style["tick_font_size"] = tick_font_size
 
-        x_tick_color = x_tick_labels[0].get_color() if x_tick_labels else style["x_tick_color"]
-        y_tick_color = y_tick_labels[0].get_color() if y_tick_labels else style["y_tick_color"]
+        x_tick_color = (
+            x_tick_labels[0].get_color() if x_tick_labels else style["x_tick_color"]
+        )
+        y_tick_color = (
+            y_tick_labels[0].get_color() if y_tick_labels else style["y_tick_color"]
+        )
         style["tick_color"] = x_tick_color
         style["x_tick_color"] = x_tick_color
         style["y_tick_color"] = y_tick_color
@@ -11639,12 +12746,16 @@ QPushButton[isGhost="true"]:hover {{
             style["event_label_style_policy"] = plot_host.cluster_style_policy()
             style["event_label_lanes"] = plot_host.event_label_lanes()
             style["event_label_belt_baseline"] = plot_host.belt_baseline_enabled()
-            style["event_label_span_siblings"] = plot_host.span_event_lines_across_siblings()
+            style["event_label_span_siblings"] = (
+                plot_host.span_event_lines_across_siblings()
+            )
             style["event_label_auto_mode"] = plot_host.auto_event_label_mode()
             compact_thr, belt_thr = plot_host.label_density_thresholds()
             style["event_label_density_compact"] = compact_thr
             style["event_label_density_belt"] = belt_thr
-            outline_enabled, outline_width, outline_color = plot_host.label_outline_settings()
+            outline_enabled, outline_width, outline_color = (
+                plot_host.label_outline_settings()
+            )
             style["event_label_outline_enabled"] = outline_enabled
             style["event_label_outline_width"] = outline_width
             style["event_label_outline_color"] = outline_color or DEFAULT_STYLE.get(
@@ -11741,6 +12852,11 @@ QPushButton[isGhost="true"]:hover {{
         """
         self.trace_data = None
         self.trace_file_path = None
+        self.trace_time = None
+        self.frame_numbers = None
+        self.frame_number_to_trace_idx = {}
+        self.frame_trace_time = None
+        self.frame_trace_index = None
         self.snapshot_frames = []
         self.frames_metadata = []
         self.frame_times = []
@@ -11869,7 +12985,9 @@ QPushButton[isGhost="true"]:hover {{
             menu.addSeparator()
             replace_with_pin_action = menu.addAction("🔄 Replace ID with Pinned Value")
         else:
-            edit_action = delete_action = jump_action = pin_action = replace_with_pin_action = None
+            edit_action = delete_action = jump_action = pin_action = (
+                replace_with_pin_action
+            ) = None
 
         clear_pins_action = menu.addAction("❌ Clear All Pins")
         menu.addSeparator()
@@ -11891,7 +13009,10 @@ QPushButton[isGhost="true"]:hover {{
                 2,
             )
             if ok:
-                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                has_od = (
+                    self.trace_data is not None
+                    and "Outer Diameter" in self.trace_data.columns
+                )
                 rounded = round(new_val, 2)
                 if has_od:
                     lbl, t, _, od_val, frame_val = self.event_table_data[row]
@@ -11911,7 +13032,9 @@ QPushButton[isGhost="true"]:hover {{
 
         elif index.isValid() and action == pin_action:
             plot_host = getattr(self, "plot_host", None)
-            is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            is_pyqtgraph = (
+                plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
+            )
             if is_pyqtgraph:
                 return
             t = self.event_table_data[row][1]
@@ -11936,14 +13059,18 @@ QPushButton[isGhost="true"]:hover {{
         elif index.isValid() and action == replace_with_pin_action:
             t_event = self.event_table_data[row][1]
             if not self.pinned_points:
-                QMessageBox.information(self, "No Pins", "There are no pinned points to use.")
+                QMessageBox.information(
+                    self, "No Pins", "There are no pinned points to use."
+                )
                 return
 
             def _pin_time(pin) -> float:
                 coords = self._pin_coords(pin[0])
                 return coords[0] if coords is not None else float("inf")
 
-            closest_pin = min(self.pinned_points, key=lambda p: abs(_pin_time(p) - t_event))
+            closest_pin = min(
+                self.pinned_points, key=lambda p: abs(_pin_time(p) - t_event)
+            )
             coords = self._pin_coords(closest_pin[0])
             if coords is None:
                 return
@@ -11956,7 +13083,10 @@ QPushButton[isGhost="true"]:hover {{
             )
             if confirm == QMessageBox.Yes:
                 self.last_replaced_event = (row, self.event_table_data[row][2])
-                has_od = self.trace_data is not None and "Outer Diameter" in self.trace_data.columns
+                has_od = (
+                    self.trace_data is not None
+                    and "Outer Diameter" in self.trace_data.columns
+                )
                 if has_od:
                     self.event_table_data[row] = (
                         self.event_table_data[row][0],
@@ -12098,7 +13228,7 @@ QPushButton[isGhost="true"]:hover {{
 
     def rebuild_default_main_layout(self):
         for widget in (
-            self.canvas,
+            getattr(self, "trace_widget", None),
             self.scroll_slider,
             self.snapshot_label,
             self.slider,
@@ -12117,7 +13247,7 @@ QPushButton[isGhost="true"]:hover {{
         plot_container_layout = QVBoxLayout(plot_container)
         plot_container_layout.setContentsMargins(14, 14, 14, 14)
         plot_container_layout.setSpacing(6)
-        plot_container_layout.addWidget(self.canvas)
+        plot_container_layout.addWidget(self.trace_widget)
         plot_container_layout.addWidget(self.scroll_slider)
         plot_panel_layout.addWidget(plot_container)
 
@@ -12131,28 +13261,69 @@ QPushButton[isGhost="true"]:hover {{
 
         right_panel_card = QFrame()
         right_panel_card.setObjectName("PlotContainer")
+        self.right_panel_card = right_panel_card
         right_panel_layout = QVBoxLayout(right_panel_card)
         right_panel_layout.setContentsMargins(14, 14, 14, 14)
         right_panel_layout.setSpacing(6)
         side_layout.addWidget(right_panel_card)
 
+        # Snapshot + event layout:
+        #   data_page (QWidget) -> main_layout (QVBoxLayout)
+        #     -> data_splitter (QSplitter, Horizontal)
+        #         [0] plot_panel (QFrame)
+        #         [1] side_panel (QFrame)
+        #             -> right_panel_card (QFrame) / QVBoxLayout (stretched 3:2 vs table)
+        #                 [0] snapshot_card (QFrame) / QVBoxLayout
+        #                     [0] snapshot_stack (QStackedWidget)
+        #                         - snapshot_label (legacy QLabel)
+        #                         - snapshot_view_pg (SnapshotViewPG)
+        #                     [1] slider
+        #                     [2] snapshot_controls
+        #                     [3] metadata_panel
+        #                 [1] event_table_card (QFrame) / QVBoxLayout
+        #                     [0] event_table
         self.snapshot_card = QFrame()
         self.snapshot_card.setObjectName("SnapshotCard")
+        self.snapshot_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         snapshot_box = QVBoxLayout(self.snapshot_card)
         snapshot_box.setContentsMargins(12, 12, 12, 12)
         snapshot_box.setSpacing(12)
-        snapshot_box.addWidget(self.snapshot_label, 0, Qt.AlignCenter)
+        self.snapshot_stack = QStackedWidget(self.snapshot_card)
+        self.snapshot_stack.setObjectName("SnapshotStack")
+        self.snapshot_stack.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
+        self.snapshot_stack.setMinimumHeight(220)
+        # Stack keeps only one snapshot widget alive in the slot; PG inherits the legacy min height/expanding policy so it no longer collapses to its tiny sizeHint.
+        self.snapshot_stack.addWidget(self.snapshot_label)
+        if self.snapshot_view_pg is not None:
+            self.snapshot_stack.addWidget(self.snapshot_view_pg)
+            self.snapshot_view_pg.setVisible(False)
+            log.info(
+                "Snapshot container child sizes/policies: snapshot=%r, sizePolicy=%r, min=%s, max=%s",
+                self.snapshot_view_pg.size(),
+                self.snapshot_view_pg.sizePolicy(),
+                self.snapshot_view_pg.minimumSize(),
+                self.snapshot_view_pg.maximumSize(),
+            )
+        snapshot_box.addWidget(self.snapshot_stack, 1)
         snapshot_box.addWidget(self.slider)
         snapshot_box.addWidget(self.snapshot_controls)
         snapshot_box.addWidget(self.metadata_panel)
-        right_panel_layout.addWidget(self.snapshot_card, 0, Qt.AlignTop)
+        right_panel_layout.addWidget(self.snapshot_card)
         self.event_table_card = QFrame()
         self.event_table_card.setObjectName("TableCard")
+        self.event_table_card.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
         table_layout = QVBoxLayout(self.event_table_card)
         table_layout.setContentsMargins(12, 12, 12, 12)
         table_layout.setSpacing(0)
         table_layout.addWidget(self.event_table, 1)
         right_panel_layout.addWidget(self.event_table_card, 1)
+        # Give the snapshot stack the majority of the column; event table still expands.
+        right_panel_layout.setStretch(0, 3)
+        right_panel_layout.setStretch(1, 2)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.setObjectName("DataSplitter")
@@ -12161,8 +13332,39 @@ QPushButton[isGhost="true"]:hover {{
         splitter.addWidget(side_panel)
         splitter.setStretchFactor(0, 5)
         splitter.setStretchFactor(1, 2)
+        if hasattr(splitter, "stretchFactor"):
+            try:
+                stretch_factors = [splitter.stretchFactor(i) for i in range(splitter.count())]
+            except Exception:
+                stretch_factors = "error"
+        else:
+            stretch_factors = "unavailable (PyQt5 QSplitter has no stretchFactor())"
+        log.info(
+            "Snapshot splitter sizes: %s stretchFactors: %s",
+            splitter.sizes(),
+            stretch_factors,
+        )
+        with contextlib.suppress(Exception):
+            splitter.splitterMoved.connect(
+                lambda *_: self._log_snapshot_column_geometries()
+            )
+        QTimer.singleShot(0, self._log_snapshot_column_geometries)
 
         return splitter
+
+    def _log_snapshot_column_geometries(self) -> None:
+        """Debug helper to log sizes of snapshot/event column to diagnose gaps."""
+        snap_card = getattr(self, "snapshot_card", None)
+        table_card = getattr(self, "event_table_card", None)
+        right_card = getattr(self, "right_panel_card", None)
+        if snap_card is None or table_card is None or right_card is None:
+            return
+        log.info(
+            "Snapshot column geom: right_panel_card=%s snapshot_card=%s event_table_card=%s",
+            right_card.size(),
+            snap_card.size(),
+            table_card.size(),
+        )
 
     def _apply_event_table_card_theme(self) -> None:
         """Apply theme styling to the event table container card."""
@@ -12304,7 +13506,9 @@ QPushButton[isGhost="true"]:hover {{
                     if resolved:
                         candidate_paths.append(os.path.abspath(resolved))
 
-            trace_path = next((p for p in candidate_paths if p and os.path.isfile(p)), None)
+            trace_path = next(
+                (p for p in candidate_paths if p and os.path.isfile(p)), None
+            )
 
             # Name and output directory
             base_name = None
@@ -12338,8 +13542,12 @@ QPushButton[isGhost="true"]:hover {{
             )
             avg_label = self._trace_label_for("p_avg")
             set_label = self._trace_label_for("p2")
-            has_avg_p = self.trace_data is not None and avg_label in self.trace_data.columns
-            has_set_p = self.trace_data is not None and set_label in self.trace_data.columns
+            has_avg_p = (
+                self.trace_data is not None and avg_label in self.trace_data.columns
+            )
+            has_set_p = (
+                self.trace_data is not None and set_label in self.trace_data.columns
+            )
             # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
             columns = [
                 "Event",
@@ -12424,7 +13632,9 @@ QPushButton[isGhost="true"]:hover {{
             elif getattr(self.current_project, "path", None):
                 initial_dir = os.path.dirname(self.current_project.path)
 
-        start_path = os.path.join(initial_dir, initial_name) if initial_dir else initial_name
+        start_path = (
+            os.path.join(initial_dir, initial_name) if initial_dir else initial_name
+        )
 
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -12514,12 +13724,18 @@ QPushButton[isGhost="true"]:hover {{
         if hasattr(self, "od_toggle_act") and self.od_toggle_act is not None:
             state["outer_trace_visible"] = self.od_toggle_act.isChecked()
         host = getattr(self, "plot_host", None)
-        if hasattr(self, "avg_pressure_toggle_act") and self.avg_pressure_toggle_act is not None:
+        if (
+            hasattr(self, "avg_pressure_toggle_act")
+            and self.avg_pressure_toggle_act is not None
+        ):
             state["avg_pressure_visible"] = self.avg_pressure_toggle_act.isChecked()
         elif host is not None:
             with contextlib.suppress(Exception):
                 state["avg_pressure_visible"] = host.is_channel_visible("avg_pressure")
-        if hasattr(self, "set_pressure_toggle_act") and self.set_pressure_toggle_act is not None:
+        if (
+            hasattr(self, "set_pressure_toggle_act")
+            and self.set_pressure_toggle_act is not None
+        ):
             state["set_pressure_visible"] = self.set_pressure_toggle_act.isChecked()
         elif host is not None:
             with contextlib.suppress(Exception):
@@ -12564,23 +13780,33 @@ QPushButton[isGhost="true"]:hover {{
             "table_fontsize": self.event_table.font().pointSize(),
             "event_table_data": list(self.event_table_data),
             "event_label_meta": copy.deepcopy(self.event_label_meta),
-            "event_table_path": str(self._event_table_path) if self._event_table_path else None,
+            "event_table_path": (
+                str(self._event_table_path) if self._event_table_path else None
+            ),
             "pins": [
-                coords for marker, _ in self.pinned_points if (coords := self._pin_coords(marker))
+                coords
+                for marker, _ in self.pinned_points
+                if (coords := self._pin_coords(marker))
             ],
             "plot_style": self.get_current_plot_style(),
             "grid_visible": self.grid_visible,
             "inner_trace_visible": (
-                self.id_toggle_act.isChecked() if self.id_toggle_act is not None else True
+                self.id_toggle_act.isChecked()
+                if self.id_toggle_act is not None
+                else True
             ),
             "outer_trace_visible": (
-                self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False
+                self.od_toggle_act.isChecked()
+                if self.od_toggle_act is not None
+                else False
             ),
             "avg_pressure_visible": (
                 self.avg_pressure_toggle_act.isChecked()
                 if self.avg_pressure_toggle_act is not None
                 else (
-                    getattr(self.plot_host, "is_channel_visible", lambda *_: True)("avg_pressure")
+                    getattr(self.plot_host, "is_channel_visible", lambda *_: True)(
+                        "avg_pressure"
+                    )
                     if hasattr(self, "plot_host")
                     else True
                 )
@@ -12589,7 +13815,9 @@ QPushButton[isGhost="true"]:hover {{
                 self.set_pressure_toggle_act.isChecked()
                 if self.set_pressure_toggle_act is not None
                 else (
-                    getattr(self.plot_host, "is_channel_visible", lambda *_: False)("set_pressure")
+                    getattr(self.plot_host, "is_channel_visible", lambda *_: False)(
+                        "set_pressure"
+                    )
                     if hasattr(self, "plot_host")
                     else False  # Default: hide Set Pressure track
                 )
@@ -12626,12 +13854,22 @@ QPushButton[isGhost="true"]:hover {{
         wstate = state.get("window_state")
         if wstate:
             self.restoreState(bytes.fromhex(wstate))
+        is_pg = self._plot_host_is_pyqtgraph()
         if "axis_xlim" in state:
             self._apply_time_window(state["axis_xlim"])
         if "axis_ylim" in state:
-            self.ax.set_ylim(state["axis_ylim"])
+            if is_pg:
+                inner_track = self.plot_host.track("inner") if hasattr(self, "plot_host") else None
+                if inner_track is not None:
+                    inner_track.set_ylim(*state["axis_ylim"])
+            elif self.ax is not None:
+                self.ax.set_ylim(state["axis_ylim"])
         splitter_state = state.get("splitter_state")
-        if splitter_state and hasattr(self, "data_splitter") and self.data_splitter is not None:
+        if (
+            splitter_state
+            and hasattr(self, "data_splitter")
+            and self.data_splitter is not None
+        ):
             with contextlib.suppress(Exception):
                 self.data_splitter.restoreState(bytes.fromhex(splitter_state))
         plot_layout = state.get("plot_layout")
@@ -12683,16 +13921,92 @@ QPushButton[isGhost="true"]:hover {{
         self.canvas.draw_idle()
 
     def apply_sample_state(self, state):
-        if not state:
-            return
         t0 = time.perf_counter()
-        sample = getattr(self, "current_sample", None)
-        is_embedded = sample is not None and getattr(sample, "dataset_id", None) is not None
-        self._event_table_path = state.get("event_table_path")
+        try:
+            if not state:
+                return
+            sample = getattr(self, "current_sample", None)
+            is_embedded = (
+                sample is not None and getattr(sample, "dataset_id", None) is not None
+            )
+            self._event_table_path = state.get("event_table_path")
 
-        # ── minimal restore for embedded datasets to avoid pyqtgraph stalls
-        if is_embedded:
+            # ── minimal restore for embedded datasets to avoid pyqtgraph stalls
+            if is_embedded:
+                event_rows = state.get("event_table_data")
+                if isinstance(event_rows, list) and event_rows:
+                    self.event_table_data = event_rows
+                    meta_payload = state.get("event_label_meta")
+                    if isinstance(meta_payload, list):
+                        self.event_label_meta = [
+                            (
+                                self._with_default_review_state(item)
+                                if isinstance(item, Mapping)
+                                else self._with_default_review_state(None)
+                            )
+                            for item in meta_payload
+                        ]
+                    else:
+                        self.event_label_meta = [
+                            self._with_default_review_state(None)
+                            for _ in self.event_table_data
+                        ]
+                    self.populate_table()
+                # Restore inner/outer toggles
+                for key, act_name, channel in (
+                    ("inner_trace_visible", "id_toggle_act", "inner"),
+                    ("outer_trace_visible", "od_toggle_act", "outer"),
+                ):
+                    if key in state and hasattr(self, act_name):
+                        act = getattr(self, act_name)
+                        if act is not None:
+                            act.blockSignals(True)
+                            act.setChecked(bool(state[key]))
+                            act.blockSignals(False)
+                            self._apply_channel_toggle(channel, bool(state[key]))
+                # Restore channel toggles for pressure tracks
+                for key, act_name, channel in (
+                    ("avg_pressure_visible", "avg_pressure_toggle_act", "avg_pressure"),
+                    ("set_pressure_visible", "set_pressure_toggle_act", "set_pressure"),
+                ):
+                    if key in state and hasattr(self, act_name):
+                        act = getattr(self, act_name)
+                        if act is not None:
+                            act.blockSignals(True)
+                            act.setChecked(bool(state[key]))
+                            act.blockSignals(False)
+                            self._apply_channel_toggle(channel, bool(state[key]))
+                # Apply only style if present; skip layout/axes/pins/grid restores.
+                style = state.get("style_settings") or state.get("plot_style")
+                if style:
+                    self.apply_plot_style(style, persist=False)
+                self.canvas.draw_idle()
+                log.info(
+                    "Timing: apply_sample_state (embedded fast path) total=%.2f ms",
+                    (time.perf_counter() - t0) * 1000,
+                )
+                return
+
+            layout = state.get("plot_layout")
+            # Applying stored plot layouts on embedded datasets is expensive on pyqtgraph;
+            # skip restoring layout/track state on load when we have embedded data.
+            if (
+                layout
+                and sample is not None
+                and getattr(sample, "dataset_id", None) is None
+            ):
+                self._pending_plot_layout = layout
+            pyqtgraph_tracks = state.get("pyqtgraph_track_state")
+            if (
+                pyqtgraph_tracks
+                and sample is not None
+                and getattr(sample, "dataset_id", None) is None
+            ):
+                self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
+            t_events = time.perf_counter()
             event_rows = state.get("event_table_data")
+            # Only restore saved event rows when the state actually contains data; otherwise
+            # keep the freshly populated events from storage.
             if isinstance(event_rows, list) and event_rows:
                 self.event_table_data = event_rows
                 meta_payload = state.get("event_label_meta")
@@ -12710,185 +14024,156 @@ QPushButton[isGhost="true"]:hover {{
                         self._with_default_review_state(None) for _ in self.event_table_data
                     ]
                 self.populate_table()
-            # Restore inner/outer toggles
-            for key, act_name, channel in (
-                ("inner_trace_visible", "id_toggle_act", "inner"),
-                ("outer_trace_visible", "od_toggle_act", "outer"),
+                self._maybe_prompt_event_review()
+            t_axes = time.perf_counter()
+            is_pg = self._plot_host_is_pyqtgraph()
+            if "axis_xlim" in state:
+                self._apply_time_window(state["axis_xlim"])
+            if "axis_ylim" in state:
+                if is_pg:
+                    inner_track = self.plot_host.track("inner") if hasattr(self, "plot_host") else None
+                    if inner_track is not None:
+                        inner_track.set_ylim(*state["axis_ylim"])
+                elif self.ax is not None:
+                    self.ax.set_ylim(state["axis_ylim"])
+            if "axis_outer_ylim" in state:
+                if is_pg:
+                    outer_track = self.plot_host.track("outer") if hasattr(self, "plot_host") else None
+                    if outer_track is not None:
+                        outer_track.set_ylim(*state["axis_outer_ylim"])
+                elif self.ax2 is not None:
+                    self.ax2.set_ylim(state["axis_outer_ylim"])
+            t_font = time.perf_counter()
+            if "table_fontsize" in state:
+                font = self.event_table.font()
+                font.setPointSize(state["table_fontsize"])
+                self.event_table.setFont(font)
+            t_pins = time.perf_counter()
+            if "pins" in state:
+                for marker, label in self.pinned_points:
+                    self._safe_remove_artist(marker)
+                    self._safe_remove_artist(label)
+                self.pinned_points.clear()
+                if is_pg:
+                    inner_track = self.plot_host.track("inner") if hasattr(self, "plot_host") else None
+                    if inner_track is not None:
+                        inner_track.clear_pins()
+                        for x, y in state.get("pins", []):
+                            label_text = f"{x:.2f} s\n{y:.1f} µm"
+                            marker, text_item = inner_track.add_pin(x, y, label_text)
+                            self.pinned_points.append((marker, text_item))
+                else:
+                    for x, y in state.get("pins", []):
+                        marker = self.ax.plot(x, y, "ro", markersize=6)[0]
+                        label = self.ax.annotate(
+                            f"{x:.2f} s\n{y:.1f} µm",
+                            xy=(x, y),
+                            xytext=(6, 6),
+                            textcoords="offset points",
+                            bbox=dict(
+                                boxstyle="round,pad=0.3", fc="#F8F8F8", ec="#CCCCCC", lw=1
+                            ),
+                            fontsize=8,
+                        )
+                        self.pinned_points.append((marker, label))
+
+            if "grid_visible" in state:
+                self.grid_visible = state["grid_visible"]
+                if is_pg:
+                    for track in getattr(self.plot_host, "tracks", lambda: [])():
+                        track.set_grid_visible(self.grid_visible)
+                elif self.ax is not None:
+                    self.ax.grid(self.grid_visible)
+                    if self.grid_visible:
+                        self.ax.grid(color=CURRENT_THEME["grid_color"])
+            if (
+                ("inner_trace_visible" in state or "outer_trace_visible" in state)
+                and hasattr(self, "id_toggle_act")
+                and self.id_toggle_act is not None
             ):
-                if key in state and hasattr(self, act_name):
-                    act = getattr(self, act_name)
-                    if act is not None:
-                        act.blockSignals(True)
-                        act.setChecked(bool(state[key]))
-                        act.blockSignals(False)
-                        self._apply_channel_toggle(channel, bool(state[key]))
-            # Restore channel toggles for pressure tracks
-            for key, act_name, channel in (
-                ("avg_pressure_visible", "avg_pressure_toggle_act", "avg_pressure"),
-                ("set_pressure_visible", "set_pressure_toggle_act", "set_pressure"),
+                inner_on = state.get(
+                    "inner_trace_visible",
+                    self.id_toggle_act.isChecked(),
+                )
+                outer_on = state.get(
+                    "outer_trace_visible",
+                    (
+                        self.od_toggle_act.isChecked()
+                        if self.od_toggle_act is not None
+                        else False
+                    ),
+                )
+                outer_supported = self._outer_channel_available()
+                self._apply_toggle_state(
+                    inner_on, outer_on, outer_supported=outer_supported
+                )
+                self._rebuild_channel_layout(inner_on, outer_on, redraw=False)
+            # Apply avg/set visibility after layout so ancillary tracks stay in sync
+            if (
+                "avg_pressure_visible" in state
+                and hasattr(self, "avg_pressure_toggle_act")
+                and self.avg_pressure_toggle_act is not None
             ):
-                if key in state and hasattr(self, act_name):
-                    act = getattr(self, act_name)
-                    if act is not None:
-                        act.blockSignals(True)
-                        act.setChecked(bool(state[key]))
-                        act.blockSignals(False)
-                        self._apply_channel_toggle(channel, bool(state[key]))
-            # Apply only style if present; skip layout/axes/pins/grid restores.
+                self.avg_pressure_toggle_act.blockSignals(True)
+                self.avg_pressure_toggle_act.setChecked(state["avg_pressure_visible"])
+                self.avg_pressure_toggle_act.blockSignals(False)
+                self._apply_channel_toggle("avg_pressure", state["avg_pressure_visible"])
+            if (
+                "set_pressure_visible" in state
+                and hasattr(self, "set_pressure_toggle_act")
+                and self.set_pressure_toggle_act is not None
+            ):
+                self.set_pressure_toggle_act.blockSignals(True)
+                self.set_pressure_toggle_act.setChecked(state["set_pressure_visible"])
+                self.set_pressure_toggle_act.blockSignals(False)
+                self._apply_channel_toggle("set_pressure", state["set_pressure_visible"])
+
+            legend_settings = state.get("legend_settings")
+            if isinstance(legend_settings, dict):
+                self.apply_legend_settings(legend_settings, mark_dirty=False)
+
+            # ─── restore style settings ─────────────────────────────────────
             style = state.get("style_settings") or state.get("plot_style")
             if style:
                 self.apply_plot_style(style, persist=False)
+                if (
+                    state.get("plot_style")
+                    and hasattr(self, "plot_style_dialog")
+                    and self.plot_style_dialog
+                ):
+                    with contextlib.suppress(AttributeError):
+                        self.plot_style_dialog.set_style(state["plot_style"])
+            if "axis_settings" in state:
+                x_label = state["axis_settings"].get("x", {}).get("label")
+                y_label = state["axis_settings"].get("y", {}).get("label")
+                y_outer_label = state["axis_settings"].get("y_outer", {}).get("label")
+                if x_label:
+                    self._set_shared_xlabel(x_label)
+                if y_label:
+                    self.ax.set_ylabel(y_label)
+                if y_outer_label and self.ax2 is not None:
+                    self.ax2.set_ylabel(y_outer_label)
+            t_layout = time.perf_counter()
+            self._apply_pending_plot_layout()
+            t_pyqtgraph = time.perf_counter()
+            self._apply_pending_pyqtgraph_track_state()
+            t_draw = time.perf_counter()
             self.canvas.draw_idle()
+            t_end = time.perf_counter()
             log.info(
-                "Timing: apply_sample_state (embedded fast path) total=%.2f ms",
-                (time.perf_counter() - t0) * 1000,
+                "Timing: apply_sample_state breakdown (ms) events=%.2f axes=%.2f font=%.2f pins=%.2f layout=%.2f pyqtgraph=%.2f draw=%.2f total=%.2f",
+                (t_events - t0) * 1000,
+                (t_font - t_events) * 1000,
+                (t_pins - t_font) * 1000,
+                (t_layout - t_pins) * 1000,
+                (t_pyqtgraph - t_layout) * 1000,
+                (t_draw - t_pyqtgraph) * 1000,
+                (t_end - t_draw) * 1000,
+                (t_end - t0) * 1000,
             )
-            return
 
-        layout = state.get("plot_layout")
-        # Applying stored plot layouts on embedded datasets is expensive on pyqtgraph;
-        # skip restoring layout/track state on load when we have embedded data.
-        if layout and sample is not None and getattr(sample, "dataset_id", None) is None:
-            self._pending_plot_layout = layout
-        pyqtgraph_tracks = state.get("pyqtgraph_track_state")
-        if pyqtgraph_tracks and sample is not None and getattr(sample, "dataset_id", None) is None:
-            self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
-        t_events = time.perf_counter()
-        event_rows = state.get("event_table_data")
-        # Only restore saved event rows when the state actually contains data; otherwise
-        # keep the freshly populated events from storage.
-        if isinstance(event_rows, list) and event_rows:
-            self.event_table_data = event_rows
-            meta_payload = state.get("event_label_meta")
-            if isinstance(meta_payload, list):
-                self.event_label_meta = [
-                    (
-                        self._with_default_review_state(item)
-                        if isinstance(item, Mapping)
-                        else self._with_default_review_state(None)
-                    )
-                    for item in meta_payload
-                ]
-            else:
-                self.event_label_meta = [
-                    self._with_default_review_state(None) for _ in self.event_table_data
-                ]
-            self.populate_table()
-            self._maybe_prompt_event_review()
-        t_axes = time.perf_counter()
-        if "axis_xlim" in state:
-            self._apply_time_window(state["axis_xlim"])
-        if "axis_ylim" in state:
-            self.ax.set_ylim(state["axis_ylim"])
-        if "axis_outer_ylim" in state and self.ax2 is not None:
-            self.ax2.set_ylim(state["axis_outer_ylim"])
-        t_font = time.perf_counter()
-        if "table_fontsize" in state:
-            font = self.event_table.font()
-            font.setPointSize(state["table_fontsize"])
-            self.event_table.setFont(font)
-        t_pins = time.perf_counter()
-        if "pins" in state:
-            for marker, label in self.pinned_points:
-                self._safe_remove_artist(marker)
-                self._safe_remove_artist(label)
-            self.pinned_points.clear()
-            for x, y in state.get("pins", []):
-                marker = self.ax.plot(x, y, "ro", markersize=6)[0]
-                label = self.ax.annotate(
-                    f"{x:.2f} s\n{y:.1f} µm",
-                    xy=(x, y),
-                    xytext=(6, 6),
-                    textcoords="offset points",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="#F8F8F8", ec="#CCCCCC", lw=1),
-                    fontsize=8,
-                )
-                self.pinned_points.append((marker, label))
-
-        if "grid_visible" in state:
-            self.grid_visible = state["grid_visible"]
-            self.ax.grid(self.grid_visible)
-            if self.grid_visible:
-                self.ax.grid(color=CURRENT_THEME["grid_color"])
-        if (
-            ("inner_trace_visible" in state or "outer_trace_visible" in state)
-            and hasattr(self, "id_toggle_act")
-            and self.id_toggle_act is not None
-        ):
-            inner_on = state.get(
-                "inner_trace_visible",
-                self.id_toggle_act.isChecked(),
-            )
-            outer_on = state.get(
-                "outer_trace_visible",
-                (self.od_toggle_act.isChecked() if self.od_toggle_act is not None else False),
-            )
-            outer_supported = self._outer_channel_available()
-            self._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)
-            self._rebuild_channel_layout(inner_on, outer_on, redraw=False)
-        # Apply avg/set visibility after layout so ancillary tracks stay in sync
-        if (
-            "avg_pressure_visible" in state
-            and hasattr(self, "avg_pressure_toggle_act")
-            and self.avg_pressure_toggle_act is not None
-        ):
-            self.avg_pressure_toggle_act.blockSignals(True)
-            self.avg_pressure_toggle_act.setChecked(state["avg_pressure_visible"])
-            self.avg_pressure_toggle_act.blockSignals(False)
-            self._apply_channel_toggle("avg_pressure", state["avg_pressure_visible"])
-        if (
-            "set_pressure_visible" in state
-            and hasattr(self, "set_pressure_toggle_act")
-            and self.set_pressure_toggle_act is not None
-        ):
-            self.set_pressure_toggle_act.blockSignals(True)
-            self.set_pressure_toggle_act.setChecked(state["set_pressure_visible"])
-            self.set_pressure_toggle_act.blockSignals(False)
-            self._apply_channel_toggle("set_pressure", state["set_pressure_visible"])
-
-        legend_settings = state.get("legend_settings")
-        if isinstance(legend_settings, dict):
-            self.apply_legend_settings(legend_settings, mark_dirty=False)
-
-        # ─── restore style settings ─────────────────────────────────────
-        style = state.get("style_settings") or state.get("plot_style")
-        if style:
-            self.apply_plot_style(style, persist=False)
-            if (
-                state.get("plot_style")
-                and hasattr(self, "plot_style_dialog")
-                and self.plot_style_dialog
-            ):
-                with contextlib.suppress(AttributeError):
-                    self.plot_style_dialog.set_style(state["plot_style"])
-        if "axis_settings" in state:
-            x_label = state["axis_settings"].get("x", {}).get("label")
-            y_label = state["axis_settings"].get("y", {}).get("label")
-            y_outer_label = state["axis_settings"].get("y_outer", {}).get("label")
-            if x_label:
-                self._set_shared_xlabel(x_label)
-            if y_label:
-                self.ax.set_ylabel(y_label)
-            if y_outer_label and self.ax2 is not None:
-                self.ax2.set_ylabel(y_outer_label)
-        t_layout = time.perf_counter()
-        self._apply_pending_plot_layout()
-        t_pyqtgraph = time.perf_counter()
-        self._apply_pending_pyqtgraph_track_state()
-        t_draw = time.perf_counter()
-        self.canvas.draw_idle()
-        t_end = time.perf_counter()
-        log.info(
-            "Timing: apply_sample_state breakdown (ms) events=%.2f axes=%.2f font=%.2f pins=%.2f layout=%.2f pyqtgraph=%.2f draw=%.2f total=%.2f",
-            (t_events - t0) * 1000,
-            (t_font - t_events) * 1000,
-            (t_pins - t_font) * 1000,
-            (t_layout - t_pins) * 1000,
-            (t_pyqtgraph - t_layout) * 1000,
-            (t_draw - t_pyqtgraph) * 1000,
-            (t_end - t_draw) * 1000,
-            (t_end - t0) * 1000,
-        )
+        finally:
+            log.debug("apply_sample_state completed in %.3f s", time.perf_counter() - t0)
 
     def restore_last_selection(self) -> bool:
         if not self.project_tree or not self.current_project:
@@ -12903,7 +14188,9 @@ QPushButton[isGhost="true"]:hover {{
             last_sample,
         )
         if not last_exp:
-            log.warning("RESTORE_SELECTION: No last_experiment saved, falling back to first sample")
+            log.warning(
+                "RESTORE_SELECTION: No last_experiment saved, falling back to first sample"
+            )
             return False
 
         root = self.project_tree.topLevelItem(0)
@@ -12922,13 +14209,18 @@ QPushButton[isGhost="true"]:hover {{
                     for j in range(child.childCount()):
                         sample_child = child.child(j)
                         sample_obj = sample_child.data(0, Qt.UserRole)
-                        if isinstance(sample_obj, SampleN) and sample_obj.name == last_sample:
+                        if (
+                            isinstance(sample_obj, SampleN)
+                            and sample_obj.name == last_sample
+                        ):
                             sample_item = sample_child
                             break
                 break
 
         if sample_item is not None:
-            log.info("RESTORE_SELECTION: Successfully restored sample '%s'", last_sample)
+            log.info(
+                "RESTORE_SELECTION: Successfully restored sample '%s'", last_sample
+            )
             self.project_tree.setCurrentItem(sample_item)
             self.on_tree_item_clicked(sample_item, 0)
             return True
@@ -12942,7 +14234,9 @@ QPushButton[isGhost="true"]:hover {{
             self.on_tree_item_clicked(exp_item, 0)
             return True
 
-        log.warning("RESTORE_SELECTION: Failed to find experiment '%s' in tree", last_exp)
+        log.warning(
+            "RESTORE_SELECTION: Failed to find experiment '%s' in tree", last_exp
+        )
         return False
 
     def closeEvent(self, event):
@@ -12966,10 +14260,14 @@ QPushButton[isGhost="true"]:hover {{
                     wait_iteration += 1
 
                 if self._save_in_progress:
-                    log.warning("Timed out waiting for save to complete, forcing save anyway")
+                    log.warning(
+                        "Timed out waiting for save to complete, forcing save anyway"
+                    )
 
                 if not self.session_dirty:
-                    log.info("Close-event save skipped (not dirty) path=%s", project_path)
+                    log.info(
+                        "Close-event save skipped (not dirty) path=%s", project_path
+                    )
                 else:
                     log.info(
                         "Close-event save requested path=%s (skip_optimize=True)",

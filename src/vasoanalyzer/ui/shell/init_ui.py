@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt, QTimer
+import logging
+from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -24,11 +25,43 @@ from vasoanalyzer.ui.event_table_controller import EventTableController
 from vasoanalyzer.ui.interactions import InteractionController
 from vasoanalyzer.ui.panels.home_page import HomePage
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
+from vasoanalyzer.ui.plots.mpl_interactions import MplInteractionHost
 from vasoanalyzer.ui.plots.renderer_factory import create_plot_host
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:  # pragma: no cover
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
+
+
+log = logging.getLogger(__name__)
+
+
+class _PlotLeaveFilter(QObject):
+    """Event filter to forward leave events from PG widget to handler."""
+
+    def __init__(self, on_leave, parent=None):
+        super().__init__(parent)
+        self._on_leave = on_leave
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Leave:
+            try:
+                self._on_leave()
+            except Exception:
+                pass
+        return False
+
+
+class _SnapshotPreviewLabel(QLabel):
+    """QLabel used for the legacy snapshot viewer with resize logging."""
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        log.info(
+            "LegacySnapshotView.resizeEvent: size=%dx%d",
+            self.width(),
+            self.height(),
+        )
 
 
 def init_ui(window: VasoAnalyzerApp) -> None:
@@ -49,13 +82,35 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.main_layout.setSpacing(12)
 
     dpi = int(QApplication.primaryScreen().logicalDotsPerInch())
+    # Main trace view uses PyQtGraph by default:
+    # - renderer_factory.get_default_renderer_type() -> "pyqtgraph"
+    # - window.fig stays None for this backend
+    # - window.canvas is a PyQtGraphCanvasCompat wrapper around plot_host.widget()
+    # Matplotlib is reserved for the figure composer / exports, not the live trace view.
     window.plot_host = create_plot_host(dpi=dpi)
-    window.fig = window.plot_host.figure
-    window.canvas = window.plot_host.canvas
+    backend = (
+        window.plot_host.get_render_backend()
+        if hasattr(window.plot_host, "get_render_backend")
+        else "matplotlib"
+    )
+    use_pyqtgraph = backend == "pyqtgraph"
+    window.fig = window.plot_host.figure if not use_pyqtgraph else None
+    window.canvas = window.plot_host.canvas if not use_pyqtgraph else window.plot_host.canvas
+    window.trace_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
     if hasattr(window.plot_host, "set_click_handler"):
         window.plot_host.set_click_handler(window._handle_pyqtgraph_click)
-    window.canvas.setMouseTracking(True)
-    window.canvas.toolbar = None
+    target_mouse_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
+    target_mouse_widget.setMouseTracking(True)
+    if use_pyqtgraph:
+        target_mouse_widget.setFocusPolicy(Qt.StrongFocus)
+        # For any legacy draw_idle calls, forward to the native PG redraw.
+        if hasattr(window, "plot_host") and hasattr(window.plot_host, "redraw"):
+            window.canvas.draw_idle = window.plot_host.redraw  # type: ignore[attr-defined]
+        # Handle leave events via Qt for PyQtGraph backend
+        window._pg_leave_filter = _PlotLeaveFilter(window._handle_figure_leave, target_mouse_widget)
+        target_mouse_widget.installEventFilter(window._pg_leave_filter)
+    if not use_pyqtgraph:
+        window.canvas.toolbar = None
     initial_specs = [
         ChannelTrackSpec(
             track_id="inner",
@@ -72,9 +127,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         alpha=window._event_highlight_base_alpha,
     )
     inner_track = window.plot_host.track("inner")
-    window.ax = inner_track.ax if inner_track else None
+    window.ax = inner_track.ax if inner_track and not use_pyqtgraph else None
     window.ax2 = None
-    window._bind_primary_axis_callbacks()
+    if not use_pyqtgraph:
+        window._bind_primary_axis_callbacks()
 
     window._init_hover_artists()
     window.active_canvas = window.canvas
@@ -85,6 +141,13 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.toolbar.setMovable(False)
     window.canvas.toolbar = window.toolbar
     window.toolbar.setMouseTracking(True)
+    if use_pyqtgraph:
+        interaction_host = window.plot_host
+    else:
+        track_lookup = getattr(window.plot_host, "track_for_axes", None)
+        if not callable(track_lookup):
+            track_lookup = None
+        interaction_host = MplInteractionHost(window.canvas, track_lookup=track_lookup)
 
     window.trace_file_label = QLabel("No trace loaded")
     window.trace_file_label.setObjectName("TraceChip")
@@ -106,6 +169,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.addToolBar(Qt.TopToolBarArea, window.toolbar)
     window._interaction_controller = InteractionController(
         window.plot_host,
+        interaction_host,
         toolbar=window.toolbar,
         on_drag_state=window._set_plot_drag_state,
     )
@@ -127,7 +191,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.scroll_slider.hide()
     window.scroll_slider.setToolTip("Scroll timeline (X-axis)")
 
-    window.snapshot_label = QLabel("Snapshot preview")
+    # Legacy snapshot viewer: QLabel baseline with 220px minimum height; PG viewer mirrors this minimum.
+    window.snapshot_label = _SnapshotPreviewLabel("Snapshot preview")
     window.snapshot_label.setObjectName("SnapshotPreview")
     window.snapshot_label.setAlignment(Qt.AlignCenter)
     window.snapshot_label.setMinimumHeight(220)
@@ -346,19 +411,21 @@ QLabel#MetadataDetails {{
     window.stack.setCurrentWidget(window.home_page)
     window._set_toolbars_visible(False)
 
-    window.canvas.mpl_connect("draw_event", window.update_event_label_positions)
-    window.canvas.mpl_connect("draw_event", window.sync_slider_with_plot)
-    window.canvas.mpl_connect("motion_notify_event", window.update_hover_label)
-    window.canvas.mpl_connect("figure_leave_event", window._handle_figure_leave)
-    window.canvas.mpl_connect("button_press_event", window.handle_click_on_plot)
-    window.canvas.mpl_connect(
-        "button_release_event",
-        lambda event: QTimer.singleShot(
-            100,
-            lambda: window.on_mouse_release(event),
-        ),
-    )
-    window.canvas.mpl_connect("draw_event", window.sync_slider_with_plot)
+    backend = window.plot_host.get_render_backend() if hasattr(window.plot_host, "get_render_backend") else ""
+    if backend == "matplotlib":
+        window.canvas.mpl_connect("draw_event", window.update_event_label_positions)
+        window.canvas.mpl_connect("draw_event", window.sync_slider_with_plot)
+        window.canvas.mpl_connect("motion_notify_event", window.update_hover_label)
+        window.canvas.mpl_connect("figure_leave_event", window._handle_figure_leave)
+        window.canvas.mpl_connect("button_press_event", window.handle_click_on_plot)
+        window.canvas.mpl_connect(
+            "button_release_event",
+            lambda event: QTimer.singleShot(
+                100,
+                lambda: window.on_mouse_release(event),
+            ),
+        )
+        window.canvas.mpl_connect("draw_event", window.sync_slider_with_plot)
 
     window._refresh_home_recent()
     QTimer.singleShot(0, lambda: window._update_toolbar_compact_mode(window.width()))

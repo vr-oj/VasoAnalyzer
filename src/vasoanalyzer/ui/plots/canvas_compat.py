@@ -9,7 +9,7 @@ from typing import Any
 
 from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtGui import QMouseEvent, QWheelEvent
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QWidget
 
 log = logging.getLogger(__name__)
 
@@ -59,13 +59,6 @@ class PyQtGraphCanvasCompat(QWidget):
         self.toolbar: Any = None
         self.figure: Any = None  # PyQtGraph doesn't use matplotlib Figure
         self.widgetlock: Any = _DummyWidgetLock()  # For toolbar pan/zoom compatibility
-
-        # Create layout and add the PyQtGraph widget to it
-        # This ensures the canvas wrapper actually displays the plots
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._pg_widget)
 
         # Install event filter on PyQtGraph widget to intercept events
         self._pg_widget.installEventFilter(self)

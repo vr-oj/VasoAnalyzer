@@ -26,7 +26,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QSettings, Qt
 from PyQt5.QtWidgets import (
     QAction,
     QDialog,
@@ -372,6 +372,10 @@ class ProjectMixin:
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            embed = settings.value("snapshots/embed_stacks", False, type=bool)
+            self.current_project.embed_snapshots = bool(embed)
+
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -418,6 +422,9 @@ class ProjectMixin:
                     path_obj = path_obj.with_suffix(".vaso")
 
             path = str(path_obj.resolve(strict=False))
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            embed = settings.value("snapshots/embed_stacks", False, type=bool)
+            self.current_project.embed_snapshots = bool(embed)
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -570,6 +577,10 @@ class ProjectMixin:
             return
 
         try:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            embed = settings.value("snapshots/embed_stacks", False, type=bool)
+            self.current_project.embed_snapshots = bool(embed)
+
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()

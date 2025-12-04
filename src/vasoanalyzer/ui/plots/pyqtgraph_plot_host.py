@@ -9,8 +9,9 @@ from typing import Any, cast
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt5.QtCore import QPointF, Qt
 from PyQt5.QtGui import QColor, QFont
-from PyQt5.QtWidgets import QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -18,6 +19,12 @@ from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
 from vasoanalyzer.ui.plots.plot_host import LayoutState
+from vasoanalyzer.ui.plots.interactions_base import (
+    ClickContext,
+    InteractionHost,
+    MoveContext,
+    ScrollContext,
+)
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
 from vasoanalyzer.ui.plots.pyqtgraph_event_strip import PyQtGraphEventStripTrack
 from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
@@ -31,7 +38,7 @@ __all__ = ["PyQtGraphPlotHost"]
 log = logging.getLogger(__name__)
 
 
-class PyQtGraphPlotHost:
+class PyQtGraphPlotHost(InteractionHost):
     """GPU-accelerated plot host using PyQtGraph.
 
     Provides high-performance alternative to matplotlib-based PlotHost
@@ -49,8 +56,8 @@ class PyQtGraphPlotHost:
         self._enable_opengl = enable_opengl
 
         # Create main widget with vertical layout for stacked tracks
-        self.widget = QWidget()
-        self.layout = QVBoxLayout(self.widget)
+        self._widget = QWidget()
+        self.layout = QVBoxLayout(self._widget)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(2)  # Small gap between tracks
 
@@ -59,20 +66,24 @@ class PyQtGraphPlotHost:
 
         # Apply theme
         bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
-        self.widget.setStyleSheet(f"background-color: {bg_color};")
+        self._widget.setStyleSheet(f"background-color: {bg_color};")
 
         # Create matplotlib-compatible canvas wrapper for event handling
         # The wrapper contains self.widget and provides mpl_connect() for toolbar
-        self.canvas = PyQtGraphCanvasCompat(self.widget)
+        self.canvas = PyQtGraphCanvasCompat(self._widget)
 
         # Channel management
         self._channel_specs: list[ChannelTrackSpec] = []
         self._tracks: dict[str, PyQtGraphChannelTrack] = {}
         self._channel_visible: dict[str, bool] = {}
+        self._current_layout_signature: tuple | None = None
 
         # Data model and state
         self._model: TraceModel | None = None
         self._current_window: tuple[float, float] | None = None
+        self._data_t_min: float | None = None
+        self._data_t_max: float | None = None
+        self._min_window_span: float = 1e-6
         self._event_times: list[float] = []
         self._event_colors: list[str] | None = None
         self._event_labels: list[str] = []
@@ -123,6 +134,19 @@ class PyQtGraphPlotHost:
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
         self._grid_alpha: float = 0.10
+        self._click_handlers: list[Callable[[ClickContext], None]] = []
+        self._move_handlers: list[Callable[[MoveContext], None]] = []
+        self._scroll_handlers: list[Callable[[ScrollContext], None]] = []
+
+    # ------------------------------------------------------------------ InteractionHost
+    def on_click(self, handler: Callable[[ClickContext], None]) -> None:
+        self._click_handlers.append(handler)
+
+    def on_move(self, handler: Callable[[MoveContext], None]) -> None:
+        self._move_handlers.append(handler)
+
+    def on_scroll(self, handler: Callable[[ScrollContext], None]) -> None:
+        self._scroll_handlers.append(handler)
 
     def apply_theme(self) -> None:
         """Refresh plot host colors from the active theme."""
@@ -133,7 +157,7 @@ class PyQtGraphPlotHost:
             "hover_label_border",
             CURRENT_THEME.get("text", "#000000"),
         )
-        self.widget.setStyleSheet(f"background-color: {bg};")
+        self._widget.setStyleSheet(f"background-color: {bg};")
         self._lane_border_pen = pg.mkPen(color=border_color, width=1, cosmetic=True)
 
         for track in self._tracks.values():
@@ -160,7 +184,7 @@ class PyQtGraphPlotHost:
             if callable(apply_method):
                 with contextlib.suppress(Exception):
                     apply_method()
-        style = self.widget.styleSheet() if hasattr(self, "widget") else ""
+        style = self._widget.styleSheet() if hasattr(self, "_widget") else ""
         print(
             f"[THEME-DEBUG] PyQtGraphPlotHost styleSheet length={len(style) if style is not None else 0}"
         )
@@ -335,16 +359,31 @@ class PyQtGraphPlotHost:
 
         self._channel_specs.append(spec)
         self._rebuild_tracks()
+        self._current_layout_signature = self._layout_signature(self._channel_specs)
         return self._tracks[spec.track_id]
 
     def ensure_channels(self, specs: Iterable[ChannelTrackSpec]) -> None:
         """Ensure the provided set of channels (ordered) exist."""
         desired = list(specs)
-        current_ids = [spec.track_id for spec in self._channel_specs]
-        desired_ids = [spec.track_id for spec in desired]
+        new_signature = self._layout_signature(desired)
+        if (
+            self._current_layout_signature is not None
+            and new_signature == self._current_layout_signature
+            and self._tracks
+        ):
+            # Layout already matches; skip rebuild to avoid jank.
+            self._channel_specs = desired
+            return
 
         self._channel_specs = desired
         self._rebuild_tracks()
+        self._current_layout_signature = new_signature
+
+    def _layout_signature(self, specs: Iterable[ChannelTrackSpec]) -> tuple:
+        """Return a hashable signature for the current layout specification."""
+        return tuple(
+            (spec.track_id, spec.component, float(spec.height_ratio), spec.label) for spec in specs
+        )
 
     def _rebuild_tracks(self) -> None:
         """Recreate tracks to match specs."""
@@ -358,8 +397,11 @@ class PyQtGraphPlotHost:
         new_tracks: dict[str, PyQtGraphChannelTrack] = {}
         if not self._channel_specs:
             self._tracks = new_tracks
+            self._current_layout_signature = None
             return
 
+        primary_plot_item: pg.PlotItem | None = None
+        primary_track: PyQtGraphChannelTrack | None = None
         # Ensure event strip exists and sits at top
         if self._event_strip_track is None:
             self._event_strip_widget = pg.PlotWidget()
@@ -404,6 +446,13 @@ class PyQtGraphPlotHost:
             plot_item = track.view.get_widget().getPlotItem()
             plot_items.append(plot_item)
 
+            if primary_plot_item is None:
+                primary_plot_item = plot_item
+                primary_track = track
+            else:
+                # Link X-axis to the primary plot item to avoid manual range writes
+                plot_item.setXLink(primary_plot_item)
+
             # Configure X-axis visibility: only show labels on the bottom-visible track
             is_bottom_track = spec.track_id == bottom_visible_id
             self._configure_bottom_axis(plot_item, is_bottom_track=is_bottom_track)
@@ -440,6 +489,8 @@ class PyQtGraphPlotHost:
             # Apply stored visibility state for this track
             track.set_visible(self.is_channel_visible(spec.track_id))
 
+            self._connect_track_signals(track, bind_range=False)
+
             if self._click_handler is not None:
                 track.set_click_handler(
                     lambda x, y, button, _mode, ev, tid=spec.track_id: self._emit_click(
@@ -455,7 +506,7 @@ class PyQtGraphPlotHost:
                 self._channel_visible.pop(key, None)
 
             # Connect signals for synchronized interactions
-            self._connect_track_signals(track)
+            self._connect_track_signals(track, bind_range=False)
             is_top_track = idx == 0
             self._configure_track_defaults(track, is_top_track=is_top_track)
 
@@ -468,17 +519,246 @@ class PyQtGraphPlotHost:
         self._event_highlight_overlay.sync_tracks(plot_items)
         self._apply_grid_to_all_tracks()
 
+        # Only listen to range changes from the primary plot to avoid feedback loops.
+        for track in self._tracks.values():
+            plot_item = track.view.get_widget().getPlotItem()
+            with contextlib.suppress(Exception):
+                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
+            setattr(track, "_range_bound", False)
+        if primary_track is not None:
+            self._connect_track_signals(primary_track, bind_range=True)
+
         # Update window if already set
         if self._current_window is not None:
             x0, x1 = self._current_window
             self.set_time_window(x0, x1)
+        self._current_layout_signature = self._layout_signature(self._channel_specs)
 
-    def _connect_track_signals(self, track: PyQtGraphChannelTrack) -> None:
+    def _connect_track_signals(
+        self, track: PyQtGraphChannelTrack, *, bind_range: bool = True
+    ) -> None:
         """Connect track signals for synchronized pan/zoom."""
-        plot_item = track.view.get_widget().getPlotItem()
+        if bind_range and not getattr(track, "_range_bound", False):
+            plot_item = track.view.get_widget().getPlotItem()
+            plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+            setattr(track, "_range_bound", True)
+        self._bind_interaction_signals(track)
 
-        # Connect view range changed signal
-        plot_item.sigRangeChanged.connect(self._on_track_range_changed)
+    def _bind_interaction_signals(self, track: PyQtGraphChannelTrack) -> None:
+        """Hook raw Qt/PyQtGraph signals for interaction dispatch."""
+        if getattr(track, "_interaction_bound", False):
+            return
+
+        widget = track.view.get_widget()
+        scene = widget.scene()
+        view_box = track.view.view_box()
+
+        if scene is not None:
+            scene.sigMouseMoved.connect(
+                lambda pos, t=track: self._handle_track_mouse_moved(t, pos)
+            )
+        if hasattr(view_box, "sigMousePressEvent"):
+            view_box.sigMousePressEvent.connect(
+                lambda ev, t=track: self._handle_track_mouse_pressed(t, ev)
+            )
+        if hasattr(view_box, "sigMouseReleaseEvent"):
+            view_box.sigMouseReleaseEvent.connect(
+                lambda ev, t=track: self._handle_track_mouse_released(t, ev)
+            )
+
+        setattr(track, "_interaction_bound", True)
+
+    def _handle_track_mouse_moved(self, track: PyQtGraphChannelTrack, scene_pos: QPointF) -> None:
+        ctx = self._build_move_context(track, scene_pos)
+        if ctx is None:
+            return
+        self._dispatch_move(ctx)
+
+    def _handle_track_mouse_pressed(self, track: PyQtGraphChannelTrack, event) -> None:
+        ctx = self._build_click_context(track, event, pressed=True)
+        if ctx is None:
+            return
+        self._dispatch_click(ctx)
+
+    def _handle_track_mouse_released(self, track: PyQtGraphChannelTrack, event) -> None:
+        ctx = self._build_click_context(track, event, pressed=False)
+        if ctx is None:
+            return
+        self._dispatch_click(ctx)
+
+    def _handle_wheel_event(self, track: PyQtGraphChannelTrack, event) -> None:
+        ctx = self._build_scroll_context(track, event)
+        if ctx is None:
+            return
+        self._dispatch_scroll(ctx)
+
+    def _build_move_context(
+        self, track: PyQtGraphChannelTrack, scene_pos: QPointF
+    ) -> MoveContext | None:
+        if not self._point_in_track(track, scene_pos):
+            return None
+        data_pos = self._map_scene_to_data(track, scene_pos)
+        if data_pos is None:
+            return None
+        ctx = MoveContext(
+            x_data=data_pos.x(),
+            y_data=data_pos.y(),
+            track_id=track.id,
+        )
+        ctx.x_px = float(scene_pos.x())  # type: ignore[attr-defined]
+        ctx.y_px = float(scene_pos.y())  # type: ignore[attr-defined]
+        ctx.buttons = QApplication.mouseButtons()  # type: ignore[attr-defined]
+        return ctx
+
+    def _build_click_context(
+        self, track: PyQtGraphChannelTrack, event, *, pressed: bool
+    ) -> ClickContext | None:
+        try:
+            scene_pos = event.scenePos()
+        except Exception:
+            return None
+        if not self._point_in_track(track, scene_pos):
+            return None
+        data_pos = self._map_scene_to_data(track, scene_pos)
+        if data_pos is None:
+            return None
+        button = self._button_name_from_qt(getattr(event, "button", lambda: None)())
+        ctx = ClickContext(
+            x_data=data_pos.x(),
+            y_data=data_pos.y(),
+            button=button,
+            modifiers=self._modifiers_from_event(event),
+            track_id=track.id,
+            in_gutter=self._is_in_gutter(track, scene_pos),
+            double=bool(getattr(event, "double", lambda: False)()),
+        )
+        ctx.x_px = float(scene_pos.x())  # type: ignore[attr-defined]
+        ctx.y_px = float(scene_pos.y())  # type: ignore[attr-defined]
+        ctx.pressed = bool(pressed)  # type: ignore[attr-defined]
+        try:
+            ctx.buttons = event.buttons()  # type: ignore[attr-defined]
+        except Exception:
+            ctx.buttons = None  # type: ignore[attr-defined]
+        return ctx
+
+    def _build_scroll_context(
+        self, track: PyQtGraphChannelTrack, event
+    ) -> ScrollContext | None:
+        try:
+            scene_pos = event.scenePos()
+        except Exception:
+            return None
+        if not self._point_in_track(track, scene_pos):
+            return None
+        data_pos = self._map_scene_to_data(track, scene_pos)
+        if data_pos is None:
+            return None
+        angle_delta = None
+        if hasattr(event, "angleDelta"):
+            try:
+                angle_delta = event.angleDelta().y()
+            except Exception:
+                angle_delta = None
+        if angle_delta is None and hasattr(event, "delta"):
+            try:
+                angle_delta = event.delta()
+            except Exception:
+                angle_delta = None
+        if angle_delta is None:
+            angle_delta = 0
+
+        ctx = ScrollContext(
+            x_data=data_pos.x(),
+            y_data=data_pos.y(),
+            delta_y=float(angle_delta),
+            track_id=track.id,
+            modifiers=self._modifiers_from_event(event),
+        )
+        ctx.x_px = float(scene_pos.x())  # type: ignore[attr-defined]
+        ctx.y_px = float(scene_pos.y())  # type: ignore[attr-defined]
+        return ctx
+
+    def _dispatch_click(self, ctx: ClickContext) -> None:
+        for handler in list(self._click_handlers):
+            try:
+                handler(ctx)
+            except Exception:
+                continue
+
+    def _dispatch_move(self, ctx: MoveContext) -> None:
+        for handler in list(self._move_handlers):
+            try:
+                handler(ctx)
+            except Exception:
+                continue
+
+    def _dispatch_scroll(self, ctx: ScrollContext) -> None:
+        for handler in list(self._scroll_handlers):
+            try:
+                handler(ctx)
+            except Exception:
+                continue
+
+    def _map_scene_to_data(self, track: PyQtGraphChannelTrack, scene_pos: QPointF):
+        view_box = track.view.view_box()
+        if view_box is None:
+            return None
+        try:
+            return view_box.mapSceneToView(scene_pos)
+        except Exception:
+            return None
+
+    def _point_in_track(self, track: PyQtGraphChannelTrack, scene_pos: QPointF) -> bool:
+        view_box = track.view.view_box()
+        if view_box is None:
+            return False
+        try:
+            rect = view_box.sceneBoundingRect()
+        except Exception:
+            return False
+        return rect.contains(scene_pos)
+
+    def _is_in_gutter(self, track: PyQtGraphChannelTrack, scene_pos: QPointF) -> bool:
+        view_box = track.view.view_box()
+        if view_box is None:
+            return False
+        try:
+            rect = view_box.sceneBoundingRect()
+        except Exception:
+            return False
+        margin_px = 18.0
+        left = float(rect.left())
+        right = float(rect.right())
+        x_coord = float(scene_pos.x())
+        return (x_coord < left + margin_px) or (x_coord > right - margin_px)
+
+    def _modifiers_from_event(self, event) -> set[str]:
+        mods: set[str] = set()
+        try:
+            qt_mods = event.modifiers()
+        except Exception:
+            qt_mods = None
+        if qt_mods is None:
+            return mods
+        if qt_mods & Qt.ShiftModifier:
+            mods.add("shift")
+        if qt_mods & Qt.ControlModifier:
+            mods.add("control")
+        if qt_mods & Qt.AltModifier:
+            mods.add("alt")
+        if qt_mods & Qt.MetaModifier:
+            mods.add("meta")
+        return mods
+
+    def _button_name_from_qt(self, button: Qt.MouseButton) -> str:
+        if button == Qt.LeftButton:
+            return "left"
+        if button == Qt.MiddleButton:
+            return "middle"
+        if button == Qt.RightButton:
+            return "right"
+        return str(button)
+
 
     def _configure_track_defaults(
         self, track: PyQtGraphChannelTrack, is_top_track: bool = False
@@ -713,7 +993,7 @@ class PyQtGraphPlotHost:
             return
         r, g, b = (int(c) for c in color)
         self._window_bg_color = (r, g, b)
-        self.widget.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
+        self._widget.setStyleSheet(f"background-color: rgb({r}, {g}, {b});")
 
     def window_background_color(self) -> tuple[int, int, int] | None:
         return self._window_bg_color
@@ -761,7 +1041,7 @@ class PyQtGraphPlotHost:
             pass
 
         # Fallback: estimate using layout geometry and height ratios
-        container_height = float(max(self.widget.height(), self.layout.geometry().height(), 1))
+        container_height = float(max(self._widget.height(), self.layout.geometry().height(), 1))
         visible_specs = [
             spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
         ]
@@ -914,17 +1194,8 @@ class PyQtGraphPlotHost:
         x_range = view_box.viewRange()[0]
         x0, x1 = float(x_range[0]), float(x_range[1])
 
-        # Update internal state
+        # Update internal state only (avoid writing back the range here)
         self._current_window = (x0, x1)
-
-        # Synchronize all other tracks (block signals to avoid recursion)
-        for track in self._tracks.values():
-            plot_item = track.view.get_widget().getPlotItem()
-            with contextlib.suppress(Exception):
-                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
-            track.update_window(x0, x1)
-            plot_item.setXRange(x0, x1, padding=0)
-            plot_item.sigRangeChanged.connect(self._on_track_range_changed)
 
         previous_flag = self._range_change_user_driven
         self._range_change_user_driven = True
@@ -937,6 +1208,8 @@ class PyQtGraphPlotHost:
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
         self._model = model
+        self._data_t_min = None
+        self._data_t_max = None
 
         for track in self._tracks.values():
             track.set_model(model)
@@ -945,11 +1218,23 @@ class PyQtGraphPlotHost:
         # Set initial window to full range
         if model is not None:
             x0, x1 = model.full_range
+            self._data_t_min = float(x0)
+            self._data_t_max = float(x1)
             self.set_time_window(x0, x1)
         self.debug_dump_state("set_trace_model (after)")
 
     def set_time_window(self, x0: float, x1: float) -> None:
         """Set the visible time window for all tracks."""
+        x0 = float(x0)
+        x1 = float(x1)
+        log.debug(
+            "PyQtGraphPlotHost.set_time_window: requested=(%r, %r) data_span=(%r, %r)",
+            x0,
+            x1,
+            self._data_t_min,
+            self._data_t_max,
+        )
+        x0, x1 = self._clamp_time_window(x0, x1)
         self._current_window = (x0, x1)
 
         for track in self._tracks.values():
@@ -972,6 +1257,30 @@ class PyQtGraphPlotHost:
             self._range_change_user_driven = previous_flag
         self.debug_dump_state("set_time_window (after)")
         self.log_data_and_view_ranges("time_window_changed")
+
+    def _clamp_time_window(self, x0: float, x1: float) -> tuple[float, float]:
+        """Clamp the requested window to known data bounds using public APIs."""
+        if self._data_t_min is None or self._data_t_max is None:
+            return x0, x1
+
+        data_min = float(self._data_t_min)
+        data_max = float(self._data_t_max)
+        data_span = data_max - data_min
+        if data_span <= 0:
+            return x0, x1
+
+        span = max(float(x1 - x0), self._min_window_span)
+        # If requested span exceeds data span, snap to full data.
+        if span >= data_span:
+            return data_min, data_max
+
+        if x0 < data_min:
+            x0 = data_min
+            x1 = x0 + span
+        if x1 > data_max:
+            x1 = data_max
+            x0 = x1 - span
+        return x0, x1
 
     def set_events(
         self,
@@ -1054,11 +1363,20 @@ class PyQtGraphPlotHost:
 
     def get_widget(self) -> QWidget:
         """Get the main widget for embedding in UI."""
-        return self.widget
+        return self._widget
+
+    def widget(self) -> QWidget:
+        """Alias for embedding compatibility."""
+        return self._widget
 
     def get_render_backend(self) -> str:
         """Get the rendering backend identifier."""
         return "pyqtgraph"
+
+    def redraw(self) -> None:
+        """Request a repaint of the root widget."""
+        with contextlib.suppress(Exception):
+            self._widget.update()
 
     def is_user_range_change_active(self) -> bool:
         """Return True if the latest time-window update originated from user input."""
@@ -1093,7 +1411,7 @@ class PyQtGraphPlotHost:
         # Update widget background
         if "background_color" in style:
             bg = style["background_color"]
-            self.widget.setStyleSheet(f"background-color: {bg};")
+            self._widget.setStyleSheet(f"background-color: {bg};")
 
     def _schedule_draw(self) -> None:
         """Schedule a draw (compatibility method - PyQtGraph updates automatically)."""
@@ -1155,6 +1473,27 @@ class PyQtGraphPlotHost:
         first_id = self._channel_specs[0].track_id
         track = self._tracks.get(first_id)
         return None if track is None else track.ax
+
+    def get_trace_view_range(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float]] | None:
+        """Return current (x_range, y_range) from the primary track view."""
+        if not self._channel_specs:
+            return None
+        first_id = self._channel_specs[0].track_id
+        track = self._tracks.get(first_id)
+        if track is None:
+            return None
+        try:
+            plot_item = track.view.get_widget().getPlotItem()
+            x_range, y_range = plot_item.viewRange()
+            x_tuple = (float(x_range[0]), float(x_range[1]))
+            y_tuple = (float(y_range[0]), float(y_range[1]))
+            log.debug("PyQtGraphPlotHost.get_trace_view_range x=%s y=%s", x_tuple, y_tuple)
+            return x_tuple, y_tuple
+        except Exception:
+            log.exception("Failed to fetch trace view range from PyQtGraphPlotHost")
+            return None
 
     def set_trace_model(self, model: TraceModel) -> None:
         """Set trace model (matplotlib PlotHost compatibility - alias for set_model)."""
@@ -1268,6 +1607,14 @@ class PyQtGraphPlotHost:
     def set_event_labels_v3_enabled(self, enabled: bool) -> None:
         self.set_event_labels_visible(enabled)
 
+    def event_labels_visible(self) -> bool:
+        """Return whether event labels are currently enabled."""
+        return bool(self._event_labels_enabled)
+
+    def event_label_options(self) -> LayoutOptionsV3:
+        """Return current event label layout options."""
+        return self._event_label_options
+
     def set_event_label_mode(self, mode: str) -> None:
         normalized = str(mode or "").lower()
         mapping = {
@@ -1380,10 +1727,15 @@ class PyQtGraphPlotHost:
         self._event_colors = None
         self._event_labels = []
         self._event_label_meta = None
+        self._current_layout_signature = None
 
-    def tracks(self) -> list[PyQtGraphChannelTrack]:
-        """Get all tracks as a list."""
-        return list(self._tracks.values())
+    def tracks(self) -> tuple[PyQtGraphChannelTrack, ...]:
+        """Get all tracks as an immutable tuple."""
+        return tuple(self._tracks.values())
+
+    def iter_tracks(self):
+        """Yield tracks without exposing the internal mapping."""
+        return iter(self._tracks.values())
 
     def suspend_updates(self) -> None:
         """Suspend updates for batching operations (compatibility stub)."""

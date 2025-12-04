@@ -313,6 +313,8 @@ class Project:
     created_at: str | None = None
     updated_at: str | None = None
     attachments: list[Attachment] = field(default_factory=list)
+    # Whether to embed snapshot video stacks into the project database
+    embed_snapshots: bool = False
 
     # Internal: current open store handle (for persistent connection)
     _store: Any = field(default=None, repr=False, compare=False, init=False)
@@ -1682,6 +1684,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
 
     t_start = time.perf_counter()
     base_dir = base_dir.resolve()
+    embed_snapshots = getattr(project, "embed_snapshots", False)
 
     # DEBUG: _populate_store_from_project instrumentation start
     project_name = getattr(project, "name", None) or getattr(project, "path", None)
@@ -1793,6 +1796,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     sample=sample,
                     sample_index=sample_index,
                     source_repo=source_repo,
+                    embed_snapshots=embed_snapshots,
                 )
 
         if project.attachments:
@@ -1845,6 +1849,7 @@ def _save_sample_to_store(
     sample: SampleN,
     sample_index: int,
     source_repo: ProjectRepository | None = None,
+    embed_snapshots: bool = False,
 ) -> None:
     """Serialize an individual ``sample`` into ``store``."""
 
@@ -1908,6 +1913,7 @@ def _save_sample_to_store(
         sample,
         base_dir,
         source_repo=source_repo,
+        embed_snapshots=embed_snapshots,
     )
     analysis_keys = _persist_sample_results(repo, dataset_id, sample)
 
@@ -2379,6 +2385,7 @@ def _persist_sample_snapshots(
     sample: SampleN,
     base_dir: Path,
     source_repo: ProjectRepository | None = None,
+    embed_snapshots: bool = False,
 ) -> dict[str, Any]:
     t_start = time.perf_counter()
     payload: dict[str, Any] = {}
@@ -2388,40 +2395,42 @@ def _persist_sample_snapshots(
     snapshot_format = (sample.snapshot_format or "").lower() or "npz"
     snapshot_mime = "application/x-npz"
 
-    if isinstance(sample.snapshots, np.ndarray):
-        buffer = io.BytesIO()
-        np.savez_compressed(buffer, stack=sample.snapshots)
-        snapshot_bytes = buffer.getvalue()
-        snapshot_format = "npz"
-        snapshot_mime = "application/x-npz"
-    elif source_repo is not None and sample.dataset_id is not None:
-        asset_roles = sample.asset_roles or {}
-        asset_id = asset_roles.get(snapshot_role)
-        if asset_id:
-            existing = None
-            get_asset_bytes = getattr(source_repo, "get_asset_bytes", None)
-            if callable(get_asset_bytes):
-                try:
-                    existing = cast(bytes, get_asset_bytes(asset_id))
-                except Exception:
-                    existing = None
-            if existing:
-                snapshot_bytes = existing
-                if existing.startswith(b"PK"):
-                    snapshot_format = "npz"
-                    snapshot_mime = "application/x-npz"
-                elif existing.startswith(b"\x93NUMPY"):
-                    snapshot_format = "npy"
-                    snapshot_mime = "application/x-npy"
-                else:
-                    snapshot_format = sample.snapshot_format or snapshot_format
-                    snapshot_mime = (
-                        f"application/x-{snapshot_format}"
-                        if snapshot_format in {"npz", "npy"}
-                        else "application/octet-stream"
-                    )
+    if embed_snapshots:
+        # Embedding is opt-in to keep saves lightweight by default
+        if isinstance(sample.snapshots, np.ndarray):
+            buffer = io.BytesIO()
+            np.savez_compressed(buffer, stack=sample.snapshots)
+            snapshot_bytes = buffer.getvalue()
+            snapshot_format = "npz"
+            snapshot_mime = "application/x-npz"
+        elif source_repo is not None and sample.dataset_id is not None:
+            asset_roles = sample.asset_roles or {}
+            asset_id = asset_roles.get(snapshot_role)
+            if asset_id:
+                existing = None
+                get_asset_bytes = getattr(source_repo, "get_asset_bytes", None)
+                if callable(get_asset_bytes):
+                    try:
+                        existing = cast(bytes, get_asset_bytes(asset_id))
+                    except Exception:
+                        existing = None
+                if existing:
+                    snapshot_bytes = existing
+                    if existing.startswith(b"PK"):
+                        snapshot_format = "npz"
+                        snapshot_mime = "application/x-npz"
+                    elif existing.startswith(b"\x93NUMPY"):
+                        snapshot_format = "npy"
+                        snapshot_mime = "application/x-npy"
+                    else:
+                        snapshot_format = sample.snapshot_format or snapshot_format
+                        snapshot_mime = (
+                            f"application/x-{snapshot_format}"
+                            if snapshot_format in {"npz", "npy"}
+                            else "application/octet-stream"
+                        )
 
-    if snapshot_bytes:
+    if snapshot_bytes is not None:
         repo.add_or_update_asset(
             dataset_id,
             snapshot_role,
@@ -2433,6 +2442,9 @@ def _persist_sample_snapshots(
         payload["snapshot_format"] = snapshot_format
         sample.snapshot_role = snapshot_role
         sample.snapshot_format = snapshot_format
+    else:
+        sample.snapshot_role = None
+        sample.snapshot_format = None
 
     snapshot_path = sample.snapshot_path
     if snapshot_path:

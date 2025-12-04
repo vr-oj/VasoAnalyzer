@@ -14,6 +14,13 @@ import tifffile
 
 log = logging.getLogger(__name__)
 
+# Snapshot image model:
+# - TIFF snapshots are fully materialised in memory (optionally subsampled to ``max_frames``) and returned as a list
+#   of np.ndarray frames (grayscale H×W or RGB H×W×3). Callers such as VasoAnalyzerApp/_SnapshotLoadJob stack these
+#   into ``(n_frames, H, W[,3])`` arrays for persistence/playback.
+# - Timing is not decoded here; downstream code reads FrameTime/Rec_intvl tags from the returned metadata to derive
+#   recording_interval and per-frame timestamps.
+
 
 def parse_description(desc: str) -> dict[str, object]:
     """Parse TIFF page descriptions which may contain JSON or OME-XML."""

@@ -11,7 +11,7 @@ import logging
 from typing import TYPE_CHECKING, TypedDict
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -33,8 +33,6 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:
     from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
@@ -289,7 +287,9 @@ class PyQtGraphSettingsDialog(QDialog):
 
         auto_scale_cb = QCheckBox()
         auto_scale_cb.setToolTip("Enable automatic Y scaling for this track")
-        auto_scale_cb.setChecked(track.view._autoscale_y if track is not None else True)
+        auto_scale_cb.setChecked(
+            track.view.is_autoscale_enabled() if track is not None else True
+        )
 
         visible_cb = QCheckBox()
         visible_cb.setToolTip("Show or hide this track")
@@ -319,171 +319,19 @@ class PyQtGraphSettingsDialog(QDialog):
     # TAB 2: AXIS & TITLES
     # ========================================================================
     def _create_axis_titles_tab(self) -> QWidget:
-        """Create axis titles and styling tab."""
+        """Axis styling is handled by theme/composer; keep this tab as a placeholder."""
         tab = QWidget()
-        main_layout = QVBoxLayout(tab)
+        layout = QVBoxLayout(tab)
 
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-
-        content = QWidget()
-        layout = QVBoxLayout(content)
-
-        intro = QLabel("Set axis titles, fonts, and global tick style for all tracks.")
-        intro.setWordWrap(True)
-        intro.setStyleSheet("color: gray; margin-bottom: 8px;")
-        layout.addWidget(intro)
-
-        x_axis_group = QGroupBox("X Axis", content)
-        x_form = QFormLayout(x_axis_group)
-        x_form.setLabelAlignment(Qt.AlignRight)
-
-        self.x_axis_title_edit = QLineEdit()
-        self.x_axis_title_edit.setPlaceholderText("Time (s)")
-        x_form.addRow("Title:", self.x_axis_title_edit)
-
-        font_row = QWidget()
-        font_layout = QHBoxLayout(font_row)
-        font_layout.setContentsMargins(0, 0, 0, 0)
-        font_layout.setSpacing(8)
-        self.x_axis_font_family = QComboBox()
-        self.x_axis_font_family.addItems(self._font_choices)
-        font_layout.addWidget(self.x_axis_font_family, 2)
-        self.x_axis_font_size = QSpinBox()
-        self.x_axis_font_size.setRange(6, 48)
-        self.x_axis_font_size.setValue(20)
-        font_layout.addWidget(self.x_axis_font_size, 1)
-        x_form.addRow("Font:", font_row)
-
-        # X and Y axis title/font controls are omitted from the visible layout in
-        # the PyQtGraph dialog to keep this tab focused on analysis-time tick styling.
-        # They remain constructed here so we can re-enable them later if needed.
-
-        y_axis_group = QGroupBox("Y Axes (per track)", content)
-        y_grid = QGridLayout(y_axis_group)
-        y_grid.setHorizontalSpacing(16)
-        y_grid.setVerticalSpacing(12)
-        y_grid.setColumnStretch(0, 1)
-        y_grid.setColumnStretch(1, 1)
-
-        helper_box = QGroupBox("All Y Axes", y_axis_group)
-        helper_form = QFormLayout(helper_box)
-        helper_form.setLabelAlignment(Qt.AlignRight)
-        helper_row = QWidget()
-        helper_layout = QHBoxLayout(helper_row)
-        helper_layout.setContentsMargins(0, 0, 0, 0)
-        helper_layout.setSpacing(8)
-        self.y_all_font_family = QComboBox()
-        self.y_all_font_family.addItems(self._font_choices)
-        self.y_all_font_family.setMaximumWidth(160)
-        helper_layout.addWidget(self.y_all_font_family, 2)
-        self.y_all_font_size = QSpinBox()
-        self.y_all_font_size.setRange(6, 48)
-        self.y_all_font_size.setValue(20)
-        self.y_all_font_size.setMaximumWidth(70)
-        helper_layout.addWidget(self.y_all_font_size, 1)
-        self.y_all_apply_btn = QPushButton("Apply to all")
-        helper_layout.addWidget(self.y_all_apply_btn)
-        helper_form.addRow("Font:", helper_row)
-        y_grid.addWidget(helper_box, 0, 0, 1, 2)
-
-        self._y_all_helper_ready = False
-        self.y_all_font_family.currentTextChanged.connect(self._on_y_all_helper_changed)
-        self.y_all_font_size.valueChanged.connect(self._on_y_all_helper_changed)
-        self.y_all_apply_btn.clicked.connect(self._on_apply_y_axis_font_to_all_clicked)
-
-        self.y_axis_widgets = {}
-        for idx, (track_id, track) in enumerate(self.plot_host._tracks.items()):
-            track_box = QGroupBox(track.spec.label, y_axis_group)
-            track_form = QFormLayout(track_box)
-            track_form.setLabelAlignment(Qt.AlignRight)
-
-            title_edit = QLineEdit()
-            title_edit.setPlaceholderText(track.spec.label)
-            track_form.addRow("Label:", title_edit)
-
-            font_row = QWidget()
-            font_layout = QHBoxLayout(font_row)
-            font_layout.setContentsMargins(0, 0, 0, 0)
-            font_layout.setSpacing(8)
-            font_family = QComboBox()
-            font_family.addItems(self._font_choices)
-            font_family.setMaximumWidth(160)
-            font_layout.addWidget(font_family, 2)
-            font_size = QSpinBox()
-            font_size.setRange(6, 48)
-            font_size.setValue(20)
-            font_size.setMaximumWidth(70)
-            font_layout.addWidget(font_size, 1)
-
-            track_form.addRow("Font:", font_row)
-
-            track_widgets: AxisTitleWidgets = {
-                "title": title_edit,
-                "font_family": font_family,
-                "font_size": font_size,
-            }
-
-            row = 1 + idx // 2
-            col = idx % 2
-            y_grid.addWidget(track_box, row, col)
-            self.y_axis_widgets[track_id] = (track, track_widgets)
-
-        tick_group = QGroupBox("Tick Style (global)")
-        tick_form = QFormLayout(tick_group)
-        tick_form.setLabelAlignment(Qt.AlignRight)
-
-        self.tick_font_size = QSpinBox()
-        self.tick_font_size.setRange(6, 32)
-        self.tick_font_size.setValue(16)
-        tick_form.addRow("Font size:", self.tick_font_size)
-
-        tick_length_row = QWidget()
-        tick_length_layout = QHBoxLayout(tick_length_row)
-        tick_length_layout.setContentsMargins(0, 0, 0, 0)
-        tick_length_layout.setSpacing(8)
-        self.x_tick_length = QSpinBox()
-        self.x_tick_length.setRange(0, 20)
-        self.x_tick_length.setValue(5)
-        self.x_tick_length.setSuffix(" px")
-        tick_length_layout.addWidget(QLabel("X"))
-        tick_length_layout.addWidget(self.x_tick_length)
-        self.y_tick_length = QSpinBox()
-        self.y_tick_length.setRange(0, 20)
-        self.y_tick_length.setValue(5)
-        self.y_tick_length.setSuffix(" px")
-        tick_length_layout.addSpacing(12)
-        tick_length_layout.addWidget(QLabel("Y"))
-        tick_length_layout.addWidget(self.y_tick_length)
-        tick_form.addRow("Tick length:", tick_length_row)
-
-        tick_color_widget = self._create_color_picker_widget()
-        self.tick_color_btn = tick_color_widget["button"]
-        self.tick_color_label = tick_color_widget["label"]
-        tick_form.addRow("Tick color:", tick_color_widget["widget"])
-
-        layout.addWidget(tick_group)
-        # Keep axis title/font controls hidden (out of layout) but alive to avoid crashes
-        x_axis_group.hide()
-        y_axis_group.hide()
-
+        info = QLabel(
+            "Axis titles, fonts, and tick styling follow the active theme or the "
+            "Matplotlib Figure Composer. No axis styling controls are available here."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: gray; margin: 8px 4px;")
+        layout.addWidget(info)
         layout.addStretch(1)
-        scroll.setWidget(content)
-        main_layout.addWidget(scroll)
-
         return tab
-
-    def _on_apply_y_axis_font_to_all_clicked(self) -> None:
-        family = self.y_all_font_family.currentText()
-        size = self.y_all_font_size.value()
-        if not family:
-            return
-
-        for _track, widgets in self.y_axis_widgets.values():
-            widgets["font_family"].setCurrentText(family)
-            widgets["font_size"].setValue(size)
 
     def _on_apply_line_style_to_all_clicked(self) -> None:
         width = self.lines_all_width.value()
@@ -496,11 +344,6 @@ class PyQtGraphSettingsDialog(QDialog):
             widgets["line_style"].setCurrentText(style)
             self._set_label_color(widgets["color_label"], color_hex)
             widgets["alpha"].setValue(alpha)
-
-    def _on_y_all_helper_changed(self) -> None:
-        if not getattr(self, "_y_all_helper_ready", False):
-            return
-        self._on_apply_y_axis_font_to_all_clicked()
 
     # ========================================================================
     # TAB 3: LINES & MARKERS
@@ -577,7 +420,8 @@ class PyQtGraphSettingsDialog(QDialog):
         self.lines_all_apply_btn.clicked.connect(self._on_apply_line_style_to_all_clicked)
 
         self.line_widgets = {}
-        for idx, (track_id, track) in enumerate(self.plot_host._tracks.items()):
+        for idx, track in enumerate(self.plot_host.tracks()):
+            track_id = track.spec.track_id
             track_box = QGroupBox(track.spec.label)
             track_form = QFormLayout(track_box)
             track_form.setLabelAlignment(Qt.AlignRight)
@@ -905,23 +749,6 @@ class PyQtGraphSettingsDialog(QDialog):
                 "Grid line color follows tick color settings on the 'Axis & Titles' tab."
             )
 
-        # Background Section
-        bg_group = QGroupBox("Background")
-        bg_form = QFormLayout(bg_group)
-        bg_form.setLabelAlignment(Qt.AlignRight)
-
-        bg_color_widget = self._create_color_picker_widget(CURRENT_THEME["window_bg"])
-        self.bg_color_btn = bg_color_widget["button"]
-        self.bg_color_label = bg_color_widget["label"]
-        bg_form.addRow("Background Color:", bg_color_widget["widget"])
-
-        plot_bg_color_widget = self._create_color_picker_widget("#FFFFFF")
-        self.plot_bg_color_btn = plot_bg_color_widget["button"]
-        self.plot_bg_color_label = plot_bg_color_widget["label"]
-        bg_form.addRow("Plot Area Color:", plot_bg_color_widget["widget"])
-
-        layout.addWidget(bg_group)
-
         # Hover Tooltip Section
         tooltip_group = QGroupBox("Hover Tooltips")
         tooltip_form = QFormLayout(tooltip_group)
@@ -1072,73 +899,32 @@ class PyQtGraphSettingsDialog(QDialog):
     def _load_current_settings(self):
         """Load current settings from plot host."""
         try:
-            # Load X axis title
-            if self.plot_host._tracks:
-                first_track = next(iter(self.plot_host._tracks.values()))
-                plot_item = first_track.view.get_widget().getPlotItem()
-                x_label = plot_item.getAxis("bottom").label.toPlainText()
-                if x_label:
-                    self.x_axis_title_edit.setText(x_label)
-            axis_font_family = None
-            axis_font_size = None
-            with contextlib.suppress(Exception):
-                axis_font_family, axis_font_size = self.plot_host.axis_font()
-            if axis_font_family:
-                self.x_axis_font_family.setCurrentText(axis_font_family)
-            if axis_font_size:
-                self.x_axis_font_size.setValue(int(axis_font_size))
-            with contextlib.suppress(Exception):
-                tick_size = self.plot_host.tick_font_size()
-                self.tick_font_size.setValue(int(tick_size))
-
             # Track visibility from host state
             for track_id, (_track, widgets) in self.track_widgets.items():
                 widgets["visible"].setChecked(self.plot_host.is_channel_visible(track_id))
 
-            # Load Y axis titles
-            first_widgets = None
-            for _track_id, (track, widgets) in self.y_axis_widgets.items():
-                if first_widgets is None:
-                    first_widgets = widgets
-                plot_item = track.view.get_widget().getPlotItem()
-                y_label = plot_item.getAxis("left").label.toPlainText()
-                if y_label:
-                    widgets["title"].setText(y_label)
-            if first_widgets is not None:
-                self.y_all_font_family.setCurrentText(first_widgets["font_family"].currentText())
-                self.y_all_font_size.setValue(first_widgets["font_size"].value())
-                self._y_all_helper_ready = True
-
-            # Load event label settings from first track that has a labeler
-            label_options_loaded = False
-            for track in self.plot_host._tracks.values():
-                if track.view._event_labeler is not None:
-                    options = track.view._event_labeler.options
-                    self._set_event_label_controls(options, track.view._event_labels_visible)
-                    label_options_loaded = True
-                    break
-            if not label_options_loaded:
-                options = getattr(self.plot_host, "_event_label_options", None)
-                if options is not None:
-                    enabled_flag = getattr(self.plot_host, "_event_labels_enabled", True)
-                    self._set_event_label_controls(options, enabled_flag)
+            # Load event label settings
+            options = None
+            enabled_flag = True
+            get_opts = getattr(self.plot_host, "event_label_options", None)
+            if callable(get_opts):
+                options = get_opts()
+            get_enabled = getattr(self.plot_host, "event_labels_visible", None)
+            if callable(get_enabled):
+                enabled_flag = bool(get_enabled())
+            if options is not None:
+                self._set_event_label_controls(options, enabled_flag)
+            else:
+                for track in self.plot_host.tracks():
+                    opts = track.view.event_label_options()
+                    if opts is not None:
+                        self._set_event_label_controls(opts, track.view.are_event_labels_visible())
+                        break
 
             with contextlib.suppress(Exception):
                 x_visible, y_visible, grid_alpha = self.plot_host.grid_state()
                 self.grid_visible_cb.setChecked(bool(x_visible and y_visible))
                 self.grid_alpha.setValue(float(grid_alpha))
-
-            bg_color = getattr(self.plot_host, "window_background_color", None)
-            if callable(bg_color):
-                bg_color = bg_color()
-            if bg_color:
-                self._set_label_color(self.bg_color_label, self._rgb_to_hex(bg_color))
-
-            plot_bg_color = getattr(self.plot_host, "plot_background_color", None)
-            if callable(plot_bg_color):
-                plot_bg_color = plot_bg_color()
-            if plot_bg_color:
-                self._set_label_color(self.plot_bg_color_label, self._rgb_to_hex(plot_bg_color))
 
             with contextlib.suppress(Exception):
                 self.tooltip_enabled_cb.setChecked(self.plot_host.label_tooltips_enabled())
@@ -1172,14 +958,9 @@ class PyQtGraphSettingsDialog(QDialog):
                     track.set_ylim(y_min, y_max)
                 else:
                     track.view.set_autoscale_y(True)
-                    with contextlib.suppress(Exception):
-                        track.autoscale()
 
                 # Visibility
                 self.plot_host.set_channel_visible(track_id, widgets["visible"].isChecked())
-
-            # Apply axis titles
-            self._apply_axis_titles()
 
             # Apply line styling
             self._apply_line_styling()
@@ -1206,49 +987,8 @@ class PyQtGraphSettingsDialog(QDialog):
             log.error(f"Failed to apply PyQtGraph settings: {e}", exc_info=True)
 
     def _apply_axis_titles(self):
-        """Apply axis title settings."""
-        try:
-            # X axis title
-            x_title = self.x_axis_title_edit.text()
-            x_font_family = self.x_axis_font_family.currentText()
-            x_font_size = self.x_axis_font_size.value()
-            tick_color = QColor(self._get_label_color(self.tick_color_label))
-            x_tick_length = int(self.x_tick_length.value())
-            y_tick_length = int(self.y_tick_length.value())
-            tick_font_size = self.tick_font_size.value()
-            self.plot_host.set_axis_font(family=x_font_family, size=x_font_size)
-            self.plot_host.set_tick_font_size(tick_font_size)
-            for track in self.plot_host._tracks.values():
-                plot_item = track.view.get_widget().getPlotItem()
-                axis = plot_item.getAxis("bottom")
-                axis.label.setFont(QFont(x_font_family, x_font_size))
-            # Y axis titles (per track)
-            for _track_id, (track, widgets) in self.y_axis_widgets.items():
-                y_title = widgets["title"].text()
-                y_font_family = widgets["font_family"].currentText()
-                y_font_size = widgets["font_size"].value()
-
-                plot_item = track.view.get_widget().getPlotItem()
-                axis = plot_item.getAxis("left")
-                axis.label.setFont(QFont(y_font_family, y_font_size))
-
-            # Tick styling
-            tick_font = QFont("Arial", tick_font_size)
-            for track in self.plot_host._tracks.values():
-                plot_item = track.view.get_widget().getPlotItem()
-                bottom_axis = plot_item.getAxis("bottom")
-                left_axis = plot_item.getAxis("left")
-                bottom_axis.setTickFont(tick_font)
-                left_axis.setTickFont(tick_font)
-                bottom_axis.setStyle(tickLength=x_tick_length)
-                left_axis.setStyle(tickLength=y_tick_length)
-                bottom_axis.setTextPen(tick_color)
-                bottom_axis.setPen(tick_color)
-                left_axis.setTextPen(tick_color)
-                left_axis.setPen(tick_color)
-
-        except Exception as e:
-            log.error(f"Failed to apply axis titles: {e}", exc_info=True)
+        """Axis styling is theme/composer driven; no-op in this dialog."""
+        return
 
     def _apply_line_styling(self):
         """Apply line styling settings."""
@@ -1300,7 +1040,7 @@ class PyQtGraphSettingsDialog(QDialog):
             event_line_qt_style = style_map.get(event_line_style_text, Qt.DashLine)
 
             # Apply to all tracks
-            for _track_id, track in self.plot_host._tracks.items():
+            for track in self.plot_host.tracks():
                 track.view.set_event_line_style(
                     width=event_line_width,
                     style=event_line_qt_style,
@@ -1369,12 +1109,6 @@ class PyQtGraphSettingsDialog(QDialog):
                     owner.grid_visible = grid_visible
                     if hasattr(owner, "_sync_grid_action"):
                         owner._sync_grid_action()
-
-            bg_color_hex = self._get_label_color(self.bg_color_label)
-            plot_bg_hex = self._get_label_color(self.plot_bg_color_label)
-
-            self.plot_host.set_window_background_color(self._hex_to_rgb_tuple(bg_color_hex))
-            self.plot_host.set_plot_background_color(self._hex_to_rgb_tuple(plot_bg_hex))
 
         except Exception as e:
             log.error(f"Failed to apply grid/appearance settings: {e}", exc_info=True)
