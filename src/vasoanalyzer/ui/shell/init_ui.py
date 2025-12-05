@@ -238,27 +238,6 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.next_frame_btn.setEnabled(False)
     controls_layout.addWidget(window.next_frame_btn)
 
-    window.rotate_ccw_btn = QToolButton(window.snapshot_controls)
-    window.rotate_ccw_btn.setIcon(window.style().standardIcon(QStyle.SP_ArrowBack))
-    window.rotate_ccw_btn.setToolTip("Rotate 90° counter-clockwise")
-    window.rotate_ccw_btn.clicked.connect(window.rotate_snapshot_ccw)
-    window.rotate_ccw_btn.setEnabled(False)
-    controls_layout.addWidget(window.rotate_ccw_btn)
-
-    window.rotate_cw_btn = QToolButton(window.snapshot_controls)
-    window.rotate_cw_btn.setIcon(window.style().standardIcon(QStyle.SP_ArrowForward))
-    window.rotate_cw_btn.setToolTip("Rotate 90° clockwise")
-    window.rotate_cw_btn.clicked.connect(window.rotate_snapshot_cw)
-    window.rotate_cw_btn.setEnabled(False)
-    controls_layout.addWidget(window.rotate_cw_btn)
-
-    window.rotate_reset_btn = QToolButton(window.snapshot_controls)
-    window.rotate_reset_btn.setIcon(window.style().standardIcon(QStyle.SP_BrowserReload))
-    window.rotate_reset_btn.setToolTip("Reset rotation to 0°")
-    window.rotate_reset_btn.clicked.connect(window.reset_snapshot_rotation)
-    window.rotate_reset_btn.setEnabled(False)
-    controls_layout.addWidget(window.rotate_reset_btn)
-
     window.snapshot_speed_label = QLabel("Speed:")
     window.snapshot_speed_label.setObjectName("SnapshotSpeedLabel")
     window.snapshot_speed_label.setEnabled(False)

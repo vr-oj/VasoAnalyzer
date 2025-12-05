@@ -808,7 +808,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_meta: dict[str, Any] = {}
         self.data_cache: DataCache | None = None
         self._cache_root_hint: str | None = None
-        self.snapshot_view_pg: SnapshotViewPG | None = SnapshotViewPG(self)
+        self.snapshot_view_pg: SnapshotViewPG | None = SnapshotViewPG(
+            self, show_native_controls=True
+        )
         if self.snapshot_view_pg is not None:
             self.snapshot_view_pg.hide()
             self.snapshot_view_pg.currentTimeChanged.connect(
@@ -5997,7 +5999,7 @@ class VasoAnalyzerApp(QMainWindow):
                 widget.setVisible(bool(should_show and not use_pg))
         for widget in shared_widgets:
             if widget is not None:
-                widget.setVisible(bool(should_show))
+                widget.setVisible(bool(should_show and not use_pg))
 
         self._update_snapshot_rotation_controls()
 
@@ -10330,23 +10332,31 @@ QPushButton[isGhost="true"]:hover {{
         if hasattr(self, "snapshot_timer"):
             self._configure_snapshot_timer()
 
-    def _configure_snapshot_timer(self) -> None:
+    def _calculate_snapshot_fps(self) -> float:
+        """Calculate playback FPS from frame times and speed multiplier.
+
+        Returns canonical frame rate for smooth PyQtGraph playback.
+        """
+        # Calculate base interval from frame times (canonical pattern)
         interval = None
         if self.frame_trace_time is not None and len(self.frame_trace_time) > 1:
             with contextlib.suppress(Exception):
                 diffs = np.diff(self.frame_trace_time)
                 finite = diffs[np.isfinite(diffs)]
                 if finite.size:
-                    interval = float(np.median(finite))
-        if interval is None:
+                    interval = float(np.median(finite))  # Use median (robust)
+
+        # Fallback to recording interval
+        if interval is None or interval <= 0:
             try:
                 interval = float(self.recording_interval)
             except (TypeError, ValueError):
                 interval = 0.14
 
-        if not interval:
+        if not interval or interval <= 0:
             interval = 0.14
 
+        # Apply speed multiplier
         try:
             speed = float(self.snapshot_speed_multiplier)
         except (TypeError, ValueError):
@@ -10355,8 +10365,20 @@ QPushButton[isGhost="true"]:hover {{
         if speed <= 0:
             speed = 1.0
 
-        effective_interval = interval / speed if interval else 0.14
-        interval_ms = max(20, int(round(effective_interval * 1000)))
+        # Calculate FPS
+        effective_interval = interval / speed
+        fps = 1.0 / effective_interval if effective_interval > 0 else 10.0
+
+        # Cap to reasonable range (1-60 FPS for smooth display)
+        fps = min(max(fps, 1.0), 60.0)
+
+        return fps
+
+    def _configure_snapshot_timer(self) -> None:
+        """Configure timer for legacy snapshot viewer playback."""
+        fps = self._calculate_snapshot_fps()
+        interval_ms = int(round(1000.0 / fps))
+        interval_ms = max(20, min(interval_ms, 1000))  # Clamp to 20-1000ms
         self.snapshot_timer.setInterval(interval_ms)
 
     # Playback controller:
@@ -10364,16 +10386,26 @@ QPushButton[isGhost="true"]:hover {{
     # - snapshot_timer.timeout -> advance_snapshot_frame -> set_current_frame(...) follows same path
     # - play/pause + speed toggle snapshot_timer state; _set_snapshot_frame dispatches to PG or legacy viewer.
     def _set_playback_state(self, playing: bool) -> None:
-        if not hasattr(self, "snapshot_timer"):
-            return
-
-        if not playing or not self.snapshot_frames:
+        """Control playback using PyQtGraph native engine via wrapper API."""
+        if not self.snapshot_frames:
             playing = False
-            self.snapshot_timer.stop()
-        else:
-            self._configure_snapshot_timer()
-            self.snapshot_timer.start()
 
+        # Use PyQtGraph native playback via clean wrapper
+        if self._use_pg_snapshot_viewer() and self.snapshot_view_pg is not None:
+            if playing:
+                fps = self._calculate_snapshot_fps()
+                self.snapshot_view_pg.play(fps=fps)
+            else:
+                self.snapshot_view_pg.stop()
+        else:
+            # Legacy viewer: use timer-based playback
+            if playing:
+                self._configure_snapshot_timer()
+                self.snapshot_timer.start()
+            else:
+                self.snapshot_timer.stop()
+
+        # Update button UI
         self.play_pause_btn.blockSignals(True)
         self.play_pause_btn.setChecked(playing)
         self.play_pause_btn.blockSignals(False)
@@ -12344,6 +12376,9 @@ QPushButton[isGhost="true"]:hover {{
             self.scroll_slider.show()
         else:
             self.scroll_slider.hide()
+
+        # User preference: keep scroll slider hidden
+        self.scroll_slider.hide()
 
     def open_subplot_layout_dialog(self, fig=None):
         """Open dialog to adjust subplot paddings and spacing.
