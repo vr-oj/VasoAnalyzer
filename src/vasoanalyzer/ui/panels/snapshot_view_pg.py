@@ -367,7 +367,7 @@ class SnapshotViewPG(QtWidgets.QWidget):
         play_btn.setText("Play")
         play_btn.setEnabled(False)
         play_btn.toggled.connect(self._on_native_play_toggled)
-        row.addWidget(play_btn)
+        row.addWidget(play_btn, 0, QtCore.Qt.AlignVCenter)
 
         slider = QtWidgets.QSlider(QtCore.Qt.Horizontal, controls)
         slider.setMinimum(0)
@@ -375,7 +375,6 @@ class SnapshotViewPG(QtWidgets.QWidget):
         slider.setSingleStep(1)
         slider.setEnabled(False)
         slider.valueChanged.connect(self._on_native_slider_changed)
-        row.addWidget(slider, 1)
 
         fps_spin = pg.SpinBox(
             value=self._default_fps,
@@ -386,12 +385,25 @@ class SnapshotViewPG(QtWidgets.QWidget):
             siPrefix=False,
             suffix=" fps",
         )
-        # Match the play button width for visual balance; ensure enough room for 3 digits.
-        target_width = max(play_btn.sizeHint().width(), 0.1)
-        fps_spin.setFixedWidth(target_width)
+
+        # Match all controls to button height for perfect alignment
+        btn_width = play_btn.sizeHint().width()
+        btn_height = play_btn.sizeHint().height()
+
+        # Ensure spinbox is wide enough for "200 fps" and matches button
+        target_width = max(btn_width, 90)  # 90px accommodates 3-digit fps
+        fps_spin.setMinimumWidth(target_width)
+
+        if btn_height > 0:
+            fps_spin.setFixedHeight(btn_height)
+            slider.setFixedHeight(btn_height)
+
         fps_spin.setEnabled(False)
         fps_spin.valueChanged.connect(self._on_native_fps_changed)
-        row.addWidget(fps_spin)
+
+        # Add widgets with vertical center alignment
+        row.addWidget(slider, 1, QtCore.Qt.AlignVCenter)
+        row.addWidget(fps_spin, 0, QtCore.Qt.AlignVCenter)
 
         self._native_controls = {
             "widget": controls,

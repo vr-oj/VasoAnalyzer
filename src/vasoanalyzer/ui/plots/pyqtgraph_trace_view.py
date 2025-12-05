@@ -56,6 +56,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         view_box = PanOnlyViewBox(enableMenu=False)
         view_box.setMouseEnabled(x=True, y=False)  # Horizontal interactions only
         view_box.setMouseMode(view_box.PanMode)  # Default: grab to pan horizontally
+        self._mouse_mode: str = "pan"
 
         # Create plot widget with our custom ViewBox
         self._plot_widget = pg.PlotWidget(viewBox=view_box)
@@ -144,6 +145,22 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def view_box(self) -> PanOnlyViewBox:
         """Return the underlying ViewBox for this trace view."""
         return self._view_box
+
+    def set_mouse_mode(self, mode: str = "pan") -> None:
+        """Switch between pan and rectangle-zoom modes using ViewBox API."""
+        mode_normalized = "rect" if str(mode).lower() == "rect" else "pan"
+        vb = self._view_box
+        if mode_normalized == "rect":
+            vb.setMouseMode(vb.RectMode)
+        else:
+            vb.setMouseMode(vb.PanMode)
+        # Always keep interactions constrained to X (time) axis
+        vb.setMouseEnabled(x=True, y=False)
+        self._mouse_mode = mode_normalized
+
+    def mouse_mode(self) -> str:
+        """Return current mouse interaction mode ("pan" or "rect")."""
+        return getattr(self, "_mouse_mode", "pan")
 
     def _init_hover_label(self) -> None:
         """Create a persistent hover label anchored to the plot."""

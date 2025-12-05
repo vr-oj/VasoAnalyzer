@@ -8248,6 +8248,24 @@ QPushButton[isGhost="true"]:hover {{
         if plot_host is None:
             return
 
+        is_pyqtgraph = bool(
+            hasattr(plot_host, "get_render_backend")
+            and plot_host.get_render_backend() == "pyqtgraph"
+        )
+
+        if is_pyqtgraph and hasattr(plot_host, "zoom_at"):
+            window = plot_host.current_window()
+            if window is None and hasattr(plot_host, "full_range"):
+                window = plot_host.full_range()
+            if window is None:
+                return
+            start, end = float(window[0]), float(window[1])
+            if start >= end:
+                return
+            center = (start + end) / 2.0
+            plot_host.zoom_at(center, factor=0.5)
+            return
+
         window = plot_host.current_window()
         full_range = plot_host.full_range()
         if window is None or full_range is None:
@@ -8287,6 +8305,24 @@ QPushButton[isGhost="true"]:hover {{
         if plot_host is None:
             return
 
+        is_pyqtgraph = bool(
+            hasattr(plot_host, "get_render_backend")
+            and plot_host.get_render_backend() == "pyqtgraph"
+        )
+
+        if is_pyqtgraph and hasattr(plot_host, "zoom_at"):
+            window = plot_host.current_window()
+            if window is None and hasattr(plot_host, "full_range"):
+                window = plot_host.full_range()
+            if window is None:
+                return
+            start, end = float(window[0]), float(window[1])
+            if start >= end:
+                return
+            center = (start + end) / 2.0
+            plot_host.zoom_at(center, factor=2.0)
+            return
+
         window = plot_host.current_window()
         full_range = plot_host.full_range()
         if window is None or full_range is None:
@@ -8317,6 +8353,17 @@ QPushButton[isGhost="true"]:hover {{
             new_start, new_end = full_start, full_end
 
         self._apply_time_window((new_start, new_end))
+
+    def _on_box_zoom_toggled(self, checked: bool) -> None:
+        """Enable rectangle zoom mode for PyQtGraph traces; otherwise keep pan-only."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "get_render_backend"):
+            return
+        if plot_host.get_render_backend() != "pyqtgraph":
+            return
+        if hasattr(plot_host, "set_mouse_mode"):
+            mode = "rect" if checked else "pan"
+            plot_host.set_mouse_mode(mode)
 
     def _on_autoscale_triggered(self) -> None:
         """Handle autoscale button click - reset to full time range and autoscale Y axes."""
@@ -8360,6 +8407,18 @@ QPushButton[isGhost="true"]:hover {{
         ):
             plot_host.log_data_and_view_ranges("autoscale_y_toolbar")
         self._sync_autoscale_y_action_from_host()
+
+    def _on_pan_mode_toggled(self, checked: bool) -> None:
+        """Enable PyQtGraph pan mode when the Pan action is activated."""
+        if not checked:
+            return
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "get_render_backend"):
+            return
+        if plot_host.get_render_backend() != "pyqtgraph":
+            return
+        if hasattr(plot_host, "set_mouse_mode"):
+            plot_host.set_mouse_mode("pan")
 
     def _sync_autoscale_y_action_from_host(self) -> None:
         """Align the Y-autoscale toggle with the current renderer state."""
@@ -9904,14 +9963,22 @@ QPushButton[isGhost="true"]:hover {{
 
         # Update trace cursor + highlight.
         self._highlight_selected_event(resolved_time)
+        is_playing_video = bool(
+            getattr(self, "play_pause_btn", None)
+            and self.play_pause_btn.isChecked()
+        )
         plot_host = getattr(self, "plot_host", None)
         if plot_host is not None:
-            if hasattr(plot_host, "center_on_time"):
-                with contextlib.suppress(Exception):
-                    plot_host.center_on_time(resolved_time)
             if hasattr(plot_host, "set_time_cursor"):
                 with contextlib.suppress(Exception):
                     plot_host.set_time_cursor(resolved_time, visible=True)
+            # Avoid snapping back to full range during playback; keep user zoom stable.
+            should_center = (
+                not is_playing_video and src_label in {"manual", "event"}
+            )
+            if should_center and hasattr(plot_host, "center_on_time"):
+                with contextlib.suppress(Exception):
+                    plot_host.center_on_time(resolved_time)
 
         frame_idx = self._frame_index_for_time_canonical(resolved_time)
         if frame_idx is not None:

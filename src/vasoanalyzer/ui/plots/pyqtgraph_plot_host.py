@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF, Qt
+from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
@@ -77,6 +77,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._tracks: dict[str, PyQtGraphChannelTrack] = {}
         self._channel_visible: dict[str, bool] = {}
         self._current_layout_signature: tuple | None = None
+        self._bottom_visible_track_id: str | None = None
 
         # Data model and state
         self._model: TraceModel | None = None
@@ -97,6 +98,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._pan_active: bool = False
         self._pan_start_x: float | None = None
         self._pan_start_window: tuple[float, float] | None = None
+        self._mouse_mode: str = "pan"  # "pan" or "rect" (box zoom)
 
         # Performance throttling
         self._min_draw_interval: float = 1.0 / 120.0  # 120 FPS cap
@@ -137,6 +139,10 @@ class PyQtGraphPlotHost(InteractionHost):
         self._click_handlers: list[Callable[[ClickContext], None]] = []
         self._move_handlers: list[Callable[[MoveContext], None]] = []
         self._scroll_handlers: list[Callable[[ScrollContext], None]] = []
+
+        # Install resize event filter to refresh axes/fonts when geometry changes
+        self._resize_filter = _ResizeEventFilter(self)
+        self._widget.installEventFilter(self._resize_filter)
 
     # ------------------------------------------------------------------ InteractionHost
     def on_click(self, handler: Callable[[ClickContext], None]) -> None:
@@ -189,6 +195,9 @@ class PyQtGraphPlotHost(InteractionHost):
             f"[THEME-DEBUG] PyQtGraphPlotHost styleSheet length={len(style) if style is not None else 0}"
         )
 
+        # Refresh axis fonts and labels after theme change
+        self.refresh_axes_and_fonts(reason="theme-changed")
+
     # ------------------------------------------------------------------ visibility helpers
     def set_channel_visible(self, channel_kind: str, visible: bool) -> None:
         """Set visibility for a given channel kind.
@@ -205,13 +214,8 @@ class PyQtGraphPlotHost(InteractionHost):
         if track is not None:
             track.set_visible(bool(visible))
 
-        # Reassign bottom X-axis ownership based on updated visibility.
-        self._update_bottom_axis_assignments()
-
-        # Update all track fonts since visible count changed
-        # Y-axis title sizes adapt based on number of visible tracks
-        for t in self._tracks.values():
-            self._apply_axis_font_to_track(t)
+        # Refresh axis ownership and fonts after visibility change
+        self.refresh_axes_and_fonts(reason="channel-visible-changed")
 
     def set_click_handler(self, handler: Callable[[str, float, float, int, Any], None] | None):
         """Assign a global click handler for all tracks."""
@@ -532,6 +536,8 @@ class PyQtGraphPlotHost(InteractionHost):
         if self._current_window is not None:
             x0, x1 = self._current_window
             self.set_time_window(x0, x1)
+        # Reapply the stored mouse mode (pan vs box zoom) to all tracks
+        self.set_mouse_mode(self._mouse_mode)
         self._current_layout_signature = self._layout_signature(self._channel_specs)
 
     def _connect_track_signals(
@@ -783,7 +789,6 @@ class PyQtGraphPlotHost(InteractionHost):
         if track.primary_line:
             track.set_line_width(self._default_line_width)
         self._apply_axis_font_to_track(track)
-        self._apply_axis_font_to_track(track)
 
     def _configure_bottom_axis(
         self,
@@ -853,6 +858,9 @@ class PyQtGraphPlotHost(InteractionHost):
             if bottom_visible_id is None:
                 return
 
+        # Store as single source of truth for bottom track
+        self._bottom_visible_track_id = bottom_visible_id
+
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
             if track is None:
@@ -862,6 +870,29 @@ class PyQtGraphPlotHost(InteractionHost):
                 plot_item,
                 is_bottom_track=(spec.track_id == bottom_visible_id),
             )
+
+    def refresh_axes_and_fonts(self, *, reason: str = "") -> None:
+        """Reapply bottom-axis ownership and axis fonts after layout/theme changes.
+
+        This ensures axis labels, fonts, and tick styling stay consistent when:
+        - Window is resized
+        - Track visibility changes
+        - Theme changes
+        - Font settings change
+        - Layout reflows (splitter, event strip, etc.)
+
+        Args:
+            reason: Optional debug label for why refresh was triggered
+        """
+        if not self._tracks:
+            return
+
+        # Update bottom-visible tracking (single source of truth)
+        self._update_bottom_axis_assignments()
+
+        # Reapply fonts based on current geometry
+        for track in self._tracks.values():
+            self._apply_axis_font_to_track(track)
 
     def _apply_event_label_options(self) -> None:
         if not self._tracks:
@@ -958,8 +989,7 @@ class PyQtGraphPlotHost(InteractionHost):
             self._axis_font_size = float(size)
             changed = True
         if changed:
-            for track in self._tracks.values():
-                self._apply_axis_font_to_track(track)
+            self.refresh_axes_and_fonts(reason="axis-font-changed")
 
     def axis_font(self) -> tuple[str, float]:
         return self._axis_font_family, self._axis_font_size
@@ -969,8 +999,7 @@ class PyQtGraphPlotHost(InteractionHost):
         if value == self._tick_font_size:
             return
         self._tick_font_size = value
-        for track in self._tracks.values():
-            self._apply_axis_font_to_track(track)
+        self.refresh_axes_and_fonts(reason="tick-font-changed")
 
     def tick_font_size(self) -> float:
         return self._tick_font_size
@@ -1117,16 +1146,8 @@ class PyQtGraphPlotHost(InteractionHost):
             left_axis.setTickLength(5, 0)
         self._recenter_axis_label(left_axis, height_px)
 
-        visible_specs = [
-            spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
-        ]
-        if visible_specs:
-            bottom_visible_id = visible_specs[-1].track_id
-        elif self._channel_specs:
-            bottom_visible_id = self._channel_specs[-1].track_id
-        else:
-            bottom_visible_id = track.id
-
+        # Use cached bottom track ID (single source of truth)
+        bottom_visible_id = self._bottom_visible_track_id or track.id
         is_bottom = track.id == bottom_visible_id
         if is_bottom:
             bottom_axis = plot_item.getAxis("bottom")
@@ -1552,6 +1573,20 @@ class PyQtGraphPlotHost(InteractionHost):
         """Get current time window."""
         return self._current_window
 
+    def set_mouse_mode(self, mode: str = "pan") -> None:
+        """Set interaction mode for all track ViewBoxes (pan or rectangle zoom)."""
+        normalized = "rect" if str(mode).lower() == "rect" else "pan"
+        self._mouse_mode = normalized
+        for track in self._tracks.values():
+            try:
+                track.view.set_mouse_mode(normalized)
+            except Exception:
+                log.debug("Failed to set mouse mode on track %s", track.id, exc_info=True)
+
+    def mouse_mode(self) -> str:
+        """Return current interaction mode ("pan" or "rect")."""
+        return getattr(self, "_mouse_mode", "pan")
+
     def full_range(self) -> tuple[float, float] | None:
         """Get full time range from model."""
         if self._model is None:
@@ -1765,9 +1800,12 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def zoom_at(self, center: float, factor: float) -> None:
         """Zoom around a given time coordinate."""
-        if self._current_window is None:
+        window = self.current_window()
+        if window is None:
+            window = self.full_range()
+        if window is None:
             return
-        x0, x1 = self._current_window
+        x0, x1 = window
         span = x1 - x0
         if span <= 0:
             return
@@ -1972,3 +2010,39 @@ class PyQtGraphPlotHost(InteractionHost):
         view_state = self.capture_view_state()
         renderer = MatplotlibExportRenderer(dpi=dpi)
         return renderer.render(view_state, figsize=figsize)
+
+
+class _ResizeEventFilter(QObject):
+    """Event filter to refresh axes/fonts when plot host widget is resized.
+
+    This ensures that axis labels, fonts, and tick styling stay consistent
+    when the window is resized, the splitter is adjusted, or the layout reflows.
+    """
+
+    def __init__(self, plot_host: PyQtGraphPlotHost) -> None:
+        """Initialize resize event filter.
+
+        Args:
+            plot_host: The plot host to refresh when resize occurs
+        """
+        super().__init__()
+        self._plot_host = plot_host
+        self._pending_refresh = False
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API uses camelCase
+        """Filter resize events and schedule axis/font refresh."""
+        if event.type() == QEvent.Resize:
+            # Schedule refresh after layout has stabilized
+            # Use QTimer.singleShot(0, ...) to ensure refresh happens after
+            # Qt has updated widget geometry and layout metrics
+            if not self._pending_refresh:
+                self._pending_refresh = True
+                QTimer.singleShot(0, self._do_refresh)
+        return False  # Don't block the event
+
+    def _do_refresh(self) -> None:
+        """Execute the deferred refresh."""
+        self._pending_refresh = False
+        if self._plot_host is not None:
+            with contextlib.suppress(Exception):
+                self._plot_host.refresh_axes_and_fonts(reason="resize")
