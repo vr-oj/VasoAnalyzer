@@ -42,7 +42,11 @@ def match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
         norm = normalize_label(col)
         unitless = _unitless(norm)
 
-        if (
+        # Priority 1: VasoTracker high-precision time column
+        if norm == "timesexact" and _missing("t_seconds", mapping):
+            mapping[col] = "t_seconds"
+        # Priority 2: Standard time columns
+        elif (
             unitless in {"times", "tseconds", "t", "time", "timestamp"}
             or unitless.startswith("time")
         ) and _missing("t_seconds", mapping):
@@ -74,6 +78,21 @@ def match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
             and _missing("p2", mapping)
         ):
             mapping[col] = "p2"
+        # VasoTracker-specific columns
+        elif norm == "framenumber" and _missing("frame_number", mapping):
+            mapping[col] = "frame_number"
+        elif norm == "tiffpage" and _missing("tiff_page", mapping):
+            mapping[col] = "tiff_page"
+        elif (
+            norm in {"temperature", "temperaturec", "temp"} or ("temp" in norm and "c" in norm)
+        ) and _missing("temp", mapping):
+            mapping[col] = "temp"
+        elif norm in {"tablemarker", "marker"} and _missing("table_marker", mapping):
+            mapping[col] = "table_marker"
+        elif (
+            norm in {"caliper", "caliperlength"} or ("caliper" in norm and "length" in norm)
+        ) and _missing("caliper_length", mapping):
+            mapping[col] = "caliper_length"
     if mapping:
         log.debug("TRACE COLUMN MAP: %s", mapping)
         return mapping

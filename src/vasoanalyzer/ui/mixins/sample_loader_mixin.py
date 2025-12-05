@@ -565,7 +565,7 @@ class SampleLoaderMixin:
 
         if sample.snapshot_path and Path(sample.snapshot_path).exists():
             try:
-                frames, _ = load_tiff(sample.snapshot_path, metadata=False)
+                frames, _, _ = load_tiff(sample.snapshot_path, metadata=False)
                 if frames:
                     sample.snapshots = np.stack(frames)
                     return sample.snapshots
@@ -905,7 +905,7 @@ class SampleLoaderMixin:
 
         if tiff_path:
             try:
-                snapshots, _ = load_tiff(tiff_path, metadata=False)
+                snapshots, _, _ = load_tiff(tiff_path, metadata=False)
                 self.load_snapshots(snapshots)
                 self.toggle_snapshot_viewer(True)
             except Exception as e:
@@ -988,7 +988,7 @@ class SampleLoaderMixin:
         """Load a snapshot TIFF from ``file_path`` and update the viewer."""
 
         try:
-            frames, frames_metadata = load_tiff(file_path)
+            frames, frames_metadata, _ = load_tiff(file_path)
             valid_frames = []
             valid_metadata = []
 

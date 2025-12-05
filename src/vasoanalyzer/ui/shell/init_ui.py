@@ -57,7 +57,7 @@ class _SnapshotPreviewLabel(QLabel):
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
-        log.info(
+        log.debug(
             "LegacySnapshotView.resizeEvent: size=%dx%d",
             self.width(),
             self.height(),
@@ -195,6 +195,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.snapshot_label = _SnapshotPreviewLabel("Snapshot preview")
     window.snapshot_label.setObjectName("SnapshotPreview")
     window.snapshot_label.setAlignment(Qt.AlignCenter)
+    window.snapshot_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     window.snapshot_label.setMinimumHeight(220)
     window.snapshot_label.hide()
     window.snapshot_label.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -268,6 +269,14 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     controls_layout.addWidget(window.snapshot_speed_combo)
 
     controls_layout.addStretch()
+
+    window.snapshot_subsample_label = QLabel("")
+    window.snapshot_subsample_label.setObjectName("SnapshotSubsampleLabel")
+    window.snapshot_subsample_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    window.snapshot_subsample_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+    window.snapshot_subsample_label.setVisible(False)
+    window.snapshot_subsample_label.setToolTip("Loaded a reduced subset of the TIFF stack")
+    controls_layout.addWidget(window.snapshot_subsample_label)
 
     window.snapshot_time_label = QLabel("Frame 0 / 0")
     window.snapshot_time_label.setObjectName("SnapshotStatusLabel")
@@ -373,6 +382,14 @@ QWidget#SnapshotControls {{
 QLabel#SnapshotStatusLabel {{
     color: #4d5466;
     font-size: 12px;
+}}
+QLabel#SnapshotSubsampleLabel {{
+    background: {hover_bg};
+    color: {text_color};
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
 }}
 QLabel#SectionTitle {{
     font-weight: 600;

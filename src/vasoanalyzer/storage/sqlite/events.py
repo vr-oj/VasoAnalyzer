@@ -43,6 +43,25 @@ def match_event_columns(columns: Sequence[str]) -> dict[str, str]:
             mapping[col] = "p2"
         elif norm in {"temp", "temperature"} and "temp" not in mapping.values():
             mapping[col] = "temp"
+        # VasoTracker event table columns
+        elif (
+            norm in {"od", "outerdiam", "outerdiameter"} and "od" not in mapping.values()
+        ):
+            mapping[col] = "od"
+        elif (
+            norm in {"id", "innerdiam", "innerdiameter", "diambefore"}
+            and "id_diam" not in mapping.values()
+        ):
+            mapping[col] = "id_diam"
+        elif (
+            norm in {"caliper", "caliperlength"} and "caliper" not in mapping.values()
+        ):
+            mapping[col] = "caliper"
+        elif (
+            norm in {"odref", "odrefpct", "percentodref", "odreference"}
+            and "od_ref_pct" not in mapping.values()
+        ):
+            mapping[col] = "od_ref_pct"
     return mapping
 
 

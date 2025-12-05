@@ -57,7 +57,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3  # v3: Full VasoTracker support (Time_s_exact, frame_number, tiff_page, etc.)
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
 
@@ -227,6 +227,19 @@ class SampleN:
     snapshot_format: str | None = None
     analysis_result_keys: list[str] | None = None
     edit_history: list[dict[str, Any]] | None = None
+    import_metadata: dict[str, Any] | None = None
+    """
+    VasoTracker import provenance metadata:
+    {
+        "trace_original_filename": "20251202_Exp01.csv",
+        "events_original_filename": "20251202_Exp01_table.csv",
+        "tiff_original_filename": "20251202_Exp01_Result.tiff",
+        "trace_original_directory": "/path/to/RawFiles",
+        "import_timestamp": "2025-12-04T10:30:00Z",
+        "canonical_time_source": "Time_s_exact",
+        "schema_version": 3,
+    }
+    """
     # Cache validation fields - track which dataset_id the cached data belongs to
     _trace_cache_dataset_id: int | None = field(default=None, repr=False)
     _events_cache_dataset_id: int | None = field(default=None, repr=False)
@@ -315,6 +328,9 @@ class Project:
     attachments: list[Attachment] = field(default_factory=list)
     # Whether to embed snapshot video stacks into the project database
     embed_snapshots: bool = False
+    # Whether to embed TIFF snapshots (WARNING: can significantly increase .vaso file size)
+    # This is opt-in and requires explicit user confirmation
+    embed_tiff_snapshots: bool = False
 
     # Internal: current open store handle (for persistent connection)
     _store: Any = field(default=None, repr=False, compare=False, init=False)
@@ -1685,6 +1701,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
     t_start = time.perf_counter()
     base_dir = base_dir.resolve()
     embed_snapshots = getattr(project, "embed_snapshots", False)
+    embed_tiff_snapshots = getattr(project, "embed_tiff_snapshots", False)
 
     # DEBUG: _populate_store_from_project instrumentation start
     project_name = getattr(project, "name", None) or getattr(project, "path", None)
@@ -1797,6 +1814,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     sample_index=sample_index,
                     source_repo=source_repo,
                     embed_snapshots=embed_snapshots,
+                    embed_tiff_snapshots=embed_tiff_snapshots,
                 )
 
         if project.attachments:
@@ -1850,6 +1868,7 @@ def _save_sample_to_store(
     sample_index: int,
     source_repo: ProjectRepository | None = None,
     embed_snapshots: bool = False,
+    embed_tiff_snapshots: bool = False,
 ) -> None:
     """Serialize an individual ``sample`` into ``store``."""
 
@@ -1914,6 +1933,7 @@ def _save_sample_to_store(
         base_dir,
         source_repo=source_repo,
         embed_snapshots=embed_snapshots,
+        embed_tiff_snapshots=embed_tiff_snapshots,
     )
     analysis_keys = _persist_sample_results(repo, dataset_id, sample)
 
@@ -2379,6 +2399,22 @@ def _persist_sample_attachments(
     return payload
 
 
+def get_file_size_mb(file_path: str) -> float:
+    """Get file size in megabytes.
+
+    Args:
+        file_path: Path to file
+
+    Returns:
+        File size in MB, or 0 if file doesn't exist
+    """
+    try:
+        size_bytes = os.path.getsize(file_path)
+        return size_bytes / (1024 * 1024)
+    except (OSError, FileNotFoundError):
+        return 0.0
+
+
 def _persist_sample_snapshots(
     repo: ProjectRepository,
     dataset_id: int,
@@ -2386,6 +2422,7 @@ def _persist_sample_snapshots(
     base_dir: Path,
     source_repo: ProjectRepository | None = None,
     embed_snapshots: bool = False,
+    embed_tiff_snapshots: bool = False,
 ) -> dict[str, Any]:
     t_start = time.perf_counter()
     payload: dict[str, Any] = {}
@@ -2451,9 +2488,46 @@ def _persist_sample_snapshots(
         abs_path = _absolute_path(snapshot_path, base_dir)
         rel_path = _relativize_path(abs_path.as_posix(), base_dir) if abs_path else snapshot_path
         payload["snapshot_path"] = rel_path
-        # Do NOT embed TIFF snapshots in the project to avoid ballooning .vaso size.
-        # They are used only for local playback; keeping the path is sufficient.
-        sample.snapshot_tiff_role = None
+
+        # Optional TIFF embedding (requires explicit opt-in via embed_tiff_snapshots flag)
+        if embed_tiff_snapshots and abs_path and abs_path.exists():
+            # Check if file is a TIFF
+            if abs_path.suffix.lower() in {".tiff", ".tif"}:
+                file_size_mb = get_file_size_mb(str(abs_path))
+                log.warning(
+                    "Embedding TIFF snapshot for sample=%s (size=%.1f MB). "
+                    "This will increase .vaso file size significantly.",
+                    sample.name,
+                    file_size_mb,
+                )
+                try:
+                    with open(abs_path, "rb") as f:
+                        tiff_bytes = f.read()
+
+                    tiff_role = "snapshot_tiff"
+                    repo.add_or_update_asset(
+                        dataset_id,
+                        tiff_role,
+                        tiff_bytes,
+                        embed=True,
+                        mime="image/tiff",
+                    )
+                    sample.snapshot_tiff_role = tiff_role
+                    payload["snapshot_tiff_role"] = tiff_role
+                    log.info(
+                        "Embedded TIFF snapshot for sample=%s (size=%.1f MB)",
+                        sample.name,
+                        file_size_mb,
+                    )
+                except Exception as e:
+                    log.error("Failed to embed TIFF snapshot: %s", e)
+                    sample.snapshot_tiff_role = None
+            else:
+                sample.snapshot_tiff_role = None
+        else:
+            # Default: Do NOT embed TIFF snapshots to avoid ballooning .vaso size.
+            # They are used only for local playback; keeping the path is sufficient.
+            sample.snapshot_tiff_role = None
     duration = time.perf_counter() - t_start
     log.info(
         "Save: snapshots sample=%s dataset_id=%s time=%.3fs",

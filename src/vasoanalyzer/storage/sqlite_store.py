@@ -169,8 +169,32 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
             now=_utc_now(),
         )
     elif version < SCHEMA_VERSION:
-        conn.close()
-        raise LegacyProjectError(project_path, version)
+        # Auto-migrate from older schema version
+        if version == 1:
+            # v1 requires conversion to sqlite-v3 format (cannot auto-migrate)
+            conn.close()
+            raise LegacyProjectError(project_path, version)
+        else:
+            # v2 → v3: Auto-migrate with backup
+            log.info(f"Auto-migrating project from v{version} to v{SCHEMA_VERSION}")
+
+            # Create backup before migration
+            import shutil
+            backup_path = project_path.as_posix().replace('.vaso', f'.v{version}.backup.vaso')
+            conn.close()  # Close before copying
+            shutil.copy2(project_path.as_posix(), backup_path)
+            log.info(f"Created backup: {backup_path}")
+
+            # Reopen and migrate
+            conn = open_db(project_path.as_posix(), apply_pragmas=False)
+            _projects.apply_default_pragmas(conn)
+            _projects.run_migrations(
+                conn,
+                start=version,
+                target=SCHEMA_VERSION,
+                now=_utc_now(),
+            )
+            log.info(f"Migration complete: v{version} → v{SCHEMA_VERSION}")
     elif version > SCHEMA_VERSION:
         raise RuntimeError(
             f"Project schema version {version} is newer than supported {SCHEMA_VERSION}"

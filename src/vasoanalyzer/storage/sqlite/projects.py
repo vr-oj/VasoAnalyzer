@@ -68,6 +68,11 @@ def ensure_schema(
             p_avg REAL,
             p1 REAL,
             p2 REAL,
+            frame_number INTEGER,
+            tiff_page INTEGER,
+            temp REAL,
+            table_marker INTEGER,
+            caliper_length REAL,
             PRIMARY KEY (dataset_id, t_seconds)
         ) WITHOUT ROWID;
 
@@ -83,6 +88,10 @@ def ensure_schema(
             p1 REAL,
             p2 REAL,
             temp REAL,
+            od REAL,
+            id_diam REAL,
+            caliper REAL,
+            od_ref_pct REAL,
             extra_json TEXT
         );
 
@@ -173,6 +182,24 @@ def run_migrations(
                 timezone=timezone,
             )
             version = target
+        elif version == 2:
+            # Migration from v2 to v3: Add VasoTracker full support columns
+            log.info("Migrating schema from v2 to v3 (VasoTracker full support)")
+
+            # Add new columns to trace table
+            conn.execute("ALTER TABLE trace ADD COLUMN frame_number INTEGER")
+            conn.execute("ALTER TABLE trace ADD COLUMN tiff_page INTEGER")
+            conn.execute("ALTER TABLE trace ADD COLUMN temp REAL")
+            conn.execute("ALTER TABLE trace ADD COLUMN table_marker INTEGER")
+            conn.execute("ALTER TABLE trace ADD COLUMN caliper_length REAL")
+
+            # Add new columns to event table
+            conn.execute("ALTER TABLE event ADD COLUMN od REAL")
+            conn.execute("ALTER TABLE event ADD COLUMN id_diam REAL")
+            conn.execute("ALTER TABLE event ADD COLUMN caliper REAL")
+            conn.execute("ALTER TABLE event ADD COLUMN od_ref_pct REAL")
+
+            version = 3
         else:
             raise RuntimeError(
                 "This project uses a legacy .vaso format that requires conversion to sqlite-v3."

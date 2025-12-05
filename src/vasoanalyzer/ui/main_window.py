@@ -18,6 +18,7 @@ import html
 import io
 import json
 import logging
+import math
 import os
 import sqlite3
 import sys
@@ -32,6 +33,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import tifffile
 from PyQt5.QtCore import (
     QEvent,
     QObject,
@@ -160,6 +162,8 @@ from .update_checker import UpdateChecker
 
 log = logging.getLogger(__name__)
 _TIME_SYNC_DEBUG = bool(os.getenv("VA_TIME_SYNC_DEBUG"))
+_TIFF_PROMPT_THRESHOLD = 1000
+_TIFF_REDUCED_TARGET_FRAMES = 400
 
 
 def _log_time_sync(label: str, **fields) -> None:
@@ -410,7 +414,7 @@ class _SnapshotLoadJob(QRunnable):
         path = Path(self._snapshot_path).expanduser()
         if not path.exists():
             return None
-        frames, _ = load_tiff(path.as_posix(), metadata=False)
+        frames, _, _ = load_tiff(path.as_posix(), metadata=False)
         if frames:
             return np.stack(frames)
         return None
@@ -648,13 +652,20 @@ class VasoAnalyzerApp(QMainWindow):
         self.trace_file_path = None
         self.trace_model: TraceModel | None = None
         self.trace_time: np.ndarray | None = None
+        self.trace_time_exact: np.ndarray | None = None
         self.frame_numbers: np.ndarray | None = None
         self.frame_number_to_trace_idx: dict[int, int] = {}
+        self.tiff_page_to_trace_idx: dict[int, int] = {}
         self.frame_trace_time: np.ndarray | None = None
         self.frame_trace_index: np.ndarray | None = None
+        self.frame_trace_indices = []
         self.snapshot_frames = []
         self.frames_metadata = []
         self.frame_times = []
+        self.snapshot_frame_indices: list[int] = []
+        self.snapshot_loading_info: dict[str, Any] | None = None
+        self.snapshot_frame_stride: int = 1
+        self.snapshot_total_frames: int | None = None
         self.current_frame = 0
         self.snapshot_speed_multiplier = 1.0
         self.event_labels = []
@@ -4748,7 +4759,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_use_pg_snapshot.setChecked(True)
         self.action_use_pg_snapshot.toggled.connect(self._on_toggle_pg_snapshot_viewer)
         view_menu.addAction(self.action_use_pg_snapshot)
-        # TODO: Phase 2 – make PG snapshot viewer the default (checked) and keep legacy as fallback toggle.
 
         shortcut = "Meta+M" if sys.platform == "darwin" else "Ctrl+M"
         self.action_snapshot_metadata = QAction("Metadata…", self)
@@ -7790,8 +7800,10 @@ QPushButton[isGhost="true"]:hover {{
         self.trace_time = None
         self.frame_numbers = None
         self.frame_number_to_trace_idx = {}
+        self.tiff_page_to_trace_idx = {}
         self.frame_trace_time = None
         self.frame_trace_index = None
+        self.trace_time_exact = None
         self.frame_times = []
 
         if self.trace_data is None:
@@ -7800,6 +7812,11 @@ QPushButton[isGhost="true"]:hover {{
         if "Time (s)" in self.trace_data.columns:
             with contextlib.suppress(Exception):
                 self.trace_time = self.trace_data["Time (s)"].to_numpy(dtype=float)
+        if "Time_s_exact" in self.trace_data.columns:
+            with contextlib.suppress(Exception):
+                self.trace_time_exact = self.trace_data["Time_s_exact"].to_numpy(
+                    dtype=float
+                )
 
         if "FrameNumber" in self.trace_data.columns:
             try:
@@ -7812,6 +7829,16 @@ QPushButton[isGhost="true"]:hover {{
                 }
             except Exception:
                 log.debug("Unable to build frame→trace mapping", exc_info=True)
+        if "TiffPage" in self.trace_data.columns:
+            try:
+                tiff_series = pd.to_numeric(self.trace_data["TiffPage"], errors="coerce")
+                self.tiff_page_to_trace_idx = {
+                    int(tp): int(i)
+                    for i, tp in enumerate(tiff_series.to_numpy())
+                    if pd.notna(tp)
+                }
+            except Exception:
+                log.debug("Unable to build TIFF page→trace mapping", exc_info=True)
 
     def _get_trace_model_for_sample(self, sample: SampleN | None) -> TraceModel:
         """Return a TraceModel for the current trace_data, using a per-dataset cache."""
@@ -8715,7 +8742,7 @@ QPushButton[isGhost="true"]:hover {{
 
         if tiff_path:
             try:
-                snapshots, _ = load_tiff(tiff_path, metadata=False)
+                snapshots, _, _ = load_tiff(tiff_path, metadata=False)
                 self.load_snapshots(snapshots)
                 self.toggle_snapshot_viewer(True)
             except Exception as e:
@@ -8907,6 +8934,62 @@ QPushButton[isGhost="true"]:hover {{
         if has_events:
             self._set_event_table_visible(True, source="data")
 
+    def _reset_snapshot_loading_info(self) -> None:
+        """Clear any cached snapshot loading metadata."""
+
+        self.snapshot_loading_info = None
+        self.snapshot_frame_indices = []
+        self.snapshot_total_frames = None
+        self.snapshot_frame_stride = 1
+        self._update_snapshot_sampling_badge()
+
+    @staticmethod
+    def _format_stride_label(stride: int) -> str:
+        """Return a human-friendly label like 'every 3rd'."""
+
+        suffix = "th"
+        if stride % 100 not in {11, 12, 13}:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(stride % 10, "th")
+        return f"every {stride}{suffix}"
+
+    def _probe_tiff_frame_count(self, file_path: str) -> int | None:
+        """Return the total number of pages in a TIFF without loading frames."""
+
+        try:
+            with tifffile.TiffFile(file_path) as tif:
+                return len(tif.pages)
+        except Exception:
+            log.debug("Failed to probe TIFF frame count for %s", file_path, exc_info=True)
+            return None
+
+    def _prompt_tiff_load_strategy(self, total_frames: int) -> tuple[str, int | None]:
+        """Ask the user whether to load all frames or a reduced subset."""
+
+        stride = max(2, int(math.ceil(total_frames / _TIFF_REDUCED_TARGET_FRAMES)))
+        approx_frames = int(math.ceil(total_frames / stride))
+        stride_label = self._format_stride_label(stride)
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Large TIFF detected")
+        dialog.setIcon(QMessageBox.Question)
+        dialog.setText(
+            f"This TIFF contains {total_frames} frames. Loading all frames may be slow."
+        )
+        dialog.setInformativeText(
+            f"Load all frames, or load a reduced set ({stride_label}, ~{approx_frames} frames)?"
+        )
+        all_btn = dialog.addButton("Load all frames", QMessageBox.AcceptRole)
+        reduced_btn = dialog.addButton("Load reduced set", QMessageBox.ActionRole)
+        cancel_btn = dialog.addButton("Cancel", QMessageBox.RejectRole)
+        dialog.setDefaultButton(all_btn)
+        dialog.exec_()
+
+        clicked = dialog.clickedButton()
+        if clicked == cancel_btn:
+            return "cancel", None
+        if clicked == reduced_btn:
+            return "reduced", stride
+        return "full", None
+
     def _update_excel_controls(self):
         """Enable or disable Excel mapping actions based on available data."""
         has_data = bool(getattr(self, "event_table_data", None))
@@ -8944,37 +9027,96 @@ QPushButton[isGhost="true"]:hover {{
         ):
             return None, None
 
+        frame_indices = []
+        info_indices = None
+        if isinstance(self.snapshot_loading_info, Mapping):
+            info_indices = self.snapshot_loading_info.get("frame_indices")
+        if info_indices and len(info_indices) == n_frames:
+            frame_indices = list(info_indices)
+        elif self.snapshot_frame_indices and len(self.snapshot_frame_indices) == n_frames:
+            frame_indices = list(self.snapshot_frame_indices)
+        else:
+            frame_indices = list(range(n_frames))
+
         try:
-            tiff_rows = self.trace_data[self.trace_data["TiffPage"].notna()].copy()
-            if tiff_rows.empty:
+            # TIFF metadata timestamps are ignored; trace["TiffPage"] + trace["Time (s)"] are the source of truth.
+            mapping = dict(self.tiff_page_to_trace_idx)
+            if not mapping:
+                tiff_rows = self.trace_data[self.trace_data["TiffPage"].notna()].copy()
+                if tiff_rows.empty:
+                    return None, None
+                tiff_rows.loc[:, "TiffPage"] = pd.to_numeric(
+                    tiff_rows["TiffPage"], errors="coerce"
+                )
+                tiff_rows = tiff_rows[tiff_rows["TiffPage"].notna()]
+                mapping = {
+                    int(row["TiffPage"]): int(idx) for idx, row in tiff_rows.iterrows()
+                }
+
+            if not mapping:
                 return None, None
-            tiff_rows.loc[:, "TiffPage"] = pd.to_numeric(
-                tiff_rows["TiffPage"], errors="coerce"
-            )
-            tiff_rows = tiff_rows[tiff_rows["TiffPage"].notna()]
-            tiff_rows = tiff_rows.sort_values("TiffPage")
 
-            frame_indices = tiff_rows["TiffPage"].to_numpy(dtype=int)
-            frame_trace_index = tiff_rows.index.to_numpy(dtype=int)
-            frame_trace_time = tiff_rows["Time (s)"].to_numpy(dtype=float)
+            frame_trace_index = np.full(n_frames, -1, dtype=int)
+            frame_trace_time = np.full(n_frames, np.nan, dtype=float)
+            time_col = pd.to_numeric(self.trace_data["Time (s)"], errors="coerce")
 
-            if len(frame_trace_time) != n_frames or len(frame_trace_index) != n_frames:
+            for frame_idx, page_idx in enumerate(frame_indices):
+                if page_idx is None:
+                    continue
+                try:
+                    page_int = int(page_idx)
+                except Exception:
+                    page_int = page_idx
+                trace_idx = mapping.get(page_int)
+                if trace_idx is None:
+                    log.debug(
+                        "TIFF sync: no trace mapping for TiffPage %s (frame %d)",
+                        page_idx,
+                        frame_idx,
+                    )
+                    continue
+                if trace_idx < 0 or trace_idx >= len(time_col):
+                    log.error(
+                        "TIFF sync mismatch: TiffPage %s mapped to out-of-range trace index %s",
+                        page_idx,
+                        trace_idx,
+                    )
+                    return None, None
+                frame_trace_index[frame_idx] = trace_idx
+                with contextlib.suppress(Exception):
+                    frame_trace_time[frame_idx] = float(time_col.iloc[trace_idx])
+
+            if (frame_trace_index == -1).any():
+                missing = np.where(frame_trace_index == -1)[0]
                 log.error(
-                    "TIFF sync mismatch: trace provides %d mapped frames, stack has %d",
-                    len(frame_trace_time),
-                    n_frames,
+                    "TIFF sync mismatch: %d missing frame mappings (examples=%s)",
+                    len(missing),
+                    missing[:5],
                 )
                 return None, None
-            if not np.array_equal(frame_indices, np.arange(n_frames)):
-                log.error(
-                    "TIFF sync mismatch: TiffPage values are not sequential 0..%d",
-                    n_frames - 1,
-                )
+            if np.isnan(frame_trace_time).any():
+                log.error("TIFF sync mismatch: NaN times when mapping TiffPage to trace")
                 return None, None
 
             self.frame_trace_index = frame_trace_index
             self.frame_trace_time = frame_trace_time
             self.frame_times = frame_trace_time.tolist()
+            self.snapshot_frame_indices = frame_indices
+
+            try:
+                span = (min(frame_indices), max(frame_indices)) if frame_indices else (None, None)
+            except Exception:
+                span = (None, None)
+            info = self.snapshot_loading_info if isinstance(self.snapshot_loading_info, Mapping) else {}
+            total_frames = info.get("total_frames", self.snapshot_total_frames)
+            stride = info.get("frame_stride", self.snapshot_frame_stride)
+            log.debug(
+                "Frame/trace sync established: loaded_frames=%d total_frames=%s stride=%s span=%s",
+                n_frames,
+                total_frames,
+                stride,
+                span,
+            )
             return frame_trace_index, frame_trace_time
         except Exception:
             log.exception("Failed to derive frame_trace_time from trace metadata")
@@ -8983,10 +9125,31 @@ QPushButton[isGhost="true"]:hover {{
     def _load_snapshot_from_path(self, file_path: str) -> bool:
         """Load a snapshot TIFF from ``file_path`` and update the viewer."""
 
+        self._reset_snapshot_loading_info()
         try:
-            frames, frames_metadata = load_tiff(file_path)
+            total_frames = self._probe_tiff_frame_count(file_path)
+            max_frames = None
+            chosen_stride = None
+            if total_frames is not None:
+                self.snapshot_total_frames = int(total_frames)
+                if total_frames >= _TIFF_PROMPT_THRESHOLD:
+                    choice, stride = self._prompt_tiff_load_strategy(total_frames)
+                    if choice == "cancel":
+                        return False
+                    if choice == "reduced" and stride:
+                        chosen_stride = stride
+                        max_frames = int(math.ceil(total_frames / stride))
+
+            frames, frames_metadata, loading_info = load_tiff(
+                file_path, max_frames=max_frames
+            )
+            loading_info = loading_info or {}
             valid_frames = []
             valid_metadata = []
+            raw_indices = loading_info.get("frame_indices") or list(
+                range(len(frames))
+            )
+            valid_indices: list[int] = []
 
             for i, frame in enumerate(frames):
                 if frame is not None and frame.size > 0:
@@ -8995,6 +9158,13 @@ QPushButton[isGhost="true"]:hover {{
                         valid_metadata.append(frames_metadata[i])
                     else:
                         valid_metadata.append({})
+                    if i < len(raw_indices):
+                        try:
+                            valid_indices.append(int(raw_indices[i]))
+                        except Exception:
+                            valid_indices.append(raw_indices[i])
+                    else:
+                        valid_indices.append(i)
 
             if len(valid_frames) < len(frames):
                 QMessageBox.warning(
@@ -9009,8 +9179,33 @@ QPushButton[isGhost="true"]:hover {{
                 )
                 return False
 
+            frame_stride = int(loading_info.get("frame_stride", chosen_stride or 1))
+            total_frames_value = loading_info.get(
+                "total_frames", self.snapshot_total_frames or len(valid_frames)
+            )
+            try:
+                total_frames_value = int(total_frames_value)
+            except Exception:
+                total_frames_value = self.snapshot_total_frames or len(valid_frames)
+
+            loading_info.update(
+                {
+                    "loaded_frames": len(valid_frames),
+                    "frame_indices": valid_indices,
+                    "frame_stride": frame_stride,
+                    "total_frames": total_frames_value,
+                }
+            )
+            loading_info["is_subsampled"] = bool(
+                frame_stride > 1 or len(valid_frames) < int(total_frames_value or 0)
+            )
+
             self.snapshot_frames = valid_frames
             self.frames_metadata = valid_metadata
+            self.snapshot_loading_info = loading_info
+            self.snapshot_frame_indices = valid_indices
+            self.snapshot_frame_stride = frame_stride
+            self.snapshot_total_frames = total_frames_value
 
             first_meta: dict[str, Any] = self.frames_metadata[0] or {} if self.frames_metadata else {}
             frame_trace_index, frame_trace_time = self._derive_frame_trace_time(
@@ -9030,7 +9225,7 @@ QPushButton[isGhost="true"]:hover {{
                     meta_keys=",".join(sorted((first_meta or {}).keys())),
                 )
             else:
-                # Legacy fallback: approximate frame times from metadata if sync columns are missing
+                # Legacy fallback: approximate frame times from TIFF metadata only when TiffPage mapping is missing.
                 self.recording_interval = 0.14
                 if self.frames_metadata:
                     found = False
@@ -9111,6 +9306,7 @@ QPushButton[isGhost="true"]:hover {{
             self._configure_snapshot_timer()
             self._apply_frame_change(0)
             self.toggle_snapshot_viewer(True)
+            self._update_snapshot_sampling_badge()
 
             if self.current_sample is not None:
                 try:
@@ -9120,6 +9316,24 @@ QPushButton[isGhost="true"]:hover {{
                     pass
                 self.mark_session_dirty()
                 self.auto_save_project(reason="snapshot")
+
+            status_note = None
+            if self.snapshot_loading_info.get("is_subsampled"):
+                stride_text = self._format_stride_label(
+                    int(self.snapshot_loading_info.get("frame_stride", 1))
+                )
+                status_note = (
+                    f"Reduced snapshot set loaded: {len(self.snapshot_frames)}/"
+                    f"{self.snapshot_loading_info.get('total_frames')} frames "
+                    f"({stride_text})"
+                )
+            elif self.snapshot_total_frames:
+                status_note = (
+                    f"Loaded {len(self.snapshot_frames)} frame(s)"
+                    f" (original stack: {self.snapshot_total_frames})"
+                )
+            if status_note:
+                self.statusBar().showMessage(status_note, 6000)
 
             return True
 
@@ -9206,6 +9420,7 @@ QPushButton[isGhost="true"]:hover {{
             return None
         if idx < 0 or idx >= len(self.trace_time):
             return None
+        # Events derive their canonical time from the trace row that matches FrameNumber.
         return float(self.trace_time[idx])
 
     def load_project_events(
@@ -9242,27 +9457,41 @@ QPushButton[isGhost="true"]:hover {{
             int(val) if pd.notna(val) else None for val in raw_frame_values
         ]
 
+        trace_time_series = None
+        if self.trace_data is not None and "Time (s)" in self.trace_data.columns:
+            trace_time_series = pd.to_numeric(self.trace_data["Time (s)"], errors="coerce")
+
         resolved_times: list[float] = []
         resolved_frames: list[int | None] = []
+        event_trace_indices: list[int | None] = []
         unsynced_events = 0
         for idx_ev, lbl in enumerate(self.event_labels):
             frame_val = raw_frame_list[idx_ev] if idx_ev < len(raw_frame_list) else None
             time_val = raw_times[idx_ev] if idx_ev < len(raw_times) else np.nan
             resolved_frames.append(frame_val)
-            mapped_time = self._trace_time_for_frame_number(frame_val)
-            if mapped_time is not None:
-                resolved_times.append(mapped_time)
-            else:
+
+            trace_idx = None
+            if frame_val is not None:
+                trace_idx = self.frame_number_to_trace_idx.get(int(frame_val))
+            event_trace_indices.append(trace_idx)
+
+            mapped_time = None
+            if trace_idx is not None and trace_time_series is not None:
+                with contextlib.suppress(Exception):
+                    mapped_time = float(trace_time_series.iloc[trace_idx])
+            if mapped_time is None or pd.isna(mapped_time):
                 try:
-                    resolved_times.append(float(time_val))
+                    mapped_time = float(time_val)
                 except (TypeError, ValueError):
-                    resolved_times.append(np.nan)
+                    mapped_time = np.nan
                     if frame_val is not None:
                         unsynced_events += 1
+            resolved_times.append(mapped_time)
 
         if unsynced_events:
             log.warning("Events: %d rows had frame numbers with no trace match", unsynced_events)
 
+        # Canonical event times prefer trace["Time (s)"] mapped via FrameNumber; event CSV strings are fallback only.
         self.event_times = resolved_times
         self.event_frames = [
             int(fr) if fr is not None else 0 for fr in resolved_frames
@@ -9293,6 +9522,7 @@ QPushButton[isGhost="true"]:hover {{
             default_offset_sec = 2.0
             time_trace = self.trace_data["Time (s)"]
 
+            # Event times should come from trace["Time (s)"] via FrameNumber mapping, not parsed event CSV strings.
             for idx_ev, (lbl, t, fr) in enumerate(
                 zip(
                     self.event_labels,
@@ -9303,8 +9533,12 @@ QPushButton[isGhost="true"]:hover {{
             ):
                 if pd.isna(t):
                     continue
-                idx = int(np.argmin(np.abs(arr_t - t)))
-                frame_number = int(fr) if fr is not None else idx
+                trace_idx = (
+                    event_trace_indices[idx_ev] if idx_ev < len(event_trace_indices) else None
+                )
+                if trace_idx is None:
+                    trace_idx = int(np.argmin(np.abs(arr_t - t)))
+                frame_number = int(fr) if fr is not None else trace_idx
 
                 # Sample a value before the *next* event (or before trace end)
                 if len(self.event_times) > 1 and idx_ev < len(self.event_times) - 1:
@@ -9463,6 +9697,19 @@ QPushButton[isGhost="true"]:hover {{
     def load_snapshots(self, stack):
         self.snapshot_frames = [frame for frame in stack]
         if self.snapshot_frames:
+            self.snapshot_frame_indices = list(range(len(self.snapshot_frames)))
+            self.snapshot_frame_stride = 1
+            self.snapshot_total_frames = len(self.snapshot_frames)
+            self.snapshot_loading_info = {
+                "total_frames": self.snapshot_total_frames,
+                "loaded_frames": len(self.snapshot_frames),
+                "frame_stride": 1,
+                "frame_indices": self.snapshot_frame_indices,
+                "is_subsampled": False,
+            }
+        else:
+            self._reset_snapshot_loading_info()
+        if self.snapshot_frames:
             canonical_times = None
             frame_trace_index, frame_trace_time = self._derive_frame_trace_time(
                 len(self.snapshot_frames)
@@ -9490,6 +9737,7 @@ QPushButton[isGhost="true"]:hover {{
             self.snapshot_speed_combo.setEnabled(True)
             self._set_playback_state(False)
             self._configure_snapshot_timer()
+            self._update_snapshot_sampling_badge()
 
     def compute_frame_trace_indices(self):
         """Map each frame to the nearest trace index using canonical times."""
@@ -9640,6 +9888,16 @@ QPushButton[isGhost="true"]:hover {{
         frame_idx = self._frame_index_for_time_canonical(resolved_time)
         if frame_idx is not None:
             self.current_frame = frame_idx
+            if log.isEnabledFor(logging.DEBUG):
+                tiff_page = self._tiff_page_for_frame(frame_idx)
+                time_exact = self._trace_time_exact_for_page(tiff_page)
+                log.debug(
+                    "Trace→Frame sync: time=%s frame=%s tiff_page=%s time_exact=%s",
+                    resolved_time,
+                    frame_idx,
+                    tiff_page,
+                    time_exact,
+                )
 
         # Map to nearest frame only when we are not already handling a frame change.
         if not from_frame_change and self.snapshot_frames:
@@ -9708,22 +9966,27 @@ QPushButton[isGhost="true"]:hover {{
                     raise ValueError(f"Unsupported TIFF frame format: {frame.shape}")
             else:
                 raise ValueError(f"Unknown TIFF frame dimensions: {frame.shape}")
-            log.info(
+            log.debug(
                 "LegacySnapshotView: frame shape=%s bytesPerLine=%s",
                 getattr(frame, "shape", None),
                 q_img.bytesPerLine(),
             )
 
-            target_width = self.event_table.viewport().width()
+            target_width = 0
+            snapshot_stack = getattr(self, "snapshot_stack", None)
+            if snapshot_stack is not None:
+                target_width = snapshot_stack.width()
             if target_width <= 0:
                 target_width = self.snapshot_label.width()
+            if target_width <= 0 and self.event_table is not None:
+                target_width = self.event_table.viewport().width()
             pix = QPixmap.fromImage(q_img).scaledToWidth(
                 target_width, Qt.SmoothTransformation
             )
             self.snapshot_label.setFixedSize(pix.width(), pix.height())
             self.snapshot_label.setPixmap(pix)
             default_rect = QRectF(0, 0, float(width), float(height))
-            log.info(
+            log.debug(
                 "LegacySnapshotView.default_rect: frame=%d rect=%s target_width=%d orig=%dx%d scaled=%dx%d",
                 index,
                 default_rect,
@@ -9761,6 +10024,69 @@ QPushButton[isGhost="true"]:hover {{
         idx = self.slider.value()
         self._apply_frame_change(idx)
 
+    def _update_snapshot_sampling_badge(self) -> None:
+        """Show or hide the reduced-load badge near the snapshot controls."""
+
+        label = getattr(self, "snapshot_subsample_label", None)
+        if label is None:
+            return
+        info = self.snapshot_loading_info or {}
+        if not isinstance(info, Mapping):
+            info = {}
+        loaded = info.get("loaded_frames") or (
+            len(self.snapshot_frames) if self.snapshot_frames else None
+        )
+        total = info.get("total_frames")
+        stride = info.get("frame_stride")
+        is_subsampled = bool(info.get("is_subsampled"))
+        if (
+            is_subsampled
+            and loaded
+            and total
+            and stride
+            and int(total) >= int(loaded)
+            and int(stride) >= 1
+        ):
+            stride_text = self._format_stride_label(int(stride))
+            label.setText(
+                f"Reduced: {int(loaded)}/{int(total)} frames ({stride_text})"
+            )
+            label.setVisible(True)
+            label.setToolTip(
+                f"Loaded {int(loaded)} of {int(total)} frames ({stride_text}) from the TIFF stack"
+            )
+        else:
+            label.clear()
+            label.setVisible(False)
+
+    def _tiff_page_for_frame(self, frame_idx: int) -> int | None:
+        """Return the original TIFF page index for the given loaded frame."""
+
+        indices = self.snapshot_frame_indices or []
+        if frame_idx < 0 or frame_idx >= len(indices):
+            return None
+        try:
+            return int(indices[frame_idx])
+        except Exception:
+            return indices[frame_idx]
+
+    def _trace_time_exact_for_page(self, tiff_page: int | None) -> float | None:
+        """Return Time_s_exact for the trace row mapped to the given TIFF page."""
+
+        if tiff_page is None or self.trace_time_exact is None:
+            return None
+        try:
+            trace_idx = self.tiff_page_to_trace_idx.get(int(tiff_page))
+        except Exception:
+            trace_idx = None
+        if trace_idx is None:
+            return None
+        if trace_idx < 0 or trace_idx >= len(self.trace_time_exact):
+            return None
+        with contextlib.suppress(Exception):
+            return float(self.trace_time_exact[int(trace_idx)])
+        return None
+
     def _apply_frame_change(self, idx: int):
         self.current_frame = idx
         self._set_snapshot_frame(idx)
@@ -9768,6 +10094,8 @@ QPushButton[isGhost="true"]:hover {{
 
         trace_idx = None
         trace_time = None
+        tiff_page = self._tiff_page_for_frame(idx)
+        time_exact = self._trace_time_exact_for_page(tiff_page)
         if self.frame_trace_index is not None and idx < len(self.frame_trace_index):
             trace_idx = int(self.frame_trace_index[idx])
             if self.trace_time is not None and trace_idx < len(self.trace_time):
@@ -9784,7 +10112,18 @@ QPushButton[isGhost="true"]:hover {{
             frame_time=frame_time,
             trace_idx=trace_idx,
             trace_time=trace_time,
+            tiff_page=tiff_page,
+            time_exact=time_exact,
         )
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "Frame→Trace sync: frame=%d tiff_page=%s trace_idx=%s time=%s time_exact=%s",
+                idx,
+                tiff_page,
+                trace_idx,
+                trace_time,
+                time_exact,
+            )
         if frame_time is not None:
             self.jump_to_time(
                 float(frame_time),
@@ -9798,6 +10137,7 @@ QPushButton[isGhost="true"]:hover {{
         self._update_metadata_display(idx)
 
     def _update_snapshot_status(self, idx: int) -> None:
+        self._update_snapshot_sampling_badge()
         total = len(self.snapshot_frames) if self.snapshot_frames else 0
         if total <= 0:
             self.snapshot_time_label.setText("Frame 0 / 0")
@@ -9820,13 +10160,27 @@ QPushButton[isGhost="true"]:hover {{
                 timestamp = idx * float(self.recording_interval)
             except (TypeError, ValueError):
                 timestamp = None
+        info = self.snapshot_loading_info or {}
+        if not isinstance(info, Mapping):
+            info = {}
+        original_total = info.get("total_frames")
+        stride = info.get("frame_stride", 1)
+        is_subsampled = bool(info.get("is_subsampled"))
+        suffix = ""
+        if (
+            is_subsampled
+            and original_total
+            and int(original_total) >= total
+            and int(stride) >= 1
+        ):
+            stride_text = self._format_stride_label(int(stride))
+            suffix = f" (from original {int(original_total)} frames, {stride_text})"
 
         if timestamp is None:
-            self.snapshot_time_label.setText(f"Frame {frame_number} / {total}")
+            text = f"Frame {frame_number} / {total}{suffix}"
         else:
-            self.snapshot_time_label.setText(
-                f"Frame {frame_number} / {total} @ {timestamp:.2f} s"
-            )
+            text = f"Frame {frame_number} / {total}{suffix} @ {timestamp:.2f} s"
+        self.snapshot_time_label.setText(text)
 
     def _update_metadata_display(self, idx: int) -> None:
         self._update_metadata_button_state()
@@ -12853,6 +13207,7 @@ QPushButton[isGhost="true"]:hover {{
         self.trace_data = None
         self.trace_file_path = None
         self.trace_time = None
+        self.trace_time_exact = None
         self.frame_numbers = None
         self.frame_number_to_trace_idx = {}
         self.frame_trace_time = None
@@ -12861,6 +13216,10 @@ QPushButton[isGhost="true"]:hover {{
         self.frames_metadata = []
         self.frame_times = []
         self.frame_trace_indices = []
+        self.snapshot_frame_indices = []
+        self.snapshot_frame_stride = 1
+        self.snapshot_total_frames = None
+        self.snapshot_loading_info = None
         self.current_frame = 0
         self.event_labels = []
         self.event_times = []
@@ -12909,6 +13268,7 @@ QPushButton[isGhost="true"]:hover {{
         self._set_playback_state(False)
         self.snapshot_time_label.setText("Frame 0 / 0")
         self.snapshot_label.hide()
+        self._reset_snapshot_loading_info()
         self.set_snapshot_metadata_visible(False)
         self.metadata_details_label.setText("No metadata available.")
         self._update_metadata_button_state()
@@ -13419,6 +13779,13 @@ QPushButton[isGhost="true"]:hover {{
             }}
             QFrame#SnapshotCard QLabel {{
                 color: {text};
+            }}
+            QLabel#SnapshotSubsampleLabel {{
+                background: {button_hover};
+                color: {text};
+                border-radius: 10px;
+                padding: 2px 8px;
+                font-size: 11px;
             }}
             QFrame#SnapshotCard QSlider::groove:horizontal {{
                 background: {CURRENT_THEME.get("grid_color", "#cccccc")};

@@ -91,6 +91,9 @@ def load_trace_and_events(
         list(df.columns),
     )
 
+    from datetime import datetime, timezone
+    from pathlib import Path
+
     extras: dict[str, object] = {
         "event_file": None,
         "auto_detected": False,
@@ -99,6 +102,12 @@ def load_trace_and_events(
         "dropped_missing_time": 0,
         "ignored_out_of_range": 0,
         "time_source": None,
+        # Provenance metadata
+        "import_timestamp": datetime.now(timezone.utc).isoformat(),
+        "trace_original_filename": Path(trace_path).name,
+        "trace_original_directory": str(Path(trace_path).parent),
+        "canonical_time_source": df.attrs.get("canonical_time_source", "Time (s)"),
+        "schema_version": 3,
     }
 
     events_df: pd.DataFrame | None = None
@@ -121,6 +130,7 @@ def load_trace_and_events(
 
     if ev_path and os.path.exists(ev_path):
         extras["event_file"] = ev_path
+        extras["events_original_filename"] = Path(ev_path).name
         events_df = _read_event_dataframe(ev_path, cache=cache)
         log.info(
             "Import: Loaded events CSV %s with %d rows (columns=%s)",
@@ -145,9 +155,14 @@ def load_trace_and_events(
     diam: list[float] = []
     od_diam: list[float] = []
 
+    # trace["Time (s)"] is the canonical experiment clock (sourced from Time_s_exact
+    # if available, else Time (s) for legacy files). All other time views
+    # (event CSV strings, TIFF metadata) map back onto this column.
     trace_time = df["Time (s)"].to_numpy(dtype=float)
     frame_number_to_trace_idx: dict[int, int] = {}
+    tiff_page_to_trace_idx: dict[int, int] = {}
     if "FrameNumber" in df.columns:
+        # FrameNumber values in the trace CSV align with the events CSV "Frame" column.
         frame_numbers = pd.to_numeric(df["FrameNumber"], errors="coerce")
         frame_number_to_trace_idx = {
             int(fn): int(i)
@@ -158,6 +173,23 @@ def load_trace_and_events(
             "Import: Prepared %d frame→trace index mappings from trace CSV",
             len(frame_number_to_trace_idx),
         )
+    if "TiffPage" in df.columns:
+        # TiffPage values come from the VasoTracker TIFF stack (0-based frame indices).
+        tiff_pages = pd.to_numeric(df["TiffPage"], errors="coerce")
+        tiff_page_to_trace_idx = {
+            int(tp): int(i)
+            for i, tp in enumerate(tiff_pages.to_numpy())
+            if pd.notna(tp)
+        }
+        log.info(
+            "Import: Prepared %d TIFF-page→trace index mappings from trace CSV",
+            len(tiff_page_to_trace_idx),
+        )
+
+    extras["frame_number_to_trace_idx"] = frame_number_to_trace_idx
+    extras["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
+    df.attrs["frame_number_to_trace_idx"] = frame_number_to_trace_idx
+    df.attrs["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
 
     def _coerce_time_values(series: pd.Series) -> pd.Series:
         """Return ``series`` converted to seconds where possible."""
