@@ -64,6 +64,18 @@ class SnapshotViewPG(QtWidgets.QWidget):
             btn = getattr(self.image_view.ui, btn_name, None)
             if btn is not None:
                 btn.hide()
+        # Hide the built-in playback/timeline UI so the app-level controls are the single source.
+        with contextlib.suppress(Exception):
+            timeline = getattr(self.image_view.ui, "roiPlot", None)
+            if timeline is not None:
+                timeline.hide()
+                timeline.setMaximumHeight(0)
+            time_slider = getattr(self.image_view.ui, "timeSlider", None)
+            if time_slider is not None:
+                time_slider.hide()
+            play_btn = getattr(self.image_view.ui, "playBtn", None)
+            if play_btn is not None:
+                play_btn.hide()
 
         self.image_view.sigTimeChanged.connect(self._on_pg_time_changed)
 
@@ -90,6 +102,9 @@ class SnapshotViewPG(QtWidgets.QWidget):
         if arr.size == 0:
             self._clear()
             return
+
+        # Reset orientation for each new stack before applying transforms.
+        self.set_rotation(0)
 
         arr = self._normalize_stack_to_grayscale(arr)
         n_frames = arr.shape[0]
@@ -175,6 +190,18 @@ class SnapshotViewPG(QtWidgets.QWidget):
     def rotate_relative(self, delta_deg: int) -> None:
         self.set_rotation(self._rotation_deg + delta_deg)
 
+    def rotate_cw_90(self) -> None:
+        """Rotate 90 degrees clockwise."""
+        self.rotate_relative(90)
+
+    def rotate_ccw_90(self) -> None:
+        """Rotate 90 degrees counter-clockwise."""
+        self.rotate_relative(-90)
+
+    def reset_rotation(self) -> None:
+        """Reset orientation to 0 degrees."""
+        self.set_rotation(0)
+
     # ---------- internal ----------
     def _clear(self) -> None:
         self._stack = None
@@ -244,11 +271,11 @@ class SnapshotViewPG(QtWidgets.QWidget):
         if action is None:
             return
         if action == act_left:
-            self.rotate_relative(-90)
+            self.rotate_ccw_90()
         elif action == act_right:
-            self.rotate_relative(90)
+            self.rotate_cw_90()
         elif action == act_reset:
-            self.set_rotation(0)
+            self.reset_rotation()
 
 
 __all__ = ["SnapshotViewPG"]

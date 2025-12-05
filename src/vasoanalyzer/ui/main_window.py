@@ -5987,14 +5987,38 @@ class VasoAnalyzerApp(QMainWindow):
         if pg_widget is not None:
             pg_widget.setVisible(bool(should_show and use_pg))
 
-        legacy_widgets = (
-            getattr(self, "snapshot_label", None),
+        legacy_widgets = (getattr(self, "snapshot_label", None),)
+        shared_widgets = (
             getattr(self, "slider", None),
             getattr(self, "snapshot_controls", None),
         )
         for widget in legacy_widgets:
             if widget is not None:
                 widget.setVisible(bool(should_show and not use_pg))
+        for widget in shared_widgets:
+            if widget is not None:
+                widget.setVisible(bool(should_show))
+
+        self._update_snapshot_rotation_controls()
+
+    def _update_snapshot_rotation_controls(self) -> None:
+        """Enable or disable rotation buttons based on viewer state."""
+
+        buttons = (
+            getattr(self, "rotate_ccw_btn", None),
+            getattr(self, "rotate_cw_btn", None),
+            getattr(self, "rotate_reset_btn", None),
+        )
+        can_rotate = (
+            bool(self.snapshot_frames)
+            and self.snapshot_view_pg is not None
+            and self._use_pg_snapshot_viewer()
+            and self._snapshot_view_visible()
+        )
+        for btn in buttons:
+            if btn is None:
+                continue
+            btn.setEnabled(can_rotate)
 
     def toggle_snapshot_viewer(self, checked: bool):
         if not checked:
@@ -9725,6 +9749,7 @@ QPushButton[isGhost="true"]:hover {{
                 canonical_times = np.asarray(self.frame_times, dtype=float)
 
             self.compute_frame_trace_indices()
+            self.reset_snapshot_rotation()
             self._update_pg_snapshot_viewer(stack, canonical_times)
             self.slider.setMinimum(0)
             self.slider.setMaximum(len(self.snapshot_frames) - 1)
@@ -9738,6 +9763,7 @@ QPushButton[isGhost="true"]:hover {{
             self._set_playback_state(False)
             self._configure_snapshot_timer()
             self._update_snapshot_sampling_badge()
+            self._update_snapshot_rotation_controls()
 
     def compute_frame_trace_indices(self):
         """Map each frame to the nearest trace index using canonical times."""
@@ -10387,6 +10413,28 @@ QPushButton[isGhost="true"]:hover {{
             self._set_playback_state(False)
         idx = (self.current_frame + 1) % len(self.snapshot_frames)
         self.set_current_frame(idx)
+
+    def rotate_snapshot_ccw(self) -> None:
+        viewer = getattr(self, "snapshot_view_pg", None)
+        if viewer is None:
+            return
+        with contextlib.suppress(Exception):
+            viewer.rotate_ccw_90()
+
+    def rotate_snapshot_cw(self) -> None:
+        viewer = getattr(self, "snapshot_view_pg", None)
+        if viewer is None:
+            return
+        with contextlib.suppress(Exception):
+            viewer.rotate_cw_90()
+
+    def reset_snapshot_rotation(self) -> None:
+        viewer = getattr(self, "snapshot_view_pg", None)
+        if viewer is None:
+            return
+        with contextlib.suppress(Exception):
+            viewer.reset_rotation()
+        self._update_snapshot_rotation_controls()
 
     def set_snapshot_metadata_visible(self, visible: bool) -> None:
         action = getattr(self, "action_snapshot_metadata", None)
@@ -13262,10 +13310,17 @@ QPushButton[isGhost="true"]:hover {{
         self.prev_frame_btn.setEnabled(False)
         self.next_frame_btn.setEnabled(False)
         self.play_pause_btn.setEnabled(False)
+        if hasattr(self, "rotate_ccw_btn"):
+            self.rotate_ccw_btn.setEnabled(False)
+        if hasattr(self, "rotate_cw_btn"):
+            self.rotate_cw_btn.setEnabled(False)
+        if hasattr(self, "rotate_reset_btn"):
+            self.rotate_reset_btn.setEnabled(False)
         self.snapshot_speed_label.setEnabled(False)
         self.snapshot_speed_combo.setEnabled(False)
         self._reset_snapshot_speed()
         self._set_playback_state(False)
+        self.reset_snapshot_rotation()
         self.snapshot_time_label.setText("Frame 0 / 0")
         self.snapshot_label.hide()
         self._reset_snapshot_loading_info()
@@ -13803,6 +13858,19 @@ QPushButton[isGhost="true"]:hover {{
                 background: {button_hover};
             }}
             QFrame#SnapshotCard QSlider::handle:horizontal:pressed {{
+                background: {button_active};
+            }}
+            QFrame#SnapshotCard QToolButton {{
+                background: {button_bg};
+                border: 1px solid {border};
+                border-radius: 8px;
+                padding: 6px 8px;
+            }}
+            QFrame#SnapshotCard QToolButton:hover {{
+                background: {button_hover};
+            }}
+            QFrame#SnapshotCard QToolButton:pressed,
+            QFrame#SnapshotCard QToolButton:checked {{
                 background: {button_active};
             }}
         """
