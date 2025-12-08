@@ -139,6 +139,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._click_handlers: list[Callable[[ClickContext], None]] = []
         self._move_handlers: list[Callable[[MoveContext], None]] = []
         self._scroll_handlers: list[Callable[[ScrollContext], None]] = []
+        self._sampling_mode_active: bool = False
 
         # Install resize event filter to refresh axes/fonts when geometry changes
         self._resize_filter = _ResizeEventFilter(self)
@@ -226,6 +227,109 @@ class PyQtGraphPlotHost(InteractionHost):
                     tid, x, y, button, ev
                 )
             )
+
+    def set_sampling_mode(self, enabled: bool) -> None:
+        """Enable/disable sampling mode visual feedback.
+
+        Args:
+            enabled: Whether sampling mode is active
+        """
+        self._sampling_mode_active = enabled
+
+        if enabled:
+            # Add visual indicators for sampling mode
+            # TODO: Add plot border glow, cursor change, badge overlay
+            pass
+        else:
+            # Remove visual indicators
+            # TODO: Remove border glow, restore cursor, hide badge
+            pass
+
+    def set_review_mode_highlighting(self, enabled: bool) -> None:
+        """Enable/disable enhanced highlighting for review mode.
+
+        Args:
+            enabled: Whether to use animated review mode highlighting
+        """
+        if hasattr(self, "_event_highlight_overlay"):
+            self._event_highlight_overlay.set_animated(enabled)
+
+    def show_sampling_crosshair(self, time_sec: float, id_val: float | None = None, od_val: float | None = None) -> None:
+        """Display sampling crosshair at the given time and values.
+
+        Args:
+            time_sec: Time position for vertical line
+            id_val: ID value for horizontal line on ID track
+            od_val: OD value for horizontal line on OD track
+        """
+        # Find ID and OD tracks
+        id_track = self._tracks.get("ID")
+        od_track = self._tracks.get("OD")
+
+        # Show crosshair on ID track
+        if id_track is not None and id_val is not None:
+            self._show_track_crosshair(id_track, time_sec, id_val)
+
+        # Show crosshair on OD track
+        if od_track is not None and od_val is not None:
+            self._show_track_crosshair(od_track, time_sec, od_val)
+
+        # Auto-hide after 2 seconds
+        QTimer.singleShot(2000, self.hide_sampling_crosshair)
+
+    def hide_sampling_crosshair(self) -> None:
+        """Hide sampling crosshair markers."""
+        for track in self._tracks.values():
+            self._hide_track_crosshair(track)
+
+    def _show_track_crosshair(self, track: PyQtGraphChannelTrack, time_sec: float, value: float) -> None:
+        """Show crosshair lines on a specific track.
+
+        Args:
+            track: Track to show crosshair on
+            time_sec: Time position for vertical line
+            value: Value position for horizontal line
+        """
+        plot_item = track.view.get_widget().getPlotItem()
+
+        # Create or update vertical line
+        if not hasattr(track, "_sampling_vline"):
+            track._sampling_vline = pg.InfiniteLine(
+                pos=time_sec,
+                angle=90,
+                pen=pg.mkPen(color="#1D5CFF", width=1, style=Qt.DashLine),
+                movable=False,
+            )
+            track._sampling_vline.setZValue(10)
+            plot_item.addItem(track._sampling_vline)
+        else:
+            track._sampling_vline.setPos(time_sec)
+            track._sampling_vline.show()
+
+        # Create or update horizontal line
+        if not hasattr(track, "_sampling_hline"):
+            track._sampling_hline = pg.InfiniteLine(
+                pos=value,
+                angle=0,
+                pen=pg.mkPen(color="#1D5CFF", width=1, style=Qt.DashLine),
+                movable=False,
+            )
+            track._sampling_hline.setZValue(10)
+            plot_item.addItem(track._sampling_hline)
+        else:
+            track._sampling_hline.setPos(value)
+            track._sampling_hline.show()
+
+    def _hide_track_crosshair(self, track: PyQtGraphChannelTrack) -> None:
+        """Hide crosshair lines on a specific track.
+
+        Args:
+            track: Track to hide crosshair on
+        """
+        if hasattr(track, "_sampling_vline"):
+            track._sampling_vline.hide()
+        if hasattr(track, "_sampling_hline"):
+            track._sampling_hline.hide()
 
     def is_channel_visible(self, channel_kind: str) -> bool:
         """Return visibility flag for a channel kind (defaults to True)."""

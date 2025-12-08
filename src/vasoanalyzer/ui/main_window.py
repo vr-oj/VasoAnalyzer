@@ -66,6 +66,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QDesktopWidget,
     QDialog,
+    QDockWidget,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -76,6 +77,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QShortcut,
     QSizePolicy,
     QSplitter,
     QStackedWidget,
@@ -135,10 +137,13 @@ from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
 )
 from vasoanalyzer.ui.figure_composer_new import NewFigureComposerWindow
 from vasoanalyzer.ui.matplotlib_composer import MatplotlibComposerWindow
+from vasoanalyzer.ui.mpl_composer import PureMplFigureComposer
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
 from vasoanalyzer.ui.panels.snapshot_view_pg import SnapshotViewPG
+from vasoanalyzer.ui.panels.event_review_panel import EventReviewPanel
+from vasoanalyzer.ui.review_mode_controller import ReviewModeController
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.theme import (
@@ -890,6 +895,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.setup_metadata_panel()
         self.setup_zoom_dock()
         self.setup_scope_dock()
+        self.setup_review_panel_dock()
         self._update_excel_controls()
 
         self.modeStack.setMouseTracking(True)
@@ -1034,6 +1040,94 @@ class VasoAnalyzerApp(QMainWindow):
             self.showhide_menu.addAction(self.scope_dock.toggleViewAction())
 
         self.scope_dock.visibilityChanged.connect(self._on_scope_visibility_changed)
+
+    def setup_review_panel_dock(self):
+        """Setup event review panel as docked widget."""
+        # Create review panel widget
+        self.review_panel = EventReviewPanel(self)
+
+        # Create dock widget
+        self.review_dock = QDockWidget("Event Review", self)
+        self.review_dock.setObjectName("ReviewDock")
+        self.review_dock.setWidget(self.review_panel)
+        self.review_dock.setAllowedAreas(
+            Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea
+        )
+        self.addDockWidget(Qt.RightDockWidgetArea, self.review_dock)
+        self.review_dock.hide()
+
+        # Add to show/hide menu
+        if hasattr(self, "showhide_menu"):
+            self.showhide_menu.addAction(self.review_dock.toggleViewAction())
+
+        # Create review mode controller
+        plot_host = getattr(self, "plot_host", None)
+        self.review_controller = ReviewModeController(
+            self, self.review_panel, plot_host
+        )
+
+        # Register click handler for sampling mode
+        if plot_host is not None:
+            plot_host.on_click(self._handle_review_sampling_click)
+
+        # Connect visibility changes
+        self.review_dock.visibilityChanged.connect(self._on_review_dock_visibility_changed)
+
+    def _on_review_dock_visibility_changed(self, visible: bool) -> None:
+        """Handle review dock visibility changes.
+
+        Args:
+            visible: Whether dock is now visible
+        """
+        if visible and not self.review_controller.is_active():
+            # Start review when dock opens
+            self.review_controller.start_review()
+        elif not visible and self.review_controller.is_active():
+            # End review when dock closes
+            self.review_controller.end_review()
+
+    def _handle_review_sampling_click(self, ctx) -> None:
+        """Handle plot clicks during review mode.
+
+        Args:
+            ctx: ClickContext from plot interaction
+        """
+        # Check if review mode is active
+        if not hasattr(self, "review_controller"):
+            return
+
+        # If review is not active, don't interfere with normal clicks
+        if not self.review_controller.is_active():
+            return
+
+        # During review mode, handle sampling clicks
+        if self.review_controller.sampling_mode:
+            # Forward click to controller with time value for sampling
+            if hasattr(ctx, "x_data") and ctx.x_data is not None:
+                self.review_controller.handle_trace_click(ctx.x_data)
+        # Otherwise, just consume the click to prevent accidental actions
+        # (user can still pan/zoom with mouse drag, but single clicks are blocked)
+
+    def _toggle_review_mode(self) -> None:
+        """Toggle review mode (show/hide review panel)."""
+        if not hasattr(self, "review_dock"):
+            log.warning("Review dock not initialized")
+            return
+
+        if not self.event_table_data:
+            QMessageBox.information(
+                self, "No Events", "Load events before starting a review."
+            )
+            return
+
+        # Toggle dock visibility
+        self.review_dock.setVisible(not self.review_dock.isVisible())
+
+        # Raise and activate if showing
+        if self.review_dock.isVisible():
+            with contextlib.suppress(Exception):
+                self.review_dock.raise_()
+                self.review_dock.activateWindow()
 
     # ---------- Project Menu Actions ----------
     def _replace_current_project(self, project):
@@ -5897,7 +5991,7 @@ class VasoAnalyzerApp(QMainWindow):
         msg.exec_()
 
         if msg.clickedButton() is review_now_button:
-            self._launch_event_review_wizard()
+            self._toggle_review_mode()
 
     def _set_review_state_for_row(self, index: int, state: str) -> None:
         if not hasattr(self, "event_label_meta"):
@@ -7345,12 +7439,13 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_action.setEnabled(False)
         self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
 
-        self.review_events_action = QAction(QIcon(), "Review Events…", self)
+        self.review_events_action = QAction(QIcon(), "Review Events", self)
         self.review_events_action.setToolTip(
-            "Step through events to confirm or flag values"
+            "Open review panel to confirm or edit event values (Ctrl+Shift+R)"
         )
+        self.review_events_action.setShortcut("Ctrl+Shift+R")
         self.review_events_action.setEnabled(False)
-        self.review_events_action.triggered.connect(self._launch_event_review_wizard)
+        self.review_events_action.triggered.connect(self._toggle_review_mode)
 
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Load events…", self
@@ -11948,6 +12043,11 @@ QPushButton[isGhost="true"]:hover {{
         if not self.event_table_data or not (0 <= row < len(self.event_table_data)):
             return
 
+        # Sync review panel if active (unless source is already review_controller)
+        if hasattr(self, "review_controller") and source != "review_controller":
+            if self.review_controller.is_active():
+                self.review_controller.sync_to_event(row)
+
         try:
             event_time = float(self.event_table_data[row][1])
         except (TypeError, ValueError):
@@ -12357,10 +12457,13 @@ QPushButton[isGhost="true"]:hover {{
                 self._focus_event_row(idx, source="plot")
                 return
 
-        # Right-click on pin -> context menu
-        if is_right and self.pinned_points:
-            idx = self._nearest_pin_index(x, y)
+        # Right-click menu
+        if is_right:
+            # Check if clicking on an existing pin
+            idx = self._nearest_pin_index(x, y) if self.pinned_points else None
+
             if idx is not None:
+                # Context menu for existing pin
                 marker, label = self.pinned_points[idx]
                 coords = self._pin_coords(marker)
                 if coords is None:
@@ -12388,17 +12491,23 @@ QPushButton[isGhost="true"]:hover {{
                     tr_type = getattr(marker, "trace_type", "inner")
                     self.prompt_add_event(data_x, data_y, tr_type)
                     return
+            else:
+                # Context menu for empty trace area (add new pin)
+                menu = QMenu(self)
+                add_pin_action = menu.addAction("📍 Add Pin Here")
+                action = menu.exec_(QCursor.pos())
 
-        # Left-click add pin
-        if is_left:
-            tr_type = "inner"
-            track = getattr(self, "plot_host", None)
-            if track is not None and hasattr(track, "track"):
-                spec_track = track.track(track_id)
-                if spec_track and getattr(spec_track.spec, "component", "") == "outer":
-                    tr_type = "outer"
-            self._add_pyqtgraph_pin(track_id, x, y, tr_type)
-            self.mark_session_dirty()
+                if action == add_pin_action:
+                    # Determine trace type based on track
+                    tr_type = "inner"
+                    track = getattr(self, "plot_host", None)
+                    if track is not None and hasattr(track, "track"):
+                        spec_track = track.track(track_id)
+                        if spec_track and getattr(spec_track.spec, "component", "") == "outer":
+                            tr_type = "outer"
+                    self._add_pyqtgraph_pin(track_id, x, y, tr_type)
+                    self.mark_session_dirty()
+                    return
 
     def handle_event_replacement(self, x, y):
         if not self.event_labels or not self.event_times:
@@ -12962,56 +13071,56 @@ QPushButton[isGhost="true"]:hover {{
         new_composer.activateWindow()
 
     def open_matplotlib_composer(self, checked: bool = False) -> None:
-        """Launch the lightweight Matplotlib composer."""
+        """Launch the Pure Matplotlib Figure Composer."""
         if self.trace_model is None:
             QMessageBox.information(
                 self, "Matplotlib Composer", "No trace is currently loaded."
             )
             return
 
-        event_times = getattr(self, "event_times", None)
-        event_labels = getattr(self, "event_labels", None)
+        # Get event data
+        event_times = getattr(self, "event_times", [])
+        event_labels = getattr(self, "event_labels", [])
+
+        # Get event colors from current style
         style = (
             self.get_current_plot_style()
             if hasattr(self, "get_current_plot_style")
             else {}
         )
         event_color = style.get("event_color") if isinstance(style, dict) else None
-        event_colors = [event_color] if event_color else None
 
-        x_range = None
-        y_range = None
-        plot_host = getattr(self, "plot_host", None)
-        if plot_host is not None and hasattr(plot_host, "get_trace_view_range"):
-            try:
-                view_range = plot_host.get_trace_view_range()
-                if view_range is not None:
-                    x_range, y_range = view_range
-                    log.debug(
-                        "MatplotlibComposer initial ranges x=%s y=%s", x_range, y_range
-                    )
-            except Exception:
-                x_range = y_range = None
+        # Create event colors list
+        if event_color and event_times:
+            event_colors = [event_color] * len(event_times)
+        else:
+            event_colors = None
 
-        window = MatplotlibComposerWindow(
+        # Launch the Pure Matplotlib composer
+        window = PureMplFigureComposer(
             trace_model=self.trace_model,
+            parent=self,
             event_times=event_times,
             event_labels=event_labels,
             event_colors=event_colors,
-            event_frames=getattr(self, "event_frames", None),
-            initial_x_range=x_range,
-            initial_y_range=y_range,
-            parent=self,
         )
+
+        # Track window for cleanup
+        if not hasattr(self, "_matplotlib_composer_windows"):
+            self._matplotlib_composer_windows = []
+
         self._matplotlib_composer_windows.append(window)
         window.destroyed.connect(
             lambda _=None, w=window: self._matplotlib_composer_windows.remove(w)
             if w in self._matplotlib_composer_windows
             else None
         )
+
         window.show()
         window.raise_()
         window.activateWindow()
+
+        log.info("Pure Matplotlib Figure Composer launched")
 
     def _on_figure_saved_to_project(self, figure_id: str, figure_data: dict):
         """Handle when a figure is saved to the project.

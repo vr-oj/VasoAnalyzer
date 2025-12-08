@@ -1,0 +1,602 @@
+"""Pure Matplotlib renderer for FigureSpec.
+
+This module contains the core rendering logic that converts a FigureSpec
+into a Matplotlib Figure. It is used for both preview (at screen DPI) and
+export (at target DPI), guaranteeing "what you see is what you export".
+
+No Qt imports are allowed in this module - it must remain pure Matplotlib.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, Any, Callable
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import patches as mpatches
+from matplotlib.figure import Figure
+from matplotlib.gridspec import GridSpec
+from matplotlib.lines import Line2D
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+
+    from vasoanalyzer.core.trace_model import TraceModel
+
+    from .specs import AnnotationSpec, FigureSpec, GraphInstance, GraphSpec
+
+__all__ = ["render_figure", "render_into_axes", "TraceModelProvider"]
+
+log = logging.getLogger(__name__)
+
+# Type alias for trace model provider
+TraceModelProvider = Callable[[str], "TraceModel"]
+
+
+def render_figure(
+    spec: FigureSpec,
+    trace_model_provider: TraceModelProvider,
+    dpi: int = 100,
+    *,
+    event_times: list[float] | None = None,
+    event_labels: list[str] | None = None,
+    event_colors: list[str] | None = None,
+) -> Figure:
+    """Render a FigureSpec to a Matplotlib Figure.
+
+    This function is the single rendering path for both preview and export.
+    It creates a Figure with the exact physical size specified in the spec,
+    at the requested DPI.
+
+    Args:
+        spec: Complete figure specification
+        trace_model_provider: Callable that returns TraceModel for a sample_id
+        dpi: Dots per inch for rendering
+        event_times: Optional event times to mark on plots
+        event_labels: Optional event labels
+        event_colors: Optional event colors
+
+    Returns:
+        Matplotlib Figure object ready for display or export
+
+    Note:
+        This function has no Qt dependencies and can be used standalone.
+    """
+    # Create figure with exact physical size from spec
+    fig = Figure(
+        figsize=(spec.layout.width_in, spec.layout.height_in),
+        dpi=dpi,
+        layout="constrained",  # Modern constrained layout
+        facecolor="#ffffff",
+    )
+
+    # If no graph instances, return empty figure
+    if not spec.layout.graph_instances:
+        ax = fig.add_subplot(111)
+        ax.text(
+            0.5,
+            0.5,
+            "No graphs to display",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="#666666",
+        )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.axis("off")
+        return fig
+
+    # Create GridSpec for layout
+    gs = GridSpec(
+        spec.layout.nrows,
+        spec.layout.ncols,
+        figure=fig,
+        hspace=spec.layout.hspace,
+        wspace=spec.layout.wspace,
+    )
+
+    # Track axes for annotation rendering
+    axes_map: dict[str, Axes] = {}
+
+    # Render each graph instance
+    for instance in spec.layout.graph_instances:
+        try:
+            ax = _render_graph_instance(
+                fig,
+                gs,
+                instance,
+                spec.graphs,
+                trace_model_provider,
+                event_times,
+                event_labels,
+                event_colors,
+            )
+            axes_map[instance.instance_id] = ax
+        except Exception as e:
+            log.error(f"Failed to render graph instance {instance.instance_id}: {e}", exc_info=True)
+            # Create error placeholder
+            ax = fig.add_subplot(
+                gs[
+                    instance.row : instance.row + instance.rowspan,
+                    instance.col : instance.col + instance.colspan,
+                ]
+            )
+            ax.text(
+                0.5,
+                0.5,
+                f"Error rendering graph:\n{str(e)[:100]}",
+                ha="center",
+                va="center",
+                fontsize=10,
+                color="#cc0000",
+            )
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.axis("off")
+            axes_map[instance.instance_id] = ax
+
+    # Render annotations
+    for annot in spec.annotations:
+        try:
+            _render_annotation(fig, annot, axes_map)
+        except Exception as e:
+            log.warning(f"Failed to render annotation {annot.annotation_id}: {e}")
+
+    return fig
+
+
+def render_into_axes(
+    ax: "Axes",
+    spec: FigureSpec,
+    trace_model_provider: TraceModelProvider,
+    *,
+    event_times: list[float] | None = None,
+    event_labels: list[str] | None = None,
+    event_colors: list[str] | None = None,
+) -> dict[str, "Axes"]:
+    """Render a FigureSpec into an existing axes (used for preview).
+
+    The provided axes acts as the "page" container; graph panels are placed
+    inside it using a nested GridSpec anchored to the axes' bounding box.
+
+    Returns:
+        Mapping of graph instance id -> axes created for that graph.
+    """
+    fig = ax.figure
+
+    # Prepare the page container
+    ax.set_facecolor("#ffffff")
+    ax.set_box_aspect(max(spec.layout.height_in / max(spec.layout.width_in, 1e-6), 0.01))
+    ax.set_xlim(0, spec.layout.width_in)
+    ax.set_ylim(0, spec.layout.height_in)
+    ax.axis("off")
+
+    axes_map: dict[str, Axes] = {}
+
+    if not spec.layout.graph_instances:
+        ax.text(
+            0.5,
+            0.5,
+            "No graphs to display",
+            ha="center",
+            va="center",
+            fontsize=12,
+            color="#666666",
+        )
+        return axes_map
+
+    # Anchor a gridspec to the page axes bounding box (figure fractions)
+    bbox = ax.get_position()
+    gs = GridSpec(
+        spec.layout.nrows,
+        spec.layout.ncols,
+        figure=fig,
+        left=bbox.x0,
+        right=bbox.x1,
+        bottom=bbox.y0,
+        top=bbox.y1,
+        hspace=spec.layout.hspace,
+        wspace=spec.layout.wspace,
+    )
+
+    for instance in spec.layout.graph_instances:
+        try:
+            graph_ax = _render_graph_instance(
+                fig,
+                gs,
+                instance,
+                spec.graphs,
+                trace_model_provider,
+                event_times,
+                event_labels,
+                event_colors,
+            )
+            axes_map[instance.instance_id] = graph_ax
+        except Exception as exc:  # pragma: no cover - defensive for preview
+            log.error("Preview render failed for %s: %s", instance.instance_id, exc, exc_info=True)
+
+    for annot in spec.annotations:
+        try:
+            _render_annotation(fig, annot, axes_map, figure_transform=ax.transAxes, figure_axes=ax)
+        except Exception as exc:  # pragma: no cover - defensive for preview
+            log.warning("Failed to render preview annotation %s: %s", annot.annotation_id, exc)
+
+    return axes_map
+
+
+def _render_graph_instance(
+    fig: Figure,
+    gs: GridSpec,
+    instance: GraphInstance,
+    graphs: dict[str, GraphSpec],
+    trace_model_provider: TraceModelProvider,
+    event_times: list[float] | None,
+    event_labels: list[str] | None,
+    event_colors: list[str] | None,
+) -> Axes:
+    """Render a single graph instance into the GridSpec."""
+    # Get the graph spec
+    graph_spec = graphs.get(instance.graph_id)
+    if graph_spec is None:
+        raise ValueError(f"Graph {instance.graph_id} not found in spec")
+
+    # Create axes for this graph
+    ax = fig.add_subplot(
+        gs[
+            instance.row : instance.row + instance.rowspan,
+            instance.col : instance.col + instance.colspan,
+        ]
+    )
+
+    _populate_graph_axes(
+        ax,
+        graph_spec,
+        trace_model_provider,
+        event_times,
+        event_labels,
+        event_colors,
+    )
+
+    return ax
+
+
+def _populate_graph_axes(
+    ax: Axes,
+    graph_spec: GraphSpec,
+    trace_model_provider: TraceModelProvider,
+    event_times: list[float] | None,
+    event_labels: list[str] | None,
+    event_colors: list[str] | None,
+) -> None:
+    """Populate an existing axes with traces and styling."""
+    # Get trace model
+    try:
+        trace_model = trace_model_provider(graph_spec.sample_id)
+    except Exception as e:
+        raise ValueError(f"Failed to get trace model for sample {graph_spec.sample_id}: {e}")
+
+    # Plot each trace
+    default_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+    for idx, binding in enumerate(graph_spec.trace_bindings):
+        try:
+            _plot_trace(ax, trace_model, binding, graph_spec, idx, default_colors)
+        except Exception as e:
+            log.warning(f"Failed to plot trace {binding.name}: {e}")
+
+    _configure_axes(ax, graph_spec)
+
+    if event_times:
+        _add_event_markers(ax, event_times, event_labels, event_colors)
+
+    if graph_spec.show_legend and graph_spec.trace_bindings:
+        ax.legend(loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+
+
+def _plot_trace(
+    ax: Axes,
+    trace_model: TraceModel,
+    binding: Any,  # TraceBinding
+    graph_spec: GraphSpec,
+    idx: int,
+    default_colors: list[str],
+) -> None:
+    """Plot a single trace on the axes."""
+    # Get data arrays based on trace kind
+    time = trace_model.time_full
+    if binding.kind == "inner":
+        data = trace_model.inner_full
+        default_label = "Inner Diameter"
+    elif binding.kind == "outer":
+        data = trace_model.outer_full
+        if data is None:
+            log.warning(f"Outer diameter not available for trace {binding.name}")
+            return
+        default_label = "Outer Diameter"
+    elif binding.kind == "avg_pressure":
+        data = trace_model.avg_pressure_full
+        if data is None:
+            log.warning(f"Average pressure not available for trace {binding.name}")
+            return
+        default_label = "Avg Pressure"
+    elif binding.kind == "set_pressure":
+        data = trace_model.set_pressure_full
+        if data is None:
+            log.warning(f"Set pressure not available for trace {binding.name}")
+            return
+        default_label = "Set Pressure"
+    else:
+        raise ValueError(f"Unknown trace kind: {binding.kind}")
+
+    # Get style for this trace
+    trace_style = graph_spec.trace_styles.get(binding.name, {})
+    color = trace_style.get("color", default_colors[idx % len(default_colors)])
+    linewidth = trace_style.get("linewidth", 1.5)
+    linestyle = trace_style.get("linestyle", "-")
+    marker = trace_style.get("marker", "")
+    markersize = trace_style.get("markersize", 4)
+    alpha = trace_style.get("alpha", 1.0)
+    label = trace_style.get("label", default_label)
+
+    # Plot the trace
+    ax.plot(
+        time,
+        data,
+        color=color,
+        linewidth=linewidth,
+        linestyle=linestyle,
+        marker=marker,
+        markersize=markersize,
+        alpha=alpha,
+        label=label,
+    )
+
+
+def _configure_axes(ax: Axes, graph_spec: GraphSpec) -> None:
+    """Configure axes appearance based on graph spec."""
+    # Set labels
+    ax.set_xlabel(graph_spec.x_label)
+    ax.set_ylabel(graph_spec.y_label)
+
+    # Set scales
+    ax.set_xscale(graph_spec.x_scale)
+    ax.set_yscale(graph_spec.y_scale)
+
+    # Set limits if specified
+    if graph_spec.x_lim is not None:
+        ax.set_xlim(graph_spec.x_lim)
+    if graph_spec.y_lim is not None:
+        ax.set_ylim(graph_spec.y_lim)
+
+    # Grid
+    if graph_spec.grid:
+        ax.grid(True, alpha=0.3, linestyle="--", linewidth=0.5)
+
+    # Spines
+    for spine_name, visible in graph_spec.show_spines.items():
+        if spine_name in ax.spines:
+            ax.spines[spine_name].set_visible(visible)
+
+
+def _add_event_markers(
+    ax: Axes,
+    event_times: list[float],
+    event_labels: list[str] | None,
+    event_colors: list[str] | None,
+) -> None:
+    """Add vertical lines for event markers."""
+    for i, event_time in enumerate(event_times):
+        color = event_colors[i] if event_colors and i < len(event_colors) else "#888888"
+        label = event_labels[i] if event_labels and i < len(event_labels) else None
+
+        ax.axvline(event_time, color=color, linestyle="--", linewidth=1.0, alpha=0.6, zorder=1)
+
+        # Add label at top if provided
+        if label:
+            ax.text(
+                event_time,
+                0.98,
+                label,
+                transform=ax.get_xaxis_transform(),
+                rotation=90,
+                va="top",
+                ha="right",
+                fontsize=8,
+                color=color,
+                alpha=0.8,
+            )
+
+
+def _render_annotation(
+    fig: Figure,
+    annot: AnnotationSpec,
+    axes_map: dict[str, Axes],
+    *,
+    figure_transform=None,
+    figure_axes: Axes | Figure | None = None,
+) -> None:
+    """Render a single annotation on the figure or axes."""
+    figure_transform = figure_transform or fig.transFigure
+    figure_axes = figure_axes or fig
+
+    # Determine target axes
+    if annot.target_type == "graph" and annot.target_id:
+        ax = axes_map.get(annot.target_id)
+        if ax is None:
+            log.warning(f"Target axes {annot.target_id} not found for annotation")
+            return
+    else:
+        # Figure-level annotation - use provided transform/axes
+        ax = None
+
+    # Render based on annotation kind
+    if annot.kind == "text":
+        _render_text_annotation(fig, ax, annot, figure_transform, figure_axes)
+    elif annot.kind == "box":
+        _render_box_annotation(fig, ax, annot, figure_transform, figure_axes)
+    elif annot.kind == "arrow":
+        _render_arrow_annotation(fig, ax, annot, figure_transform, figure_axes)
+    elif annot.kind == "line":
+        _render_line_annotation(fig, ax, annot, figure_transform, figure_axes)
+
+
+def _render_text_annotation(
+    fig: Figure,
+    ax: Axes | None,
+    annot: AnnotationSpec,
+    figure_transform,
+    figure_axes: Axes | Figure,
+) -> None:
+    """Render a text annotation."""
+    if ax is None:
+        transform = figure_transform
+        target = figure_axes
+    elif annot.coord_system == "axes":
+        transform = ax.transAxes
+        target = ax
+    elif annot.coord_system == "figure":
+        transform = figure_transform
+        target = figure_axes
+    else:  # data coordinates
+        transform = ax.transData
+        target = ax
+
+    target.text(
+        annot.x0,
+        annot.y0,
+        annot.text_content,
+        transform=transform,
+        fontfamily=annot.font_family,
+        fontsize=annot.font_size,
+        fontweight=annot.font_weight,
+        fontstyle=annot.font_style,
+        color=annot.color,
+        ha=annot.ha,
+        va=annot.va,
+        rotation=annot.rotation,
+        alpha=annot.alpha,
+    )
+
+
+def _render_box_annotation(
+    fig: Figure,
+    ax: Axes | None,
+    annot: AnnotationSpec,
+    figure_transform,
+    figure_axes: Axes | Figure,
+) -> None:
+    """Render a box annotation."""
+    if ax is None:
+        transform = figure_transform
+        target = figure_axes
+    elif annot.coord_system == "axes":
+        transform = ax.transAxes
+        target = ax
+    elif annot.coord_system == "figure":
+        transform = figure_transform
+        target = figure_axes
+    else:  # data coordinates
+        transform = ax.transData
+        target = ax
+
+    width = abs(annot.x1 - annot.x0)
+    height = abs(annot.y1 - annot.y0)
+    x = min(annot.x0, annot.x1)
+    y = min(annot.y0, annot.y1)
+
+    rect = mpatches.Rectangle(
+        (x, y),
+        width,
+        height,
+        transform=transform,
+        edgecolor=annot.edgecolor,
+        facecolor=annot.facecolor,
+        alpha=annot.alpha,
+        linewidth=annot.linewidth,
+        linestyle=annot.linestyle,
+    )
+    if hasattr(target, "add_patch"):
+        target.add_patch(rect)
+    else:
+        fig.add_artist(rect)
+
+
+def _render_arrow_annotation(
+    fig: Figure,
+    ax: Axes | None,
+    annot: AnnotationSpec,
+    figure_transform,
+    figure_axes: Axes | Figure,
+) -> None:
+    """Render an arrow annotation."""
+    if ax is None:
+        transform = figure_transform
+        target = figure_axes
+    elif annot.coord_system == "axes":
+        transform = ax.transAxes
+        target = ax
+    elif annot.coord_system == "figure":
+        transform = figure_transform
+        target = figure_axes
+    else:  # data coordinates
+        transform = ax.transData
+        target = ax
+
+    target.annotate(
+        "",
+        xy=(annot.x1, annot.y1),
+        xytext=(annot.x0, annot.y0),
+        xycoords=transform,
+        textcoords=transform,
+        arrowprops=dict(
+            arrowstyle=annot.arrowstyle,
+            color=annot.color,
+            linewidth=annot.linewidth,
+            alpha=annot.alpha,
+        ),
+    )
+
+
+def _render_line_annotation(
+    fig: Figure,
+    ax: Axes | None,
+    annot: AnnotationSpec,
+    figure_transform,
+    figure_axes: Axes | Figure,
+) -> None:
+    """Render a line annotation."""
+    if ax is None:
+        transform = figure_transform
+        target = figure_axes
+    elif annot.coord_system == "axes":
+        transform = ax.transAxes
+        target = ax
+    elif annot.coord_system == "figure":
+        transform = figure_transform
+        target = figure_axes
+    else:  # data coordinates
+        transform = ax.transData
+        target = ax
+
+    if hasattr(target, "plot"):
+        target.plot(
+            [annot.x0, annot.x1],
+            [annot.y0, annot.y1],
+            transform=transform,
+            color=annot.color,
+            linewidth=annot.linewidth,
+            linestyle=annot.linestyle,
+            alpha=annot.alpha,
+        )
+    else:
+        line = Line2D(
+            [annot.x0, annot.x1],
+            [annot.y0, annot.y1],
+            transform=transform,
+            color=annot.color,
+            linewidth=annot.linewidth,
+            linestyle=annot.linestyle,
+            alpha=annot.alpha,
+        )
+        fig.add_artist(line)
