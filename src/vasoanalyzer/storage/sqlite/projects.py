@@ -10,6 +10,7 @@ from typing import Any
 
 __all__ = [
     "apply_default_pragmas",
+    "apply_cloud_safe_pragmas",  # New: cloud-safe pragma configuration
     "ensure_schema",
     "run_migrations",
     "get_user_version",
@@ -20,14 +21,42 @@ __all__ = [
 
 
 def apply_default_pragmas(conn: sqlite3.Connection) -> None:
-    """Apply the default pragmas used across the project store."""
+    """
+    Apply default pragmas for LOCAL storage (fast, optimized).
 
+    Uses WAL mode with NORMAL synchronous for optimal performance on local disks.
+    NORMAL is safe with WAL mode because:
+    - WAL provides atomicity without fsync on every commit
+    - Checkpoint before snapshot ensures durability
+    - Only staging databases use this (snapshots are the durable artifact)
+    """
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = FULL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")  # Changed from FULL - safe with WAL
     conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA mmap_size = 268435456;")
-    conn.execute("PRAGMA cache_size = -131072;")
+    conn.execute("PRAGMA mmap_size = 268435456;")  # 256MB memory mapping
+    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+
+
+def apply_cloud_safe_pragmas(conn: sqlite3.Connection) -> None:
+    """
+    Apply cloud-safe pragmas for CLOUD storage (reliable, slower).
+
+    Uses DELETE journal mode which is compatible with cloud sync services.
+    DELETE mode characteristics:
+    - Single-file database (no separate -wal or -shm files)
+    - Atomic rollback via journal file
+    - Cloud sync services can handle single-file changes reliably
+    - Slower than WAL but prevents hangs on cloud storage
+
+    Use this for: iCloud Drive, Dropbox, Google Drive, OneDrive, etc.
+    """
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = DELETE;")  # Cloud-safe mode
+    conn.execute("PRAGMA synchronous = FULL;")      # Ensure durability
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+    # NOTE: No mmap_size for cloud storage - can cause issues with sync
 
 
 def ensure_schema(
@@ -57,7 +86,9 @@ def ensure_schema(
             fps REAL,
             pixel_size_um REAL,
             t0_seconds REAL DEFAULT 0,
-            extra_json TEXT
+            extra_json TEXT,
+            trace_checksum TEXT,
+            events_checksum TEXT
         );
 
         CREATE TABLE IF NOT EXISTS trace (
@@ -200,9 +231,31 @@ def run_migrations(
             conn.execute("ALTER TABLE event ADD COLUMN od_ref_pct REAL")
 
             version = 3
+
+        elif version == 3:
+            # Migration from v3 to v4: Add checksum columns for data integrity
+            log.info("Migrating schema from v3 to v4 (checksum validation)")
+
+            # Add checksum columns to dataset table
+            # These are optional and will be computed on next save if missing
+            try:
+                conn.execute("ALTER TABLE dataset ADD COLUMN trace_checksum TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+            try:
+                conn.execute("ALTER TABLE dataset ADD COLUMN events_checksum TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+            log.info("Schema migration to v4 complete (checksums added)")
+            version = 4
+
         else:
             raise RuntimeError(
-                "This project uses a legacy .vaso format that requires conversion to sqlite-v3."
+                f"Unknown schema version {version}. Cannot migrate."
             )
     set_user_version(conn, target)
     conn.commit()

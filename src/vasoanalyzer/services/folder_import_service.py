@@ -16,8 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+import logging
+
 from vasoanalyzer.core.project import Experiment, SampleN
 from vasoanalyzer.io.events import find_matching_event_file, find_matching_tiff_file, find_matching_trace_file
+
+log = logging.getLogger(__name__)
 
 ImportStatus = Literal["NEW", "ALREADY_LOADED", "ALREADY_PROCESSED", "MODIFIED"]
 
@@ -53,6 +57,7 @@ def scan_folder_for_traces(root_folder: str) -> list[tuple[str, str, str | None]
         List of tuples: (subfolder_path, trace_file_path, tiff_file_path)
         Note: Returns ONLY experiments with a trace file (required)
     """
+    log.info("IMPORT: scan_folder_for_traces start root=%s", root_folder)
     discovered_experiments = {}  # Key: base experiment name, Value: dict of files
     root_path = Path(root_folder)
 
@@ -116,6 +121,12 @@ def scan_folder_for_traces(root_folder: str) -> list[tuple[str, str, str | None]
             # Add to candidates (must have trace to import)
             candidates.append((files["dir"], trace_file, tiff_file))
 
+    log.info(
+        "IMPORT: scan_folder_for_traces finished root=%s experiments=%d candidates=%d",
+        root_folder,
+        len(discovered_experiments),
+        len(candidates),
+    )
     return candidates
 
 
@@ -264,6 +275,11 @@ def scan_folder_with_status(
     Returns:
         List of ImportCandidate objects with status information
     """
+    log.info(
+        "IMPORT: scan_folder_with_status start root=%s experiment=%s",
+        root_folder,
+        getattr(experiment, "name", None),
+    )
     candidates = []
     trace_files = scan_folder_for_traces(root_folder)
 
@@ -288,6 +304,15 @@ def scan_folder_with_status(
         )
         candidates.append(candidate)
 
+    status_counts: dict[str, int] = {}
+    for cand in candidates:
+        status_counts[cand.status] = status_counts.get(cand.status, 0) + 1
+    log.info(
+        "IMPORT: scan_folder_with_status finished root=%s candidates=%d status_counts=%s",
+        root_folder,
+        len(candidates),
+        status_counts,
+    )
     return candidates
 
 

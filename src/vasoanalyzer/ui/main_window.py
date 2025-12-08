@@ -788,6 +788,13 @@ class VasoAnalyzerApp(QMainWindow):
         _save_layout.addWidget(self._save_progress_bar)
         self._save_progress_container.setVisible(False)
         self.statusBar().addPermanentWidget(self._save_progress_container, 0)
+        self._storage_mode_label = QLabel("")
+        self._storage_mode_label.setVisible(False)
+        self._storage_mode_label.setContentsMargins(8, 0, 8, 0)
+        self.statusBar().addPermanentWidget(self._storage_mode_label, 0)
+        self._storage_mode_path: str | None = None
+        self._storage_mode_is_cloud: bool | None = None
+        self._storage_mode_cloud_service: str | None = None
         self._save_progress_hide_timer = QTimer(self)
         self._save_progress_hide_timer.setSingleShot(True)
         self._save_progress_hide_timer.timeout.connect(self._hide_save_progress_bar)
@@ -1067,6 +1074,9 @@ class VasoAnalyzerApp(QMainWindow):
             self._relink_dialog.hide()
         self._update_metadata_panel(project)
         self._update_window_title()
+        self._update_storage_mode_indicator(
+            getattr(project, "path", None) if project else None, show_message=False
+        )
 
         if old_project is not None:
             try:
@@ -1482,6 +1492,7 @@ class VasoAnalyzerApp(QMainWindow):
             "Project created. Use the Add Data actions to start populating your experiment.",
             6000,
         )
+        self._update_storage_mode_indicator(normalised_path, force_message=True)
 
     def _open_project_file_legacy(self, path: str | None = None):
         if path is None:
@@ -1653,6 +1664,7 @@ class VasoAnalyzerApp(QMainWindow):
         if restored_from_autosave:
             status += " (autosave recovered)"
         self.statusBar().showMessage(status, 5000)
+        self._update_storage_mode_indicator(project_path, force_message=True)
 
         if project_path:
             self.update_recent_projects(project_path)
@@ -1862,6 +1874,66 @@ class VasoAnalyzerApp(QMainWindow):
         self._save_progress_label.setStyleSheet(
             f"color: {colors['text']}; padding-right: 6px;"
         )
+        if hasattr(self, "_storage_mode_label"):
+            self._storage_mode_label.setStyleSheet(
+                f"color: {colors['text']}; padding: 0 8px; font-weight: 600;"
+            )
+
+    def _update_storage_mode_indicator(
+        self, path: str | None, *, show_message: bool = True, force_message: bool = False
+    ) -> None:
+        """Update the status bar indicator showing storage mode."""
+
+        if not hasattr(self, "_storage_mode_label"):
+            return
+
+        if not path:
+            self._storage_mode_label.clear()
+            self._storage_mode_label.setVisible(False)
+            self._storage_mode_path = None
+            self._storage_mode_is_cloud = None
+            self._storage_mode_cloud_service = None
+            return
+
+        try:
+            normalised = (
+                Path(path).expanduser().resolve(strict=False).as_posix()
+                if isinstance(path, str)
+                else str(path)
+            )
+        except Exception:
+            normalised = str(path)
+
+        from vasoanalyzer.core.project import _is_cloud_storage_path
+
+        is_cloud, cloud_service = _is_cloud_storage_path(normalised)
+        mode_changed = (
+            normalised != self._storage_mode_path
+            or is_cloud != self._storage_mode_is_cloud
+            or cloud_service != self._storage_mode_cloud_service
+        )
+
+        self._storage_mode_path = normalised
+        self._storage_mode_is_cloud = is_cloud
+        self._storage_mode_cloud_service = cloud_service
+
+        if is_cloud:
+            label = "Cloud-safe mode"
+            if cloud_service:
+                label += f" ({cloud_service})"
+            tooltip = "DELETE journal + FULL sync for reliability on cloud storage."
+            if show_message and (mode_changed or force_message):
+                self.statusBar().showMessage(
+                    "Using cloud-safe mode (slower but reliable)", 6000
+                )
+        else:
+            label = "Fast mode (local)"
+            tooltip = "WAL journal with NORMAL sync for local disks."
+            # Avoid spamming the status bar for the common case
+
+        self._storage_mode_label.setText(label)
+        self._storage_mode_label.setToolTip(tooltip)
+        self._storage_mode_label.setVisible(True)
 
     def _start_background_save(
         self,
@@ -1955,6 +2027,7 @@ class VasoAnalyzerApp(QMainWindow):
             else:
                 if resolved_path:
                     self.update_recent_projects(resolved_path)
+                    self._update_storage_mode_indicator(resolved_path)
                 self._finish_save_progress_bar(True, resolved_path, duration_sec)
                 reset_reason = (
                     "manual save"
@@ -2165,6 +2238,11 @@ class VasoAnalyzerApp(QMainWindow):
     def _run_deferred_autosave(self):
         reason = self._pending_autosave_reason or "deferred"
         self._pending_autosave_reason = None
+        log.info(
+            "Autosave: running deferred autosave reason=%s path=%s",
+            reason,
+            getattr(self.current_project, "path", None),
+        )
         if self.current_project and self.current_project.path:
             self.auto_save_project(reason=reason)
 
@@ -4140,6 +4218,11 @@ class VasoAnalyzerApp(QMainWindow):
         if isinstance(target_experiment, bool):
             target_experiment = None
 
+        log.info(
+            "IMPORT: user triggered import folder into experiment target=%s",
+            getattr(target_experiment, "name", None) if target_experiment else "<none>",
+        )
+
         # Determine target experiment
         if target_experiment is None:
             target_experiment = self.current_experiment
@@ -4163,13 +4246,31 @@ class VasoAnalyzerApp(QMainWindow):
         if not folder_path:
             return
 
-        log.info("UI: Folder import started for %s", folder_path)
+        log.info(
+            "IMPORT: folder chooser accepted path=%s target_experiment=%s",
+            folder_path,
+            getattr(target_experiment, "name", None),
+        )
 
         # Scan folder for trace files
         try:
+            log.info(
+                "IMPORT: scanning folder for candidates path=%s experiment=%s",
+                folder_path,
+                getattr(target_experiment, "name", None),
+            )
             candidates = scan_folder_with_status(folder_path, target_experiment)
             log.info(
-                "UI: Folder import found %d sample candidates in %s",
+                "IMPORT: scan complete path=%s candidates=%d",
+                folder_path,
+                len(candidates),
+            )
+            log.debug(
+                "IMPORT: candidate preview entries=%s",
+                [(c.subfolder, c.status) for c in candidates],
+            )
+            log.info(
+                "IMPORT: Folder import found %d sample candidates in %s",
                 len(candidates),
                 folder_path,
             )
@@ -4193,11 +4294,18 @@ class VasoAnalyzerApp(QMainWindow):
         # Show preview dialog
         dialog = FolderImportDialog(candidates, self)
         if dialog.exec_() != QDialog.Accepted:
+            log.info("IMPORT: folder import dialog canceled path=%s", folder_path)
             return
 
         selected = dialog.selected_candidates
         if not selected:
+            log.info("IMPORT: folder import dialog accepted with no selections path=%s", folder_path)
             return
+        log.info(
+            "IMPORT: folder import dialog accepted path=%s selected=%d",
+            folder_path,
+            len(selected),
+        )
 
         # Import selected files
         success_count, error_count, _ = self._import_candidates(
@@ -4217,26 +4325,45 @@ class VasoAnalyzerApp(QMainWindow):
         success_count = 0
         error_count = 0
         errors = []
+        start_time = time.perf_counter()
+
+        total = len(candidates)
+        log.info(
+            "IMPORT: begin importing %d candidate(s) into experiment=%s",
+            total,
+            getattr(target_experiment, "name", None),
+        )
 
         for candidate in candidates:
+            sample_start = time.perf_counter()
             try:
+                log.info(
+                    "IMPORT: [%d/%d] ingesting subfolder=%s trace=%s events=%s",
+                    success_count + error_count + 1,
+                    total,
+                    candidate.subfolder,
+                    candidate.trace_file,
+                    candidate.events_file or "(auto / none)",
+                )
                 # Create sample
                 sample = SampleN(name=candidate.subfolder)
 
                 # Load trace data and events
                 from vasoanalyzer.io.trace_events import load_trace_and_events
 
-                log.info(
-                    "UI: Folder sample %s -> trace=%s events=%s",
-                    candidate.subfolder,
-                    candidate.trace_file,
-                    candidate.events_file or "(auto / none)",
-                )
-
                 df, labels, times, frames, diam, od_diam, import_meta = (
                     load_trace_and_events(candidate.trace_file)
                 )
                 sample.trace_data = df
+                log.info(
+                    "IMPORT: [%d/%d] loaded trace/events for %s (labels=%d frames=%s diameters=%s)",
+                    success_count + error_count + 1,
+                    total,
+                    candidate.subfolder,
+                    len(labels or []),
+                    bool(frames),
+                    bool(diam or od_diam),
+                )
 
                 # Update metadata for trace
                 trace_obj = (
@@ -4307,19 +4434,58 @@ class VasoAnalyzerApp(QMainWindow):
                     trace_rows,
                     event_rows,
                 )
+                log.info(
+                    "IMPORT: [%d/%d] finished sample %s status=%s duration=%.2fs",
+                    success_count + error_count,
+                    total,
+                    sample.name,
+                    getattr(candidate, "status", None),
+                    time.perf_counter() - sample_start,
+                )
 
             except Exception as e:
                 error_count += 1
                 errors.append(f"{candidate.subfolder}: {str(e)}")
                 log.exception("Error importing %s", candidate.trace_file)
+                log.info(
+                    "IMPORT: [%d/%d] failed sample %s duration=%.2fs",
+                    success_count + error_count,
+                    total,
+                    candidate.subfolder,
+                    time.perf_counter() - sample_start,
+                )
 
         # Refresh UI
+        log.info("IMPORT: refreshing project tree after folder import")
         self.refresh_project_tree()
+        log.info("IMPORT: project tree refresh completed")
         self._open_first_sample_if_none_active()
+        log.info("IMPORT: ensure first sample opened completed")
 
         # Save project
         if self.current_project and self.current_project.path:
-            save_project(self.current_project, self.current_project.path)
+            if os.environ.get("VA_DEBUG_SKIP_SAVE_AFTER_IMPORT") == "1":
+                log.info(
+                    "IMPORT: DEBUG skip save after folder import (VA_DEBUG_SKIP_SAVE_AFTER_IMPORT=1)"
+                )
+            else:
+                log.info(
+                    "IMPORT: starting save after folder import path=%s",
+                    self.current_project.path,
+                )
+                log.info(
+                    "SAVE: starting project save (reason=folder_import, path=%s)",
+                    self.current_project.path,
+                )
+                save_project(self.current_project, self.current_project.path)
+                log.info(
+                    "SAVE: project save completed (reason=folder_import, path=%s)",
+                    self.current_project.path,
+                )
+            log.info(
+                "IMPORT: finished save after folder import path=%s",
+                self.current_project.path,
+            )
 
         # Show summary
         if error_count == 0:
@@ -4336,6 +4502,13 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.warning(self, "Import Complete with Errors", message)
         log.debug(
             "Folder import summary: %d success, %d errors", success_count, error_count
+        )
+        log.info(
+            "IMPORT: completed folder import into %s (success=%d errors=%d duration=%.2fs)",
+            getattr(target_experiment, "name", None),
+            success_count,
+            error_count,
+            time.perf_counter() - start_time,
         )
         return success_count, error_count, errors
 
@@ -5732,6 +5905,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._normalize_event_label_meta(len(self.event_table_data))
         if 0 <= index < len(self.event_label_meta):
             self.event_label_meta[index]["review_state"] = state
+            # CRITICAL FIX (Bug #2): Mark sample state dirty when review state changes
+            self._sample_state_dirty = True
 
     def _mark_row_edited(self, index: int) -> None:
         self._set_review_state_for_row(index, REVIEW_EDITED)
@@ -5782,15 +5957,76 @@ class VasoAnalyzerApp(QMainWindow):
         payload = self._with_default_review_state(meta)
         if not hasattr(self, "event_label_meta"):
             self.event_label_meta = [payload]
+            # CRITICAL FIX (Bug #2): Mark sample state dirty when event metadata changes
+            self._sample_state_dirty = True
             return
         index = max(0, min(int(index), len(self.event_label_meta)))
         self.event_label_meta.insert(index, payload)
+        # CRITICAL FIX (Bug #2): Mark sample state dirty when event metadata changes
+        self._sample_state_dirty = True
 
     def _delete_event_meta(self, index: int) -> None:
         if not hasattr(self, "event_label_meta"):
             return
         if 0 <= index < len(self.event_label_meta):
             del self.event_label_meta[index]
+            # CRITICAL FIX (Bug #2): Mark sample state dirty when event metadata changes
+            self._sample_state_dirty = True
+
+    def _fallback_restore_review_states(self, event_count: int) -> None:
+        """
+        CRITICAL FIX (Bug #3): Fallback method to restore review states when deserialization fails.
+
+        Tries multiple strategies:
+        1. Load review states from current sample's events DataFrame (if Bug #1 fix is in place)
+        2. Preserve existing event_label_meta if available
+        3. Default to UNREVIEWED as last resort
+
+        Args:
+            event_count: Number of events to create metadata for
+        """
+        review_states_restored = False
+
+        # Strategy 1: Try to load from current sample's events DataFrame
+        try:
+            if (
+                hasattr(self, "current_sample")
+                and self.current_sample is not None
+                and hasattr(self.current_sample, "events_data")
+                and self.current_sample.events_data is not None
+            ):
+                events_df = self.current_sample.events_data
+                if "review_state" in events_df.columns:
+                    states = events_df["review_state"].tolist()
+                    if len(states) == event_count:
+                        self.event_label_meta = [
+                            {"review_state": str(state)} for state in states
+                        ]
+                        review_states_restored = True
+                        log.info(
+                            f"Restored {len(states)} review states from events DataFrame"
+                        )
+        except Exception as e:
+            log.debug(f"Could not restore review states from DataFrame: {e}")
+
+        # Strategy 2: Preserve existing event_label_meta if it exists and has the right length
+        if not review_states_restored and hasattr(self, "event_label_meta"):
+            existing = getattr(self, "event_label_meta", [])
+            if isinstance(existing, list) and len(existing) == event_count:
+                # Keep existing - already has review states
+                log.info(
+                    f"Preserved {len(existing)} existing review states from event_label_meta"
+                )
+                review_states_restored = True
+
+        # Strategy 3: Default to UNREVIEWED as last resort
+        if not review_states_restored:
+            self.event_label_meta = [
+                self._with_default_review_state(None) for _ in range(event_count)
+            ]
+            log.warning(
+                f"Could not restore review states - defaulted {event_count} events to UNREVIEWED"
+            )
 
     def _sync_event_data_from_table(self) -> None:
         """Recompute cached event arrays, metadata, and annotation entries."""
@@ -8354,6 +8590,60 @@ QPushButton[isGhost="true"]:hover {{
 
         self._apply_time_window((new_start, new_end))
 
+    def _on_zoom_back_triggered(self) -> None:
+        """Handle zoom back button - step back through zoom history using scaleHistory(-1)."""
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            return
+
+        is_pyqtgraph = bool(
+            hasattr(plot_host, "get_render_backend")
+            and plot_host.get_render_backend() == "pyqtgraph"
+        )
+
+        if not is_pyqtgraph:
+            # Matplotlib backend doesn't have scaleHistory, fallback to reset
+            if hasattr(plot_host, "full_range"):
+                full_range = plot_host.full_range()
+                if full_range is not None:
+                    self._apply_time_window(full_range)
+            return
+
+        # PyQtGraph: use ViewBox.scaleHistory(-1) to step back in zoom history
+        # Get the primary (first visible) track's ViewBox
+        tracks = list(plot_host.iter_tracks()) if hasattr(plot_host, "iter_tracks") else []
+        if not tracks:
+            return
+
+        # Find first visible track
+        primary_track = None
+        for track in tracks:
+            if hasattr(track, "is_visible") and track.is_visible():
+                primary_track = track
+                break
+        if primary_track is None:
+            primary_track = tracks[0]  # Fallback to first track
+
+        # Get ViewBox from track
+        view_box = None
+        if hasattr(primary_track, "view") and hasattr(primary_track.view, "view_box"):
+            view_box = primary_track.view.view_box()
+        elif hasattr(primary_track, "view_box"):
+            view_box = primary_track.view_box()
+
+        if view_box is None:
+            return
+
+        # Step back in zoom history (per PyQtGraph docs)
+        try:
+            view_box.scaleHistory(-1)
+        except Exception:
+            # No history available - fallback to full range with auto-range
+            if hasattr(plot_host, "full_range"):
+                full_range = plot_host.full_range()
+                if full_range is not None:
+                    self._apply_time_window(full_range)
+
     def _on_box_zoom_toggled(self, checked: bool) -> None:
         """Enable rectangle zoom mode for PyQtGraph traces; otherwise keep pan-only."""
         plot_host = getattr(self, "plot_host", None)
@@ -9004,6 +9294,11 @@ QPushButton[isGhost="true"]:hover {{
             self._normalize_event_label_meta(len(self.event_table_data))
             for idx, state in enumerate(updated_states):
                 self._set_review_state_for_row(idx, state)
+
+        # CRITICAL FIX (Bug #2): Mark sample state dirty after review changes applied
+        # (Note: _set_review_state_for_row also sets this, but setting here ensures it's set
+        # even if only event data changed without state changes)
+        self._sample_state_dirty = True
 
         self.populate_table()
         self._sync_event_data_from_table()
@@ -14547,19 +14842,37 @@ QPushButton[isGhost="true"]:hover {{
             if isinstance(event_rows, list) and event_rows:
                 self.event_table_data = event_rows
                 meta_payload = state.get("event_label_meta")
+
+                # CRITICAL FIX (Bug #3): Improved deserialization with fallback
                 if isinstance(meta_payload, list):
-                    self.event_label_meta = [
-                        (
-                            self._with_default_review_state(item)
-                            if isinstance(item, Mapping)
-                            else self._with_default_review_state(None)
+                    try:
+                        self.event_label_meta = [
+                            (
+                                self._with_default_review_state(item)
+                                if isinstance(item, Mapping)
+                                else self._with_default_review_state(None)
+                            )
+                            for item in meta_payload
+                        ]
+                    except Exception as e:
+                        # If deserialization fails, try to preserve existing states
+                        log.error(
+                            f"Failed to deserialize event_label_meta for sample "
+                            f"{getattr(sample, 'name', 'unknown')}: {e}. "
+                            f"Attempting fallback to preserve review states."
                         )
-                        for item in meta_payload
-                    ]
+                        # Fallback: try to get review states from events DataFrame
+                        self._fallback_restore_review_states(len(event_rows))
                 else:
-                    self.event_label_meta = [
-                        self._with_default_review_state(None) for _ in self.event_table_data
-                    ]
+                    # meta_payload is None or not a list - try fallback
+                    if meta_payload is not None:
+                        log.warning(
+                            f"event_label_meta is not a list for sample "
+                            f"{getattr(sample, 'name', 'unknown')} "
+                            f"(got {type(meta_payload).__name__}). Using fallback."
+                        )
+                    self._fallback_restore_review_states(len(event_rows))
+
                 self.populate_table()
                 self._maybe_prompt_event_review()
             t_axes = time.perf_counter()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Iterable, Sequence
+import time
 
 import pandas as pd
 
@@ -30,6 +31,32 @@ def match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
     Best-effort mapping from arbitrary column names to the canonical schema.
     """
 
+    # ------------------------------------------------------------------
+    # Pick the best time column up-front so we don't accidentally grab
+    # a hh:mm:ss string when a numeric seconds column is available.
+    best_time_col: str | None = None
+    for col in columns:
+        norm = normalize_label(col)
+        unitless = norm.replace("mmhg", "")
+        # Highest priority: explicit seconds precision columns
+        if norm == "timesexact":
+            best_time_col = col
+            break
+        if unitless in {"times", "tseconds"} or "time_s" in norm or norm.endswith("secs"):
+            best_time_col = col
+            break
+        if "(s" in col.lower():  # e.g., "Time (s)"
+            best_time_col = col
+            break
+    if best_time_col is None:
+        # Fallback to any time-like column, including hh:mm:ss strings
+        for col in columns:
+            norm = normalize_label(col)
+            unitless = norm.replace("mmhg", "")
+            if unitless.startswith("time") or unitless in {"t", "timestamp"}:
+                best_time_col = col
+                break
+
     def _unitless(norm: str) -> str:
         """Helper that strips unit suffixes like ``mmhg`` for easier matching."""
         return norm.replace("mmhg", "")
@@ -42,14 +69,8 @@ def match_trace_columns(columns: Sequence[str]) -> dict[str, str]:
         norm = normalize_label(col)
         unitless = _unitless(norm)
 
-        # Priority 1: VasoTracker high-precision time column
-        if norm == "timesexact" and _missing("t_seconds", mapping):
-            mapping[col] = "t_seconds"
-        # Priority 2: Standard time columns
-        elif (
-            unitless in {"times", "tseconds", "t", "time", "timestamp"}
-            or unitless.startswith("time")
-        ) and _missing("t_seconds", mapping):
+        # Priority 1: VasoTracker high-precision time column (handled above)
+        if col == best_time_col and _missing("t_seconds", mapping):
             mapping[col] = "t_seconds"
         elif (
             ("inner" in unitless and "diam" in unitless)
@@ -135,6 +156,15 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
         log.debug("prepare_trace_rows: empty DataFrame for dataset %s", dataset_id)
         return []
 
+    stage_start = time.perf_counter()
+
+    log.info(
+        "TRACE-SAVE: prepare_trace_rows start dataset_id=%s rows=%d columns=%s",
+        dataset_id,
+        len(df.index),
+        list(df.columns),
+    )
+
     df_local = df.copy()
     rename_map = match_trace_columns(df_local.columns)
     if rename_map:
@@ -143,7 +173,23 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     if "t_seconds" not in df_local.columns:
         raise ValueError("Trace DataFrame must contain a time column")
 
+    # Convert time column to numeric seconds.
     df_local["t_seconds"] = pd.to_numeric(df_local["t_seconds"], errors="coerce")
+    # If everything is NaN but the original column looks like hh:mm:ss, try parsing to seconds.
+    if df_local["t_seconds"].isna().all():
+        original_time_col = df_local.get("t_seconds")
+        if isinstance(original_time_col, pd.Series) and original_time_col.astype(str).str.contains(":").any():
+            try:
+                parsed = pd.to_timedelta(original_time_col.astype(str), errors="coerce").dt.total_seconds()
+                df_local["t_seconds"] = parsed
+                log.info(
+                    "TRACE-SAVE: parsed hh:mm:ss time column to seconds for dataset_id=%s (non_null=%d of %d)",
+                    dataset_id,
+                    int(parsed.notna().sum()),
+                    len(parsed),
+                )
+            except Exception:
+                log.debug("Failed to parse hh:mm:ss time column for dataset_id=%s", dataset_id, exc_info=True)
     for col in ("inner_diam", "outer_diam", "p_avg", "p1", "p2"):
         if col in df_local.columns:
             df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
@@ -151,6 +197,18 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
                 df_local.loc[df_local[col] < 0, col] = pd.NA
 
     df_local = df_local.dropna(subset=["t_seconds"])
+    log.info(
+        "TRACE-SAVE: prepare_trace_rows normalized dataset_id=%s canonical_rows=%d columns=%s",
+        dataset_id,
+        len(df_local.index),
+        list(df_local.columns),
+    )
+    log.debug(
+        "TRACE-SAVE: prepare_trace_rows stage=normalize dataset_id=%s elapsed=%.3fs rows=%d",
+        dataset_id,
+        time.perf_counter() - stage_start,
+        len(df_local.index),
+    )
 
     set_pressure_source = None
     for candidate in ("Set Pressure (mmHg)", "Set P (mmHg)"):
@@ -161,7 +219,7 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     if set_pressure_source is None and "Pressure 2 (mmHg)" in df.columns:
         set_pressure_source = pd.to_numeric(df["Pressure 2 (mmHg)"], errors="coerce")
         source_label = "Pressure 2 (mmHg)"
-        log.info(
+        log.debug(
             "prepare_trace_rows: falling back to '%s' for dataset_id=%s",
             source_label,
             dataset_id,
@@ -172,7 +230,7 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
         source_non_null = int(set_pressure_source.notna().sum())
         if current is None or source_non_null > current_non_null:
             df_local["p2"] = set_pressure_source
-            log.info(
+            log.debug(
                 "prepare_trace_rows: injected dense set-pressure from '%s' (non_null=%d of %d) for dataset_id=%s",
                 source_label,
                 source_non_null,
@@ -180,28 +238,87 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
                 dataset_id,
             )
 
-    rows = []
-    for _, row in df_local.iterrows():
-        rows.append(
-            (
-                dataset_id,
-                float(row.get("t_seconds")),
-                nullable_float(row.get("inner_diam")),
-                nullable_float(row.get("outer_diam")),
-                nullable_float(row.get("p_avg")),
-                nullable_float(row.get("p1")),
-                nullable_float(row.get("p2")),
+    log.info(
+        "TRACE-SAVE: prepare_trace_rows begin row build dataset_id=%s candidate_rows=%d",
+        dataset_id,
+        len(df_local.index),
+    )
+    log.debug(
+        "TRACE-SAVE: prepare_trace_rows stage=set_pressure dataset_id=%s elapsed=%.3fs rows=%d",
+        dataset_id,
+        time.perf_counter() - stage_start,
+        len(df_local.index),
+    )
+
+    rows: list[tuple] = []
+    total_rows = len(df_local.index)
+    # Emit at most ~10 progress lines, but at least every 20k rows
+    progress_every = max(20000, max(1, total_rows // 10))
+
+    # Use numpy-backed Series access instead of iterrows for speed and to avoid pandas object churn
+    t_values = df_local["t_seconds"].to_numpy()
+    inner_values = df_local["inner_diam"].to_numpy() if "inner_diam" in df_local else None
+    outer_values = df_local["outer_diam"].to_numpy() if "outer_diam" in df_local else None
+    p_avg_values = df_local["p_avg"].to_numpy() if "p_avg" in df_local else None
+    p1_values = df_local["p1"].to_numpy() if "p1" in df_local else None
+    p2_values = df_local["p2"].to_numpy() if "p2" in df_local else None
+
+    row_build_start = time.perf_counter()
+    try:
+        for idx, t_val in enumerate(t_values, start=1):
+            pos = idx - 1
+            rows.append(
+                (
+                    dataset_id,
+                    float(t_val),
+                    nullable_float(inner_values[pos]) if inner_values is not None else None,
+                    nullable_float(outer_values[pos]) if outer_values is not None else None,
+                    nullable_float(p_avg_values[pos]) if p_avg_values is not None else None,
+                    nullable_float(p1_values[pos]) if p1_values is not None else None,
+                    nullable_float(p2_values[pos]) if p2_values is not None else None,
+                )
             )
+            if idx == 1 or idx % progress_every == 0 or idx == total_rows:
+                log.info(
+                    "TRACE-SAVE: prepare_trace_rows progress dataset_id=%s built=%d/%d elapsed=%.2fs",
+                    dataset_id,
+                    idx,
+                    total_rows,
+                    time.perf_counter() - row_build_start,
+                )
+    except Exception:
+        log.error(
+            "TRACE-SAVE: prepare_trace_rows failed during row build "
+            "dataset_id=%s built=%d/%d elapsed=%.2fs",
+            dataset_id,
+            len(rows),
+            total_rows,
+            time.perf_counter() - row_build_start,
+            exc_info=True,
         )
+        raise
+
+    log.info(
+        "TRACE-SAVE: prepare_trace_rows row build completed dataset_id=%s rows=%d duration=%.2fs",
+        dataset_id,
+        len(rows),
+        time.perf_counter() - row_build_start,
+    )
     log.debug(
         "prepare_trace_rows: dataset=%s rows=%s columns=%s",
         dataset_id,
         len(rows),
         list(df_local.columns),
     )
+    log.debug(
+        "TRACE-SAVE: prepare_trace_rows stage=row_build dataset_id=%s elapsed=%.3fs rows=%d",
+        dataset_id,
+        time.perf_counter() - row_build_start,
+        len(rows),
+    )
     if "p2" in df_local.columns:
         p2_series = df_local["p2"]
-        log.info(
+        log.debug(
             "Embed: canonical p2 for dataset_id=%s -> non_null=%d of %d, head=%s",
             dataset_id,
             int(p2_series.notna().sum()),
@@ -209,7 +326,7 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
             p2_series.head(5).tolist(),
         )
     else:
-        log.info(
+        log.debug(
             "Embed: no canonical p2 column for dataset_id=%s; available=%s",
             dataset_id,
             list(df_local.columns),

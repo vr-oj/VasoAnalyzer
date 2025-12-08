@@ -62,6 +62,20 @@ def get_use_bundle_format_by_default() -> bool:
 USE_BUNDLE_FORMAT_BY_DEFAULT = get_use_bundle_format_by_default()
 
 
+def _detect_cloud_storage(path: Path) -> tuple[bool, str | None]:
+    """
+    Determine whether ``path`` resides in a known cloud storage location.
+
+    The import is local to avoid circular dependencies during module import.
+    """
+    try:
+        from vasoanalyzer.core.project import _is_cloud_storage_path
+
+        return _is_cloud_storage_path(path.as_posix())
+    except Exception:
+        return False, None
+
+
 # =============================================================================
 # Unified Project Store
 # =============================================================================
@@ -90,6 +104,9 @@ class UnifiedProjectStore:
     handle: ProjectHandle | None = None
     is_bundle: bool = False
     readonly: bool = False
+    is_cloud_path: bool = False
+    cloud_service: str | None = None
+    journal_mode: str | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     def mark_dirty(self) -> None:
@@ -224,17 +241,25 @@ def create_unified_project(
             if path.suffix != ".vasopack":
                 path = path.with_suffix(".vasopack")
 
+        is_cloud, cloud_service = _detect_cloud_storage(path)
+
         # Create bundle/container project
         handle, conn = create_project_handle(
             path, use_bundle_format=True, use_container_format=use_container_format
         )
+
+        # CRITICAL FIX: Ensure connection is synchronized with handle
+        # For bundles/containers, the connection should always match handle.staging_conn
+        if handle and handle.staging_conn and handle.staging_conn != conn:
+            log.warning("Connection mismatch detected after project creation, using handle's connection")
+            conn = handle.staging_conn
 
         # Initialize schema
         from .sqlite import projects as _projects
 
         _projects.ensure_schema(
             conn,
-            schema_version=3,
+            schema_version=4,
             now=_utc_now(),
             app_version=app_version,
             timezone=timezone,
@@ -250,12 +275,17 @@ def create_unified_project(
             handle=handle,
             is_bundle=True,
             readonly=False,
+            is_cloud_path=getattr(handle, "is_cloud_path", is_cloud),
+            cloud_service=getattr(handle, "cloud_service", cloud_service),
+            journal_mode=getattr(handle, "journal_mode", None),
         )
 
     else:
         # Ensure .vaso extension
         if path.suffix != ".vaso":
             path = path.with_suffix(".vaso")
+
+        is_cloud, cloud_service = _detect_cloud_storage(path)
 
         # Create legacy project (use existing create_project from sqlite_store)
         from .sqlite_store import create_project as _create_legacy_project
@@ -269,6 +299,9 @@ def create_unified_project(
             handle=None,
             is_bundle=False,
             readonly=False,
+            is_cloud_path=getattr(legacy_store, "is_cloud_path", is_cloud),
+            cloud_service=getattr(legacy_store, "cloud_service", cloud_service),
+            journal_mode=getattr(legacy_store, "journal_mode", None),
         )
 
 
@@ -304,6 +337,8 @@ def open_unified_project(
     if not path.exists():
         raise FileNotFoundError(f"Project not found: {path}")
 
+    is_cloud, cloud_service = _detect_cloud_storage(path)
+
     # Detect format
     fmt = detect_project_format(path)
     log.info(f"Opening project ({fmt}): {path}")
@@ -320,6 +355,9 @@ def open_unified_project(
             handle=handle,
             is_bundle=True,
             readonly=readonly,
+            is_cloud_path=getattr(handle, "is_cloud_path", is_cloud),
+            cloud_service=getattr(handle, "cloud_service", cloud_service),
+            journal_mode=getattr(handle, "journal_mode", None),
         )
 
     else:
@@ -336,6 +374,9 @@ def open_unified_project(
                 handle=None,
                 is_bundle=False,
                 readonly=readonly,
+                is_cloud_path=getattr(legacy_store, "is_cloud_path", is_cloud),
+                cloud_service=getattr(legacy_store, "cloud_service", cloud_service),
+                journal_mode=getattr(legacy_store, "journal_mode", None),
             )
 
         except Exception as e:

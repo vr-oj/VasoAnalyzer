@@ -37,6 +37,7 @@ from vasoanalyzer.storage.sqlite.utils import open_db
 from .sqlite_utils import backup_to_delete_mode as _sqlite_backup_to_delete_mode
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
 from .sqlite_utils import optimize as _sqlite_optimize
+from .timeout_wrapper import TimeoutError, timeout
 
 __all__ = [
     "ProjectStore",
@@ -80,6 +81,21 @@ class LegacyProjectError(RuntimeError):
         )
 
 
+def _detect_cloud_storage(path: Path) -> tuple[bool, str | None]:
+    """
+    Determine whether ``path`` is inside a known cloud-storage location.
+
+    Uses the central helper in ``vasoanalyzer.core.project`` but keeps the import
+    local to avoid circular dependencies at module import time.
+    """
+    try:
+        from vasoanalyzer.core.project import _is_cloud_storage_path
+
+        return _is_cloud_storage_path(path.as_posix())
+    except Exception:
+        return False, None
+
+
 @dataclass
 class ProjectStore:
     """Lightweight wrapper for an open SQLite project."""
@@ -87,6 +103,10 @@ class ProjectStore:
     path: Path
     conn: sqlite3.Connection
     dirty: bool = False
+    # Cloud context (used to pick journal/sync mode and surface UI hints)
+    is_cloud_path: bool = False
+    cloud_service: str | None = None
+    journal_mode: str | None = None
 
     def mark_dirty(self) -> None:
         self.dirty = True
@@ -121,8 +141,12 @@ def create_project(
     project_path = Path(path)
     project_path.parent.mkdir(parents=True, exist_ok=True)
 
+    is_cloud, cloud_service = _detect_cloud_storage(project_path)
+
     conn = open_db(project_path.as_posix(), apply_pragmas=False)
-    _projects.apply_default_pragmas(conn)
+    pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud else _projects.apply_default_pragmas
+    pragma_fn(conn)
+    journal_mode = "DELETE" if is_cloud else "WAL"
     _projects.ensure_schema(
         conn,
         schema_version=SCHEMA_VERSION,
@@ -130,7 +154,14 @@ def create_project(
         app_version=app_version,
         timezone=timezone,
     )
-    return ProjectStore(path=project_path, conn=conn, dirty=False)
+    return ProjectStore(
+        path=project_path,
+        conn=conn,
+        dirty=False,
+        is_cloud_path=is_cloud,
+        cloud_service=cloud_service,
+        journal_mode=journal_mode,
+    )
 
 
 def open_project(path: str | os.PathLike[str]) -> ProjectStore:
@@ -143,6 +174,10 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
     if not project_path.exists():
         raise FileNotFoundError(path)
 
+    is_cloud, cloud_service = _detect_cloud_storage(project_path)
+    pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud else _projects.apply_default_pragmas
+    journal_mode = "DELETE" if is_cloud else "WAL"
+
     # Check if this is a bundle format
     from .project_storage import get_project_format, open_unified_project
 
@@ -153,12 +188,17 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
         unified_store = open_unified_project(project_path, readonly=False, auto_migrate=False)
         # Return the unified store (which is already a ProjectStore-compatible object)
         return ProjectStore(
-            path=unified_store.path, conn=unified_store.conn, dirty=unified_store.dirty
+            path=unified_store.path,
+            conn=unified_store.conn,
+            dirty=unified_store.dirty,
+            is_cloud_path=getattr(unified_store, "is_cloud_path", is_cloud),
+            cloud_service=getattr(unified_store, "cloud_service", cloud_service),
+            journal_mode=getattr(unified_store, "journal_mode", journal_mode),
         )
 
     # Legacy format: open directly
     conn = open_db(project_path.as_posix(), apply_pragmas=False)
-    _projects.apply_default_pragmas(conn)
+    pragma_fn(conn)
 
     version = _projects.get_user_version(conn)
     if version == 0:
@@ -187,7 +227,7 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
 
             # Reopen and migrate
             conn = open_db(project_path.as_posix(), apply_pragmas=False)
-            _projects.apply_default_pragmas(conn)
+            pragma_fn(conn)
             _projects.run_migrations(
                 conn,
                 start=version,
@@ -200,7 +240,14 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
             f"Project schema version {version} is newer than supported {SCHEMA_VERSION}"
         )
 
-    return ProjectStore(path=project_path, conn=conn, dirty=False)
+    return ProjectStore(
+        path=project_path,
+        conn=conn,
+        dirty=False,
+        is_cloud_path=is_cloud,
+        cloud_service=cloud_service,
+        journal_mode=journal_mode,
+    )
 
 
 def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
@@ -211,13 +258,22 @@ def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
         skip_optimize: If True, skip the expensive OPTIMIZE operation (useful during app close)
     """
 
+    log.info(
+        "SAVE: store.save_project entry path=%s skip_optimize=%s",
+        getattr(store, "path", None),
+        skip_optimize,
+    )
+
     now = _utc_now()
     _projects.write_meta(store.conn, {"modified_utc": now, "modified_at": now})
+    log.info("SAVE: store.save_project checkpoint/commit start")
     store.commit()
     _sqlite_checkpoint_full(store.conn)
+    log.info("SAVE: store.save_project checkpoint/commit finished")
 
     project_path = getattr(store, "path", None)
     if not project_path:
+        log.info("SAVE: store.save_project exit (no path attached)")
         return
 
     tmp_path = project_path.with_suffix(project_path.suffix + ".tmp")
@@ -229,15 +285,28 @@ def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
         store.conn.close()
         os.replace(tmp_path, project_path)
         conn = open_db(project_path.as_posix(), apply_pragmas=False)
-        _projects.apply_default_pragmas(conn)
+        pragma_fn = (
+            _projects.apply_cloud_safe_pragmas
+            if getattr(store, "is_cloud_path", False)
+            else _projects.apply_default_pragmas
+        )
+        pragma_fn(conn)
+        store.journal_mode = "DELETE" if getattr(store, "is_cloud_path", False) else "WAL"
         store.conn = conn
         store.dirty = False
         if not skip_optimize:
+            log.info("SAVE: store.save_project optimizing database path=%s", project_path)
             _sqlite_optimize(store.conn)
     finally:
         if tmp_path.exists():
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
+
+    log.info(
+        "SAVE: store.save_project completed path=%s skip_optimize=%s",
+        project_path,
+        skip_optimize,
+    )
 
 
 def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> None:
@@ -260,7 +329,12 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     # Re-open connection so WAL and temp files point at the new location.
     store.conn.close()
     conn = open_db(dest_path.as_posix(), apply_pragmas=False)
-    _projects.apply_default_pragmas(conn)
+    is_cloud, cloud_service = _detect_cloud_storage(dest_path)
+    pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud else _projects.apply_default_pragmas
+    pragma_fn(conn)
+    store.is_cloud_path = is_cloud
+    store.cloud_service = cloud_service
+    store.journal_mode = "DELETE" if is_cloud else "WAL"
     store.conn = conn
     store.path = dest_path
     store.dirty = False
@@ -292,6 +366,17 @@ def add_dataset(
 ) -> int:
     """Insert a dataset with trace/events rows and optional TIFF asset."""
 
+    dataset_timer = time.perf_counter()
+    trace_len = len(trace_df.index) if isinstance(trace_df, pd.DataFrame) else 0
+    event_len = len(events_df.index) if isinstance(events_df, pd.DataFrame) else 0
+    log.info(
+        "TRACE-SAVE: add_dataset start name=%s trace_rows=%d event_rows=%d embed_tiff=%s",
+        name,
+        trace_len,
+        event_len,
+        embed_tiff,
+    )
+
     metadata = metadata or {}
     now = _utc_now()
 
@@ -311,6 +396,7 @@ def add_dataset(
             # Continue with None rather than failing the entire operation
             extra_json = None
 
+    log.info("TRACE-SAVE: begin transaction for dataset name=%s", name)
     with store.conn:
         dataset_sql = (
             "INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, "
@@ -333,14 +419,46 @@ def add_dataset(
             raise RuntimeError("Failed to insert dataset row")
         dataset_id = int(dataset_rowid)
 
+        trace_prep_start = time.perf_counter()
         trace_rows = list(_traces.prepare_trace_rows(dataset_id, trace_df))
+        log.info(
+            "TRACE-SAVE: prepare_trace_rows finished dataset_id=%s rows=%d duration=%.2fs",
+            dataset_id,
+            len(trace_rows),
+            time.perf_counter() - trace_prep_start,
+        )
         if trace_rows:
-            store.conn.executemany(
-                """
-                INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                trace_rows,
+            log.info(
+                "TRACE-SAVE: inserting %d trace rows into DB for dataset_id=%s",
+                len(trace_rows),
+                dataset_id,
+            )
+            TRACE_INSERT_TIMEOUT = 180  # seconds; adjust if needed
+
+            try:
+                with timeout(TRACE_INSERT_TIMEOUT):
+                    store.conn.executemany(
+                        """
+                        INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        trace_rows,
+                    )
+            except TimeoutError:
+                log.error(
+                    "TRACE-SAVE: trace insert timed out for dataset_id=%s after %ss "
+                    "(rows=%d) - likely slow/locked storage backend",
+                    dataset_id,
+                    TRACE_INSERT_TIMEOUT,
+                    len(trace_rows),
+                    exc_info=True,
+                )
+                raise
+
+            log.info(
+                "TRACE-SAVE: insert completed for dataset_id=%s (rows=%d)",
+                dataset_id,
+                len(trace_rows),
             )
 
         if events_df is not None and not events_df.empty:
@@ -348,6 +466,11 @@ def add_dataset(
             log.debug("Prepared %d event rows for dataset_id=%s", len(event_rows), dataset_id)
             if event_rows:
                 log.debug("Executing SQL INSERT for %d events", len(event_rows))
+                log.info(
+                    "TRACE-SAVE: inserting %d event rows into DB for dataset_id=%s",
+                    len(event_rows),
+                    dataset_id,
+                )
                 store.conn.executemany(
                     (
                         "INSERT INTO event("
@@ -355,6 +478,11 @@ def add_dataset(
                         ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     ),
                     event_rows,
+                )
+                log.info(
+                    "TRACE-SAVE: event insert completed for dataset_id=%s rows=%d",
+                    dataset_id,
+                    len(event_rows),
                 )
                 log.debug("SQL INSERT completed for %d events", len(event_rows))
 
@@ -387,6 +515,12 @@ def add_dataset(
             )
 
     store.mark_dirty()
+    log.info(
+        "TRACE-SAVE: dataset_id=%s transaction committed name=%s elapsed=%.2fs",
+        dataset_id,
+        name,
+        time.perf_counter() - dataset_timer,
+    )
     return dataset_id
 
 

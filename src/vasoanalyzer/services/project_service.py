@@ -549,7 +549,17 @@ class SQLiteProjectRepository(ProjectRepository):
         return list(sqlite_store.iter_datasets(self._store))
 
     def save(self, *, skip_optimize: bool = False) -> None:
+        log.info(
+            "SAVE: SQLiteProjectRepository.save entry path=%s skip_optimize=%s",
+            getattr(self._store, "path", None),
+            skip_optimize,
+        )
         sqlite_store.save_project(self._store, skip_optimize=skip_optimize)
+        log.info(
+            "SAVE: SQLiteProjectRepository.save completed path=%s skip_optimize=%s",
+            getattr(self._store, "path", None),
+            skip_optimize,
+        )
 
     @property
     def store(self) -> sqlite_store.ProjectStore:

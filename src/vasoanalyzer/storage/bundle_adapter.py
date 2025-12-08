@@ -89,6 +89,9 @@ class ProjectHandle:
     is_container: bool = False
     container_path: Path | None = None
     temp_bundle_root: Path | None = None
+    is_cloud_path: bool = False
+    cloud_service: str | None = None
+    journal_mode: str | None = None
 
     def __post_init__(self):
         # Register cleanup on process exit
@@ -146,6 +149,20 @@ def _cleanup_all_handles():
             log.warning(f"Error closing handle during shutdown: {e}")
 
 
+def _detect_cloud_storage(path: Path) -> tuple[bool, str | None]:
+    """
+    Determine whether the project path resides in cloud storage.
+
+    The import is local to avoid import cycles when core.project imports this adapter.
+    """
+    try:
+        from vasoanalyzer.core.project import _is_cloud_storage_path
+
+        return _is_cloud_storage_path(path.as_posix())
+    except Exception:
+        return False, None
+
+
 # =============================================================================
 # Open / Create Project
 # =============================================================================
@@ -200,6 +217,8 @@ def open_project_handle(
         if was_migrated:
             log.info(f"Project auto-migrated to bundle format: {path}")
 
+    is_cloud_path, cloud_service = _detect_cloud_storage(Path(path))
+
     # Detect format
     fmt = detect_project_format(path)
     is_bundle = fmt in ("bundle-v1", "zip-bundle-v1")
@@ -216,7 +235,12 @@ def open_project_handle(
         temp_root = bundle_root.parent  # Get the temp directory root
 
         # Open the unpacked bundle
-        handle, conn = _open_bundle_handle(bundle_root, readonly=readonly)
+        handle, conn = _open_bundle_handle(
+            bundle_root,
+            readonly=readonly,
+            is_cloud_path=is_cloud_path,
+            cloud_service=cloud_service,
+        )
 
         # Update handle to track container info
         handle.is_container = True
@@ -226,9 +250,20 @@ def open_project_handle(
         return handle, conn
 
     elif is_bundle:
-        return _open_bundle_handle(path, readonly=readonly)
+        return _open_bundle_handle(
+            path,
+            readonly=readonly,
+            is_cloud_path=is_cloud_path,
+            cloud_service=cloud_service,
+        )
     else:
-        return _open_legacy_handle(path, readonly=readonly, fmt=fmt)
+        return _open_legacy_handle(
+            path,
+            readonly=readonly,
+            fmt=fmt,
+            is_cloud_path=is_cloud_path,
+            cloud_service=cloud_service,
+        )
 
 
 def create_project_handle(
@@ -272,6 +307,7 @@ def create_project_handle(
             # Ensure path has .vaso extension
             if path.suffix != ".vaso":
                 path = path.with_suffix(".vaso")
+            is_cloud_path, cloud_service = _detect_cloud_storage(path)
 
             # Create temp bundle
             with tempfile.TemporaryDirectory(prefix="VasoAnalyzer-create-") as temp_dir:
@@ -282,17 +318,23 @@ def create_project_handle(
                 create_bundle(bundle_root)
 
                 # Initialize schema in bundle
-                staging_path, staging_conn = open_staging_db(bundle_root)
+                staging_path, staging_conn = open_staging_db(
+                    bundle_root,
+                    use_cloud_safe=bool(is_cloud_path),
+                    cloud_service=cloud_service,
+                )
                 try:
                     from ..storage.sqlite import projects as _projects
 
                     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    _projects.ensure_schema(staging_conn, schema_version=3, now=now)
+                    _projects.ensure_schema(staging_conn, schema_version=4, now=now)
                     staging_conn.commit()
 
-                    # Checkpoint WAL to ensure all data is in main database file
-                    staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    staging_conn.commit()
+                    journal_mode = staging_conn.execute("PRAGMA journal_mode").fetchone()[0]
+                    # Checkpoint WAL to ensure all data is in main database file (only relevant for WAL mode)
+                    if str(journal_mode).upper() == "WAL":
+                        staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        staging_conn.commit()
                 finally:
                     staging_conn.close()
 
@@ -312,22 +354,29 @@ def create_project_handle(
             # Ensure path has .vasopack extension
             if path.suffix != ".vasopack":
                 path = path.with_suffix(".vasopack")
+            is_cloud_path, cloud_service = _detect_cloud_storage(path)
 
             # Create bundle
             create_bundle(path)
 
             # Initialize schema in new bundle
-            staging_path, staging_conn = open_staging_db(path)
+            staging_path, staging_conn = open_staging_db(
+                path,
+                use_cloud_safe=bool(is_cloud_path),
+                cloud_service=cloud_service,
+            )
             try:
                 from ..storage.sqlite import projects as _projects
 
                 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                _projects.ensure_schema(staging_conn, schema_version=3, now=now)
+                _projects.ensure_schema(staging_conn, schema_version=4, now=now)
                 staging_conn.commit()
 
+                journal_mode = staging_conn.execute("PRAGMA journal_mode").fetchone()[0]
                 # Checkpoint WAL to ensure all data is in main database file
-                staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                staging_conn.commit()
+                if str(journal_mode).upper() == "WAL":
+                    staging_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    staging_conn.commit()
             finally:
                 staging_conn.close()
 
@@ -335,12 +384,18 @@ def create_project_handle(
             create_snapshot(path, staging_path)
 
             # Open the bundle (will have existing staging DB and snapshot)
-            return _open_bundle_handle(path, readonly=False)
+            return _open_bundle_handle(
+                path,
+                readonly=False,
+                is_cloud_path=is_cloud_path,
+                cloud_service=cloud_service,
+            )
     else:
         # Create legacy single-file project
         # Ensure path has .vaso extension
         if path.suffix != ".vaso":
             path = path.with_suffix(".vaso")
+        is_cloud_path, cloud_service = _detect_cloud_storage(path)
 
         # Create empty database
         conn = sqlite3.connect(path, timeout=30.0)
@@ -348,8 +403,12 @@ def create_project_handle(
         # Initialize schema (this is normally done by the ProjectRepository)
         from ..storage.sqlite import projects as _projects
 
+        pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud_path else _projects.apply_default_pragmas
+        pragma_fn(conn)
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        _projects.ensure_schema(conn, schema_version=3, now=now)
+        _projects.ensure_schema(conn, schema_version=4, now=now)
 
         handle = ProjectHandle(
             path=path,
@@ -360,6 +419,9 @@ def create_project_handle(
             staging_path=None,
             staging_conn=conn,
             snapshot_on_save=False,
+            is_cloud_path=bool(is_cloud_path),
+            cloud_service=cloud_service,
+            journal_mode=str(journal_mode).upper() if journal_mode else None,
         )
 
         _open_handles[id(handle)] = handle
@@ -367,9 +429,18 @@ def create_project_handle(
 
 
 def _open_bundle_handle(
-    bundle_path: Path, *, readonly: bool = False
+    bundle_path: Path,
+    *,
+    readonly: bool = False,
+    is_cloud_path: bool | None = None,
+    cloud_service: str | None = None,
 ) -> tuple[ProjectHandle, sqlite3.Connection]:
     """Open bundle project and create staging database."""
+
+    if is_cloud_path is None or cloud_service is None:
+        detected_cloud, detected_service = _detect_cloud_storage(bundle_path)
+        is_cloud_path = detected_cloud if is_cloud_path is None else is_cloud_path
+        cloud_service = detected_service if cloud_service is None else cloud_service
 
     # Open bundle (validates structure, acquires lock)
     bundle_info = open_bundle(bundle_path, readonly=readonly)
@@ -386,6 +457,10 @@ def _open_bundle_handle(
             raise ValueError(f"Bundle has no snapshots: {bundle_path}")
 
         conn = sqlite3.connect(f"file:{current_snapshot.path}?mode=ro", uri=True, timeout=10.0)
+        journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+        journal_mode = (
+            str(journal_mode_row[0]).upper() if journal_mode_row and journal_mode_row[0] else None
+        )
 
         handle = ProjectHandle(
             path=bundle_path,
@@ -396,13 +471,21 @@ def _open_bundle_handle(
             staging_path=None,
             staging_conn=conn,
             snapshot_on_save=False,
+            is_cloud_path=bool(is_cloud_path),
+            cloud_service=cloud_service,
+            journal_mode=journal_mode,
         )
         connection = conn
 
     else:
         # Write mode: create staging database from current snapshot (or empty if new)
         init_from = current_snapshot.path if current_snapshot is not None else None
-        staging_path, staging_conn = open_staging_db(bundle_path, initialize_from=init_from)
+        staging_path, staging_conn = open_staging_db(
+            bundle_path,
+            initialize_from=init_from,
+            use_cloud_safe=bool(is_cloud_path),
+            cloud_service=cloud_service,
+        )
 
         # If this is a brand new bundle (no snapshots), initialize the schema
         if current_snapshot is None:
@@ -410,7 +493,12 @@ def _open_bundle_handle(
             from ..storage.sqlite import projects as _projects
 
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            _projects.ensure_schema(staging_conn, schema_version=3, now=now)
+            _projects.ensure_schema(staging_conn, schema_version=4, now=now)
+
+        journal_mode_row = staging_conn.execute("PRAGMA journal_mode").fetchone()
+        journal_mode = (
+            str(journal_mode_row[0]).upper() if journal_mode_row and journal_mode_row[0] else None
+        )
 
         handle = ProjectHandle(
             path=bundle_path,
@@ -421,6 +509,9 @@ def _open_bundle_handle(
             staging_path=staging_path,
             staging_conn=staging_conn,
             snapshot_on_save=True,
+            is_cloud_path=bool(is_cloud_path),
+            cloud_service=cloud_service,
+            journal_mode=journal_mode,
         )
         connection = staging_conn
 
@@ -429,18 +520,34 @@ def _open_bundle_handle(
 
 
 def _open_legacy_handle(
-    vaso_path: Path, *, readonly: bool = False, fmt: str = "sqlite-v3"
+    vaso_path: Path,
+    *,
+    readonly: bool = False,
+    fmt: str = "sqlite-v3",
+    is_cloud_path: bool | None = None,
+    cloud_service: str | None = None,
 ) -> tuple[ProjectHandle, sqlite3.Connection]:
     """Open legacy .vaso file directly."""
 
+    if is_cloud_path is None or cloud_service is None:
+        detected_cloud, detected_service = _detect_cloud_storage(vaso_path)
+        is_cloud_path = detected_cloud if is_cloud_path is None else is_cloud_path
+        cloud_service = detected_service if cloud_service is None else cloud_service
+
     if readonly:
         conn = sqlite3.connect(f"file:{vaso_path}?mode=ro", uri=True, timeout=10.0)
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
+        journal_mode_val = str(journal_mode[0]).upper() if journal_mode and journal_mode[0] else None
     else:
         conn = sqlite3.connect(vaso_path, timeout=30.0)
-        # Set up optimal settings
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        conn.execute("PRAGMA foreign_keys=ON")
+        from ..storage.sqlite import projects as _projects
+
+        pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud_path else _projects.apply_default_pragmas
+        pragma_fn(conn)
+        journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+        journal_mode_val = (
+            str(journal_mode_row[0]).upper() if journal_mode_row and journal_mode_row[0] else None
+        )
 
     handle = ProjectHandle(
         path=vaso_path,
@@ -451,6 +558,9 @@ def _open_legacy_handle(
         staging_path=None,
         staging_conn=conn,
         snapshot_on_save=False,
+        is_cloud_path=bool(is_cloud_path),
+        cloud_service=cloud_service,
+        journal_mode=journal_mode_val,
     )
 
     _open_handles[id(handle)] = handle

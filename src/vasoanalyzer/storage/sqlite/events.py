@@ -111,17 +111,33 @@ def prepare_event_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
             df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
 
     rows = []
+    # CRITICAL FIX (Bug #1): Exclude review_state from extra_cols since it needs special handling
     extra_cols = [
         c
         for c in df_local.columns
-        if c not in {"t_seconds", "label", "frame", "p_avg", "p1", "p2", "temp"}
+        if c not in {"t_seconds", "label", "frame", "p_avg", "p1", "p2", "temp", "review_state"}
     ]
     for _, row in df_local.iterrows():
         extra_json = None
+        payload = {}
+
+        # CRITICAL FIX: Always include review_state in extra_json
+        review_state = row.get("review_state", "UNREVIEWED")
+        if pd.notna(review_state):
+            payload["review_state"] = str(review_state)
+        else:
+            payload["review_state"] = "UNREVIEWED"
+
+        # Include other extra columns
         if extra_cols:
-            payload = {c: row.get(c) for c in extra_cols if pd.notna(row.get(c))}
-            if payload:
-                extra_json = json.dumps(payload)
+            for c in extra_cols:
+                val = row.get(c)
+                if pd.notna(val):
+                    payload[c] = val
+
+        if payload:
+            extra_json = json.dumps(payload, ensure_ascii=False)
+
         rows.append(
             (
                 dataset_id,
@@ -163,8 +179,23 @@ def fetch_events_dataframe(
     df = pd.read_sql_query(" ".join(query), conn, params=params)
     if not df.empty and "extra_json" in df.columns:
         extras = []
+        review_states = []  # CRITICAL FIX (Bug #1): Extract review states separately
+
         for payload in df["extra_json"]:
-            extras.append(json.loads(payload) if isinstance(payload, str) and payload else {})
+            extra_dict = json.loads(payload) if isinstance(payload, str) and payload else {}
+
+            # CRITICAL FIX: Extract review_state and add as top-level column
+            review_state = extra_dict.pop("review_state", "UNREVIEWED")
+            review_states.append(review_state)
+
+            extras.append(extra_dict)
+
         df = df.drop(columns=["extra_json"])
+        df["review_state"] = review_states  # Add as top-level column
         df["extra"] = extras
+    else:
+        # If no extra_json column exists, add default review_state
+        if not df.empty:
+            df["review_state"] = "UNREVIEWED"
+
     return df

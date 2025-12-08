@@ -1799,21 +1799,41 @@ class PyQtGraphPlotHost(InteractionHost):
                 log.debug("Click handler failed for track %s", track_id, exc_info=True)
 
     def zoom_at(self, center: float, factor: float) -> None:
-        """Zoom around a given time coordinate."""
-        window = self.current_window()
-        if window is None:
-            window = self.full_range()
-        if window is None:
+        """Zoom X-axis around current view center using viewRange() + setXRange().
+
+        This is the canonical approach per PyQtGraph docs: read current range
+        with viewRange(), calculate new range, then apply with setXRange().
+
+        Args:
+            center: Center point (unused - zoom is always around current center)
+            factor: Scale factor where:
+                - factor < 1.0 zooms in (e.g., 0.5 = 2x zoom in)
+                - factor > 1.0 zooms out (e.g., 2.0 = 2x zoom out)
+        """
+        if not self._tracks:
             return
-        x0, x1 = window
-        span = x1 - x0
-        if span <= 0:
-            return
-        new_span = max(span * factor, 1e-6)
-        half = new_span / 2.0
-        new_x0 = center - half
-        new_x1 = center + half
-        self.set_time_window(new_x0, new_x1)
+
+        # Get current X range from the first (primary) track using viewRange()
+        first_track = next(iter(self._tracks.values()))
+        plot_item = first_track.view.get_widget().getPlotItem()
+        view_box = plot_item.getViewBox()
+        (x_min, x_max), _ = view_box.viewRange()
+
+        # Calculate new X range: zoom around the current center
+        x_center = 0.5 * (x_min + x_max)
+        half_span = 0.5 * (x_max - x_min) * factor
+        new_x_min = x_center - half_span
+        new_x_max = x_center + half_span
+
+        # Apply new X range to the primary ViewBox using setXRange()
+        # X-links will propagate this to all other tracks automatically
+        view_box.setXRange(new_x_min, new_x_max, padding=0.0)
+
+        # Update internal state
+        self._current_window = (new_x_min, new_x_max)
+
+        # Notify listeners about the window change
+        self._notify_time_window_changed()
 
     def scroll_by(self, delta: float) -> None:
         """Scroll the current time window by delta seconds."""

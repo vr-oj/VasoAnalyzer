@@ -49,8 +49,9 @@ SQLITE_MAGIC = b"SQLite format 3\x00"
 # Temp directory prefix
 TEMP_DIR_PREFIX = "VasoAnalyzer-container-"
 
-# Maximum age for stale temp directories (24 hours)
-TEMP_DIR_MAX_AGE = 86400
+# CRITICAL FIX (Vulnerability #7): Reduced from 24 hours to 1 hour
+# Maximum age for stale temp directories (1 hour)
+TEMP_DIR_MAX_AGE = 3600
 
 
 # =============================================================================

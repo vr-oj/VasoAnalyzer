@@ -239,7 +239,17 @@ def _build_pyqtgraph_plot_toolbar(
     window.actZoomOut.triggered.connect(window._on_zoom_out_triggered)
     toolbar.addAction(window.actZoomOut)
 
-    window.actAutoscale = QAction(QIcon(window.icon_path("Home.svg")), "Autoscale", window)
+    window.actZoomBack = QAction(QIcon(window.icon_path("Back.svg")), "Zoom Back", window)
+    window.actZoomBack.setShortcut(QKeySequence("Backspace"))
+    window.actZoomBack.setToolTip(
+        "<b>Zoom Back</b> <kbd>Backspace</kbd><br><br>"
+        "Step back through zoom history.<br>"
+        "Returns to previous view state."
+    )
+    window.actZoomBack.triggered.connect(window._on_zoom_back_triggered)
+    toolbar.addAction(window.actZoomBack)
+
+    window.actAutoscale = QAction(QIcon(window.icon_path("autoscale.svg")), "Autoscale", window)
     window.actAutoscale.setShortcut(QKeySequence("A"))
     window.actAutoscale.setToolTip(
         "<b>Autoscale</b> <kbd>A</kbd><br><br>"
@@ -250,7 +260,7 @@ def _build_pyqtgraph_plot_toolbar(
     toolbar.addAction(window.actAutoscale)
 
     window.actAutoscaleY = QAction(
-        QIcon(window.icon_path("Grid.svg")), "Y-Axis Autoscale", window
+        QIcon(window.icon_path("y-autoscale.svg")), "Y-Axis Autoscale", window
     )
     window.actAutoscaleY.setCheckable(True)
     window.actAutoscaleY.setShortcut(QKeySequence("Y"))
@@ -383,8 +393,9 @@ def _reassign_toolbar_icons(toolbar: CustomToolbar, window: VasoAnalyzerApp) -> 
     extras = {
         getattr(window, "actZoomIn", None): "Zoom.svg",
         getattr(window, "actZoomOut", None): "ZoomOut.svg",
-        getattr(window, "actAutoscale", None): "Home.svg",
-        getattr(window, "actAutoscaleY", None): "Grid.svg",
+        getattr(window, "actZoomBack", None): "Back.svg",
+        getattr(window, "actAutoscale", None): "autoscale.svg",
+        getattr(window, "actAutoscaleY", None): "y-autoscale.svg",
         getattr(window, "actPgPan", None): "Pan.svg",
         getattr(window, "actBoxZoom", None): "Zoom.svg",
         getattr(window, "actGrid", None): "Grid.svg",

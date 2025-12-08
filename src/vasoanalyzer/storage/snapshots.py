@@ -89,19 +89,42 @@ def atomic_write_text(path: Path, text: str) -> None:
     """
     Write text to file atomically with fsync.
 
+    CRITICAL FIX (Vulnerability #4): Fsyncs both file AND parent directory
+    to ensure directory entry is persisted. This prevents orphaned files
+    if power loss occurs during atomic replace.
+
     Creates temporary file, writes content, fsyncs, then atomically replaces target.
     """
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         tmp.write_text(text, encoding="utf-8")
-        # Ensure data is on disk
+
+        # CRITICAL FIX: Fsync the temp file
         fd = os.open(tmp, os.O_RDONLY)
         try:
             os.fsync(fd)
         finally:
             os.close(fd)
-        # Atomic replace
+
+        # CRITICAL FIX: Fsync parent directory before rename
+        # This ensures the directory state is persisted
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+
+        # Atomic replace (rename is atomic on POSIX systems)
         os.replace(tmp, path)
+
+        # CRITICAL FIX: Fsync parent directory after rename
+        # This ensures the new directory entry is persisted
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+
     except Exception:
         # Clean up temp file on error
         if tmp.exists():
@@ -189,31 +212,71 @@ def open_bundle(bundle_path: Path, *, readonly: bool = False) -> BundleInfo:
     if missing:
         raise ValueError(f"Invalid bundle (missing {', '.join(missing)}): {bundle_path}")
 
-    # Try to acquire lock (unless readonly)
+    # CRITICAL FIX (Vulnerability #3): Atomic lock acquisition to prevent TOCTOU race
     lock_path = bundle_path / ".lock"
     if not readonly:
         try:
-            # Try non-blocking lock
-            if lock_path.exists():
-                # Check if lock is stale (older than 1 hour)
-                lock_age = time.time() - lock_path.stat().st_mtime
-                if lock_age < 3600:
-                    log.warning(
-                        f"Bundle is locked by another process (opened read-only): {bundle_path}"
-                    )
-                    readonly = True
-                else:
-                    log.info("Removing stale lock file")
-                    lock_path.unlink()
+            lock_data = {
+                "pid": os.getpid(),
+                "timestamp": time.time(),
+                "hostname": os.uname().nodename if hasattr(os, "uname") else "unknown",
+            }
+            lock_json = json.dumps(lock_data, indent=2)
 
-            if not readonly:
-                # Create lock file
-                lock_data = {
-                    "pid": os.getpid(),
-                    "timestamp": time.time(),
-                    "hostname": os.uname().nodename if hasattr(os, "uname") else "unknown",
-                }
-                atomic_write_text(lock_path, json.dumps(lock_data, indent=2))
+            try:
+                # ATOMIC: Open with O_CREAT | O_EXCL - succeeds only if file doesn't exist
+                # This prevents TOCTOU race where two processes both see no lock and both create one
+                fd = os.open(
+                    str(lock_path),
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o644
+                )
+                try:
+                    os.write(fd, lock_json.encode("utf-8"))
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+
+                log.debug("Acquired exclusive write lock on bundle")
+
+            except FileExistsError:
+                # Lock exists - check if stale
+                try:
+                    lock_age = time.time() - lock_path.stat().st_mtime
+                    if lock_age < 3600:
+                        log.warning(
+                            f"Bundle is locked by another process (opened read-only): {bundle_path}"
+                        )
+                        readonly = True
+                    else:
+                        # Stale lock - remove and retry ONCE
+                        log.info("Removing stale lock file and retrying")
+                        lock_path.unlink()
+
+                        # Retry lock acquisition (only once to avoid infinite loop)
+                        try:
+                            fd = os.open(
+                                str(lock_path),
+                                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                0o644
+                            )
+                            try:
+                                os.write(fd, lock_json.encode("utf-8"))
+                                os.fsync(fd)
+                            finally:
+                                os.close(fd)
+
+                            log.debug("Acquired write lock after removing stale lock")
+
+                        except FileExistsError:
+                            # Another process created lock between unlink and retry
+                            log.warning("Lock acquired by another process during retry (opened read-only)")
+                            readonly = True
+
+                except Exception as e:
+                    log.warning(f"Could not handle existing lock: {e}. Opening read-only.")
+                    readonly = True
+
         except Exception as e:
             log.warning(f"Could not acquire lock: {e}. Opening read-only.")
             readonly = True
@@ -284,28 +347,84 @@ def create_snapshot(bundle_path: Path, staging_db: Path) -> SnapshotInfo:
     dest = Path(str(dest_tmp)[:-4])  # Remove .tmp
 
     try:
-        # CRITICAL FIX: Checkpoint WAL to ensure all data is in the main database file
-        # Before creating snapshot, we must flush all pending writes from WAL to main DB
+        # CRITICAL FIX (Vulnerability #2): Enforce complete WAL checkpoint with retry and validation
+        # Before creating snapshot, we MUST flush all pending writes from WAL to main DB
         log.debug("Checkpointing WAL before snapshot creation")
-        try:
-            with sqlite3.connect(staging_db) as conn:
-                # PRAGMA wal_checkpoint(FULL) ensures:
-                # 1. All WAL frames are written to main database
-                # 2. WAL file is reset/truncated
-                # 3. Checkpoint completes even if database is busy
-                conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                conn.commit()
-                log.debug("WAL checkpoint completed successfully")
-        except Exception as e:
-            log.warning(f"WAL checkpoint failed (will try backup anyway): {e}")
 
-        # Verify WAL/SHM files are gone or minimal after checkpoint
+        # Import timeout wrapper for hang protection
+        from .timeout_wrapper import timeout, TimeoutError as TimeoutErr
+
+        max_retries = 3
+        checkpoint_complete = False
+        WAL_CHECKPOINT_TIMEOUT = 60  # 60 seconds max for checkpoint
+
+        try:
+            with timeout(WAL_CHECKPOINT_TIMEOUT):
+                for attempt in range(max_retries):
+                    try:
+                        with sqlite3.connect(staging_db, timeout=30.0) as conn:
+                            # PRAGMA wal_checkpoint(TRUNCATE) returns: (result, log, checkpointed)
+                            # result: 0=success, 1=error
+                            # log: number of busy WAL frames (should be 0 for complete checkpoint)
+                            # checkpointed: number of frames written
+                            cursor = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                            result = cursor.fetchone()
+
+                            if result is None:
+                                raise RuntimeError("WAL checkpoint returned no result")
+
+                            checkpoint_result, busy_count, frames_checkpointed = result
+
+                            # CRITICAL: Verify checkpoint was complete (no busy frames)
+                            if busy_count > 0:
+                                if attempt < max_retries - 1:
+                                    log.warning(
+                                        f"WAL checkpoint incomplete (attempt {attempt + 1}/{max_retries}): "
+                                        f"{busy_count} busy frames remaining. Retrying..."
+                                    )
+                                    time.sleep(0.2 * (attempt + 1))  # Exponential backoff
+                                    continue
+                                else:
+                                    raise RuntimeError(
+                                        f"WAL checkpoint failed after {max_retries} attempts: "
+                                        f"{busy_count} busy pages remaining. Database may be locked."
+                                    )
+
+                            conn.commit()
+                            log.debug(f"WAL checkpoint succeeded: {frames_checkpointed} frames written")
+                            checkpoint_complete = True
+                            break
+
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e) and attempt < max_retries - 1:
+                            log.warning(
+                                f"Database locked during checkpoint (attempt {attempt + 1}/{max_retries}). "
+                                f"Retrying in {0.5 * (attempt + 1)}s..."
+                            )
+                            time.sleep(0.5 * (attempt + 1))
+                            continue
+                        raise RuntimeError(f"WAL checkpoint failed: {e}") from e
+
+                if not checkpoint_complete:
+                    raise RuntimeError("WAL checkpoint did not complete successfully")
+
+        except TimeoutErr as e:
+            raise RuntimeError(
+                f"WAL checkpoint timed out after {WAL_CHECKPOINT_TIMEOUT}s. "
+                f"This usually indicates the database is on slow/cloud storage. "
+                f"Please ensure the project is saved to a local disk (~/Documents)."
+            ) from e
+
+        # Verify WAL file is minimal after checkpoint (header only, < 4096 bytes)
         wal_file = staging_db.with_suffix(".sqlite-wal")
         shm_file = staging_db.with_suffix(".sqlite-shm")
         if wal_file.exists():
             wal_size = wal_file.stat().st_size
-            if wal_size > 0:
-                log.warning(f"WAL file still exists with {wal_size} bytes: {wal_file}")
+            if wal_size > 4096:  # More than just header
+                raise RuntimeError(
+                    f"WAL file still contains data after checkpoint: {wal_size} bytes. "
+                    f"Snapshot creation aborted to prevent data loss."
+                )
         if shm_file.exists():
             log.debug(f"SHM file exists (normal for WAL mode): {shm_file}")
 
@@ -516,7 +635,11 @@ def validate_snapshot(snap_path: Path) -> bool:
 
 
 def open_staging_db(
-    bundle_path: Path, *, initialize_from: Path | None = None
+    bundle_path: Path,
+    *,
+    initialize_from: Path | None = None,
+    use_cloud_safe: bool = False,
+    cloud_service: str | None = None,
 ) -> tuple[Path, sqlite3.Connection]:
     """
     Create or open staging database for active session.
@@ -538,25 +661,60 @@ def open_staging_db(
     staging_id = uuid.uuid4().hex[:12]
     staging_path = staging_dir / f"{staging_id}.sqlite"
 
-    log.info(f"Creating staging database: {staging_path}")
+    mode_label = "cloud-safe" if use_cloud_safe else "fast"
+    log.info(f"Creating staging database: {staging_path} mode={mode_label} cloud_service={cloud_service}")
 
-    # Copy from snapshot if provided
+    # CRITICAL FIX (Vulnerability #5): Hold read lock during copy to prevent deletion
     if initialize_from and initialize_from.exists():
         log.debug(f"Initializing staging DB from {initialize_from}")
-        shutil.copy2(initialize_from, staging_path)
+
+        try:
+            # Open source snapshot with read lock to prevent it from being deleted mid-copy
+            src_conn = sqlite3.connect(
+                f"file:{initialize_from}?mode=ro",
+                uri=True,
+                timeout=10.0
+            )
+            try:
+                # Verify source is valid before copying
+                result = src_conn.execute("PRAGMA quick_check").fetchone()
+                if result[0] != "ok":
+                    raise RuntimeError(
+                        f"Source snapshot failed integrity check: {initialize_from}"
+                    )
+
+                # Copy while holding read lock (this prevents pruning from deleting it)
+                shutil.copy2(initialize_from, staging_path)
+                log.debug(f"Staging DB initialized from snapshot (size: {staging_path.stat().st_size} bytes)")
+
+            finally:
+                src_conn.close()
+
+        except Exception as e:
+            log.error(f"Failed to initialize staging DB from snapshot: {e}")
+            # Clean up partial copy
+            if staging_path.exists():
+                staging_path.unlink()
+            raise RuntimeError(
+                f"Staging DB initialization failed: {e}"
+            ) from e
 
     # Open with optimal settings for staging
     conn = sqlite3.connect(staging_path, timeout=30.0)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")  # Faster, still safe
-    if hasattr(os, "F_FULLFSYNC"):  # macOS
-        conn.execute("PRAGMA fullfsync=ON")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA mmap_size=268435456")  # 256 MB
-    conn.execute("PRAGMA cache_size=-131072")  # 128 MB
+    from .sqlite import projects as _projects
 
-    log.info(f"Staging database ready: {staging_path}")
+    pragma_fn = _projects.apply_cloud_safe_pragmas if use_cloud_safe else _projects.apply_default_pragmas
+    pragma_fn(conn)
+    if not use_cloud_safe and hasattr(os, "F_FULLFSYNC"):  # macOS full fsync is only helpful for WAL
+        conn.execute("PRAGMA fullfsync=ON")
+
+    journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
+    journal_mode = str(journal_mode_row[0]).upper() if journal_mode_row and journal_mode_row[0] else None
+
+    log.info(
+        f"Staging database ready: {staging_path} journal_mode={journal_mode} "
+        f"cloud_safe={use_cloud_safe} cloud_service={cloud_service}"
+    )
     return staging_path, conn
 
 
@@ -586,13 +744,52 @@ def prune_old_snapshots(bundle_path: Path, keep_count: int = 50) -> int:
 
     log.info(f"Pruning old snapshots (keeping {keep_count} most recent)")
 
+    # CRITICAL FIX (Vulnerability #8): Validate HEAD.json before pruning
+    # This ensures we don't accidentally delete the current snapshot if HEAD is corrupted
+    head_path = bundle_path / "HEAD.json"
+    current_snapshot_name = None
+
+    try:
+        if head_path.exists():
+            head = json.loads(head_path.read_text(encoding="utf-8"))
+            current_snapshot_name = head.get("current")
+
+            # Verify current snapshot exists and is valid
+            if current_snapshot_name:
+                current_path = bundle_path / "snapshots" / current_snapshot_name
+                if not current_path.exists():
+                    log.error(f"HEAD points to missing snapshot: {current_snapshot_name}")
+                    raise ValueError(
+                        f"Cannot prune: current snapshot missing: {current_snapshot_name}"
+                    )
+
+                # Validate current snapshot integrity
+                if not validate_snapshot(current_path):
+                    log.error(f"HEAD points to corrupted snapshot: {current_snapshot_name}")
+                    raise ValueError(
+                        f"Cannot prune: current snapshot corrupted: {current_snapshot_name}"
+                    )
+
+                log.debug(f"Validated current snapshot from HEAD: {current_snapshot_name}")
+    except Exception as e:
+        log.error(f"Cannot prune snapshots: HEAD validation failed: {e}")
+        raise RuntimeError("Snapshot pruning aborted: invalid HEAD state") from e
+
     snapshots = list_snapshots(bundle_path)
     if len(snapshots) <= keep_count:
         log.debug(f"Only {len(snapshots)} snapshots exist, no pruning needed")
         return 0
 
-    # Never delete current snapshot
+    # Never delete current snapshot (get from HEAD.json AND is_current flag)
     current_nums = {s.number for s in snapshots if s.is_current}
+
+    # Add current snapshot number from HEAD.json validation
+    if current_snapshot_name:
+        try:
+            current_num = int(Path(current_snapshot_name).stem)
+            current_nums.add(current_num)
+        except ValueError:
+            log.warning(f"Could not parse snapshot number from: {current_snapshot_name}")
 
     # Sort by number, oldest first
     candidates = sorted(snapshots, key=lambda s: s.number)

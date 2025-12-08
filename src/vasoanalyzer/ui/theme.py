@@ -42,6 +42,11 @@ LIGHT_THEME = {
     "cursor_b": "#FF6B3D",
     "cursor_text": "#222222",
     "snapshot_bg": "#2B2B2B",
+    # Table-specific
+    "table_hover": "#F0F0F0",  # Row/cell hover background
+    "table_editable_hover": "#E6F0FF",  # Editable cell hover (light blue)
+    "table_focused_border": "#3366FF",  # Active cell border (blue)
+    "table_header_border": "#CCCCCC",  # Header separators
 }
 
 DARK_THEME = dict(LIGHT_THEME)
@@ -87,6 +92,11 @@ DARK_THEME.update(
         "warning_border": "#F97316",
         "warning_text": "#FDE68A",
         "snapshot_bg": "#1F2933",
+        # Table-specific
+        "table_hover": "#1E293B",  # Row/cell hover background
+        "table_editable_hover": "#172554",  # Editable cell hover (darker blue)
+        "table_focused_border": "#3B82F6",  # Active cell border (bright blue)
+        "table_header_border": "#1E293B",  # Header separators
     }
 )
 

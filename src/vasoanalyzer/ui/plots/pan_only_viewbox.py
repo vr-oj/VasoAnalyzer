@@ -13,10 +13,16 @@ log = logging.getLogger(__name__)
 
 
 class PanOnlyViewBox(pg.ViewBox):
-    """ViewBox that converts any wheel/trackpad scrolling into horizontal panning.
+    """ViewBox that converts wheel/trackpad scrolling into horizontal panning.
 
-    Zoom via wheel is completely disabled. Left-drag rectangle zoom is preserved
-    (default VB behavior) when in RectMode. Toolbar zoom buttons work independently.
+    Interaction model (per PyQtGraph docs + VasoAnalyzer spec):
+    - Wheel: horizontal pan (time scrub) - custom override below
+    - Left drag (PanMode): pan horizontally
+    - Right drag (PanMode): continuous zoom in X (PyQtGraph default behavior)
+    - Left drag (RectMode): box zoom (PyQtGraph default behavior)
+
+    Y-axis interactions are disabled (setMouseEnabled(y=False)) to keep
+    Y-axis control manual/autoscale-only via toolbar buttons.
     """
 
     sigWheelEvent = pyqtSignal(object)
@@ -29,10 +35,11 @@ class PanOnlyViewBox(pg.ViewBox):
         self._min_x_range: float | None = None
         self._max_x_range: float | None = None
 
-        # Default to horizontal panning only.
+        # Configure for horizontal interactions only (per PyQtGraph docs).
+        # PanMode: left drag = pan, right drag = zoom (both X-only due to setMouseEnabled).
         self.setMouseMode(pg.ViewBox.PanMode)
-        self.setMouseEnabled(x=True, y=False)
-        self.enableAutoRange(x=False, y=False)
+        self.setMouseEnabled(x=True, y=False)  # X interactions only
+        self.enableAutoRange(x=False, y=False)  # Manual range control by default
 
     def set_time_limits(
         self,
