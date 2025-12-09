@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: vasoanalyzer
-Version: 0.1.0
+Version: 2.3.0
 Summary: Developer tooling and tests for the VasoAnalyzer application.
 Author: Osvaldo J. Vega Rodríguez
 License: CC BY-NC-SA 4.0
@@ -17,7 +17,7 @@ Requires-Dist: mypy>=1.8.0; extra == "dev"
 Requires-Dist: types-requests>=2.32.0.20240712; extra == "dev"
 Dynamic: license-file
 
-# VasoAnalyzer v2.2.5
+# VasoAnalyzer v2.3.0
 
 **Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
 

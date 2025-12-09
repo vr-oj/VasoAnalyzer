@@ -15,10 +15,16 @@ class StylePreset:
     width_in: float
     height_in: float
     base_font_size: float
+    title_size: float
     axis_label_size: float
     tick_label_size: float
     legend_size: float
+    annotation_size: float
     default_linewidth: float
+    axis_spine_width: float
+    tick_direction: str
+    tick_major_length: float
+    tick_minor_length: float
     export_dpi: int
 
 
@@ -29,10 +35,16 @@ STYLE_PRESETS: Dict[str, StylePreset] = {
         width_in=5.9,
         height_in=3.0,
         base_font_size=8.0,
+        title_size=10.0,
         axis_label_size=9.0,
         tick_label_size=7.0,
         legend_size=7.0,
+        annotation_size=8.0,
         default_linewidth=1.5,
+        axis_spine_width=1.0,
+        tick_direction="out",
+        tick_major_length=3.5,
+        tick_minor_length=2.0,
         export_dpi=600,
     ),
     "Journal single-column": StylePreset(
@@ -41,10 +53,16 @@ STYLE_PRESETS: Dict[str, StylePreset] = {
         width_in=3.4,
         height_in=3.0,
         base_font_size=8.0,
+        title_size=10.0,
         axis_label_size=9.0,
         tick_label_size=7.0,
         legend_size=7.0,
+        annotation_size=8.0,
         default_linewidth=1.2,
+        axis_spine_width=0.9,
+        tick_direction="out",
+        tick_major_length=3.5,
+        tick_minor_length=2.0,
         export_dpi=600,
     ),
     "Journal double-column": StylePreset(
@@ -53,10 +71,16 @@ STYLE_PRESETS: Dict[str, StylePreset] = {
         width_in=7.1,
         height_in=3.5,
         base_font_size=8.0,
+        title_size=10.0,
         axis_label_size=9.0,
         tick_label_size=7.0,
         legend_size=7.0,
+        annotation_size=8.0,
         default_linewidth=1.2,
+        axis_spine_width=1.0,
+        tick_direction="out",
+        tick_major_length=3.5,
+        tick_minor_length=2.0,
         export_dpi=600,
     ),
 }
@@ -70,9 +94,26 @@ def apply_style_preset(spec: FigureSpec, preset: StylePreset) -> None:
     font = getattr(spec, "font", None)
     if font is not None:
         font.base_size = preset.base_font_size
-        font.axis_label_size = preset.axis_label_size
-        font.tick_label_size = preset.tick_label_size
-        font.legend_size = preset.legend_size
+        if hasattr(font, "figure_title"):
+            font.figure_title.size = preset.title_size
+        if hasattr(font, "panel_label"):
+            font.panel_label.size = preset.axis_label_size
+        if hasattr(font, "axis_title"):
+            font.axis_title.size = preset.axis_label_size
+        if hasattr(font, "tick_label"):
+            font.tick_label.size = preset.tick_label_size
+        if hasattr(font, "legend"):
+            font.legend.size = preset.legend_size
+        if hasattr(font, "annotation"):
+            font.annotation.size = preset.annotation_size
+
+    style = getattr(spec, "style", None)
+    if style is not None:
+        style.default_linewidth = preset.default_linewidth
+        style.axis_spine_width = preset.axis_spine_width
+        style.tick_direction = preset.tick_direction
+        style.tick_major_length = preset.tick_major_length
+        style.tick_minor_length = preset.tick_minor_length
 
     spec.export.dpi = preset.export_dpi
 

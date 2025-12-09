@@ -13096,10 +13096,14 @@ QPushButton[isGhost="true"]:hover {{
         else:
             event_colors = None
 
+        dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
+
         # Launch the Pure Matplotlib composer
         window = PureMplFigureComposer(
             trace_model=self.trace_model,
             parent=self,
+            project=self.current_project,
+            dataset_id=dataset_id,
             event_times=event_times,
             event_labels=event_labels,
             event_colors=event_colors,

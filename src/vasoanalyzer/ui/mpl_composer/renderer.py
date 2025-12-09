@@ -10,12 +10,14 @@ No Qt imports are allowed in this module - it must remain pure Matplotlib.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable
+import string
+from typing import TYPE_CHECKING, Any, Callable, Dict, List
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches as mpatches
+from matplotlib.artist import Artist
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
@@ -26,9 +28,17 @@ if TYPE_CHECKING:
 
     from vasoanalyzer.core.trace_model import TraceModel
 
-    from .specs import AnnotationSpec, FigureSpec, GraphInstance, GraphSpec
+    from .specs import (
+        AnnotationSpec,
+        FigureSpec,
+        FontSpec,
+        GraphInstance,
+        GraphSpec,
+        PanelLabelSpec,
+        StyleSpec,
+    )
 
-__all__ = ["render_figure", "render_into_axes", "TraceModelProvider"]
+__all__ = ["render_figure", "render_into_axes", "create_annotation_artists", "TraceModelProvider"]
 
 log = logging.getLogger(__name__)
 
@@ -36,23 +46,159 @@ log = logging.getLogger(__name__)
 TraceModelProvider = Callable[[str], "TraceModel"]
 
 
-def _font_rc(spec: "FigureSpec") -> dict[str, Any]:
-    """Build rcParams overrides from the figure font spec."""
+def _rc_params(spec: "FigureSpec") -> dict[str, Any]:
+    """Build rcParams overrides from the figure font/style spec."""
     f = spec.font
-    return {
+    s: StyleSpec | None = getattr(spec, "style", None)
+    rc: dict[str, Any] = {
         "font.family": f.family,
-        "font.size": f.base_size,
-        "font.weight": f.weight,
-        "font.style": f.style,
-        "axes.labelsize": f.axis_label_size,
-        "xtick.labelsize": f.tick_label_size,
-        "ytick.labelsize": f.tick_label_size,
-        "legend.fontsize": f.legend_size,
+        "font.size": getattr(f, "base_size", f.tick_label.size if hasattr(f, "tick_label") else 8.0),
+        "axes.labelsize": getattr(getattr(f, "axis_title", None), "size", 9.0),
+        "xtick.labelsize": getattr(getattr(f, "tick_label", None), "size", 8.0),
+        "ytick.labelsize": getattr(getattr(f, "tick_label", None), "size", 8.0),
+        "legend.fontsize": getattr(getattr(f, "legend", None), "size", 8.0),
         "text.color": "#000000",
         "axes.labelcolor": "#000000",
         "xtick.color": "#000000",
         "ytick.color": "#000000",
     }
+    if s is not None:
+        rc.update(
+            {
+                "lines.linewidth": s.default_linewidth,
+                "axes.linewidth": s.axis_spine_width,
+                "xtick.direction": s.tick_direction,
+                "ytick.direction": s.tick_direction,
+                "xtick.major.size": s.tick_major_length,
+                "ytick.major.size": s.tick_major_length,
+                "xtick.minor.size": s.tick_minor_length,
+                "ytick.minor.size": s.tick_minor_length,
+            }
+        )
+    return rc
+
+
+def create_annotation_artists(
+    fig: Figure,
+    axes_map: Dict[str, "Axes"],
+    annot: "AnnotationSpec",
+    *,
+    figure_transform=None,
+    figure_axes: "Axes | Figure | None" = None,
+) -> List[Artist]:
+    """Create Matplotlib artist(s) for a single AnnotationSpec and attach them."""
+    artists: List[Artist] = []
+    figure_transform = figure_transform or fig.transFigure
+    figure_axes = figure_axes or fig
+
+    if annot.target_type == "graph" and annot.target_id:
+        ax = axes_map.get(annot.target_id)
+        if ax is None:
+            log.warning("Target axes %s not found for annotation %s", annot.target_id, annot.annotation_id)
+            return artists
+    else:
+        ax = None
+
+    if ax is None:
+        transform = figure_transform
+        target = figure_axes
+    elif annot.coord_system == "axes":
+        transform = ax.transAxes
+        target = ax
+    elif annot.coord_system == "figure":
+        transform = figure_transform
+        target = figure_axes
+    else:
+        transform = ax.transData
+        target = ax
+
+    zorder = getattr(annot, "zorder", 10)
+
+    if annot.kind == "text":
+        artist = target.text(
+            annot.x0,
+            annot.y0,
+            annot.text_content,
+            transform=transform,
+            fontfamily=annot.font_family,
+            fontsize=annot.font_size,
+            fontweight=annot.font_weight,
+            fontstyle=annot.font_style,
+            color=annot.color,
+            ha=annot.ha,
+            va=annot.va,
+            rotation=annot.rotation,
+            alpha=annot.alpha,
+            zorder=zorder,
+        )
+        artists.append(artist)
+    elif annot.kind == "box":
+        width = abs(annot.x1 - annot.x0)
+        height = abs(annot.y1 - annot.y0)
+        x = min(annot.x0, annot.x1)
+        y = min(annot.y0, annot.y1)
+
+        rect = mpatches.Rectangle(
+            (x, y),
+            width,
+            height,
+            transform=transform,
+            edgecolor=annot.edgecolor,
+            facecolor=annot.facecolor,
+            alpha=annot.alpha,
+            linewidth=annot.linewidth,
+            linestyle=annot.linestyle,
+            zorder=zorder,
+        )
+        if hasattr(target, "add_patch"):
+            target.add_patch(rect)
+        else:
+            fig.add_artist(rect)
+        artists.append(rect)
+    elif annot.kind == "arrow":
+        artist = target.annotate(
+            "",
+            xy=(annot.x1, annot.y1),
+            xytext=(annot.x0, annot.y0),
+            xycoords=transform,
+            textcoords=transform,
+            arrowprops=dict(
+                arrowstyle=annot.arrowstyle,
+                color=annot.color,
+                linewidth=annot.linewidth,
+                alpha=annot.alpha,
+                zorder=zorder,
+            ),
+        )
+        artists.append(artist)
+    elif annot.kind == "line":
+        if hasattr(target, "plot"):
+            lines = target.plot(
+                [annot.x0, annot.x1],
+                [annot.y0, annot.y1],
+                transform=transform,
+                color=annot.color,
+                linewidth=annot.linewidth,
+                linestyle=annot.linestyle,
+                alpha=annot.alpha,
+                zorder=zorder,
+            )
+            artists.extend(lines)
+        else:
+            line = Line2D(
+                [annot.x0, annot.x1],
+                [annot.y0, annot.y1],
+                transform=transform,
+                color=annot.color,
+                linewidth=annot.linewidth,
+                linestyle=annot.linestyle,
+                alpha=annot.alpha,
+                zorder=zorder,
+            )
+            fig.add_artist(line)
+            artists.append(line)
+
+    return artists
 
 
 def render_figure(
@@ -84,7 +230,7 @@ def render_figure(
     Note:
         This function has no Qt dependencies and can be used standalone.
     """
-    with mpl.rc_context(_font_rc(spec)):
+    with mpl.rc_context(_rc_params(spec)):
         # Create figure with exact physical size from spec
         fig = Figure(
             figsize=(spec.layout.width_in, spec.layout.height_in),
@@ -130,6 +276,8 @@ def render_figure(
                     gs,
                     instance,
                     spec.graphs,
+                    spec.font,
+                    spec.style,
                     trace_model_provider,
                     event_times,
                     event_labels,
@@ -159,10 +307,13 @@ def render_figure(
                 ax.axis("off")
                 axes_map[instance.instance_id] = ax
 
+        spec.layout._font_override = spec.font
+        _render_panel_labels(spec.layout, axes_map)
+
         # Render annotations
         for annot in spec.annotations:
             try:
-                _render_annotation(fig, annot, axes_map)
+                create_annotation_artists(fig, axes_map, annot)
             except Exception as e:
                 log.warning(f"Failed to render annotation {annot.annotation_id}: {e}")
 
@@ -188,7 +339,7 @@ def render_into_axes(
     """
     fig = ax.figure
 
-    with mpl.rc_context(_font_rc(spec)):
+    with mpl.rc_context(_rc_params(spec)):
         # Prepare the page container
         ax.set_facecolor("#ffffff")
         ax.set_box_aspect(max(spec.layout.height_in / max(spec.layout.width_in, 1e-6), 0.01))
@@ -231,6 +382,8 @@ def render_into_axes(
                     gs,
                     instance,
                     spec.graphs,
+                    spec.font,
+                    spec.style,
                     trace_model_provider,
                     event_times,
                     event_labels,
@@ -240,11 +393,8 @@ def render_into_axes(
             except Exception as exc:  # pragma: no cover - defensive for preview
                 log.error("Preview render failed for %s: %s", instance.instance_id, exc, exc_info=True)
 
-        for annot in spec.annotations:
-            try:
-                _render_annotation(fig, annot, axes_map, figure_transform=ax.transAxes, figure_axes=ax)
-            except Exception as exc:  # pragma: no cover - defensive for preview
-                log.warning("Failed to render preview annotation %s: %s", annot.annotation_id, exc)
+        spec.layout._font_override = spec.font
+        _render_panel_labels(spec.layout, axes_map)
 
         return axes_map
 
@@ -254,6 +404,8 @@ def _render_graph_instance(
     gs: GridSpec,
     instance: GraphInstance,
     graphs: dict[str, GraphSpec],
+    font: "FontSpec",
+    style: "StyleSpec",
     trace_model_provider: TraceModelProvider,
     event_times: list[float] | None,
     event_labels: list[str] | None,
@@ -276,6 +428,8 @@ def _render_graph_instance(
     _populate_graph_axes(
         ax,
         graph_spec,
+        font,
+        style,
         trace_model_provider,
         event_times,
         event_labels,
@@ -288,6 +442,8 @@ def _render_graph_instance(
 def _populate_graph_axes(
     ax: Axes,
     graph_spec: GraphSpec,
+    font: "FontSpec",
+    style: "StyleSpec",
     trace_model_provider: TraceModelProvider,
     event_times: list[float] | None,
     event_labels: list[str] | None,
@@ -307,18 +463,18 @@ def _populate_graph_axes(
         secondary_binding = graph_spec.trace_bindings[1]
 
         try:
-            _plot_trace(ax, trace_model, primary_binding, graph_spec, 0, default_colors)
+            _plot_trace(ax, trace_model, primary_binding, graph_spec, style, 0, default_colors)
         except Exception as e:
             log.warning(f"Failed to plot trace {primary_binding.name}: {e}")
 
-        _configure_axes(ax, graph_spec)
+        _configure_axes(ax, graph_spec, font)
 
         ax2 = ax.twinx()
         try:
-            _plot_trace(ax2, trace_model, secondary_binding, graph_spec, 1, default_colors)
+            _plot_trace(ax2, trace_model, secondary_binding, graph_spec, style, 1, default_colors)
         except Exception as e:
             log.warning(f"Failed to plot secondary trace {secondary_binding.name}: {e}")
-        _configure_secondary_y(ax2, graph_spec)
+        _configure_secondary_y(ax2, graph_spec, font)
 
         if event_times:
             _add_event_markers(
@@ -327,6 +483,7 @@ def _populate_graph_axes(
                 event_times,
                 event_labels,
                 event_colors,
+                font,
             )
 
         if graph_spec.show_legend:
@@ -335,15 +492,20 @@ def _populate_graph_axes(
             handles = h1 + h2
             labels = l1 + l2
             if handles:
-                ax.legend(handles, labels, loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+                leg = ax.legend(handles, labels, loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+                if leg:
+                    for text in leg.get_texts():
+                        text.set_fontsize(font.legend.size)
+                        text.set_fontweight(font.legend.weight)
+                        text.set_fontstyle(font.legend.style)
     else:
         for idx, binding in enumerate(graph_spec.trace_bindings):
             try:
-                _plot_trace(ax, trace_model, binding, graph_spec, idx, default_colors)
+                _plot_trace(ax, trace_model, binding, graph_spec, style, idx, default_colors)
             except Exception as e:
                 log.warning(f"Failed to plot trace {binding.name}: {e}")
 
-        _configure_axes(ax, graph_spec)
+        _configure_axes(ax, graph_spec, font)
 
         if event_times:
             _add_event_markers(
@@ -352,10 +514,16 @@ def _populate_graph_axes(
                 event_times,
                 event_labels,
                 event_colors,
+                font,
             )
 
         if graph_spec.show_legend and graph_spec.trace_bindings:
-            ax.legend(loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+            leg = ax.legend(loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+            if leg:
+                for text in leg.get_texts():
+                    text.set_fontsize(font.legend.size)
+                    text.set_fontweight(font.legend.weight)
+                    text.set_fontstyle(font.legend.style)
 
 
 def _plot_trace(
@@ -363,6 +531,7 @@ def _plot_trace(
     trace_model: TraceModel,
     binding: Any,  # TraceBinding
     graph_spec: GraphSpec,
+    style_spec: "StyleSpec",
     idx: int,
     default_colors: list[str],
 ) -> None:
@@ -396,7 +565,7 @@ def _plot_trace(
     # Get style for this trace
     trace_style = graph_spec.trace_styles.get(binding.name, {})
     color = trace_style.get("color", default_colors[idx % len(default_colors)])
-    linewidth = trace_style.get("linewidth", graph_spec.default_linewidth)
+    linewidth = trace_style.get("linewidth", graph_spec.default_linewidth or style_spec.default_linewidth)
     linestyle = trace_style.get("linestyle", "-")
     marker = trace_style.get("marker", "")
     markersize = trace_style.get("markersize", 4)
@@ -417,15 +586,19 @@ def _plot_trace(
     )
 
 
-def _configure_axes(ax: Axes, graph_spec: GraphSpec) -> None:
+def _configure_axes(ax: Axes, graph_spec: GraphSpec, font: "FontSpec") -> None:
     """Configure axes appearance based on graph spec."""
     # Set labels
-    ax.set_xlabel(graph_spec.x_label)
-    ax.set_ylabel(graph_spec.y_label)
+    ax.set_xlabel(graph_spec.x_label, fontsize=font.axis_title.size, fontweight=font.axis_title.weight, fontstyle=font.axis_title.style)
+    ax.set_ylabel(graph_spec.y_label, fontsize=font.axis_title.size, fontweight=font.axis_title.weight, fontstyle=font.axis_title.style)
 
     # Set scales
     ax.set_xscale(graph_spec.x_scale)
     ax.set_yscale(graph_spec.y_scale)
+
+    # Remove default padding so autoscale matches data extents
+    ax.set_xmargin(0.0)
+    ax.set_ymargin(0.02)
 
     # Set limits if specified
     if graph_spec.x_lim is not None:
@@ -451,11 +624,23 @@ def _configure_axes(ax: Axes, graph_spec: GraphSpec) -> None:
     if graph_spec.y_max_ticks is not None:
         ax.yaxis.set_major_locator(MaxNLocator(graph_spec.y_max_ticks))
 
+    ax.tick_params(axis="x", labelsize=font.tick_label.size)
+    ax.tick_params(axis="y", labelsize=font.tick_label.size)
+    # Apply tick label weight/style
+    for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+        lbl.set_fontweight(font.tick_label.weight)
+        lbl.set_fontstyle(font.tick_label.style)
 
-def _configure_secondary_y(ax2: Axes, graph_spec: GraphSpec) -> None:
+
+def _configure_secondary_y(ax2: Axes, graph_spec: GraphSpec, font: "FontSpec") -> None:
     """Configure the secondary y axis for twin-Y plots."""
     if graph_spec.y2_label:
-        ax2.set_ylabel(graph_spec.y2_label)
+        ax2.set_ylabel(
+            graph_spec.y2_label,
+            fontsize=font.axis_title.size,
+            fontweight=font.axis_title.weight,
+            fontstyle=font.axis_title.style,
+        )
     ax2.set_yscale(graph_spec.y2_scale)
     if graph_spec.y2_lim is not None:
         ax2.set_ylim(graph_spec.y2_lim)
@@ -466,6 +651,11 @@ def _configure_secondary_y(ax2: Axes, graph_spec: GraphSpec) -> None:
     if "left" in ax2.spines:
         ax2.spines["left"].set_visible(False)
 
+    ax2.tick_params(axis="y", labelsize=font.tick_label.size)
+    for lbl in ax2.get_yticklabels():
+        lbl.set_fontweight(font.tick_label.weight)
+        lbl.set_fontstyle(font.tick_label.style)
+
 
 def _add_event_markers(
     ax: Axes,
@@ -473,6 +663,7 @@ def _add_event_markers(
     event_times: list[float],
     event_labels: list[str] | None,
     event_colors: list[str] | None,
+    font: "FontSpec",
 ) -> None:
     """Add vertical lines for event markers."""
     if not graph_spec.show_event_markers:
@@ -509,201 +700,47 @@ def _add_event_markers(
                 rotation=graph_spec.event_label_rotation,
                 va="top",
                 ha="right",
-                fontsize=8,
+                fontsize=getattr(getattr(font, "annotation", None), "size", getattr(font, "annotation_size", 8)),
+                fontweight=getattr(getattr(font, "annotation", None), "weight", getattr(font, "weight", "normal")),
+                fontstyle=getattr(getattr(font, "annotation", None), "style", getattr(font, "style", "normal")),
                 color=color,
                 alpha=0.8,
             )
 
 
-def _render_annotation(
-    fig: Figure,
-    annot: AnnotationSpec,
-    axes_map: dict[str, Axes],
-    *,
-    figure_transform=None,
-    figure_axes: Axes | Figure | None = None,
-) -> None:
-    """Render a single annotation on the figure or axes."""
-    figure_transform = figure_transform or fig.transFigure
-    figure_axes = figure_axes or fig
+def _panel_label_from_index(idx: int) -> str:
+    """Return alphabetical panel label (A, B, ..., Z, AA, AB...)."""
+    letters = string.ascii_uppercase
+    label = ""
+    n = idx
+    while True:
+        label = letters[n % 26] + label
+        n = n // 26 - 1
+        if n < 0:
+            break
+    return label
 
-    # Determine target axes
-    if annot.target_type == "graph" and annot.target_id:
-        ax = axes_map.get(annot.target_id)
+
+def _render_panel_labels(layout, axes_map: dict[str, Axes]) -> None:
+    """Render panel labels if enabled."""
+    label_spec: PanelLabelSpec | None = getattr(layout, "panel_labels", None)
+    if label_spec is None or not label_spec.show:
+        return
+    font = getattr(getattr(layout, "_font_override", None), "panel_label", None)
+
+    for idx, inst in enumerate(getattr(layout, "graph_instances", [])):
+        ax = axes_map.get(inst.instance_id)
         if ax is None:
-            log.warning(f"Target axes {annot.target_id} not found for annotation")
-            return
-    else:
-        # Figure-level annotation - use provided transform/axes
-        ax = None
-
-    # Render based on annotation kind
-    if annot.kind == "text":
-        _render_text_annotation(fig, ax, annot, figure_transform, figure_axes)
-    elif annot.kind == "box":
-        _render_box_annotation(fig, ax, annot, figure_transform, figure_axes)
-    elif annot.kind == "arrow":
-        _render_arrow_annotation(fig, ax, annot, figure_transform, figure_axes)
-    elif annot.kind == "line":
-        _render_line_annotation(fig, ax, annot, figure_transform, figure_axes)
-
-
-def _render_text_annotation(
-    fig: Figure,
-    ax: Axes | None,
-    annot: AnnotationSpec,
-    figure_transform,
-    figure_axes: Axes | Figure,
-) -> None:
-    """Render a text annotation."""
-    if ax is None:
-        transform = figure_transform
-        target = figure_axes
-    elif annot.coord_system == "axes":
-        transform = ax.transAxes
-        target = ax
-    elif annot.coord_system == "figure":
-        transform = figure_transform
-        target = figure_axes
-    else:  # data coordinates
-        transform = ax.transData
-        target = ax
-
-    target.text(
-        annot.x0,
-        annot.y0,
-        annot.text_content,
-        transform=transform,
-        fontfamily=annot.font_family,
-        fontsize=annot.font_size,
-        fontweight=annot.font_weight,
-        fontstyle=annot.font_style,
-        color=annot.color,
-        ha=annot.ha,
-        va=annot.va,
-        rotation=annot.rotation,
-        alpha=annot.alpha,
-    )
-
-
-def _render_box_annotation(
-    fig: Figure,
-    ax: Axes | None,
-    annot: AnnotationSpec,
-    figure_transform,
-    figure_axes: Axes | Figure,
-) -> None:
-    """Render a box annotation."""
-    if ax is None:
-        transform = figure_transform
-        target = figure_axes
-    elif annot.coord_system == "axes":
-        transform = ax.transAxes
-        target = ax
-    elif annot.coord_system == "figure":
-        transform = figure_transform
-        target = figure_axes
-    else:  # data coordinates
-        transform = ax.transData
-        target = ax
-
-    width = abs(annot.x1 - annot.x0)
-    height = abs(annot.y1 - annot.y0)
-    x = min(annot.x0, annot.x1)
-    y = min(annot.y0, annot.y1)
-
-    rect = mpatches.Rectangle(
-        (x, y),
-        width,
-        height,
-        transform=transform,
-        edgecolor=annot.edgecolor,
-        facecolor=annot.facecolor,
-        alpha=annot.alpha,
-        linewidth=annot.linewidth,
-        linestyle=annot.linestyle,
-    )
-    if hasattr(target, "add_patch"):
-        target.add_patch(rect)
-    else:
-        fig.add_artist(rect)
-
-
-def _render_arrow_annotation(
-    fig: Figure,
-    ax: Axes | None,
-    annot: AnnotationSpec,
-    figure_transform,
-    figure_axes: Axes | Figure,
-) -> None:
-    """Render an arrow annotation."""
-    if ax is None:
-        transform = figure_transform
-        target = figure_axes
-    elif annot.coord_system == "axes":
-        transform = ax.transAxes
-        target = ax
-    elif annot.coord_system == "figure":
-        transform = figure_transform
-        target = figure_axes
-    else:  # data coordinates
-        transform = ax.transData
-        target = ax
-
-    target.annotate(
-        "",
-        xy=(annot.x1, annot.y1),
-        xytext=(annot.x0, annot.y0),
-        xycoords=transform,
-        textcoords=transform,
-        arrowprops=dict(
-            arrowstyle=annot.arrowstyle,
-            color=annot.color,
-            linewidth=annot.linewidth,
-            alpha=annot.alpha,
-        ),
-    )
-
-
-def _render_line_annotation(
-    fig: Figure,
-    ax: Axes | None,
-    annot: AnnotationSpec,
-    figure_transform,
-    figure_axes: Axes | Figure,
-) -> None:
-    """Render a line annotation."""
-    if ax is None:
-        transform = figure_transform
-        target = figure_axes
-    elif annot.coord_system == "axes":
-        transform = ax.transAxes
-        target = ax
-    elif annot.coord_system == "figure":
-        transform = figure_transform
-        target = figure_axes
-    else:  # data coordinates
-        transform = ax.transData
-        target = ax
-
-    if hasattr(target, "plot"):
-        target.plot(
-            [annot.x0, annot.x1],
-            [annot.y0, annot.y1],
-            transform=transform,
-            color=annot.color,
-            linewidth=annot.linewidth,
-            linestyle=annot.linestyle,
-            alpha=annot.alpha,
+            continue
+        label = _panel_label_from_index(idx)
+        ax.text(
+            label_spec.x_offset,
+            label_spec.y_offset,
+            label,
+            transform=ax.transAxes,
+            fontsize=font.size if font else label_spec.font_size,
+            fontweight=font.weight if font else label_spec.weight,
+            fontstyle=getattr(font, "style", "normal") if font else "normal",
+            ha="left",
+            va="baseline",
         )
-    else:
-        line = Line2D(
-            [annot.x0, annot.x1],
-            [annot.y0, annot.y1],
-            transform=transform,
-            color=annot.color,
-            linewidth=annot.linewidth,
-            linestyle=annot.linestyle,
-            alpha=annot.alpha,
-        )
-        fig.add_artist(line)

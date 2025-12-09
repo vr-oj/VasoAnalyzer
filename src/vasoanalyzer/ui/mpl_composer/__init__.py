@@ -26,6 +26,10 @@ from .specs import (
     GraphInstance,
     GraphSpec,
     LayoutSpec,
+    FontSpec,
+    TextRoleFont,
+    StyleSpec,
+    PanelLabelSpec,
     TraceBinding,
 )
 
@@ -35,6 +39,10 @@ __all__ = [
     "GraphSpec",
     "GraphInstance",
     "LayoutSpec",
+    "FontSpec",
+    "TextRoleFont",
+    "StyleSpec",
+    "PanelLabelSpec",
     "AnnotationSpec",
     "ExportSpec",
     "TraceBinding",

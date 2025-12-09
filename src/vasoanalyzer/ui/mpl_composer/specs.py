@@ -23,6 +23,9 @@ __all__ = [
     "LayoutSpec",
     "ExportSpec",
     "FontSpec",
+    "TextRoleFont",
+    "StyleSpec",
+    "PanelLabelSpec",
     "FigureSpec",
 ]
 
@@ -201,6 +204,17 @@ class AnnotationSpec:
 
 
 @dataclass
+class PanelLabelSpec:
+    """Configuration for panel labels (A, B, C...) in multi-panel layouts."""
+
+    show: bool = False
+    font_size: float = 9.0
+    weight: Literal["normal", "bold"] = "bold"
+    x_offset: float = -0.05
+    y_offset: float = 1.02
+
+
+@dataclass
 class LayoutSpec:
     """Specification for figure layout and panel arrangement.
 
@@ -221,6 +235,7 @@ class LayoutSpec:
     ncols: int = 1
     hspace: float = 0.3
     wspace: float = 0.3
+    panel_labels: PanelLabelSpec = field(default_factory=PanelLabelSpec)
 
 
 @dataclass
@@ -241,18 +256,51 @@ class ExportSpec:
 
 
 @dataclass
-class FontSpec:
-    """Global font settings for the figure."""
+class TextRoleFont:
+    """Font settings for a specific text role."""
 
-    family: str = "DejaVu Sans"
-    base_size: float = 8.0
+    size: float
     weight: Literal["normal", "bold"] = "normal"
     style: Literal["normal", "italic", "oblique"] = "normal"
 
-    axis_label_size: float = 9.0
-    tick_label_size: float = 8.0
-    legend_size: float = 8.0
-    annotation_size: float = 8.0
+
+@dataclass
+class FontSpec:
+    """Global font settings for the figure."""
+
+    family: str = "Arial"
+
+    figure_title: TextRoleFont = field(
+        default_factory=lambda: TextRoleFont(size=10.0, weight="bold")
+    )
+    panel_label: TextRoleFont = field(
+        default_factory=lambda: TextRoleFont(size=9.0, weight="bold")
+    )
+    axis_title: TextRoleFont = field(
+        default_factory=lambda: TextRoleFont(size=9.0, weight="bold")
+    )
+    tick_label: TextRoleFont = field(
+        default_factory=lambda: TextRoleFont(size=8.0, weight="normal")
+    )
+    legend: TextRoleFont = field(
+        default_factory=lambda: TextRoleFont(size=8.0, weight="normal")
+    )
+    annotation: TextRoleFont = field(
+        default_factory=lambda: TextRoleFont(size=8.0, weight="normal")
+    )
+
+    base_size: float = 8.0
+
+
+@dataclass
+class StyleSpec:
+    """Global style settings beyond fonts."""
+
+    default_linewidth: float = 1.5
+    axis_spine_width: float = 1.0
+    tick_direction: Literal["in", "out", "inout"] = "out"
+    tick_major_length: float = 3.5
+    tick_minor_length: float = 2.0
 
 
 @dataclass
@@ -274,4 +322,5 @@ class FigureSpec:
     annotations: list[AnnotationSpec] = field(default_factory=list)
     export: ExportSpec = field(default_factory=ExportSpec)
     font: FontSpec = field(default_factory=FontSpec)
+    style: StyleSpec = field(default_factory=StyleSpec)
     metadata: dict[str, Any] = field(default_factory=dict)
