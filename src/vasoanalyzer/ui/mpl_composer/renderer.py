@@ -78,6 +78,22 @@ def _rc_params(spec: "FigureSpec") -> dict[str, Any]:
     return rc
 
 
+def _ensure_overlay_axes(fig: Figure) -> "Axes":
+    """Return a figure overlay axes (0-1 normalized) for figure-level annotations."""
+    overlay = getattr(fig, "_va_overlay_axes", None)
+    if overlay is None or overlay.figure is None:
+        overlay = fig.add_axes([0, 0, 1, 1], facecolor="none")
+        overlay.set_axis_off()
+        overlay.set_in_layout(False)
+        overlay.set_zorder(20)
+        try:
+            overlay.set_navigate(False)
+        except Exception:
+            pass
+        fig._va_overlay_axes = overlay
+    return overlay
+
+
 def create_annotation_artists(
     fig: Figure,
     axes_map: Dict[str, "Axes"],
@@ -86,11 +102,19 @@ def create_annotation_artists(
     figure_transform=None,
     figure_axes: "Axes | Figure | None" = None,
 ) -> List[Artist]:
-    """Create Matplotlib artist(s) for a single AnnotationSpec and attach them."""
-    artists: List[Artist] = []
-    figure_transform = figure_transform or fig.transFigure
-    figure_axes = figure_axes or fig
+    """Create Matplotlib artist(s) for a single AnnotationSpec and attach them.
 
+    Allowed transforms: ax.transData, ax.get_xaxis_transform(), ax.transAxes.
+    No use of annotate() to avoid mixed transform surprises across backends.
+    """
+    artists: List[Artist] = []
+    figure_axes = figure_axes or _ensure_overlay_axes(fig)
+    figure_transform = figure_transform or figure_axes.transAxes
+
+    # Phase 1 audit (updated):
+    # - transform chosen by coord_system: transData for data, transAxes for axes/figure.
+    # - linewidth/linestyle in points; dash pattern relies on Matplotlib defaults.
+    # - No annotate(); arrows use FancyArrowPatch with allowed transforms only.
     if annot.target_type == "graph" and annot.target_id:
         ax = axes_map.get(annot.target_id)
         if ax is None:
@@ -115,6 +139,9 @@ def create_annotation_artists(
     zorder = getattr(annot, "zorder", 10)
 
     if annot.kind == "text":
+        # Phase 1 audit (text):
+        # - transform: resolved above (figure/axes/data).
+        # - fontsize in points; clip_on default True; no bbox unless added to spec.
         artist = target.text(
             annot.x0,
             annot.y0,
@@ -133,6 +160,8 @@ def create_annotation_artists(
         )
         artists.append(artist)
     elif annot.kind == "box":
+        # Phase 1 audit (box):
+        # - transform: resolved above; linewidth/dash in points; clip_on default True.
         width = abs(annot.x1 - annot.x0)
         height = abs(annot.y1 - annot.y0)
         x = min(annot.x0, annot.x1)
@@ -156,22 +185,27 @@ def create_annotation_artists(
             fig.add_artist(rect)
         artists.append(rect)
     elif annot.kind == "arrow":
-        artist = target.annotate(
-            "",
-            xy=(annot.x1, annot.y1),
-            xytext=(annot.x0, annot.y0),
-            xycoords=transform,
-            textcoords=transform,
-            arrowprops=dict(
-                arrowstyle=annot.arrowstyle,
-                color=annot.color,
-                linewidth=annot.linewidth,
-                alpha=annot.alpha,
-                zorder=zorder,
-            ),
+        # Phase 1 audit (arrow):
+        # - Uses FancyArrowPatch with explicit transform; linewidth in points; no annotate().
+        arrow = mpatches.FancyArrowPatch(
+            (annot.x0, annot.y0),
+            (annot.x1, annot.y1),
+            transform=transform,
+            color=annot.color,
+            linewidth=annot.linewidth,
+            arrowstyle=annot.arrowstyle or "->",
+            alpha=annot.alpha,
+            zorder=zorder,
+            mutation_scale=max(annot.linewidth * 6.0, 6.0),
         )
-        artists.append(artist)
+        if hasattr(target, "add_patch"):
+            target.add_patch(arrow)
+        else:
+            fig.add_artist(arrow)
+        artists.append(arrow)
     elif annot.kind == "line":
+        # Phase 1 audit (line):
+        # - transform: resolved above; linewidth/dash in points; clip_on default True.
         if hasattr(target, "plot"):
             lines = target.plot(
                 [annot.x0, annot.x1],
@@ -228,7 +262,10 @@ def render_figure(
         Matplotlib Figure object ready for display or export
 
     Note:
-        This function has no Qt dependencies and can be used standalone.
+        This function has no Qt dependencies and can be used standalone. Export
+        calls rebuild a fresh Figure per output, while preview uses
+        render_into_axes on a persistent FigureCanvasQTAgg (TODO: Phase 2 – unify
+        preview/export surface construction).
     """
     with mpl.rc_context(_rc_params(spec)):
         # Create figure with exact physical size from spec
@@ -311,9 +348,16 @@ def render_figure(
         _render_panel_labels(spec.layout, axes_map)
 
         # Render annotations
+        overlay_ax = _ensure_overlay_axes(fig)
         for annot in spec.annotations:
             try:
-                create_annotation_artists(fig, axes_map, annot)
+                create_annotation_artists(
+                    fig,
+                    axes_map,
+                    annot,
+                    figure_transform=overlay_ax.transAxes,
+                    figure_axes=overlay_ax,
+                )
             except Exception as e:
                 log.warning(f"Failed to render annotation {annot.annotation_id}: {e}")
 
@@ -669,6 +713,10 @@ def _add_event_markers(
     if not graph_spec.show_event_markers:
         return
 
+    # Phase 1 audit:
+    # - Vertical events drawn with ax.axvline -> x/y in data coords, linewidth in points, dash style via linestyle (backend defaults).
+    # - Labels use transform=ax.get_xaxis_transform() (x=data, y=axes fraction); WARNING: blended transform that could diverge across backends/DPI.
+    # - clip_on not specified (uses Matplotlib default True).
     for i, event_time in enumerate(event_times):
         color = (
             event_colors[i]
@@ -728,6 +776,9 @@ def _render_panel_labels(layout, axes_map: dict[str, Axes]) -> None:
         return
     font = getattr(getattr(layout, "_font_override", None), "panel_label", None)
 
+    # Phase 1 audit:
+    # - Panel labels use ax.transAxes (axes fraction) with fontsize/weight in points.
+    # - No bbox; inherits default dash/clip settings.
     for idx, inst in enumerate(getattr(layout, "graph_instances", [])):
         ax = axes_map.get(inst.instance_id)
         if ax is None:

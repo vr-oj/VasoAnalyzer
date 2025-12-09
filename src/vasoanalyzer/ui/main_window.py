@@ -13098,6 +13098,15 @@ QPushButton[isGhost="true"]:hover {{
 
         dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
 
+        visible_channels = {
+            "inner": bool(getattr(self, "id_toggle_act", None) and self.id_toggle_act.isChecked()),
+            "outer": bool(getattr(self, "od_toggle_act", None) and self.od_toggle_act.isChecked()),
+            "avg_pressure": bool(getattr(self, "avg_pressure_toggle_act", None) and self.avg_pressure_toggle_act.isChecked()),
+            "set_pressure": bool(getattr(self, "set_pressure_toggle_act", None) and self.set_pressure_toggle_act.isChecked()),
+        }
+        if not any(visible_channels.values()):
+            visible_channels["inner"] = True
+
         # Launch the Pure Matplotlib composer
         window = PureMplFigureComposer(
             trace_model=self.trace_model,
@@ -13107,6 +13116,7 @@ QPushButton[isGhost="true"]:hover {{
             event_times=event_times,
             event_labels=event_labels,
             event_colors=event_colors,
+            visible_channels=visible_channels,
         )
 
         # Track window for cleanup

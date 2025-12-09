@@ -44,6 +44,7 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QAbstractSpinBox,
     QRadioButton,
     QScrollArea,
     QSpinBox,
@@ -103,20 +104,20 @@ class ComposerNavigationToolbar(NavigationToolbar):
         super().__init__(canvas, parent)
         self._on_view_changed = on_view_changed
 
-    def _notify_view_changed(self):
+    def _notify_view_changed(self, event=None):
         if self._on_view_changed is not None:
             try:
-                self._on_view_changed()
+                self._on_view_changed(event)
             except Exception:
                 pass
 
     def release_zoom(self, event):
         super().release_zoom(event)
-        self._notify_view_changed()
+        self._notify_view_changed(event)
 
     def release_pan(self, event):
         super().release_pan(event)
-        self._notify_view_changed()
+        self._notify_view_changed(event)
 
     def home(self, *args, **kwargs):
         super().home(*args, **kwargs)
@@ -144,6 +145,7 @@ class PureMplFigureComposer(QMainWindow):
         event_times: list[float] | None = None,
         event_labels: list[str] | None = None,
         event_colors: list[str] | None = None,
+        visible_channels: dict[str, bool] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Pure Matplotlib Figure Composer")
@@ -153,6 +155,7 @@ class PureMplFigureComposer(QMainWindow):
         self.event_times = event_times or []
         self.event_labels = event_labels or []
         self.event_colors = event_colors or []
+        self._initial_visible_channels = visible_channels
 
         # Typography baseline
         mpl.rcParams["font.family"] = "Arial"
@@ -171,6 +174,8 @@ class PureMplFigureComposer(QMainWindow):
 
         # Preview settings
         self.preview_dpi = 100
+        # Preview uses a live FigureCanvasQTAgg at preview_dpi; export rebuilds
+        # figures via render_figure at target DPI (see export_figure).
         self.zoom_factor = 1.0
 
         # Annotation interaction state
@@ -182,6 +187,8 @@ class PureMplFigureComposer(QMainWindow):
         self._drag_start_data: Any = None
         self._preview_axes_map: dict[str, Axes] = {}
         self._axes_instance_lookup: dict[Axes, str] = {}
+        self._axis_limit_cids: dict[Axes, list[int]] = {}
+        self._suppress_axis_sync = False
         self._suppress_size_events = False
         self._current_event_index: int = 0
         self._current_trace_name: str | None = None
@@ -210,13 +217,29 @@ class PureMplFigureComposer(QMainWindow):
         self._update_preview()
         self._resize_to_available_screen()
 
+    def _apply_spinbox_arrows(self, widgets: list):
+        """Ensure spin boxes always show up/down arrows."""
+        for w in widgets:
+            if isinstance(w, QAbstractSpinBox):
+                w.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
+
     def _create_default_spec(self) -> FigureSpec:
         """Create a default FigureSpec for initialization."""
+        visible = self._initial_visible_channels or {}
         if self.trace_model is not None:
             sample_id = "current_sample"
-            trace_bindings = [TraceBinding(name="inner", kind="inner")]
-            if self.trace_model.outer_full is not None:
+            trace_bindings: list[TraceBinding] = []
+            # Order: inner, outer, avg_pressure, set_pressure
+            if visible.get("inner", True):
+                trace_bindings.append(TraceBinding(name="inner", kind="inner"))
+            if visible.get("outer", False) and getattr(self.trace_model, "outer_full", None) is not None:
                 trace_bindings.append(TraceBinding(name="outer", kind="outer"))
+            if visible.get("avg_pressure", False) and getattr(self.trace_model, "avg_pressure_full", None) is not None:
+                trace_bindings.append(TraceBinding(name="avg_pressure", kind="avg_pressure"))
+            if visible.get("set_pressure", False) and getattr(self.trace_model, "set_pressure_full", None) is not None:
+                trace_bindings.append(TraceBinding(name="set_pressure", kind="set_pressure"))
+            if not trace_bindings:
+                trace_bindings.append(TraceBinding(name="inner", kind="inner"))
         else:
             sample_id = "no_sample"
             trace_bindings = []
@@ -304,6 +327,7 @@ class PureMplFigureComposer(QMainWindow):
         self.preview_ax.set_facecolor(PAGE_BG_COLOR)
         self.preview_ax.axis("off")
         self.preview_ax.set_zorder(1)
+        self.preview_ax.set_navigate(False)
 
         # Overlay axes for annotations so they render above panels
         self._annotation_overlay_ax = self.ui_figure.add_axes(
@@ -368,6 +392,7 @@ class PureMplFigureComposer(QMainWindow):
         controls_layout = QVBoxLayout(controls_container)
         controls_layout.setContentsMargins(8, 8, 8, 8)
         controls_layout.setSpacing(6)
+        controls_container.setMaximumWidth(560)
 
         self.tab_widget = QTabWidget()
         self.layout_tab = self._build_layout_tab()
@@ -387,6 +412,7 @@ class PureMplFigureComposer(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setMaximumWidth(580)
 
         splitter.addWidget(scroll)
         splitter.setStretchFactor(1, 2)
@@ -452,7 +478,7 @@ class PureMplFigureComposer(QMainWindow):
     # ------------------------------------------------------------------
     def _build_layout_tab(self) -> QWidget:
         w = QWidget()
-        layout = QVBoxLayout(w)
+        layout = QGridLayout(w)
         layout.setSpacing(8)
 
         # Size
@@ -484,7 +510,6 @@ class PureMplFigureComposer(QMainWindow):
         size_form.addRow("Height (in)", row_h)
         self.cb_lock_aspect = QCheckBox("Lock aspect ratio")
         size_form.addRow(self.cb_lock_aspect)
-        layout.addWidget(grp_size)
 
         # Grid
         grp_grid = QGroupBox("Panel grid")
@@ -515,7 +540,6 @@ class PureMplFigureComposer(QMainWindow):
             presets_row.addWidget(btn)
         presets_row.addStretch(1)
         grid_form.addRow("Quick presets", presets_row)
-        layout.addWidget(grp_grid)
 
         # Panel mapping
         grp_map = QGroupBox("Panel mapping")
@@ -545,7 +569,6 @@ class PureMplFigureComposer(QMainWindow):
         ]:
             btn_row.addWidget(btn)
         map_layout.addLayout(btn_row)
-        layout.addWidget(grp_map)
 
         # Panel labels
         grp_labels = QGroupBox("Panel labels (A, B, C…) applied to all panels")
@@ -566,7 +589,6 @@ class PureMplFigureComposer(QMainWindow):
         labels_form.addRow("Weight", self.combo_panel_label_weight)
         labels_form.addRow("X offset", self.spin_panel_label_x)
         labels_form.addRow("Y offset", self.spin_panel_label_y)
-        layout.addWidget(grp_labels)
 
         # Templates (save/load)
         grp_tpl = QGroupBox("Templates")
@@ -587,9 +609,13 @@ class PureMplFigureComposer(QMainWindow):
         note.setStyleSheet("color: #6c757d;")
         tpl_layout2.addWidget(note)
         grp_tpl.setLayout(tpl_layout2)
-        layout.addWidget(grp_tpl)
 
-        layout.addStretch(1)
+        layout.addWidget(grp_size, 0, 0)
+        layout.addWidget(grp_grid, 0, 1)
+        layout.addWidget(grp_map, 1, 0, 1, 2)
+        layout.addWidget(grp_labels, 2, 0)
+        layout.addWidget(grp_tpl, 2, 1)
+        layout.setRowStretch(3, 1)
 
         # Signals
         self.spin_width.valueChanged.connect(self._on_size_changed_qt)
@@ -617,12 +643,26 @@ class PureMplFigureComposer(QMainWindow):
         btn_save_tpl.clicked.connect(self._on_save_template)
 
         self._refresh_layout_tab()
+        self._apply_spinbox_arrows(
+            [
+                self.spin_width,
+                self.spin_height,
+                self.spin_rows,
+                self.spin_cols,
+                self.spin_hspace,
+                self.spin_wspace,
+                self.spin_panel_label_size,
+                self.spin_panel_label_x,
+                self.spin_panel_label_y,
+            ]
+        )
         return w
 
     def _build_fonts_tab(self) -> QWidget:
         w = QWidget()
-        layout = QVBoxLayout(w)
-        layout.setSpacing(8)
+        layout = QGridLayout(w)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
 
         grp_fonts = QGroupBox("Typography")
         fonts_layout = QVBoxLayout(grp_fonts)
@@ -707,7 +747,7 @@ class PureMplFigureComposer(QMainWindow):
             )
 
         fonts_layout.addLayout(grid)
-        layout.addWidget(grp_fonts)
+        layout.addWidget(grp_fonts, 0, 0, 1, 2)
 
         grp_style = QGroupBox("Line / axis style")
         style_form = QFormLayout(grp_style)
@@ -746,7 +786,7 @@ class PureMplFigureComposer(QMainWindow):
         style_form.addRow("Tick direction", self.combo_tick_dir)
         style_form.addRow("Tick length (major)", self.spin_tick_major)
         style_form.addRow("Tick length (minor)", self.spin_tick_minor)
-        layout.addWidget(grp_style)
+        layout.addWidget(grp_style, 1, 0)
 
         grp_presets = QGroupBox("Style presets")
         preset_layout = QHBoxLayout()
@@ -761,9 +801,8 @@ class PureMplFigureComposer(QMainWindow):
         preset_wrap.addLayout(preset_layout)
         preset_wrap.addWidget(self.label_style_desc)
         grp_presets.setLayout(preset_wrap)
-        layout.addWidget(grp_presets)
-
-        layout.addStretch(1)
+        layout.addWidget(grp_presets, 1, 1)
+        layout.setRowStretch(2, 1)
 
         self.combo_font_family.currentTextChanged.connect(self._on_font_family_changed)
 
@@ -777,12 +816,24 @@ class PureMplFigureComposer(QMainWindow):
             self._on_style_preset_changed
         )
 
+        self._apply_spinbox_arrows(
+            [ctrl["spin"] for ctrl in self.font_role_controls.values()]
+            + [
+                self.spin_default_linewidth,
+                self.spin_spine_width,
+                self.spin_tick_major,
+                self.spin_tick_minor,
+            ]
+        )
+
         return w
 
     def _build_traces_events_tab(self) -> QWidget:
         """Traces & Events tab – GraphPad-style controls for the active panel."""
         w = QWidget()
-        layout = QVBoxLayout(w)
+        layout = QGridLayout(w)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
 
         group_panel = QGroupBox("Panel")
         panel_layout = QVBoxLayout(group_panel)
@@ -794,7 +845,7 @@ class PureMplFigureComposer(QMainWindow):
         hint = QLabel("Editing settings for this panel only.")
         hint.setStyleSheet("color: #6c757d;")
         panel_layout.addWidget(hint)
-        layout.addWidget(group_panel)
+        layout.addWidget(group_panel, 0, 0)
 
         group_display = QGroupBox("Display & spines")
         disp_layout = QVBoxLayout(group_display)
@@ -834,7 +885,7 @@ class PureMplFigureComposer(QMainWindow):
         ]:
             spine_layout.addWidget(cb)
         disp_layout.addLayout(spine_layout)
-        layout.addWidget(group_display)
+        layout.addWidget(group_display, 0, 1)
 
         group_axes = QGroupBox("Axes & ranges")
         axes_form = QFormLayout(group_axes)
@@ -844,10 +895,22 @@ class PureMplFigureComposer(QMainWindow):
         self.combo_y_scale.addItems(["linear", "log"])
         self.cb_x_auto = QCheckBox("Auto")
         self.cb_y_auto = QCheckBox("Auto")
-        self.edit_x_min = QLineEdit()
-        self.edit_x_max = QLineEdit()
-        self.edit_y_min = QLineEdit()
-        self.edit_y_max = QLineEdit()
+        self.edit_x_min = QDoubleSpinBox()
+        self.edit_x_min.setDecimals(2)
+        self.edit_x_min.setRange(-1e9, 1e9)
+        self.edit_x_min.setSingleStep(0.1)
+        self.edit_x_max = QDoubleSpinBox()
+        self.edit_x_max.setDecimals(2)
+        self.edit_x_max.setRange(-1e9, 1e9)
+        self.edit_x_max.setSingleStep(0.1)
+        self.edit_y_min = QDoubleSpinBox()
+        self.edit_y_min.setDecimals(2)
+        self.edit_y_min.setRange(-1e9, 1e9)
+        self.edit_y_min.setSingleStep(0.1)
+        self.edit_y_max = QDoubleSpinBox()
+        self.edit_y_max.setDecimals(2)
+        self.edit_y_max.setRange(-1e9, 1e9)
+        self.edit_y_max.setSingleStep(0.1)
         axes_form.addRow("X scale", self.combo_x_scale)
         axes_form.addRow("X auto", self.cb_x_auto)
         axes_form.addRow("X min", self.edit_x_min)
@@ -856,7 +919,7 @@ class PureMplFigureComposer(QMainWindow):
         axes_form.addRow("Y auto", self.cb_y_auto)
         axes_form.addRow("Y min", self.edit_y_min)
         axes_form.addRow("Y max", self.edit_y_max)
-        layout.addWidget(group_axes)
+        layout.addWidget(group_axes, 1, 0)
 
         group_ticks = QGroupBox("Ticks")
         ticks_form = QFormLayout(group_ticks)
@@ -871,7 +934,7 @@ class PureMplFigureComposer(QMainWindow):
         self.spin_y_max_ticks = QSpinBox()
         self.spin_y_max_ticks.setRange(0, 50)  # 0 = auto
         ticks_form.addRow("Max Y ticks", self.spin_y_max_ticks)
-        layout.addWidget(group_ticks)
+        layout.addWidget(group_ticks, 1, 1)
 
         group_events = QGroupBox("Events")
         events_layout = QVBoxLayout(group_events)
@@ -907,7 +970,7 @@ class PureMplFigureComposer(QMainWindow):
             no_events = QLabel("No events in this figure.")
             no_events.setStyleSheet("color: #6c757d;")
             events_layout.addWidget(no_events)
-        layout.addWidget(group_events)
+        layout.addWidget(group_events, 2, 0)
 
         group_traces = QGroupBox("Traces & Y-axes")
         traces_layout = QVBoxLayout(group_traces)
@@ -958,9 +1021,8 @@ class PureMplFigureComposer(QMainWindow):
         style_form.addRow("Marker", self.combo_trace_marker)
 
         traces_layout.addWidget(style_group)
-        layout.addWidget(group_traces)
-
-        layout.addStretch(1)
+        layout.addWidget(group_traces, 2, 1)
+        layout.setRowStretch(3, 1)
 
         self._connect_traces_events_signals()
         self._refresh_traces_events_tab()
@@ -1071,6 +1133,18 @@ class PureMplFigureComposer(QMainWindow):
         right.addStretch(1)
         root.addLayout(right, stretch=2)
 
+        self._apply_spinbox_arrows(
+            [
+                self.spin_annot_font,
+                self.spin_annot_rotation,
+                self.spin_annot_alpha,
+                self.spin_annot_linewidth,
+                self.spin_default_annot_font,
+                self.spin_default_alpha,
+                self.spin_default_linewidth,
+            ]
+        )
+
         self._connect_annotation_signals()
         self._refresh_annotation_ui()
 
@@ -1078,7 +1152,9 @@ class PureMplFigureComposer(QMainWindow):
 
     def _build_export_tab(self) -> QWidget:
         w = QWidget()
-        layout = QVBoxLayout(w)
+        layout = QGridLayout(w)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
 
         grp_export = QGroupBox("Output format")
         form = QFormLayout(grp_export)
@@ -1105,7 +1181,7 @@ class PureMplFigureComposer(QMainWindow):
         bg_layout.addWidget(self.radio_bg_white)
         bg_layout.addWidget(self.radio_bg_transparent)
         form.addRow("Background", bg_layout)
-        layout.addWidget(grp_export)
+        layout.addWidget(grp_export, 0, 0)
 
         grp_presets = QGroupBox("Figure width presets (mm)")
         h = QHBoxLayout()
@@ -1119,7 +1195,7 @@ class PureMplFigureComposer(QMainWindow):
         self.label_width_status = QLabel("")
         self.label_width_status.setStyleSheet("color: #6c757d;")
         presets_wrap.addWidget(self.label_width_status)
-        layout.addWidget(grp_presets)
+        layout.addWidget(grp_presets, 0, 1)
 
         grp_profiles = QGroupBox("Export profiles")
         prof_layout = QVBoxLayout(grp_profiles)
@@ -1136,7 +1212,7 @@ class PureMplFigureComposer(QMainWindow):
         self.label_export_profile_desc = QLabel("")
         self.label_export_profile_desc.setStyleSheet("color: #6c757d;")
         prof_layout.addWidget(self.label_export_profile_desc)
-        layout.addWidget(grp_profiles)
+        layout.addWidget(grp_profiles, 1, 0, 1, 2)
 
         grp_multi = QGroupBox("Additional formats")
         multi_layout = QVBoxLayout(grp_multi)
@@ -1144,7 +1220,7 @@ class PureMplFigureComposer(QMainWindow):
         self.cb_export_tiff = QCheckBox("Also export TIFF (600 dpi)")
         multi_layout.addWidget(self.cb_export_png)
         multi_layout.addWidget(self.cb_export_tiff)
-        layout.addWidget(grp_multi)
+        layout.addWidget(grp_multi, 2, 0)
 
         grp_io = QGroupBox("Figure definition & export")
         io_layout = QVBoxLayout(grp_io)
@@ -1156,8 +1232,8 @@ class PureMplFigureComposer(QMainWindow):
         io_layout.addWidget(self.btn_load_fig)
         io_layout.addWidget(self.btn_save_to_project)
         io_layout.addWidget(self.btn_export_fig)
-        layout.addWidget(grp_io)
-        layout.addStretch(1)
+        layout.addWidget(grp_io, 2, 1)
+        layout.setRowStretch(3, 1)
 
         self.combo_format.currentTextChanged.connect(self._on_export_format_changed)
         self.spin_dpi.valueChanged.connect(self._on_export_dpi_changed)
@@ -1174,6 +1250,8 @@ class PureMplFigureComposer(QMainWindow):
             self.combo_export_profile.currentText()
         )
         self._update_width_status_label()
+
+        self._apply_spinbox_arrows([self.spin_dpi])
 
         return w
 
@@ -1232,6 +1310,7 @@ class PureMplFigureComposer(QMainWindow):
             row_spin = QSpinBox()
             row_spin.setRange(0, max(self.spec.layout.nrows - 1, 0))
             row_spin.setValue(inst.row)
+            self._apply_spinbox_arrows([row_spin])
             row_spin.valueChanged.connect(
                 lambda val, iid=inst.instance_id: self._on_panel_position_changed(
                     iid, "row", val
@@ -1242,6 +1321,7 @@ class PureMplFigureComposer(QMainWindow):
             col_spin = QSpinBox()
             col_spin.setRange(0, max(self.spec.layout.ncols - 1, 0))
             col_spin.setValue(inst.col)
+            self._apply_spinbox_arrows([col_spin])
             col_spin.valueChanged.connect(
                 lambda val, iid=inst.instance_id: self._on_panel_position_changed(
                     iid, "col", val
@@ -1252,6 +1332,7 @@ class PureMplFigureComposer(QMainWindow):
             rowspan_spin = QSpinBox()
             rowspan_spin.setRange(1, max(self.spec.layout.nrows, 1))
             rowspan_spin.setValue(inst.rowspan)
+            self._apply_spinbox_arrows([rowspan_spin])
             rowspan_spin.valueChanged.connect(
                 lambda val, iid=inst.instance_id: self._on_panel_position_changed(
                     iid, "rowspan", val
@@ -1262,6 +1343,7 @@ class PureMplFigureComposer(QMainWindow):
             colspan_spin = QSpinBox()
             colspan_spin.setRange(1, max(self.spec.layout.ncols, 1))
             colspan_spin.setValue(inst.colspan)
+            self._apply_spinbox_arrows([colspan_spin])
             colspan_spin.valueChanged.connect(
                 lambda val, iid=inst.instance_id: self._on_panel_position_changed(
                     iid, "colspan", val
@@ -1814,6 +1896,22 @@ class PureMplFigureComposer(QMainWindow):
         self.combo_trace_ls.currentTextChanged.connect(self._on_trace_style_changed)
         self.combo_trace_marker.currentTextChanged.connect(self._on_trace_style_changed)
 
+        spin_widgets = [
+            self.edit_x_min,
+            self.edit_x_max,
+            self.edit_y_min,
+            self.edit_y_max,
+            self.spin_x_tick_every,
+            self.spin_x_max_ticks,
+            self.spin_y_max_ticks,
+            self.spin_event_lw,
+            self.spin_event_rotation,
+            self.spin_trace_lw,
+        ]
+        if self.event_times:
+            spin_widgets.append(self.spin_event_index)
+        self._apply_spinbox_arrows(spin_widgets)
+
     def _with_graph_spec(self) -> GraphSpec | None:
         graph = self._get_active_graph_spec()
         return graph
@@ -2038,10 +2136,10 @@ class PureMplFigureComposer(QMainWindow):
         self.cb_x_auto.setChecked(auto_x)
         self.cb_y_auto.setChecked(auto_y)
 
-        self.edit_x_min.setText(str(float(x_min)))
-        self.edit_x_max.setText(str(float(x_max)))
-        self.edit_y_min.setText(str(float(y_min)))
-        self.edit_y_max.setText(str(float(y_max)))
+        self.edit_x_min.setValue(float(x_min))
+        self.edit_x_max.setValue(float(x_max))
+        self.edit_y_min.setValue(float(y_min))
+        self.edit_y_max.setValue(float(y_max))
 
         for ctrl in (self.edit_x_min, self.edit_x_max):
             ctrl.setEnabled(not auto_x)
@@ -2134,16 +2232,16 @@ class PureMplFigureComposer(QMainWindow):
         if not graph:
             return
         if axis == "x":
-            vmin = self._parse_optional_float(self.edit_x_min.text())
-            vmax = self._parse_optional_float(self.edit_x_max.text())
-            graph.x_lim = None if vmin is None or vmax is None else (vmin, vmax)
+            vmin = float(self.edit_x_min.value())
+            vmax = float(self.edit_x_max.value())
+            graph.x_lim = (vmin, vmax)
             self._set_axis_auto_checkbox("x", graph.x_lim is None)
             for ctrl in (self.edit_x_min, self.edit_x_max):
                 ctrl.setEnabled(graph.x_lim is not None)
         else:
-            vmin = self._parse_optional_float(self.edit_y_min.text())
-            vmax = self._parse_optional_float(self.edit_y_max.text())
-            graph.y_lim = None if vmin is None or vmax is None else (vmin, vmax)
+            vmin = float(self.edit_y_min.value())
+            vmax = float(self.edit_y_max.value())
+            graph.y_lim = (vmin, vmax)
             self._set_axis_auto_checkbox("y", graph.y_lim is None)
             for ctrl in (self.edit_y_min, self.edit_y_max):
                 ctrl.setEnabled(graph.y_lim is not None)
@@ -2978,6 +3076,10 @@ class PureMplFigureComposer(QMainWindow):
         self._annotation_artists.clear()
 
     def _create_annotation_artists_for_preview(self, annot: AnnotationSpec):
+        # Phase 1 audit: preview annotations are drawn onto the overlay axes
+        # (figure-level transAxes). Graph-targeted annotations reuse the
+        # preview axes transforms but still live on the overlay, so figure vs
+        # data transforms can mix here.
         artists = create_annotation_artists(
             self.ui_figure,
             self._preview_axes_map,
@@ -3001,8 +3103,33 @@ class PureMplFigureComposer(QMainWindow):
         self._annotation_overlay_ax.set_xlim(self.preview_ax.get_xlim())
         self._annotation_overlay_ax.set_ylim(self.preview_ax.get_ylim())
 
-    def _sync_axes_limits_from_view(self, ax):
-        """Persist the current view limits of a preview axis back to the FigureSpec."""
+    def _disconnect_axis_limit_listeners(self):
+        """Detach x/y limit callbacks from any existing preview axes."""
+        for ax, cids in list(self._axis_limit_cids.items()):
+            for cid in cids:
+                try:
+                    ax.callbacks.disconnect(cid)
+                except Exception:
+                    pass
+        self._axis_limit_cids.clear()
+
+    def _connect_axis_limit_listeners(self):
+        """Attach x/y limit callbacks to live preview axes to mirror toolbar zoom/pan."""
+        self._disconnect_axis_limit_listeners()
+        for inst_id, ax in self._preview_axes_map.items():
+            if ax is None:
+                continue
+            if hasattr(ax, "get_navigate") and not ax.get_navigate():
+                continue
+            self._axis_limit_cids[ax] = [
+                ax.callbacks.connect("xlim_changed", self._on_axis_limits_changed),
+                ax.callbacks.connect("ylim_changed", self._on_axis_limits_changed),
+            ]
+
+    def _on_axis_limits_changed(self, ax):
+        """Handle Matplotlib axis callbacks to capture view changes."""
+        if self._suppress_axis_sync:
+            return
         inst_id = self._axes_instance_lookup.get(ax)
         if inst_id is None:
             return
@@ -3013,29 +3140,36 @@ class PureMplFigureComposer(QMainWindow):
         if graph is None:
             return
 
-        new_x_lim = tuple(map(float, ax.get_xlim()))
-        new_y_lim = tuple(map(float, ax.get_ylim()))
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
+        graph.x_lim = (float(x_min), float(x_max))
+        graph.y_lim = (float(y_min), float(y_max))
 
-        changed = False
-        if graph.x_lim != new_x_lim:
-            graph.x_lim = new_x_lim
-            changed = True
-        if graph.y_lim != new_y_lim:
-            graph.y_lim = new_y_lim
-            changed = True
+        print(
+            "DEBUG AXIS CALLBACK",
+            inst_id,
+            "xlim",
+            graph.x_lim,
+            "ylim",
+            graph.y_lim,
+        )
+        self._refresh_traces_events_tab()
 
-        if changed:
-            self._push_undo()
-            self._update_footer()
-            if inst_id == self.selected_instance_id:
-                self._set_axis_controls(graph, ax)
-
-    def _on_nav_view_changed(self):
+    def _on_nav_view_changed(self, event=None):
         """Handle pan/zoom/home/back/forward updates from the navigation toolbar."""
-        graph, ax = self._get_active_graph_and_axes()
-        if graph is None or ax is None:
-            return
-        self._sync_axes_limits_from_view(ax)
+        target_ax = getattr(event, "inaxes", None) if event is not None else None
+        inst_id = self._axes_instance_lookup.get(target_ax) if target_ax is not None else None
+
+        if target_ax is None or inst_id is None:
+            graph, target_ax = self._get_active_graph_and_axes()
+            inst_id = self.selected_instance_id
+        else:
+            inst = self._get_graph_instance(inst_id)
+            graph = self.spec.graphs.get(inst.graph_id) if inst else None
+
+        if inst_id is not None and inst_id != self.selected_instance_id:
+            self.selected_instance_id = inst_id
+
         self._refresh_traces_events_tab()
 
     def _event_in_preview(self, event) -> bool:
@@ -3071,6 +3205,11 @@ class PureMplFigureComposer(QMainWindow):
         if annot.target_type == "graph" and annot.target_id:
             ax = self._preview_axes_map.get(annot.target_id)
         if ax is None:
+            # Phase 1 audit:
+            # - Figure-level annotations use overlay axes transAxes (axes fraction).
+            # - Line/box/text linewidths/fonts stay in point units.
+            # TODO: Phase 2 – normalize annotation transforms/widths between
+            # preview overlay axes and export render_figure.
             return figure_transform, figure_axes
         if annot.coord_system == "axes":
             return ax.transAxes, ax
@@ -3406,6 +3545,8 @@ class PureMplFigureComposer(QMainWindow):
     def _update_preview(self):
         """Re-render preview from spec."""
         try:
+            self._suppress_axis_sync = True
+            self._disconnect_axis_limit_listeners()
             self._clear_annotation_artists()
             # Remove previously created graph axes from prior renders
             for ax in self._preview_axes_map.values():
@@ -3453,11 +3594,15 @@ class PureMplFigureComposer(QMainWindow):
                 self._axes_instance_lookup = {}
                 self._update_footer()
                 self.canvas.draw_idle()
+                self._suppress_axis_sync = False
                 return
 
             def trace_provider(sample_id: str):
                 return self.trace_model
 
+            # TODO: Phase 2 – unify preview/export figure construction so preview
+            # and export share the exact same builder surface instead of
+            # render_into_axes vs. render_figure divergence.
             self._preview_axes_map = render_into_axes(
                 self.preview_ax,
                 self.spec,
@@ -3480,6 +3625,31 @@ class PureMplFigureComposer(QMainWindow):
             for annot in self.spec.annotations:
                 self._create_annotation_artists_for_preview(annot)
 
+            # Debug: capture live view vs spec limits after each preview render
+            debug_inst_id = self.selected_instance_id
+            if debug_inst_id is None and self.spec.layout.graph_instances:
+                debug_inst_id = self.spec.layout.graph_instances[0].instance_id
+            if debug_inst_id:
+                debug_ax = self._preview_axes_map.get(debug_inst_id)
+                debug_inst = self._get_graph_instance(debug_inst_id)
+                debug_graph = (
+                    self.spec.graphs.get(debug_inst.graph_id) if debug_inst else None
+                )
+                if debug_ax is not None and debug_graph is not None:
+                    print(
+                        "DEBUG PREVIEW UPDATE",
+                        debug_inst_id,
+                        "xlim",
+                        debug_ax.get_xlim(),
+                        "ylim",
+                        debug_ax.get_ylim(),
+                        "graph.x_lim",
+                        debug_graph.x_lim,
+                        "graph.y_lim",
+                        debug_graph.y_lim,
+                    )
+
+            self._connect_axis_limit_listeners()
             self._update_footer()
             self._refresh_traces_events_tab()
             self.canvas.draw_idle()
@@ -3496,6 +3666,8 @@ class PureMplFigureComposer(QMainWindow):
                 color="#cc0000",
             )
             self.canvas.draw_idle()
+        finally:
+            self._suppress_axis_sync = False
 
     def _delete_selected_annotation(self):
         """Delete selected annotation."""
@@ -3544,8 +3716,79 @@ class PureMplFigureComposer(QMainWindow):
         self._update_preview()
         self._refresh_annotation_ui()
 
+    def _debug_export_all_backends(
+        self, basename: str = "composer_alignment_test", *, out_dir: str = "_debug_exports"
+    ) -> list[Path]:
+        """Dev-only helper to dump preview/export builds for alignment checks.
+
+        Steps for manual use:
+        1) Open a sample project/trace, add event boxes/lines similar to the bug repro.
+        2) From a REPL or temporary dev hook, call
+           self._debug_export_all_backends("composer_alignment_test").
+        3) Compare the preview screenshot with files in ./_debug_exports:
+           *_screen_like.png (preview DPI), *_highdpi.png (300 dpi), *.pdf.
+
+        The helper reuses render_figure (same as export) with different DPIs so
+        we can visually diff screen-like vs. export outputs without touching the UI.
+        """
+        out_root = Path(out_dir)
+        out_root.mkdir(parents=True, exist_ok=True)
+
+        def trace_provider(sample_id: str):
+            return self.trace_model
+
+        outputs: list[tuple[str, str, int]] = [
+            ("screen_like", "png", self.preview_dpi),
+            ("highdpi", "png", 300),
+        ]
+        paths: list[Path] = []
+        for suffix, fmt, dpi in outputs:
+            fig = render_figure(
+                self.spec,
+                trace_provider,
+                dpi=dpi,
+                event_times=self.event_times,
+                event_labels=self.event_labels,
+                event_colors=self.event_colors,
+            )
+            out_path = out_root / f"{basename}_{suffix}.{fmt}"
+            fig.savefig(
+                out_path,
+                format=fmt,
+                dpi=dpi if fmt in ("png", "tiff") else None,
+                bbox_inches="tight",
+                transparent=self.spec.export.transparent,
+            )
+            plt.close(fig)
+            paths.append(out_path)
+
+        pdf_fig = render_figure(
+            self.spec,
+            trace_provider,
+            dpi=300,
+            event_times=self.event_times,
+            event_labels=self.event_labels,
+            event_colors=self.event_colors,
+        )
+        pdf_path = out_root / f"{basename}.pdf"
+        pdf_fig.savefig(
+            pdf_path,
+            format="pdf",
+            bbox_inches="tight",
+            transparent=self.spec.export.transparent,
+        )
+        plt.close(pdf_fig)
+        paths.append(pdf_path)
+
+        return paths
+
     def export_figure(self):
-        """Export figure at target DPI."""
+        """Export figure at target DPI.
+
+        Export rebuilds a fresh Matplotlib Figure via render_figure (Agg/PDF),
+        while the on-screen preview lives in a persistent FigureCanvasQTAgg at
+        preview_dpi (100). They do not currently share a single Figure instance.
+        """
         if self.trace_model is None:
             QMessageBox.warning(self, "No data", "No trace model loaded for export.")
             return
