@@ -12,12 +12,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import patches as mpatches
 from matplotlib.figure import Figure
 from matplotlib.gridspec import GridSpec
 from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -32,6 +34,25 @@ log = logging.getLogger(__name__)
 
 # Type alias for trace model provider
 TraceModelProvider = Callable[[str], "TraceModel"]
+
+
+def _font_rc(spec: "FigureSpec") -> dict[str, Any]:
+    """Build rcParams overrides from the figure font spec."""
+    f = spec.font
+    return {
+        "font.family": f.family,
+        "font.size": f.base_size,
+        "font.weight": f.weight,
+        "font.style": f.style,
+        "axes.labelsize": f.axis_label_size,
+        "xtick.labelsize": f.tick_label_size,
+        "ytick.labelsize": f.tick_label_size,
+        "legend.fontsize": f.legend_size,
+        "text.color": "#000000",
+        "axes.labelcolor": "#000000",
+        "xtick.color": "#000000",
+        "ytick.color": "#000000",
+    }
 
 
 def render_figure(
@@ -63,88 +84,89 @@ def render_figure(
     Note:
         This function has no Qt dependencies and can be used standalone.
     """
-    # Create figure with exact physical size from spec
-    fig = Figure(
-        figsize=(spec.layout.width_in, spec.layout.height_in),
-        dpi=dpi,
-        layout="constrained",  # Modern constrained layout
-        facecolor="#ffffff",
-    )
-
-    # If no graph instances, return empty figure
-    if not spec.layout.graph_instances:
-        ax = fig.add_subplot(111)
-        ax.text(
-            0.5,
-            0.5,
-            "No graphs to display",
-            ha="center",
-            va="center",
-            fontsize=12,
-            color="#666666",
+    with mpl.rc_context(_font_rc(spec)):
+        # Create figure with exact physical size from spec
+        fig = Figure(
+            figsize=(spec.layout.width_in, spec.layout.height_in),
+            dpi=dpi,
+            layout="constrained",  # Modern constrained layout
+            facecolor="#ffffff",
         )
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.axis("off")
-        return fig
 
-    # Create GridSpec for layout
-    gs = GridSpec(
-        spec.layout.nrows,
-        spec.layout.ncols,
-        figure=fig,
-        hspace=spec.layout.hspace,
-        wspace=spec.layout.wspace,
-    )
-
-    # Track axes for annotation rendering
-    axes_map: dict[str, Axes] = {}
-
-    # Render each graph instance
-    for instance in spec.layout.graph_instances:
-        try:
-            ax = _render_graph_instance(
-                fig,
-                gs,
-                instance,
-                spec.graphs,
-                trace_model_provider,
-                event_times,
-                event_labels,
-                event_colors,
-            )
-            axes_map[instance.instance_id] = ax
-        except Exception as e:
-            log.error(f"Failed to render graph instance {instance.instance_id}: {e}", exc_info=True)
-            # Create error placeholder
-            ax = fig.add_subplot(
-                gs[
-                    instance.row : instance.row + instance.rowspan,
-                    instance.col : instance.col + instance.colspan,
-                ]
-            )
+        # If no graph instances, return empty figure
+        if not spec.layout.graph_instances:
+            ax = fig.add_subplot(111)
             ax.text(
                 0.5,
                 0.5,
-                f"Error rendering graph:\n{str(e)[:100]}",
+                "No graphs to display",
                 ha="center",
                 va="center",
-                fontsize=10,
-                color="#cc0000",
+                fontsize=12,
+                color="#666666",
             )
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 1)
             ax.axis("off")
-            axes_map[instance.instance_id] = ax
+            return fig
 
-    # Render annotations
-    for annot in spec.annotations:
-        try:
-            _render_annotation(fig, annot, axes_map)
-        except Exception as e:
-            log.warning(f"Failed to render annotation {annot.annotation_id}: {e}")
+        # Create GridSpec for layout
+        gs = GridSpec(
+            spec.layout.nrows,
+            spec.layout.ncols,
+            figure=fig,
+            hspace=spec.layout.hspace,
+            wspace=spec.layout.wspace,
+        )
 
-    return fig
+        # Track axes for annotation rendering
+        axes_map: dict[str, Axes] = {}
+
+        # Render each graph instance
+        for instance in spec.layout.graph_instances:
+            try:
+                ax = _render_graph_instance(
+                    fig,
+                    gs,
+                    instance,
+                    spec.graphs,
+                    trace_model_provider,
+                    event_times,
+                    event_labels,
+                    event_colors,
+                )
+                axes_map[instance.instance_id] = ax
+            except Exception as e:
+                log.error(f"Failed to render graph instance {instance.instance_id}: {e}", exc_info=True)
+                # Create error placeholder
+                ax = fig.add_subplot(
+                    gs[
+                        instance.row : instance.row + instance.rowspan,
+                        instance.col : instance.col + instance.colspan,
+                    ]
+                )
+                ax.text(
+                    0.5,
+                    0.5,
+                    f"Error rendering graph:\n{str(e)[:100]}",
+                    ha="center",
+                    va="center",
+                    fontsize=10,
+                    color="#cc0000",
+                )
+                ax.set_xlim(0, 1)
+                ax.set_ylim(0, 1)
+                ax.axis("off")
+                axes_map[instance.instance_id] = ax
+
+        # Render annotations
+        for annot in spec.annotations:
+            try:
+                _render_annotation(fig, annot, axes_map)
+            except Exception as e:
+                log.warning(f"Failed to render annotation {annot.annotation_id}: {e}")
+
+        return fig
 
 
 def render_into_axes(
@@ -166,64 +188,65 @@ def render_into_axes(
     """
     fig = ax.figure
 
-    # Prepare the page container
-    ax.set_facecolor("#ffffff")
-    ax.set_box_aspect(max(spec.layout.height_in / max(spec.layout.width_in, 1e-6), 0.01))
-    ax.set_xlim(0, spec.layout.width_in)
-    ax.set_ylim(0, spec.layout.height_in)
-    ax.axis("off")
+    with mpl.rc_context(_font_rc(spec)):
+        # Prepare the page container
+        ax.set_facecolor("#ffffff")
+        ax.set_box_aspect(max(spec.layout.height_in / max(spec.layout.width_in, 1e-6), 0.01))
+        ax.set_xlim(0, spec.layout.width_in)
+        ax.set_ylim(0, spec.layout.height_in)
+        ax.axis("off")
 
-    axes_map: dict[str, Axes] = {}
+        axes_map: dict[str, Axes] = {}
 
-    if not spec.layout.graph_instances:
-        ax.text(
-            0.5,
-            0.5,
-            "No graphs to display",
-            ha="center",
-            va="center",
-            fontsize=12,
-            color="#666666",
-        )
-        return axes_map
-
-    # Anchor a gridspec to the page axes bounding box (figure fractions)
-    bbox = ax.get_position()
-    gs = GridSpec(
-        spec.layout.nrows,
-        spec.layout.ncols,
-        figure=fig,
-        left=bbox.x0,
-        right=bbox.x1,
-        bottom=bbox.y0,
-        top=bbox.y1,
-        hspace=spec.layout.hspace,
-        wspace=spec.layout.wspace,
-    )
-
-    for instance in spec.layout.graph_instances:
-        try:
-            graph_ax = _render_graph_instance(
-                fig,
-                gs,
-                instance,
-                spec.graphs,
-                trace_model_provider,
-                event_times,
-                event_labels,
-                event_colors,
+        if not spec.layout.graph_instances:
+            ax.text(
+                0.5,
+                0.5,
+                "No graphs to display",
+                ha="center",
+                va="center",
+                fontsize=12,
+                color="#666666",
             )
-            axes_map[instance.instance_id] = graph_ax
-        except Exception as exc:  # pragma: no cover - defensive for preview
-            log.error("Preview render failed for %s: %s", instance.instance_id, exc, exc_info=True)
+            return axes_map
 
-    for annot in spec.annotations:
-        try:
-            _render_annotation(fig, annot, axes_map, figure_transform=ax.transAxes, figure_axes=ax)
-        except Exception as exc:  # pragma: no cover - defensive for preview
-            log.warning("Failed to render preview annotation %s: %s", annot.annotation_id, exc)
+        # Anchor a gridspec to the page axes bounding box (figure fractions)
+        bbox = ax.get_position()
+        gs = GridSpec(
+            spec.layout.nrows,
+            spec.layout.ncols,
+            figure=fig,
+            left=bbox.x0,
+            right=bbox.x1,
+            bottom=bbox.y0,
+            top=bbox.y1,
+            hspace=spec.layout.hspace,
+            wspace=spec.layout.wspace,
+        )
 
-    return axes_map
+        for instance in spec.layout.graph_instances:
+            try:
+                graph_ax = _render_graph_instance(
+                    fig,
+                    gs,
+                    instance,
+                    spec.graphs,
+                    trace_model_provider,
+                    event_times,
+                    event_labels,
+                    event_colors,
+                )
+                axes_map[instance.instance_id] = graph_ax
+            except Exception as exc:  # pragma: no cover - defensive for preview
+                log.error("Preview render failed for %s: %s", instance.instance_id, exc, exc_info=True)
+
+        for annot in spec.annotations:
+            try:
+                _render_annotation(fig, annot, axes_map, figure_transform=ax.transAxes, figure_axes=ax)
+            except Exception as exc:  # pragma: no cover - defensive for preview
+                log.warning("Failed to render preview annotation %s: %s", annot.annotation_id, exc)
+
+        return axes_map
 
 
 def _render_graph_instance(
@@ -277,21 +300,62 @@ def _populate_graph_axes(
     except Exception as e:
         raise ValueError(f"Failed to get trace model for sample {graph_spec.sample_id}: {e}")
 
-    # Plot each trace
     default_colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
-    for idx, binding in enumerate(graph_spec.trace_bindings):
+
+    if graph_spec.twin_y and len(graph_spec.trace_bindings) >= 2:
+        primary_binding = graph_spec.trace_bindings[0]
+        secondary_binding = graph_spec.trace_bindings[1]
+
         try:
-            _plot_trace(ax, trace_model, binding, graph_spec, idx, default_colors)
+            _plot_trace(ax, trace_model, primary_binding, graph_spec, 0, default_colors)
         except Exception as e:
-            log.warning(f"Failed to plot trace {binding.name}: {e}")
+            log.warning(f"Failed to plot trace {primary_binding.name}: {e}")
 
-    _configure_axes(ax, graph_spec)
+        _configure_axes(ax, graph_spec)
 
-    if event_times:
-        _add_event_markers(ax, event_times, event_labels, event_colors)
+        ax2 = ax.twinx()
+        try:
+            _plot_trace(ax2, trace_model, secondary_binding, graph_spec, 1, default_colors)
+        except Exception as e:
+            log.warning(f"Failed to plot secondary trace {secondary_binding.name}: {e}")
+        _configure_secondary_y(ax2, graph_spec)
 
-    if graph_spec.show_legend and graph_spec.trace_bindings:
-        ax.legend(loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+        if event_times:
+            _add_event_markers(
+                ax,
+                graph_spec,
+                event_times,
+                event_labels,
+                event_colors,
+            )
+
+        if graph_spec.show_legend:
+            h1, l1 = ax.get_legend_handles_labels()
+            h2, l2 = ax2.get_legend_handles_labels()
+            handles = h1 + h2
+            labels = l1 + l2
+            if handles:
+                ax.legend(handles, labels, loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
+    else:
+        for idx, binding in enumerate(graph_spec.trace_bindings):
+            try:
+                _plot_trace(ax, trace_model, binding, graph_spec, idx, default_colors)
+            except Exception as e:
+                log.warning(f"Failed to plot trace {binding.name}: {e}")
+
+        _configure_axes(ax, graph_spec)
+
+        if event_times:
+            _add_event_markers(
+                ax,
+                graph_spec,
+                event_times,
+                event_labels,
+                event_colors,
+            )
+
+        if graph_spec.show_legend and graph_spec.trace_bindings:
+            ax.legend(loc=graph_spec.legend_loc, frameon=True, framealpha=0.9)
 
 
 def _plot_trace(
@@ -332,7 +396,7 @@ def _plot_trace(
     # Get style for this trace
     trace_style = graph_spec.trace_styles.get(binding.name, {})
     color = trace_style.get("color", default_colors[idx % len(default_colors)])
-    linewidth = trace_style.get("linewidth", 1.5)
+    linewidth = trace_style.get("linewidth", graph_spec.default_linewidth)
     linestyle = trace_style.get("linestyle", "-")
     marker = trace_style.get("marker", "")
     markersize = trace_style.get("markersize", 4)
@@ -378,19 +442,62 @@ def _configure_axes(ax: Axes, graph_spec: GraphSpec) -> None:
         if spine_name in ax.spines:
             ax.spines[spine_name].set_visible(visible)
 
+    # Ticks
+    if graph_spec.x_tick_interval is not None and graph_spec.x_scale == "linear":
+        ax.xaxis.set_major_locator(MultipleLocator(graph_spec.x_tick_interval))
+    elif graph_spec.x_max_ticks is not None:
+        ax.xaxis.set_major_locator(MaxNLocator(graph_spec.x_max_ticks))
+
+    if graph_spec.y_max_ticks is not None:
+        ax.yaxis.set_major_locator(MaxNLocator(graph_spec.y_max_ticks))
+
+
+def _configure_secondary_y(ax2: Axes, graph_spec: GraphSpec) -> None:
+    """Configure the secondary y axis for twin-Y plots."""
+    if graph_spec.y2_label:
+        ax2.set_ylabel(graph_spec.y2_label)
+    ax2.set_yscale(graph_spec.y2_scale)
+    if graph_spec.y2_lim is not None:
+        ax2.set_ylim(graph_spec.y2_lim)
+
+    ax2.grid(False)
+    if "right" in ax2.spines:
+        ax2.spines["right"].set_visible(True)
+    if "left" in ax2.spines:
+        ax2.spines["left"].set_visible(False)
+
 
 def _add_event_markers(
     ax: Axes,
+    graph_spec: GraphSpec,
     event_times: list[float],
     event_labels: list[str] | None,
     event_colors: list[str] | None,
 ) -> None:
     """Add vertical lines for event markers."""
-    for i, event_time in enumerate(event_times):
-        color = event_colors[i] if event_colors and i < len(event_colors) else "#888888"
-        label = event_labels[i] if event_labels and i < len(event_labels) else None
+    if not graph_spec.show_event_markers:
+        return
 
-        ax.axvline(event_time, color=color, linestyle="--", linewidth=1.0, alpha=0.6, zorder=1)
+    for i, event_time in enumerate(event_times):
+        color = (
+            event_colors[i]
+            if event_colors and i < len(event_colors)
+            else graph_spec.event_line_color
+        )
+        label = (
+            event_labels[i]
+            if graph_spec.show_event_labels and event_labels and i < len(event_labels)
+            else None
+        )
+
+        ax.axvline(
+            event_time,
+            color=color,
+            linestyle=graph_spec.event_line_style,
+            linewidth=graph_spec.event_line_width,
+            alpha=0.6,
+            zorder=1,
+        )
 
         # Add label at top if provided
         if label:
@@ -399,7 +506,7 @@ def _add_event_markers(
                 0.98,
                 label,
                 transform=ax.get_xaxis_transform(),
-                rotation=90,
+                rotation=graph_spec.event_label_rotation,
                 va="top",
                 ha="right",
                 fontsize=8,

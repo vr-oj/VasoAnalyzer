@@ -22,6 +22,7 @@ __all__ = [
     "AnnotationSpec",
     "LayoutSpec",
     "ExportSpec",
+    "FontSpec",
     "FigureSpec",
 ]
 
@@ -85,10 +86,30 @@ class GraphSpec:
     show_spines: dict[str, bool] = field(
         default_factory=lambda: {"top": False, "right": False, "bottom": True, "left": True}
     )
+    show_event_markers: bool = True
+    show_event_labels: bool = True
+    event_line_color: str = "#888888"
+    event_line_width: float = 1.0
+    event_line_style: str = "--"
+    event_label_rotation: float = 90.0
 
     # Legend
     show_legend: bool = True
     legend_loc: str = "upper right"
+
+    # Tick configuration
+    x_tick_interval: float | None = None
+    x_max_ticks: int | None = None
+    y_max_ticks: int | None = None
+
+    # Dual Y axis
+    twin_y: bool = False
+    y2_label: str = ""
+    y2_scale: Literal["linear", "log", "symlog"] = "linear"
+    y2_lim: tuple[float, float] | None = None
+
+    # Defaults
+    default_linewidth: float = 1.5
 
     # Per-trace style overrides
     # Format: {trace_name: {"color": "#ff0000", "linewidth": 2.0, ...}}
@@ -220,6 +241,21 @@ class ExportSpec:
 
 
 @dataclass
+class FontSpec:
+    """Global font settings for the figure."""
+
+    family: str = "DejaVu Sans"
+    base_size: float = 8.0
+    weight: Literal["normal", "bold"] = "normal"
+    style: Literal["normal", "italic", "oblique"] = "normal"
+
+    axis_label_size: float = 9.0
+    tick_label_size: float = 8.0
+    legend_size: float = 8.0
+    annotation_size: float = 8.0
+
+
+@dataclass
 class FigureSpec:
     """Complete specification of a figure.
 
@@ -237,4 +273,5 @@ class FigureSpec:
     layout: LayoutSpec = field(default_factory=LayoutSpec)
     annotations: list[AnnotationSpec] = field(default_factory=list)
     export: ExportSpec = field(default_factory=ExportSpec)
+    font: FontSpec = field(default_factory=FontSpec)
     metadata: dict[str, Any] = field(default_factory=dict)

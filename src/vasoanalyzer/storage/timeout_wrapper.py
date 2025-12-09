@@ -29,8 +29,8 @@ def timeout(seconds: int) -> Generator[None, None, None]:
     """
     Context manager that raises TimeoutError after specified seconds.
 
-    Uses signal.SIGALRM on Unix-like systems (macOS, Linux) and
-    threading.Timer on Windows.
+    Uses signal.SIGALRM on Unix-like systems (macOS, Linux) when running in
+    the main thread, and threading.Timer elsewhere (including Windows).
 
     Args:
         seconds: Maximum duration in seconds
@@ -54,13 +54,15 @@ def timeout(seconds: int) -> Generator[None, None, None]:
         - Timeout does not forcefully kill threads, just raises exception
     """
     is_windows = platform.system() == "Windows"
+    in_main_thread = threading.current_thread() is threading.main_thread()
 
-    if is_windows:
-        # Use thread-based timeout for Windows
+    def _thread_timer_timeout() -> Generator[None, None, None]:
+        """Timer-based fallback for worker threads or Windows."""
+
         timer = None
         timed_out = threading.Event()
 
-        def timeout_handler():
+        def timeout_handler() -> None:
             timed_out.set()
 
         timer = threading.Timer(seconds, timeout_handler)
@@ -74,6 +76,10 @@ def timeout(seconds: int) -> Generator[None, None, None]:
         finally:
             if timer is not None:
                 timer.cancel()
+
+    if is_windows or not in_main_thread:
+        # Windows or worker threads: use timer-based timeout
+        yield from _thread_timer_timeout()
 
     else:
         # Use signal-based timeout for Unix-like systems
