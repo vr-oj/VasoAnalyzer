@@ -1,35 +1,19 @@
-"""Pure Matplotlib Figure Composer Window - Phase 3 Complete.
-
-This module implements the main composer UI using ONLY Matplotlib widgets
-for all controls. Qt is used solely to host the Matplotlib canvas.
-
-Features (Phase 3):
-- Full annotation creation (text, box, arrow, line)
-- Annotation selection and dragging
-- Annotation property editor panel
-- Multi-panel layout templates
-- Export functionality
-"""
+"""Single Figure Studio composer window (Phase 1 single-axes core)."""
 
 from __future__ import annotations
 
-import copy
 import logging
-import uuid
-from typing import TYPE_CHECKING, Any
 from pathlib import Path
+from contextlib import contextmanager
+from typing import Any, Dict, Optional
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
-from matplotlib.artist import Artist
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QColor, QShowEvent
 from PyQt5.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
+    QColorDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -39,105 +23,57 @@ from PyQt5.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
-    QMessageBox,
     QListWidget,
     QListWidgetItem,
-    QPlainTextEdit,
+    QMessageBox,
     QPushButton,
-    QAbstractSpinBox,
-    QRadioButton,
     QScrollArea,
+    QSlider,
     QSpinBox,
     QSplitter,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QHeaderView,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from .renderer import create_annotation_artists, render_figure, render_into_axes
-from .spec_io import (
-    apply_template_structure,
-    list_templates,
-    load_figure_spec,
-    load_dataset_figure_spec,
-    load_template,
-    save_figure_spec,
-    save_dataset_figure_spec,
-    save_template,
-)
-from .specs import (
+from .renderer import (
     AnnotationSpec,
-    ExportSpec,
+    AxesSpec,
+    EventSpec,
     FigureSpec,
-    GraphInstance,
-    GraphSpec,
-    LayoutSpec,
-    TraceBinding,
+    PageSpec,
+    RenderContext,
+    TraceSpec,
+    build_figure,
+    export_figure,
 )
-from .theme import PAGE_BG_COLOR, THEME
-from .styles import STYLE_PRESETS, apply_style_preset
-
-if TYPE_CHECKING:
-    from matplotlib.axes import Axes
-
-    from vasoanalyzer.core.trace_model import TraceModel
-
-__all__ = ["PureMplFigureComposer"]
 
 log = logging.getLogger(__name__)
 
 
-class ComposerNavigationToolbar(NavigationToolbar):
-    """Navigation toolbar limited to core pan/zoom actions."""
-
-    toolitems = [
-        t
-        for t in NavigationToolbar.toolitems
-        if t[0] in ("Home", "Back", "Forward", "Pan", "Zoom")
-    ]
-
-    def __init__(self, canvas, parent, on_view_changed=None):
-        super().__init__(canvas, parent)
-        self._on_view_changed = on_view_changed
-
-    def _notify_view_changed(self, event=None):
-        if self._on_view_changed is not None:
-            try:
-                self._on_view_changed(event)
-            except Exception:
-                pass
-
-    def release_zoom(self, event):
-        super().release_zoom(event)
-        self._notify_view_changed(event)
-
-    def release_pan(self, event):
-        super().release_pan(event)
-        self._notify_view_changed(event)
-
-    def home(self, *args, **kwargs):
-        super().home(*args, **kwargs)
-        self._notify_view_changed()
-
-    def back(self, *args, **kwargs):
-        super().back(*args, **kwargs)
-        self._notify_view_changed()
-
-    def forward(self, *args, **kwargs):
-        super().forward(*args, **kwargs)
-        self._notify_view_changed()
+@contextmanager
+def signals_blocked(widget):
+    """Context manager to safely block/unblock signals."""
+    widget.blockSignals(True)
+    try:
+        yield widget
+    finally:
+        widget.blockSignals(False)
 
 
 class PureMplFigureComposer(QMainWindow):
-    """Pure Matplotlib Figure Composer window with full annotation support."""
+    """Minimal composer window wired to the single-axes FigureSpec."""
+
+    DEFAULT_WIDTH_IN = 6.0
+    DEFAULT_HEIGHT_IN = 3.0
+    DEFAULT_DPI = 300.0
 
     def __init__(
         self,
-        trace_model: TraceModel | None = None,
+        trace_model: Any | None = None,
         parent=None,
         *,
         project=None,
@@ -148,713 +84,459 @@ class PureMplFigureComposer(QMainWindow):
         visible_channels: dict[str, bool] | None = None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Pure Matplotlib Figure Composer")
+        self.setWindowTitle("Single Figure Studio")
         self.trace_model = trace_model
         self.project = project
         self.dataset_id = dataset_id
         self.event_times = event_times or []
         self.event_labels = event_labels or []
         self.event_colors = event_colors or []
-        self._initial_visible_channels = visible_channels
+        self.visible_channels = visible_channels or {}
 
-        # Typography baseline
-        mpl.rcParams["font.family"] = "Arial"
-        mpl.rcParams["font.size"] = 9
+        # Build initial spec from defaults; UI will be synced from it before preview
+        self._fig_spec: FigureSpec = self._build_initial_fig_spec(trace_model)
+        self._export_transparent = False
 
-        # Undo/redo stacks
-        self._undo_stack: list[FigureSpec] = []
-        self._redo_stack: list[FigureSpec] = []
-        self._max_undo = 50
+        self._figure = None
+        self._canvas = None
+        self._scroll: Optional[QScrollArea] = None
+        self._preview_zoom: float = 1.0
+        # zoom mode: "fit" means we auto-fit after each rebuild; "manual" means user controls zoom
+        self._zoom_mode: str = "fit"
+        self._preview_initialized = False
+        self._first_show_done = False
 
-        # Current spec (single source of truth)
-        self.spec = self._create_default_spec()
-        self._aspect_ratio = self.spec.layout.height_in / max(
-            self.spec.layout.width_in, 1e-6
-        )
+        self.spin_label_fontsize = None
+        self.spin_tick_fontsize = None
+        self.spin_legend_fontsize = None
+        self.spin_linewidth_scale = None
 
-        # Preview settings
-        self.preview_dpi = 100
-        # Preview uses a live FigureCanvasQTAgg at preview_dpi; export rebuilds
-        # figures via render_figure at target DPI (see export_figure).
-        self.zoom_factor = 1.0
+        self._trace_controls: Dict[str, Dict[str, Any]] = {}
+        self._event_controls: list[Dict[str, Any]] = []
+        self._anno_mode: str | None = "select"
+        self._box_start: tuple[float, float] | None = None
 
-        # Annotation interaction state
-        self.annotation_mode: str | None = "select"
-        self.selected_annotation_id: str | None = None
-        self._annotation_artists: dict[str, list[Artist]] = {}
-        self._dragging_annotation_id: str | None = None
-        self._dragging_mode: str | None = None
-        self._drag_start_data: Any = None
-        self._preview_axes_map: dict[str, Axes] = {}
-        self._axes_instance_lookup: dict[Axes, str] = {}
-        self._axis_limit_cids: dict[Axes, list[int]] = {}
-        self._suppress_axis_sync = False
-        self._suppress_size_events = False
-        self._current_event_index: int = 0
-        self._current_trace_name: str | None = None
-        self.selected_instance_id: str | None = (
-            self.spec.layout.graph_instances[0].instance_id
-            if self.spec.layout.graph_instances
-            else None
-        )
-        self.spec.metadata.setdefault("extra_export_png", False)
-        self.spec.metadata.setdefault("extra_export_tiff", False)
-        self._lock_aspect_ratio = False
-        self._applying_style_preset = False
+        self._page_update_timer = QTimer()
+        self._page_update_timer.setSingleShot(True)
+        self._page_update_timer.setInterval(150)  # 150ms debounce
+        self._page_update_timer.timeout.connect(self._apply_page_changes)
 
-        # UI widget references
-        self.control_widgets: dict[str, any] = {}
-
-        # Build UI
         self._setup_ui()
-        self._connect_toolbar_signals()
-        self._connect_events()
-        self._init_spec_from_dataset()
-        self._refresh_tabs()
 
-        # Initial render
-        self._push_undo()
-        self._update_preview()
-        self._resize_to_available_screen()
-
-    def _apply_spinbox_arrows(self, widgets: list):
-        """Ensure spin boxes always show up/down arrows."""
-        for w in widgets:
-            if isinstance(w, QAbstractSpinBox):
-                w.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
-
-    def _create_default_spec(self) -> FigureSpec:
-        """Create a default FigureSpec for initialization."""
-        visible = self._initial_visible_channels or {}
-        if self.trace_model is not None:
-            sample_id = "current_sample"
-            trace_bindings: list[TraceBinding] = []
-            # Order: inner, outer, avg_pressure, set_pressure
-            if visible.get("inner", True):
-                trace_bindings.append(TraceBinding(name="inner", kind="inner"))
-            if visible.get("outer", False) and getattr(self.trace_model, "outer_full", None) is not None:
-                trace_bindings.append(TraceBinding(name="outer", kind="outer"))
-            if visible.get("avg_pressure", False) and getattr(self.trace_model, "avg_pressure_full", None) is not None:
-                trace_bindings.append(TraceBinding(name="avg_pressure", kind="avg_pressure"))
-            if visible.get("set_pressure", False) and getattr(self.trace_model, "set_pressure_full", None) is not None:
-                trace_bindings.append(TraceBinding(name="set_pressure", kind="set_pressure"))
-            if not trace_bindings:
-                trace_bindings.append(TraceBinding(name="inner", kind="inner"))
-        else:
-            sample_id = "no_sample"
-            trace_bindings = []
-
-        graph_spec = GraphSpec(
-            graph_id="graph1",
-            name="Main Graph",
-            sample_id=sample_id,
-            trace_bindings=trace_bindings,
-            x_label="Time (s)",
-            y_label="Diameter (µm)",
+    # ------------------------------------------------------------------
+    # Spec / context helpers
+    # ------------------------------------------------------------------
+    def _build_initial_fig_spec(self, trace_model: Any | None) -> FigureSpec:
+        """Create the initial FigureSpec based on available data/UI defaults."""
+        page = PageSpec(
+            width_in=self.DEFAULT_WIDTH_IN,
+            height_in=self.DEFAULT_HEIGHT_IN,
+            dpi=self.DEFAULT_DPI,
+        )
+        axes = AxesSpec(
+            x_range=None,
+            y_range=None,
+            xlabel="Time (s)",
+            ylabel="Diameter (µm)",
+            show_grid=True,
+            grid_linestyle="--",
+            grid_color="#c0c0c0",
+            grid_alpha=0.7,
+            show_event_labels=False,
         )
 
-        graph_instance = GraphInstance(
-            instance_id="inst1",
-            graph_id="graph1",
-            row=0,
-            col=0,
-        )
+        traces: list[TraceSpec] = []
+        available_keys: list[str] = []
+        tm = trace_model
+        for key in ["inner", "outer", "avg_pressure", "set_pressure"]:
+            arr = getattr(tm, f"{key}_full", None) if tm is not None else None
+            if arr is not None:
+                if key in self.visible_channels and not self.visible_channels.get(key, True):
+                    continue
+                available_keys.append(key)
+        if not available_keys:
+            available_keys = ["inner"]
 
-        layout_spec = LayoutSpec(
-            width_in=5.9,  # ~150 mm
-            height_in=3.0,
-            graph_instances=[graph_instance],
-            nrows=1,
-            ncols=1,
-        )
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728"]
+        for idx, key in enumerate(available_keys):
+            traces.append(
+                TraceSpec(
+                    key=key,
+                    visible=True,
+                    color=colors[idx % len(colors)],
+                    linewidth=1.5,
+                    linestyle="-",
+                    marker="",
+                )
+            )
 
-        export_spec = ExportSpec(
-            format="pdf",
-            dpi=600,
-            preset_name="Single column (150 mm)",
-        )
+        events: list[EventSpec] = []
+        for idx, t in enumerate(self.event_times):
+            color = (
+                self.event_colors[idx]
+                if idx < len(self.event_colors)
+                else "#444444"
+            )
+            label = self.event_labels[idx] if idx < len(self.event_labels) else ""
+            events.append(
+                EventSpec(
+                    visible=True,
+                    time_s=float(t),
+                    color=color,
+                    linewidth=1.0,
+                    linestyle="--",
+                    label=label,
+                    label_above=True,
+                )
+            )
 
         return FigureSpec(
-            graphs={"graph1": graph_spec},
-            layout=layout_spec,
-            export=export_spec,
+            page=page,
+            axes=axes,
+            traces=traces,
+            events=events,
+            annotations=[],
+            legend_visible=True,
+            legend_fontsize=9.0,
+            legend_loc="upper right",
+            line_width_scale=1.0,
         )
 
-    def _init_spec_from_dataset(self) -> None:
-        """Load a saved FigureSpec for the active dataset if available."""
-        if self.project is None or self.dataset_id is None:
-            return
-        loaded = load_dataset_figure_spec(self.project, self.dataset_id)
-        if loaded is None:
-            return
-        self.spec = loaded
-        self.spec.metadata.setdefault("extra_export_png", False)
-        self.spec.metadata.setdefault("extra_export_tiff", False)
-        self._aspect_ratio = self.spec.layout.height_in / max(
-            self.spec.layout.width_in, 1e-6
+    def _render_context(self, *, is_preview: bool) -> RenderContext:
+        return RenderContext(
+            is_preview=is_preview,
+            trace_model=self.trace_model,
+            series_map=None,
         )
-        if self.spec.layout.graph_instances:
-            self.selected_instance_id = self.spec.layout.graph_instances[0].instance_id
 
-    def _setup_ui(self):
-        """Set up Qt-driven layout with Matplotlib canvas."""
+    def _sync_ui_from_spec(self) -> None:
+        """Populate UI controls from the current FigureSpec without firing signals."""
+        if not hasattr(self, "spin_width"):
+            return
+        blocks = [
+            self.spin_width,
+            self.spin_height,
+            self.spin_dpi,
+            self.cb_axes_first,
+            self.spin_axes_margin,
+            self.edit_xlabel,
+            self.edit_ylabel,
+            self.cb_grid,
+            self.combo_grid_style,
+            self.edit_grid_color,
+            self.spin_grid_alpha,
+            self.cb_legend,
+            self.spin_label_fontsize,
+            self.spin_tick_fontsize,
+            self.spin_legend_fontsize,
+            self.combo_legend_loc,
+            self.cb_event_labels,
+            self.spin_linewidth_scale,
+        ]
+        for widget in blocks:
+            if widget is not None:
+                widget.blockSignals(True)
+
+        page = self._fig_spec.page
+        axes = self._fig_spec.axes
+        self.spin_width.setValue(page.width_in)
+        self.spin_height.setValue(page.height_in)
+        self.spin_dpi.setValue(int(page.dpi))
+        self.cb_axes_first.setChecked(page.axes_first)
+        self.spin_axes_margin.setValue(page.min_margin_in)
+        self.edit_xlabel.setText(axes.xlabel)
+        self.edit_ylabel.setText(axes.ylabel)
+        self.cb_grid.setChecked(axes.show_grid)
+        self.combo_grid_style.setCurrentText(axes.grid_linestyle)
+        self.edit_grid_color.setText(axes.grid_color)
+        self.spin_grid_alpha.setValue(axes.grid_alpha)
+        self.cb_legend.setChecked(self._fig_spec.legend_visible)
+        self.combo_legend_loc.setCurrentText(self._fig_spec.legend_loc)
+        self.cb_event_labels.setChecked(getattr(axes, "show_event_labels", False))
+        if self.spin_label_fontsize is not None and axes.xlabel_fontsize is not None:
+            self.spin_label_fontsize.setValue(axes.xlabel_fontsize)
+        if self.spin_tick_fontsize is not None and axes.tick_label_fontsize is not None:
+            self.spin_tick_fontsize.setValue(axes.tick_label_fontsize)
+        if self.spin_legend_fontsize is not None and self._fig_spec.legend_fontsize is not None:
+            self.spin_legend_fontsize.setValue(self._fig_spec.legend_fontsize)
+        if self.spin_linewidth_scale is not None:
+            self.spin_linewidth_scale.setValue(self._fig_spec.line_width_scale)
+
+        for widget in blocks:
+            if widget is not None:
+                widget.blockSignals(False)
+        self._update_figure_setup_labels()
+        self._update_export_size_label()
+
+    def _sync_spec_from_ui(self) -> None:
+        """Update FigureSpec from current UI control values."""
+        page = self._fig_spec.page
+        axes = self._fig_spec.axes
+        page.width_in = float(self.spin_width.value())
+        page.height_in = float(self.spin_height.value())
+        page.dpi = float(self.spin_dpi.value())
+        page.axes_first = self.cb_axes_first.isChecked()
+        page.min_margin_in = float(self.spin_axes_margin.value())
+        if page.axes_first:
+            page.axes_width_in = page.width_in
+            page.axes_height_in = page.height_in
+        else:
+            page.axes_width_in = None
+            page.axes_height_in = None
+        axes.xlabel = self.edit_xlabel.text()
+        axes.ylabel = self.edit_ylabel.text()
+        axes.show_grid = self.cb_grid.isChecked()
+        axes.grid_linestyle = self.combo_grid_style.currentText()
+        axes.grid_color = self.edit_grid_color.text()
+        axes.grid_alpha = float(self.spin_grid_alpha.value())
+        if self.spin_label_fontsize is not None:
+            axes.xlabel_fontsize = float(self.spin_label_fontsize.value())
+            axes.ylabel_fontsize = float(self.spin_label_fontsize.value())
+        if self.spin_tick_fontsize is not None:
+            axes.tick_label_fontsize = float(self.spin_tick_fontsize.value())
+        axes.show_event_labels = self.cb_event_labels.isChecked()
+        self._fig_spec.legend_visible = self.cb_legend.isChecked()
+        if self.spin_legend_fontsize is not None:
+            self._fig_spec.legend_fontsize = float(self.spin_legend_fontsize.value())
+        self._fig_spec.legend_loc = self.combo_legend_loc.currentText()
+        if self.spin_linewidth_scale is not None:
+            self._fig_spec.line_width_scale = float(self.spin_linewidth_scale.value())
+        self._update_figure_setup_labels()
+        self._update_export_size_label()
+
+    def _update_figure_setup_labels(self) -> None:
+        if not hasattr(self, "lbl_width"):
+            return
+        if self.cb_axes_first.isChecked():
+            self.lbl_width.setText("Axes width (in)")
+            self.lbl_height.setText("Axes height (in)")
+        else:
+            self.lbl_width.setText("Figure width (in)")
+            self.lbl_height.setText("Figure height (in)")
+
+    def _update_export_size_label(self) -> None:
+        if not hasattr(self, "label_export_size"):
+            return
+        page = self._fig_spec.page
+        w_in = page.effective_width_in or page.width_in
+        h_in = page.effective_height_in or page.height_in
+        dpi = page.dpi
+        w_px = int(w_in * dpi)
+        h_px = int(h_in * dpi)
+        self.label_export_size.setText(f"{w_in:.2f} in × {h_in:.2f} in ({w_px} × {h_px} px @ {dpi:.0f} dpi)")
+
+    # ------------------------------------------------------------------
+    # UI setup
+    # ------------------------------------------------------------------
+    def _setup_ui(self) -> None:
+        # Set reasonable initial window size
+        self.resize(1400, 900)
+
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
-        root_layout.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(6, 6, 6, 6)
 
         splitter = QSplitter(Qt.Horizontal)
-        root_layout.addWidget(splitter)
+        root.addWidget(splitter)
 
-        # Left pane: title, canvas, toolbar, status
+        # Left: preview + zoom/export controls
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(4, 4, 4, 4)
-        left_layout.setSpacing(2)
-
-        title_label = QLabel("Pure Matplotlib Figure Composer")
-        title_label.setStyleSheet("font-weight: bold; font-size: 14px; color: #212529;")
-        subtitle_label = QLabel("Preview = Export • Spec-driven layout")
-        subtitle_label.setStyleSheet("color: #6c757d; font-size: 11px;")
-        left_layout.addWidget(title_label)
-        left_layout.addWidget(subtitle_label)
-
-        self.ui_figure = Figure(figsize=(10, 6), dpi=100, facecolor=THEME["bg_window"])
-        self.canvas = FigureCanvasQTAgg(self.ui_figure)
-        left_layout.addWidget(self.canvas, stretch=1)
-
-        self.preview_ax = self.ui_figure.add_subplot(111)
-        self.preview_ax.set_facecolor(PAGE_BG_COLOR)
-        self.preview_ax.axis("off")
-        self.preview_ax.set_zorder(1)
-        self.preview_ax.set_navigate(False)
-
-        # Overlay axes for annotations so they render above panels
-        self._annotation_overlay_ax = self.ui_figure.add_axes(
-            self.preview_ax.get_position(), facecolor="none"
-        )
-        self._annotation_overlay_ax.set_axis_off()
-        self._annotation_overlay_ax.set_zorder(10)
-        self._annotation_overlay_ax.set_navigate(False)
-        try:
-            self.ui_figure.axes.remove(self._annotation_overlay_ax)
-            self.ui_figure.axes.insert(0, self._annotation_overlay_ax)
-        except Exception:
-            pass
-
-        self.preview_ax.callbacks.connect(
-            "xlim_changed", self._sync_annotation_overlay_limits
-        )
-        self.preview_ax.callbacks.connect(
-            "ylim_changed", self._sync_annotation_overlay_limits
-        )
-
-        self.nav_toolbar = ComposerNavigationToolbar(self.canvas, left, on_view_changed=self._on_nav_view_changed)
-        left_layout.addWidget(self.nav_toolbar)
-
-        toolbar_row = QHBoxLayout()
-        toolbar_row.setSpacing(4)
-        self.btn_mode_select = QToolButton(text="Select")
-        self.btn_mode_text = QToolButton(text="Text")
-        self.btn_mode_box = QToolButton(text="Box")
-        self.btn_mode_arrow = QToolButton(text="Arrow")
-        self.btn_mode_line = QToolButton(text="Line")
-        self.btn_delete = QPushButton("Delete")
-        self.btn_undo = QPushButton("Undo")
-        self.btn_redo = QPushButton("Redo")
-        self.btn_export = QPushButton("Export")
-        for btn in [
-            self.btn_mode_select,
-            self.btn_mode_text,
-            self.btn_mode_box,
-            self.btn_mode_arrow,
-            self.btn_mode_line,
-            self.btn_delete,
-            self.btn_undo,
-            self.btn_redo,
-            self.btn_export,
-        ]:
-            btn.setFixedHeight(32)
-            toolbar_row.addWidget(btn)
-        left_layout.addLayout(toolbar_row)
-
-        self.status_label = QLabel("")
-        self.status_label.setStyleSheet(
-            'color: #6c757d; font-family: "Menlo", "Courier New", monospace;'
-        )
-        left_layout.addWidget(self.status_label)
-
+        left_layout.setSpacing(6)
+        title = QLabel("Single Figure Studio")
+        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        left_layout.addWidget(title)
         splitter.addWidget(left)
         splitter.setStretchFactor(0, 3)
 
-        # Right pane: tabbed controls wrapped in a scroll area
-        controls_container = QWidget()
-        controls_layout = QVBoxLayout(controls_container)
-        controls_layout.setContentsMargins(8, 8, 8, 8)
-        controls_layout.setSpacing(6)
-        controls_container.setMaximumWidth(560)
-
-        self.tab_widget = QTabWidget()
-        self.layout_tab = self._build_layout_tab()
-        self.fonts_tab = self._build_fonts_tab()
-        self.traces_events_tab = self._build_traces_events_tab()
-        self.annotation_tab = self._build_annotation_tab()
-        self.export_tab = self._build_export_tab()
-        self.tab_widget.addTab(self.layout_tab, "Layout")
-        self.tab_widget.addTab(self.fonts_tab, "Fonts / Style")
-        self.tab_widget.addTab(self.traces_events_tab, "Traces & Events")
-        self.tab_widget.addTab(self.annotation_tab, "Annotation")
-        self.tab_widget.addTab(self.export_tab, "Export")
-        controls_layout.addWidget(self.tab_widget)
-
-        scroll = QScrollArea()
-        scroll.setWidget(controls_container)
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setMaximumWidth(580)
-
-        splitter.addWidget(scroll)
+        # Right: tabs
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setSpacing(6)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_figure_tab(), "Figure Setup")
+        self.tabs.addTab(self._build_axes_tab(), "Axes / Legend")
+        self.tabs.addTab(self._build_traces_tab(), "Traces")
+        self.tabs.addTab(self._build_events_tab(), "Events")
+        self.tabs.addTab(self._build_annotations_tab(), "Annotations")
+        right_layout.addWidget(self.tabs)
+        splitter.addWidget(right)
         splitter.setStretchFactor(1, 2)
 
-        self.canvas.draw()
+        # Sync UI from spec then spec from UI to guarantee a single source of truth
+        self._sync_ui_from_spec()
+        self._sync_spec_from_ui()
 
-    def _resize_to_available_screen(self):
-        """Resize the window to fit the available screen geometry."""
-        app = QApplication.instance()
-        if app is None:
+        # Build preview after controls are in place
+        self._create_preview()
+        if self._scroll is not None:
+            left_layout.addWidget(self._scroll, stretch=1)
+
+        # Zoom / annotation / export controls
+        zoom_row = QHBoxLayout()
+        self.btn_zoom_out = QPushButton("Zoom -")
+        self.btn_zoom_in = QPushButton("Zoom +")
+        self.btn_zoom_fit = QPushButton("Fit")
+        self.zoom_slider = QSlider(Qt.Horizontal)
+        self.zoom_slider.setRange(25, 400)
+        self.zoom_slider.setValue(int(self._preview_zoom * 100))
+        zoom_row.addWidget(self.btn_zoom_out)
+        zoom_row.addWidget(self.zoom_slider, stretch=1)
+        zoom_row.addWidget(self.btn_zoom_in)
+        zoom_row.addWidget(self.btn_zoom_fit)
+        left_layout.addLayout(zoom_row)
+
+        anno_row = QHBoxLayout()
+        self.btn_anno_select = QPushButton("Select")
+        self.btn_anno_text = QPushButton("Text")
+        self.btn_anno_box = QPushButton("Box")
+        self.btn_anno_delete = QPushButton("Delete")
+        for btn in [self.btn_anno_select, self.btn_anno_text, self.btn_anno_box, self.btn_anno_delete]:
+            anno_row.addWidget(btn)
+        anno_row.addStretch(1)
+        left_layout.addLayout(anno_row)
+
+        export_row = QHBoxLayout()
+        self.btn_export = QPushButton("Export…")
+        export_row.addStretch(1)
+        export_row.addWidget(self.btn_export)
+        left_layout.addLayout(export_row)
+
+        # Signals
+        self.btn_zoom_in.clicked.connect(lambda: self._set_zoom(self._preview_zoom * 1.25, mode="manual"))
+        self.btn_zoom_out.clicked.connect(lambda: self._set_zoom(self._preview_zoom * 0.8, mode="manual"))
+        self.zoom_slider.valueChanged.connect(lambda v: self._set_zoom(v / 100.0, mode="manual"))
+        self.btn_zoom_fit.clicked.connect(self._on_zoom_fit_clicked)
+        self.btn_export.clicked.connect(self._export_dialog)
+        self.btn_anno_select.clicked.connect(lambda: self._set_anno_mode("select"))
+        self.btn_anno_text.clicked.connect(lambda: self._set_anno_mode("text"))
+        self.btn_anno_box.clicked.connect(lambda: self._set_anno_mode("box"))
+        self.btn_anno_delete.clicked.connect(self._delete_selected_annotation)
+        self._update_anno_button_styles()
+
+    def _create_preview(self) -> None:
+        if self._preview_initialized:
             return
-        screen = self.screen() or app.primaryScreen()
-        if screen is None:
-            return
-        geom = screen.availableGeometry()
-        # Leave a small margin so window chrome is visible
-        margin = 12
-        target = geom.adjusted(margin, margin, -margin, -margin)
-        self.setGeometry(target)
 
-    # ------------------------------------------------------------------
-    # Qt toolbar wiring
-    # ------------------------------------------------------------------
-    def _connect_toolbar_signals(self):
-        self.btn_mode_select.clicked.connect(
-            lambda: self._set_annotation_mode("select")
-        )
-        self.btn_mode_text.clicked.connect(lambda: self._set_annotation_mode("text"))
-        self.btn_mode_box.clicked.connect(lambda: self._set_annotation_mode("box"))
-        self.btn_mode_arrow.clicked.connect(lambda: self._set_annotation_mode("arrow"))
-        self.btn_mode_line.clicked.connect(lambda: self._set_annotation_mode("line"))
+        ctx = self._render_context(is_preview=True)
+        fig = build_figure(self._fig_spec, ctx, fig=None)
+        self._figure = fig
+        self._canvas = FigureCanvasQTAgg(fig)
+        self._canvas.mpl_connect("button_press_event", self._on_canvas_press)
+        self._canvas.mpl_connect("button_release_event", self._on_canvas_release)
 
-        self.btn_delete.clicked.connect(lambda: self._set_annotation_mode("delete"))
-        self.btn_undo.clicked.connect(self._undo)
-        self.btn_redo.clicked.connect(self._redo)
-        self.btn_export.clicked.connect(self.export_figure)
-        self._update_toolbar_styles()
+        scroll = QScrollArea(self)
+        scroll.setWidget(self._canvas)
+        scroll.setWidgetResizable(False)
+        self._scroll = scroll
 
-    def _set_annotation_mode(self, mode: str):
-        self.annotation_mode = mode
-        self._update_toolbar_styles()
-        self._update_footer()
-
-    def _update_toolbar_styles(self):
-        mode_buttons = {
-            "select": self.btn_mode_select,
-            "text": self.btn_mode_text,
-            "box": self.btn_mode_box,
-            "arrow": self.btn_mode_arrow,
-            "line": self.btn_mode_line,
-            "delete": self.btn_delete,
-        }
-        for mode, btn in mode_buttons.items():
-            if mode == self.annotation_mode:
-                btn.setStyleSheet(
-                    "background-color: #4da3ff; color: white; font-weight: bold;"
-                )
-            else:
-                btn.setStyleSheet("")
+        self._preview_initialized = True
+        # Defer initial fit until the window is shown (handled in showEvent)
 
     # ------------------------------------------------------------------
     # Tabs
     # ------------------------------------------------------------------
-    def _build_layout_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QGridLayout(w)
-        layout.setSpacing(8)
+    def _build_figure_tab(self) -> QWidget:
+        tab = QWidget()
+        form = QFormLayout(tab)
+        form.setLabelAlignment(Qt.AlignRight)
 
-        # Size
-        grp_size = QGroupBox("Figure size")
-        size_form = QFormLayout(grp_size)
-        size_form.addRow(QLabel("Figure area (not page)"))
         self.spin_width = QDoubleSpinBox()
-        self.spin_width.setRange(2.0, 24.0)
+        self.spin_width.setRange(1.0, 30.0)
         self.spin_width.setSingleStep(0.1)
-        self.spin_width.setValue(self.spec.layout.width_in)
-        self.label_width_mm = QLabel("")
-        self.label_width_mm.setStyleSheet("color: #6c757d;")
-        row_w = QHBoxLayout()
-        row_w.addWidget(self.spin_width)
-        row_w.addWidget(self.label_width_mm)
-        row_w.addStretch(1)
-        size_form.addRow("Width (in)", row_w)
-
+        self.spin_width.setValue(self._fig_spec.page.width_in)
         self.spin_height = QDoubleSpinBox()
-        self.spin_height.setRange(1.0, 24.0)
+        self.spin_height.setRange(1.0, 30.0)
         self.spin_height.setSingleStep(0.1)
-        self.spin_height.setValue(self.spec.layout.height_in)
-        self.label_height_mm = QLabel("")
-        self.label_height_mm.setStyleSheet("color: #6c757d;")
-        row_h = QHBoxLayout()
-        row_h.addWidget(self.spin_height)
-        row_h.addWidget(self.label_height_mm)
-        row_h.addStretch(1)
-        size_form.addRow("Height (in)", row_h)
-        self.cb_lock_aspect = QCheckBox("Lock aspect ratio")
-        size_form.addRow(self.cb_lock_aspect)
+        self.spin_height.setValue(self._fig_spec.page.height_in)
+        self.spin_dpi = QSpinBox()
+        self.spin_dpi.setRange(50, 1200)
+        self.spin_dpi.setValue(int(self._fig_spec.page.dpi))
+        self.cb_transparent = QCheckBox("Transparent export background")
+        self.cb_axes_first = QCheckBox("Axes-first sizing")
+        self.cb_axes_first.setChecked(self._fig_spec.page.axes_first)
+        self.spin_axes_margin = QDoubleSpinBox()
+        self.spin_axes_margin.setRange(0.0, 2.0)
+        self.spin_axes_margin.setSingleStep(0.1)
+        self.spin_axes_margin.setDecimals(2)
+        self.spin_axes_margin.setValue(self._fig_spec.page.min_margin_in)
 
-        # Grid
-        grp_grid = QGroupBox("Panel grid")
-        grid_form = QFormLayout(grp_grid)
-        grid_form.addRow(QLabel("Panel grid inside figure (LayoutSpec.nrows/ncols)"))
-        self.spin_rows = QSpinBox()
-        self.spin_rows.setRange(1, 8)
-        self.spin_rows.setValue(self.spec.layout.nrows)
-        self.spin_cols = QSpinBox()
-        self.spin_cols.setRange(1, 8)
-        self.spin_cols.setValue(self.spec.layout.ncols)
-        self.spin_hspace = QDoubleSpinBox()
-        self.spin_hspace.setRange(0.0, 2.0)
-        self.spin_hspace.setSingleStep(0.05)
-        self.spin_hspace.setValue(self.spec.layout.hspace)
-        self.spin_wspace = QDoubleSpinBox()
-        self.spin_wspace.setRange(0.0, 2.0)
-        self.spin_wspace.setSingleStep(0.05)
-        self.spin_wspace.setValue(self.spec.layout.wspace)
-        grid_form.addRow("Rows", self.spin_rows)
-        grid_form.addRow("Columns", self.spin_cols)
-        grid_form.addRow("Vertical spacing", self.spin_hspace)
-        grid_form.addRow("Horizontal spacing", self.spin_wspace)
-        presets_row = QHBoxLayout()
-        for r, c, label in [(1, 1, "1×1"), (1, 2, "1×2"), (2, 1, "2×1"), (2, 2, "2×2")]:
-            btn = QPushButton(label)
-            btn.clicked.connect(lambda _, rr=r, cc=c: self._set_grid_preset(rr, cc))
-            presets_row.addWidget(btn)
-        presets_row.addStretch(1)
-        grid_form.addRow("Quick presets", presets_row)
+        self.lbl_width = QLabel("Figure width (in)")
+        self.lbl_height = QLabel("Figure height (in)")
+        form.addRow(self.lbl_width, self.spin_width)
+        form.addRow(self.lbl_height, self.spin_height)
+        form.addRow("DPI", self.spin_dpi)
+        form.addRow(self.cb_axes_first)
+        form.addRow("Min margin (in)", self.spin_axes_margin)
+        form.addRow("", self.cb_transparent)
+        self.label_export_size = QLabel("")
+        self.label_export_size.setStyleSheet("color: #6c757d;")
+        form.addRow("Export size", self.label_export_size)
 
-        # Panel mapping
-        grp_map = QGroupBox("Panel mapping")
-        map_layout = QVBoxLayout(grp_map)
-        self.table_panel_map = QTableWidget(0, 6)
-        self.table_panel_map.setHorizontalHeaderLabels(
-            ["Label", "Graph", "Row (0-based)", "Col (0-based)", "Rowspan", "Colspan"]
-        )
-        self.table_panel_map.verticalHeader().setVisible(False)
-        self.table_panel_map.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table_panel_map.setSelectionMode(QTableWidget.SingleSelection)
-        self.table_panel_map.horizontalHeader().setSectionResizeMode(
-            QHeaderView.Stretch
-        )
-        map_layout.addWidget(self.table_panel_map)
+        self.spin_width.valueChanged.connect(self._on_page_dimension_changed)
+        self.spin_height.valueChanged.connect(self._on_page_dimension_changed)
+        self.spin_dpi.valueChanged.connect(self._on_page_dimension_changed)
+        self.cb_axes_first.toggled.connect(self._on_page_dimension_changed)
+        self.cb_axes_first.toggled.connect(lambda _: self._update_figure_setup_labels())
+        self.spin_axes_margin.valueChanged.connect(self._on_page_dimension_changed)
+        self.cb_transparent.toggled.connect(self._on_export_bg_changed)
+        return tab
 
-        btn_row = QHBoxLayout()
-        self.btn_panel_up = QPushButton("Swap up")
-        self.btn_panel_down = QPushButton("Swap down")
-        self.btn_panel_dup = QPushButton("Duplicate panel")
-        self.btn_panel_remove = QPushButton("Remove panel")
-        for btn in [
-            self.btn_panel_up,
-            self.btn_panel_down,
-            self.btn_panel_dup,
-            self.btn_panel_remove,
-        ]:
-            btn_row.addWidget(btn)
-        map_layout.addLayout(btn_row)
+    def _build_axes_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
 
-        # Panel labels
-        grp_labels = QGroupBox("Panel labels (A, B, C…) applied to all panels")
-        labels_form = QFormLayout(grp_labels)
-        self.cb_panel_labels = QCheckBox("Show panel labels")
-        labels_form.addRow(self.cb_panel_labels)
-        self.spin_panel_label_size = QDoubleSpinBox()
-        self.spin_panel_label_size.setRange(6.0, 32.0)
-        self.combo_panel_label_weight = QComboBox()
-        self.combo_panel_label_weight.addItems(["normal", "bold"])
-        self.spin_panel_label_x = QDoubleSpinBox()
-        self.spin_panel_label_x.setRange(-1.0, 2.0)
-        self.spin_panel_label_x.setSingleStep(0.01)
-        self.spin_panel_label_y = QDoubleSpinBox()
-        self.spin_panel_label_y.setRange(-1.0, 2.0)
-        self.spin_panel_label_y.setSingleStep(0.01)
-        labels_form.addRow("Font size", self.spin_panel_label_size)
-        labels_form.addRow("Weight", self.combo_panel_label_weight)
-        labels_form.addRow("X offset", self.spin_panel_label_x)
-        labels_form.addRow("Y offset", self.spin_panel_label_y)
-
-        # Templates (save/load)
-        grp_tpl = QGroupBox("Templates")
-        tpl_layout = QHBoxLayout()
-        self.combo_templates = QComboBox()
-        self._refresh_template_list()
-        tpl_layout.addWidget(self.combo_templates)
-        btn_apply_tpl = QPushButton("Apply")
-        btn_save_tpl = QPushButton("Save current")
-        tpl_layout.addWidget(btn_apply_tpl)
-        tpl_layout.addWidget(btn_save_tpl)
-        tpl_layout2 = QVBoxLayout()
-        tpl_layout2.addLayout(tpl_layout)
-        note = QLabel(
-            "Templates apply: size, grid, panel mapping, panel labels. Data/annotations preserved."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: #6c757d;")
-        tpl_layout2.addWidget(note)
-        grp_tpl.setLayout(tpl_layout2)
-
-        layout.addWidget(grp_size, 0, 0)
-        layout.addWidget(grp_grid, 0, 1)
-        layout.addWidget(grp_map, 1, 0, 1, 2)
-        layout.addWidget(grp_labels, 2, 0)
-        layout.addWidget(grp_tpl, 2, 1)
-        layout.setRowStretch(3, 1)
-
-        # Signals
-        self.spin_width.valueChanged.connect(self._on_size_changed_qt)
-        self.spin_height.valueChanged.connect(self._on_size_changed_qt)
-        self.cb_lock_aspect.toggled.connect(self._on_lock_aspect_toggled)
-        self.spin_rows.valueChanged.connect(self._on_grid_changed)
-        self.spin_cols.valueChanged.connect(self._on_grid_changed)
-        self.spin_hspace.valueChanged.connect(self._on_spacing_changed)
-        self.spin_wspace.valueChanged.connect(self._on_spacing_changed)
-        self.table_panel_map.itemSelectionChanged.connect(
-            self._on_panel_table_selection
-        )
-        self.btn_panel_up.clicked.connect(self._on_panel_swap_up)
-        self.btn_panel_down.clicked.connect(self._on_panel_swap_down)
-        self.btn_panel_dup.clicked.connect(self._on_panel_duplicate)
-        self.btn_panel_remove.clicked.connect(self._on_panel_remove)
-        self.cb_panel_labels.toggled.connect(self._on_panel_label_toggled)
-        self.spin_panel_label_size.valueChanged.connect(self._on_panel_label_changed)
-        self.combo_panel_label_weight.currentTextChanged.connect(
-            self._on_panel_label_changed
-        )
-        self.spin_panel_label_x.valueChanged.connect(self._on_panel_label_changed)
-        self.spin_panel_label_y.valueChanged.connect(self._on_panel_label_changed)
-        btn_apply_tpl.clicked.connect(self._on_apply_template)
-        btn_save_tpl.clicked.connect(self._on_save_template)
-
-        self._refresh_layout_tab()
-        self._apply_spinbox_arrows(
-            [
-                self.spin_width,
-                self.spin_height,
-                self.spin_rows,
-                self.spin_cols,
-                self.spin_hspace,
-                self.spin_wspace,
-                self.spin_panel_label_size,
-                self.spin_panel_label_x,
-                self.spin_panel_label_y,
-            ]
-        )
-        return w
-
-    def _build_fonts_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QGridLayout(w)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-
-        grp_fonts = QGroupBox("Typography")
-        fonts_layout = QVBoxLayout(grp_fonts)
-        form_family = QFormLayout()
-        self.combo_font_family = QComboBox()
-        common_fonts = [
-            "DejaVu Sans",
-            "Helvetica",
-            "Arial",
-            "Times New Roman",
-            "Calibri",
-            "Liberation Sans",
-            "Computer Modern",
-            "Verdana",
-        ]
-        self.combo_font_family.addItems(common_fonts)
-        self.combo_font_family.setEditable(True)
-        if self.spec.font.family not in common_fonts:
-            self.combo_font_family.addItem(self.spec.font.family)
-        self.combo_font_family.setCurrentText(self.spec.font.family)
-        self.combo_font_family.setToolTip("Global font family used for all text.")
-        form_family.addRow("Font family", self.combo_font_family)
-        fonts_layout.addLayout(form_family)
-
-        grid = QGridLayout()
-        grid.setContentsMargins(6, 4, 6, 4)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-        grid.addWidget(QLabel("Role"), 0, 0)
-        grid.addWidget(QLabel("Size"), 0, 1)
-        bold_header = QLabel("B")
-        bf = bold_header.font()
-        bf.setBold(True)
-        bold_header.setFont(bf)
-        grid.addWidget(bold_header, 0, 2)
-        italic_header = QLabel("I")
-        itf = italic_header.font()
-        itf.setItalic(True)
-        italic_header.setFont(itf)
-        grid.addWidget(italic_header, 0, 3)
-        self.font_role_controls: dict[str, dict[str, any]] = {}
-        roles = [
-            ("figure_title", "Figure title"),
-            ("panel_label", "Panel labels"),
-            ("axis_title", "Axis titles"),
-            ("tick_label", "Tick labels"),
-            ("legend", "Legend text"),
-            ("annotation", "Annotation text"),
-        ]
-        for row_idx, (role_key, role_label) in enumerate(roles, start=1):
-            lbl = QLabel(role_label)
-            spin = QDoubleSpinBox()
-            spin.setRange(4.0, 32.0)
-            spin.setDecimals(1)
-            spin.setSingleStep(0.5)
-            spin.setMaximumWidth(80)
-            bold_cb = QCheckBox()
-            bold_cb.setMaximumWidth(40)
-            italic_cb = QCheckBox()
-            italic_cb.setMaximumWidth(40)
-            grid.addWidget(lbl, row_idx, 0)
-            grid.addWidget(spin, row_idx, 1)
-            grid.addWidget(bold_cb, row_idx, 2)
-            grid.addWidget(italic_cb, row_idx, 3)
-            self.font_role_controls[role_key] = {
-                "spin": spin,
-                "bold": bold_cb,
-                "italic": italic_cb,
-            }
-            spin.valueChanged.connect(
-                lambda v, rk=role_key: self._on_role_font_size_changed(rk, v)
-            )
-            bold_cb.toggled.connect(
-                lambda checked, rk=role_key: self._on_role_font_weight_changed(
-                    rk, checked
-                )
-            )
-            italic_cb.toggled.connect(
-                lambda checked, rk=role_key: self._on_role_font_style_changed(
-                    rk, checked
-                )
-            )
-
-        fonts_layout.addLayout(grid)
-        layout.addWidget(grp_fonts, 0, 0, 1, 2)
-
-        grp_style = QGroupBox("Line / axis style")
-        style_form = QFormLayout(grp_style)
-        self.spin_default_linewidth = QDoubleSpinBox()
-        self.spin_default_linewidth.setRange(0.1, 5.0)
-        self.spin_default_linewidth.setSingleStep(0.1)
-        self.spin_default_linewidth.setValue(self.spec.style.default_linewidth)
-        self.spin_spine_width = QDoubleSpinBox()
-        self.spin_spine_width.setRange(0.1, 5.0)
-        self.spin_spine_width.setSingleStep(0.1)
-        self.spin_spine_width.setValue(self.spec.style.axis_spine_width)
-        self.combo_tick_dir = QComboBox()
-        self.combo_tick_dir.addItems(["in", "out", "inout"])
-        self.combo_tick_dir.setCurrentText(self.spec.style.tick_direction)
-        self.spin_tick_major = QDoubleSpinBox()
-        self.spin_tick_major.setRange(0.1, 20.0)
-        self.spin_tick_major.setSingleStep(0.5)
-        self.spin_tick_major.setValue(self.spec.style.tick_major_length)
-        self.spin_tick_minor = QDoubleSpinBox()
-        self.spin_tick_minor.setRange(0.1, 20.0)
-        self.spin_tick_minor.setSingleStep(0.5)
-        self.spin_tick_minor.setValue(self.spec.style.tick_minor_length)
-        self.spin_default_linewidth.setToolTip(
-            "Line width used for traces unless overridden in the Traces & Events tab."
-        )
-        self.spin_spine_width.setToolTip(
-            "Thickness of axis lines (spines) around each panel."
-        )
-        self.combo_tick_dir.setToolTip(
-            "Direction of tick marks (inside, outside, or both)."
-        )
-        self.spin_tick_major.setToolTip("Length of major tick marks.")
-        self.spin_tick_minor.setToolTip("Length of minor tick marks.")
-        style_form.addRow("Default trace linewidth", self.spin_default_linewidth)
-        style_form.addRow("Axis spine width", self.spin_spine_width)
-        style_form.addRow("Tick direction", self.combo_tick_dir)
-        style_form.addRow("Tick length (major)", self.spin_tick_major)
-        style_form.addRow("Tick length (minor)", self.spin_tick_minor)
-        layout.addWidget(grp_style, 1, 0)
-
-        grp_presets = QGroupBox("Style presets")
-        preset_layout = QHBoxLayout()
-        self.combo_style_preset = QComboBox()
-        self.combo_style_preset.addItems(list(STYLE_PRESETS.keys()) + ["Custom"])
-        preset_layout.addWidget(self.combo_style_preset)
-        self.btn_apply_style_preset = QPushButton("Apply preset")
-        preset_layout.addWidget(self.btn_apply_style_preset)
-        self.label_style_desc = QLabel("")
-        self.label_style_desc.setStyleSheet("color: #6c757d;")
-        preset_wrap = QVBoxLayout()
-        preset_wrap.addLayout(preset_layout)
-        preset_wrap.addWidget(self.label_style_desc)
-        grp_presets.setLayout(preset_wrap)
-        layout.addWidget(grp_presets, 1, 1)
-        layout.setRowStretch(2, 1)
-
-        self.combo_font_family.currentTextChanged.connect(self._on_font_family_changed)
-
-        self.spin_default_linewidth.valueChanged.connect(self._on_style_changed)
-        self.spin_spine_width.valueChanged.connect(self._on_style_changed)
-        self.combo_tick_dir.currentTextChanged.connect(self._on_style_changed)
-        self.spin_tick_major.valueChanged.connect(self._on_style_changed)
-        self.spin_tick_minor.valueChanged.connect(self._on_style_changed)
-        self.btn_apply_style_preset.clicked.connect(self._on_apply_style_preset)
-        self.combo_style_preset.currentTextChanged.connect(
-            self._on_style_preset_changed
-        )
-
-        self._apply_spinbox_arrows(
-            [ctrl["spin"] for ctrl in self.font_role_controls.values()]
-            + [
-                self.spin_default_linewidth,
-                self.spin_spine_width,
-                self.spin_tick_major,
-                self.spin_tick_minor,
-            ]
-        )
-
-        return w
-
-    def _build_traces_events_tab(self) -> QWidget:
-        """Traces & Events tab – GraphPad-style controls for the active panel."""
-        w = QWidget()
-        layout = QGridLayout(w)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-
-        group_panel = QGroupBox("Panel")
-        panel_layout = QVBoxLayout(group_panel)
-        panel_row = QHBoxLayout()
-        panel_row.addWidget(QLabel("Panel"))
-        self.combo_panel_select = QComboBox()
-        panel_row.addWidget(self.combo_panel_select, stretch=1)
-        panel_layout.addLayout(panel_row)
-        hint = QLabel("Editing settings for this panel only.")
-        hint.setStyleSheet("color: #6c757d;")
-        panel_layout.addWidget(hint)
-        layout.addWidget(group_panel, 0, 0)
-
-        group_display = QGroupBox("Display & spines")
-        disp_layout = QVBoxLayout(group_display)
+        grp_axes = QGroupBox("Axes")
+        form_axes = QFormLayout(grp_axes)
+        self.edit_xlabel = QLineEdit(self._fig_spec.axes.xlabel)
+        self.edit_ylabel = QLineEdit(self._fig_spec.axes.ylabel)
         self.cb_grid = QCheckBox("Show grid")
+        self.cb_grid.setChecked(self._fig_spec.axes.show_grid)
+        self.combo_grid_style = QComboBox()
+        self.combo_grid_style.addItems(["-", "--", "-.", ":"])
+        self.combo_grid_style.setCurrentText(self._fig_spec.axes.grid_linestyle)
+        self.edit_grid_color = QLineEdit(self._fig_spec.axes.grid_color)
+        self.spin_grid_alpha = QDoubleSpinBox()
+        self.spin_grid_alpha.setRange(0.0, 1.0)
+        self.spin_grid_alpha.setSingleStep(0.05)
+        self.spin_grid_alpha.setValue(self._fig_spec.axes.grid_alpha)
+        form_axes.addRow("X label", self.edit_xlabel)
+        form_axes.addRow("Y label", self.edit_ylabel)
+        form_axes.addRow(self.cb_grid)
+        form_axes.addRow("Grid style", self.combo_grid_style)
+        form_axes.addRow("Grid color", self.edit_grid_color)
+        form_axes.addRow("Grid alpha", self.spin_grid_alpha)
+
+        fonts_group = QGroupBox("Fonts", self)
+        fonts_layout = QFormLayout(fonts_group)
+
+        self.spin_label_fontsize = QDoubleSpinBox(self)
+        self.spin_label_fontsize.setDecimals(1)
+        self.spin_label_fontsize.setRange(6.0, 24.0)
+        self.spin_label_fontsize.setSingleStep(0.5)
+        self.spin_label_fontsize.setValue(11.0)
+        fonts_layout.addRow(QLabel("Axis labels (pt):", self), self.spin_label_fontsize)
+
+        self.spin_tick_fontsize = QDoubleSpinBox(self)
+        self.spin_tick_fontsize.setDecimals(1)
+        self.spin_tick_fontsize.setRange(6.0, 20.0)
+        self.spin_tick_fontsize.setSingleStep(0.5)
+        self.spin_tick_fontsize.setValue(9.0)
+        fonts_layout.addRow(QLabel("Tick labels (pt):", self), self.spin_tick_fontsize)
+
+        self.spin_legend_fontsize = QDoubleSpinBox(self)
+        self.spin_legend_fontsize.setDecimals(1)
+        self.spin_legend_fontsize.setRange(6.0, 20.0)
+        self.spin_legend_fontsize.setSingleStep(0.5)
+        self.spin_legend_fontsize.setValue(9.0)
+        fonts_layout.addRow(QLabel("Legend (pt):", self), self.spin_legend_fontsize)
+
+        grp_legend = QGroupBox("Legend")
+        form_leg = QFormLayout(grp_legend)
         self.cb_legend = QCheckBox("Show legend")
-        disp_layout.addWidget(self.cb_grid)
-        disp_layout.addWidget(self.cb_legend)
-        legend_row = QHBoxLayout()
-        legend_row.addWidget(QLabel("Legend position"))
+        self.cb_legend.setChecked(self._fig_spec.legend_visible)
         self.combo_legend_loc = QComboBox()
         self.combo_legend_loc.addItems(
             [
@@ -870,3086 +552,632 @@ class PureMplFigureComposer(QMainWindow):
                 "center",
             ]
         )
-        legend_row.addWidget(self.combo_legend_loc)
-        disp_layout.addLayout(legend_row)
-        spine_layout = QHBoxLayout()
-        self.cb_spine_left = QCheckBox("Left spine")
-        self.cb_spine_right = QCheckBox("Right spine")
-        self.cb_spine_top = QCheckBox("Top spine")
-        self.cb_spine_bottom = QCheckBox("Bottom spine")
-        for cb in [
-            self.cb_spine_left,
-            self.cb_spine_right,
-            self.cb_spine_top,
-            self.cb_spine_bottom,
-        ]:
-            spine_layout.addWidget(cb)
-        disp_layout.addLayout(spine_layout)
-        layout.addWidget(group_display, 0, 1)
+        self.combo_legend_loc.setCurrentText(self._fig_spec.legend_loc)
+        form_leg.addRow(self.cb_legend)
+        form_leg.addRow("Location", self.combo_legend_loc)
 
-        group_axes = QGroupBox("Axes & ranges")
-        axes_form = QFormLayout(group_axes)
-        self.combo_x_scale = QComboBox()
-        self.combo_x_scale.addItems(["linear", "log"])
-        self.combo_y_scale = QComboBox()
-        self.combo_y_scale.addItems(["linear", "log"])
-        self.cb_x_auto = QCheckBox("Auto")
-        self.cb_y_auto = QCheckBox("Auto")
-        self.edit_x_min = QDoubleSpinBox()
-        self.edit_x_min.setDecimals(2)
-        self.edit_x_min.setRange(-1e9, 1e9)
-        self.edit_x_min.setSingleStep(0.1)
-        self.edit_x_max = QDoubleSpinBox()
-        self.edit_x_max.setDecimals(2)
-        self.edit_x_max.setRange(-1e9, 1e9)
-        self.edit_x_max.setSingleStep(0.1)
-        self.edit_y_min = QDoubleSpinBox()
-        self.edit_y_min.setDecimals(2)
-        self.edit_y_min.setRange(-1e9, 1e9)
-        self.edit_y_min.setSingleStep(0.1)
-        self.edit_y_max = QDoubleSpinBox()
-        self.edit_y_max.setDecimals(2)
-        self.edit_y_max.setRange(-1e9, 1e9)
-        self.edit_y_max.setSingleStep(0.1)
-        axes_form.addRow("X scale", self.combo_x_scale)
-        axes_form.addRow("X auto", self.cb_x_auto)
-        axes_form.addRow("X min", self.edit_x_min)
-        axes_form.addRow("X max", self.edit_x_max)
-        axes_form.addRow("Y scale", self.combo_y_scale)
-        axes_form.addRow("Y auto", self.cb_y_auto)
-        axes_form.addRow("Y min", self.edit_y_min)
-        axes_form.addRow("Y max", self.edit_y_max)
-        layout.addWidget(group_axes, 1, 0)
+        layout.addWidget(grp_axes)
+        layout.addWidget(fonts_group)
+        layout.addWidget(grp_legend)
+        layout.addStretch(1)
 
-        group_ticks = QGroupBox("Ticks")
-        ticks_form = QFormLayout(group_ticks)
-        self.spin_x_tick_every = QDoubleSpinBox()
-        self.spin_x_tick_every.setRange(0.0, 1e6)
-        self.spin_x_tick_every.setSingleStep(10.0)
-        self.spin_x_tick_every.setDecimals(3)
-        ticks_form.addRow("X tick every (s)", self.spin_x_tick_every)
-        self.spin_x_max_ticks = QSpinBox()
-        self.spin_x_max_ticks.setRange(0, 50)
-        ticks_form.addRow("Max X ticks", self.spin_x_max_ticks)
-        self.spin_y_max_ticks = QSpinBox()
-        self.spin_y_max_ticks.setRange(0, 50)  # 0 = auto
-        ticks_form.addRow("Max Y ticks", self.spin_y_max_ticks)
-        layout.addWidget(group_ticks, 1, 1)
+        self.edit_xlabel.textChanged.connect(self._on_axes_changed)
+        self.edit_ylabel.textChanged.connect(self._on_axes_changed)
+        self.cb_grid.toggled.connect(self._on_axes_changed)
+        self.combo_grid_style.currentTextChanged.connect(self._on_axes_changed)
+        self.edit_grid_color.textChanged.connect(self._validate_grid_color)
+        self.edit_grid_color.textChanged.connect(self._on_axes_changed)
+        self.spin_grid_alpha.valueChanged.connect(self._on_axes_changed)
+        self.spin_label_fontsize.valueChanged.connect(self._on_axes_fonts_changed)
+        self.spin_tick_fontsize.valueChanged.connect(self._on_axes_fonts_changed)
+        self.spin_legend_fontsize.valueChanged.connect(self._on_axes_fonts_changed)
+        self.cb_legend.toggled.connect(self._on_legend_changed)
+        self.combo_legend_loc.currentTextChanged.connect(self._on_legend_changed)
+        return tab
 
-        group_events = QGroupBox("Events")
-        events_layout = QVBoxLayout(group_events)
-        self.cb_show_event_lines = QCheckBox("Show event lines")
-        self.cb_show_event_labels = QCheckBox("Show event labels")
-        events_layout.addWidget(self.cb_show_event_lines)
-        events_layout.addWidget(self.cb_show_event_labels)
-        style_form = QFormLayout()
-        self.edit_event_color = QLineEdit()
-        self.edit_event_color.setPlaceholderText("#888888 or named color")
-        self.spin_event_lw = QDoubleSpinBox()
-        self.spin_event_lw.setRange(0.1, 10.0)
-        self.spin_event_lw.setSingleStep(0.1)
-        self.combo_event_ls = QComboBox()
-        self.combo_event_ls.addItems(["solid", "dashed", "dotted", "dashdot"])
-        self.spin_event_rotation = QDoubleSpinBox()
-        self.spin_event_rotation.setRange(-180.0, 180.0)
-        self.spin_event_rotation.setSingleStep(5.0)
-        style_form.addRow("Line color", self.edit_event_color)
-        style_form.addRow("Line width", self.spin_event_lw)
-        style_form.addRow("Line style", self.combo_event_ls)
-        style_form.addRow("Label rotation (°)", self.spin_event_rotation)
-        events_layout.addLayout(style_form)
-        if self.event_times:
-            label_form = QFormLayout()
-            self.spin_event_index = QSpinBox()
-            self.spin_event_index.setRange(0, max(len(self.event_times) - 1, 0))
-            self.edit_event_label = QLineEdit()
-            label_form.addRow("Event index", self.spin_event_index)
-            label_form.addRow("Label", self.edit_event_label)
-            events_layout.addLayout(label_form)
-        else:
-            no_events = QLabel("No events in this figure.")
-            no_events.setStyleSheet("color: #6c757d;")
-            events_layout.addWidget(no_events)
-        layout.addWidget(group_events, 2, 0)
+    def _build_traces_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
 
-        group_traces = QGroupBox("Traces & Y-axes")
-        traces_layout = QVBoxLayout(group_traces)
-        trace_row = QHBoxLayout()
-        self.cb_trace_inner = QCheckBox("Inner diameter")
-        self.cb_trace_outer = QCheckBox("Outer diameter")
-        self.cb_trace_avg_pressure = QCheckBox("Avg pressure")
-        self.cb_trace_set_pressure = QCheckBox("Set pressure")
-        for cb in [
-            self.cb_trace_inner,
-            self.cb_trace_outer,
-            self.cb_trace_avg_pressure,
-            self.cb_trace_set_pressure,
-        ]:
-            trace_row.addWidget(cb)
-        traces_layout.addLayout(trace_row)
-        self.cb_twin_y = QCheckBox("Use right Y-axis (twin Y)")
-        traces_layout.addWidget(self.cb_twin_y)
-        self.edit_y2_label = QLineEdit()
-        self.edit_y2_label.setPlaceholderText("Right Y label")
-        self.combo_y2_scale = QComboBox()
-        self.combo_y2_scale.addItems(["linear", "log"])
-        self.edit_y2_min = QLineEdit()
-        self.edit_y2_max = QLineEdit()
-        y2_form = QFormLayout()
-        y2_form.addRow("Right Y label", self.edit_y2_label)
-        y2_form.addRow("Right Y scale", self.combo_y2_scale)
-        y2_form.addRow("Right Y min", self.edit_y2_min)
-        y2_form.addRow("Right Y max", self.edit_y2_max)
-        traces_layout.addLayout(y2_form)
+        self._trace_controls.clear()
+        for trace in self._fig_spec.traces:
+            row = QHBoxLayout()
+            cb_visible = QCheckBox(trace.key)
+            cb_visible.setChecked(trace.visible)
+            btn_color = QPushButton()
+            btn_color.setFixedWidth(32)
+            btn_color.setStyleSheet(f"background-color: {trace.color};")
+            btn_color.setProperty("color", trace.color)
+            spin_width = QDoubleSpinBox()
+            spin_width.setRange(0.1, 10.0)
+            spin_width.setSingleStep(0.1)
+            spin_width.setValue(trace.linewidth)
+            combo_ls = QComboBox()
+            combo_ls.addItems(["-", "--", "-.", ":"])
+            combo_ls.setCurrentText(trace.linestyle)
+            combo_marker = QComboBox()
+            combo_marker.addItems(["", "o", "s", "^", ".", "x"])
+            combo_marker.setCurrentText(trace.marker)
 
-        style_group = QGroupBox("Trace style")
-        style_form = QFormLayout(style_group)
-        self.combo_trace_select = QComboBox()
-        self.edit_trace_color = QLineEdit()
-        self.spin_trace_lw = QDoubleSpinBox()
-        self.spin_trace_lw.setRange(0.1, 10.0)
-        self.spin_trace_lw.setSingleStep(0.1)
-        self.combo_trace_ls = QComboBox()
-        self.combo_trace_ls.addItems(["solid", "dashed", "dotted", "dashdot"])
-        self.combo_trace_marker = QComboBox()
-        self.combo_trace_marker.addItems(["(none)", "o", "s", "^", "x"])
+            row.addWidget(cb_visible)
+            row.addWidget(QLabel("Color"))
+            row.addWidget(btn_color)
+            row.addWidget(QLabel("Line width"))
+            row.addWidget(spin_width)
+            row.addWidget(QLabel("Style"))
+            row.addWidget(combo_ls)
+            row.addWidget(QLabel("Marker"))
+            row.addWidget(combo_marker)
+            row.addStretch(1)
+            layout.addLayout(row)
 
-        style_form.addRow("Trace", self.combo_trace_select)
-        style_form.addRow("Color", self.edit_trace_color)
-        style_form.addRow("Line width", self.spin_trace_lw)
-        style_form.addRow("Line style", self.combo_trace_ls)
-        style_form.addRow("Marker", self.combo_trace_marker)
+            self._trace_controls[trace.key] = {
+                "visible": cb_visible,
+                "color": btn_color,
+                "linewidth": spin_width,
+                "linestyle": combo_ls,
+                "marker": combo_marker,
+            }
 
-        traces_layout.addWidget(style_group)
-        layout.addWidget(group_traces, 2, 1)
-        layout.setRowStretch(3, 1)
+            cb_visible.toggled.connect(lambda checked, k=trace.key: self._on_trace_changed(k))
+            btn_color.clicked.connect(lambda _, k=trace.key: self._pick_trace_color(k))
+            spin_width.valueChanged.connect(lambda _, k=trace.key: self._on_trace_changed(k))
+            combo_ls.currentTextChanged.connect(lambda _, k=trace.key: self._on_trace_changed(k))
+            combo_marker.currentTextChanged.connect(lambda _, k=trace.key: self._on_trace_changed(k))
 
-        self._connect_traces_events_signals()
-        self._refresh_traces_events_tab()
+        lw_group = QGroupBox("Line thickness (scale)", self)
+        lw_layout = QFormLayout(lw_group)
 
-        return w
+        self.spin_linewidth_scale = QDoubleSpinBox(self)
+        self.spin_linewidth_scale.setDecimals(2)
+        self.spin_linewidth_scale.setRange(0.5, 2.0)
+        self.spin_linewidth_scale.setSingleStep(0.1)
+        self.spin_linewidth_scale.setValue(self._fig_spec.line_width_scale)
+        lw_layout.addRow(QLabel("Scale factor:", self), self.spin_linewidth_scale)
 
-    def _build_annotation_tab(self) -> QWidget:
-        """Annotation manager tab."""
-        w = QWidget()
-        root = QHBoxLayout(w)
+        layout.addWidget(lw_group)
 
-        # Left: list of annotations
-        left = QVBoxLayout()
-        left.addWidget(QLabel("Annotations"))
-        self.list_annotations = QListWidget()
-        left.addWidget(self.list_annotations, stretch=1)
+        if not self._fig_spec.traces:
+            layout.addWidget(QLabel("No traces configured."))
+        layout.addStretch(1)
+
+        self.spin_linewidth_scale.valueChanged.connect(self._on_linewidth_scale_changed)
+        return tab
+
+    def _build_events_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+
+        self.cb_event_labels = QCheckBox("Show labels")
+        self.cb_event_labels.setChecked(self._fig_spec.axes.show_event_labels)
+        layout.addWidget(self.cb_event_labels)
+
+        self.events_table = QTableWidget(0, 7)
+        self.events_table.setHorizontalHeaderLabels(
+            ["Visible", "Time (s)", "Label", "Above", "Color", "Style", "Linewidth"]
+        )
+        self.events_table.verticalHeader().setVisible(False)
+        self.events_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.events_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.events_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(self.events_table)
+
         btn_row = QHBoxLayout()
-        self.btn_annot_duplicate = QPushButton("Duplicate")
-        self.btn_annot_delete = QPushButton("Delete")
-        btn_row.addWidget(self.btn_annot_duplicate)
-        btn_row.addWidget(self.btn_annot_delete)
-        left.addLayout(btn_row)
-        root.addLayout(left, stretch=1)
-
-        # Right: property editors
-        right = QVBoxLayout()
-
-        # Style/content group
-        self.group_style = QGroupBox("Style & Content")
-        text_form = QFormLayout(self.group_style)
-        self.edit_annot_text = QPlainTextEdit()
-        self.spin_annot_font = QDoubleSpinBox()
-        self.spin_annot_font.setRange(6.0, 48.0)
-        self.spin_annot_font.setSingleStep(0.5)
-        self.combo_annot_weight = QComboBox()
-        self.combo_annot_weight.addItems(["normal", "bold", "light"])
-        self.combo_annot_style = QComboBox()
-        self.combo_annot_style.addItems(["normal", "italic", "oblique"])
-        self.edit_annot_color = QLineEdit()
-        self.combo_annot_ha = QComboBox()
-        self.combo_annot_ha.addItems(["left", "center", "right"])
-        self.combo_annot_va = QComboBox()
-        self.combo_annot_va.addItems(["bottom", "center", "top"])
-        self.spin_annot_rotation = QDoubleSpinBox()
-        self.spin_annot_rotation.setRange(-180.0, 180.0)
-        self.spin_annot_rotation.setSingleStep(1.0)
-
-        text_form.addRow("Content", self.edit_annot_text)
-        text_form.addRow("Font size", self.spin_annot_font)
-        text_form.addRow("Weight", self.combo_annot_weight)
-        text_form.addRow("Style", self.combo_annot_style)
-        text_form.addRow("Color", self.edit_annot_color)
-        text_form.addRow("H align", self.combo_annot_ha)
-        text_form.addRow("V align", self.combo_annot_va)
-        text_form.addRow("Rotation", self.spin_annot_rotation)
-
-        self.edit_annot_edgecolor = QLineEdit()
-        self.edit_annot_facecolor = QLineEdit()
-        self.spin_annot_alpha = QDoubleSpinBox()
-        self.spin_annot_alpha.setRange(0.0, 1.0)
-        self.spin_annot_alpha.setSingleStep(0.05)
-        self.spin_annot_linewidth = QDoubleSpinBox()
-        self.spin_annot_linewidth.setRange(0.1, 5.0)
-        self.spin_annot_linewidth.setSingleStep(0.1)
-        self.combo_annot_linestyle = QComboBox()
-        self.combo_annot_linestyle.addItems(["solid", "dashed", "dotted", "dashdot"])
-        self.combo_annot_arrowstyle = QComboBox()
-        self.combo_annot_arrowstyle.addItems(["->", "-|>", "<->", "<|-|>", "simple"])
-        text_form.addRow("Line width", self.spin_annot_linewidth)
-        text_form.addRow("Line style", self.combo_annot_linestyle)
-        text_form.addRow("Edge color", self.edit_annot_edgecolor)
-        text_form.addRow("Fill color", self.edit_annot_facecolor)
-        text_form.addRow("Alpha", self.spin_annot_alpha)
-        text_form.addRow("Arrow style", self.combo_annot_arrowstyle)
-        right.addWidget(self.group_style)
-
-        self.group_defaults = QGroupBox("Defaults for new annotations")
-        defaults_form = QFormLayout(self.group_defaults)
-        self.spin_default_annot_font = QDoubleSpinBox()
-        self.spin_default_annot_font.setRange(6.0, 48.0)
-        self.spin_default_annot_font.setSingleStep(0.5)
-        self.combo_default_annot_weight = QComboBox()
-        self.combo_default_annot_weight.addItems(["normal", "bold", "light"])
-        self.combo_default_annot_style = QComboBox()
-        self.combo_default_annot_style.addItems(["normal", "italic", "oblique"])
-        self.edit_default_annot_color = QLineEdit()
-        self.edit_default_edgecolor = QLineEdit()
-        self.edit_default_facecolor = QLineEdit()
-        self.spin_default_alpha = QDoubleSpinBox()
-        self.spin_default_alpha.setRange(0.0, 1.0)
-        self.spin_default_alpha.setSingleStep(0.05)
-        self.spin_default_linewidth = QDoubleSpinBox()
-        self.spin_default_linewidth.setRange(0.1, 5.0)
-        self.spin_default_linewidth.setSingleStep(0.1)
-        self.combo_default_linestyle = QComboBox()
-        self.combo_default_linestyle.addItems(["solid", "dashed", "dotted", "dashdot"])
-        defaults_form.addRow("Font size", self.spin_default_annot_font)
-        defaults_form.addRow("Weight", self.combo_default_annot_weight)
-        defaults_form.addRow("Style", self.combo_default_annot_style)
-        defaults_form.addRow("Text color", self.edit_default_annot_color)
-        defaults_form.addRow("Edge color", self.edit_default_edgecolor)
-        defaults_form.addRow("Face color", self.edit_default_facecolor)
-        defaults_form.addRow("Alpha", self.spin_default_alpha)
-        defaults_form.addRow("Line width", self.spin_default_linewidth)
-        defaults_form.addRow("Line style", self.combo_default_linestyle)
-        right.addWidget(self.group_defaults)
-
-        right.addStretch(1)
-        root.addLayout(right, stretch=2)
-
-        self._apply_spinbox_arrows(
-            [
-                self.spin_annot_font,
-                self.spin_annot_rotation,
-                self.spin_annot_alpha,
-                self.spin_annot_linewidth,
-                self.spin_default_annot_font,
-                self.spin_default_alpha,
-                self.spin_default_linewidth,
-            ]
-        )
-
-        self._connect_annotation_signals()
-        self._refresh_annotation_ui()
-
-        return w
-
-    def _build_export_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QGridLayout(w)
-        layout.setHorizontalSpacing(8)
-        layout.setVerticalSpacing(8)
-
-        grp_export = QGroupBox("Output format")
-        form = QFormLayout(grp_export)
-        self.combo_format = QComboBox()
-        self.combo_format.addItems(["pdf", "svg", "png", "tiff"])
-        self.combo_format.setCurrentText(self.spec.export.format)
-        form.addRow("Format", self.combo_format)
-
-        self.spin_dpi = QSpinBox()
-        self.spin_dpi.setRange(72, 1200)
-        self.spin_dpi.setSingleStep(50)
-        self.spin_dpi.setValue(self.spec.export.dpi)
-        self.spin_dpi.setToolTip(
-            "DPI affects raster exports; vector formats ignore this value."
-        )
-        form.addRow("DPI", self.spin_dpi)
-        self.radio_bg_white = QRadioButton("White")
-        self.radio_bg_transparent = QRadioButton("Transparent")
-        if self.spec.export.transparent:
-            self.radio_bg_transparent.setChecked(True)
-        else:
-            self.radio_bg_white.setChecked(True)
-        bg_layout = QHBoxLayout()
-        bg_layout.addWidget(self.radio_bg_white)
-        bg_layout.addWidget(self.radio_bg_transparent)
-        form.addRow("Background", bg_layout)
-        layout.addWidget(grp_export, 0, 0)
-
-        grp_presets = QGroupBox("Figure width presets (mm)")
-        h = QHBoxLayout()
-        for mm in (85, 120, 180, 260):
-            btn = QPushButton(f"{mm} mm")
-            btn.clicked.connect(lambda _, v=mm: self._on_width_preset_mm(v))
-            h.addWidget(btn)
-        h.addStretch(1)
-        presets_wrap = QVBoxLayout(grp_presets)
-        presets_wrap.addLayout(h)
-        self.label_width_status = QLabel("")
-        self.label_width_status.setStyleSheet("color: #6c757d;")
-        presets_wrap.addWidget(self.label_width_status)
-        layout.addWidget(grp_presets, 0, 1)
-
-        grp_profiles = QGroupBox("Export profiles")
-        prof_layout = QVBoxLayout(grp_profiles)
-        row_prof = QHBoxLayout()
-        self.combo_export_profile = QComboBox()
-        self.combo_export_profile.addItems(
-            ["Lab default", "Journal single-column", "Journal double-column", "Custom"]
-        )
-        self.btn_apply_export_profile = QPushButton("Apply profile")
-        row_prof.addWidget(QLabel("Profile"))
-        row_prof.addWidget(self.combo_export_profile, stretch=1)
-        row_prof.addWidget(self.btn_apply_export_profile)
-        prof_layout.addLayout(row_prof)
-        self.label_export_profile_desc = QLabel("")
-        self.label_export_profile_desc.setStyleSheet("color: #6c757d;")
-        prof_layout.addWidget(self.label_export_profile_desc)
-        layout.addWidget(grp_profiles, 1, 0, 1, 2)
-
-        grp_multi = QGroupBox("Additional formats")
-        multi_layout = QVBoxLayout(grp_multi)
-        self.cb_export_png = QCheckBox("Also export PNG (300 dpi)")
-        self.cb_export_tiff = QCheckBox("Also export TIFF (600 dpi)")
-        multi_layout.addWidget(self.cb_export_png)
-        multi_layout.addWidget(self.cb_export_tiff)
-        layout.addWidget(grp_multi, 2, 0)
-
-        grp_io = QGroupBox("Figure definition & export")
-        io_layout = QVBoxLayout(grp_io)
-        self.btn_save_fig = QPushButton("Save figure definition…")
-        self.btn_load_fig = QPushButton("Load figure definition…")
-        self.btn_save_to_project = QPushButton("Save to Project")
-        self.btn_export_fig = QPushButton("Export…")
-        io_layout.addWidget(self.btn_save_fig)
-        io_layout.addWidget(self.btn_load_fig)
-        io_layout.addWidget(self.btn_save_to_project)
-        io_layout.addWidget(self.btn_export_fig)
-        layout.addWidget(grp_io, 2, 1)
-        layout.setRowStretch(3, 1)
-
-        self.combo_format.currentTextChanged.connect(self._on_export_format_changed)
-        self.spin_dpi.valueChanged.connect(self._on_export_dpi_changed)
-        self.radio_bg_white.toggled.connect(self._on_export_bg_changed)
-        self.btn_apply_export_profile.clicked.connect(self._on_apply_export_profile)
-        self.cb_export_png.toggled.connect(self._on_extra_export_changed)
-        self.cb_export_tiff.toggled.connect(self._on_extra_export_changed)
-        self.btn_save_fig.clicked.connect(self._on_save_spec)
-        self.btn_load_fig.clicked.connect(self._on_load_spec)
-        self.btn_save_to_project.clicked.connect(self._on_save_to_project_clicked)
-        self.btn_export_fig.clicked.connect(self.export_figure)
-
-        self._refresh_export_profile_description(
-            self.combo_export_profile.currentText()
-        )
-        self._update_width_status_label()
-
-        self._apply_spinbox_arrows([self.spin_dpi])
-
-        return w
-
-    def _refresh_template_list(self):
-        templates = list_templates()
-        if hasattr(self, "combo_templates"):
-            self.combo_templates.clear()
-            if templates:
-                self.combo_templates.addItems(templates)
-
-    def _panel_label_from_index(self, idx: int) -> str:
-        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        label = ""
-        n = idx
-        while True:
-            label = letters[n % 26] + label
-            n = n // 26 - 1
-            if n < 0:
-                break
-        return label
-
-    def _refresh_panel_table(self):
-        if not hasattr(self, "table_panel_map"):
-            return
-        self.table_panel_map.setRowCount(0)
-        instances = list(self.spec.layout.graph_instances)
-        graph_items = []
-        for gid, gspec in self.spec.graphs.items():
-            label = f"{gspec.name} ({gid})" if gspec and gspec.name else gid
-            graph_items.append((label, gid))
-        for row, inst in enumerate(instances):
-            self.table_panel_map.insertRow(row)
-            label_item = QTableWidgetItem(self._panel_label_from_index(row))
-            label_item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-            label_item.setData(Qt.UserRole, inst.instance_id)
-            font = label_item.font()
-            font.setBold(inst.instance_id == self.selected_instance_id)
-            label_item.setFont(font)
-            self.table_panel_map.setItem(row, 0, label_item)
-
-            combo = QComboBox()
-            if not graph_items:
-                combo.addItem(inst.graph_id, inst.graph_id)
-            else:
-                for label, gid in graph_items:
-                    combo.addItem(label, gid)
-            idx = combo.findData(inst.graph_id)
-            combo.setCurrentIndex(max(idx, 0))
-            combo.currentIndexChanged.connect(
-                lambda _, c=combo, iid=inst.instance_id: self._on_panel_graph_changed(
-                    iid, c.currentData()
-                )
-            )
-            self.table_panel_map.setCellWidget(row, 1, combo)
-
-            row_spin = QSpinBox()
-            row_spin.setRange(0, max(self.spec.layout.nrows - 1, 0))
-            row_spin.setValue(inst.row)
-            self._apply_spinbox_arrows([row_spin])
-            row_spin.valueChanged.connect(
-                lambda val, iid=inst.instance_id: self._on_panel_position_changed(
-                    iid, "row", val
-                )
-            )
-            self.table_panel_map.setCellWidget(row, 2, row_spin)
-
-            col_spin = QSpinBox()
-            col_spin.setRange(0, max(self.spec.layout.ncols - 1, 0))
-            col_spin.setValue(inst.col)
-            self._apply_spinbox_arrows([col_spin])
-            col_spin.valueChanged.connect(
-                lambda val, iid=inst.instance_id: self._on_panel_position_changed(
-                    iid, "col", val
-                )
-            )
-            self.table_panel_map.setCellWidget(row, 3, col_spin)
-
-            rowspan_spin = QSpinBox()
-            rowspan_spin.setRange(1, max(self.spec.layout.nrows, 1))
-            rowspan_spin.setValue(inst.rowspan)
-            self._apply_spinbox_arrows([rowspan_spin])
-            rowspan_spin.valueChanged.connect(
-                lambda val, iid=inst.instance_id: self._on_panel_position_changed(
-                    iid, "rowspan", val
-                )
-            )
-            self.table_panel_map.setCellWidget(row, 4, rowspan_spin)
-
-            colspan_spin = QSpinBox()
-            colspan_spin.setRange(1, max(self.spec.layout.ncols, 1))
-            colspan_spin.setValue(inst.colspan)
-            self._apply_spinbox_arrows([colspan_spin])
-            colspan_spin.valueChanged.connect(
-                lambda val, iid=inst.instance_id: self._on_panel_position_changed(
-                    iid, "colspan", val
-                )
-            )
-            self.table_panel_map.setCellWidget(row, 5, colspan_spin)
-
-            if inst.instance_id == self.selected_instance_id:
-                self.table_panel_map.selectRow(row)
-        self._update_panel_buttons_enabled()
-
-    def _refresh_layout_tab(self):
-        if not hasattr(self, "spin_width"):
-            return
-        widgets = [
-            self.spin_width,
-            self.spin_height,
-            self.spin_rows,
-            self.spin_cols,
-            self.spin_hspace,
-            self.spin_wspace,
-            self.cb_panel_labels,
-            self.spin_panel_label_size,
-            self.combo_panel_label_weight,
-            self.spin_panel_label_x,
-            self.spin_panel_label_y,
-        ]
-        for w in widgets:
-            w.blockSignals(True)
-
-        layout = self.spec.layout
-        self.spin_width.setValue(layout.width_in)
-        self.spin_height.setValue(layout.height_in)
-        self.label_width_mm.setText(f"{layout.width_in * 25.4:.1f} mm")
-        self.label_height_mm.setText(f"{layout.height_in * 25.4:.1f} mm")
-        self.cb_lock_aspect.setChecked(self._lock_aspect_ratio)
-        self.spin_rows.setValue(layout.nrows)
-        self.spin_cols.setValue(layout.ncols)
-        self.spin_hspace.setValue(layout.hspace)
-        self.spin_wspace.setValue(layout.wspace)
-
-        pls = layout.panel_labels
-        self.cb_panel_labels.setChecked(pls.show)
-        self.spin_panel_label_size.setValue(pls.font_size)
-        self.combo_panel_label_weight.setCurrentText(pls.weight)
-        self.spin_panel_label_x.setValue(pls.x_offset)
-        self.spin_panel_label_y.setValue(pls.y_offset)
-        if hasattr(self.spec, "font") and hasattr(self.spec.font, "panel_label"):
-            self.spec.font.panel_label.size = pls.font_size
-            self.spec.font.panel_label.weight = pls.weight
-
-        self._refresh_panel_table()
-
-        for w in widgets:
-            w.blockSignals(False)
-
-    def _get_graph_instance(self, instance_id: str) -> GraphInstance | None:
-        return next(
-            (
-                gi
-                for gi in self.spec.layout.graph_instances
-                if gi.instance_id == instance_id
-            ),
-            None,
-        )
-
-    def _on_grid_changed(self, *_):
-        layout = self.spec.layout
-        layout.nrows = int(self.spin_rows.value())
-        layout.ncols = int(self.spin_cols.value())
-        for inst in layout.graph_instances:
-            inst.row = min(inst.row, layout.nrows - 1)
-            inst.col = min(inst.col, layout.ncols - 1)
-            inst.rowspan = min(inst.rowspan, max(layout.nrows - inst.row, 1))
-            inst.colspan = min(inst.colspan, max(layout.ncols - inst.col, 1))
-        self._push_undo()
-        self._refresh_panel_table()
-        self._update_preview()
-
-    def _set_grid_preset(self, rows: int, cols: int):
-        """Quickly set a grid preset and refresh."""
-        self.spin_rows.setValue(rows)
-        self.spin_cols.setValue(cols)
-        if rows >= 2 or cols >= 2:
-            if self.spin_hspace.value() < 0.3:
-                self.spin_hspace.setValue(0.3)
-            if self.spin_wspace.value() < 0.3:
-                self.spin_wspace.setValue(0.3)
-        self._on_grid_changed()
-
-    def _on_spacing_changed(self, *_):
-        self.spec.layout.hspace = float(self.spin_hspace.value())
-        self.spec.layout.wspace = float(self.spin_wspace.value())
-        self._push_undo()
-        self._update_preview()
-
-    def _update_panel_buttons_enabled(self):
-        if not hasattr(self, "btn_panel_up"):
-            return
-        has_selection = self.table_panel_map.currentRow() >= 0
-        for btn in [
-            self.btn_panel_up,
-            self.btn_panel_down,
-            self.btn_panel_dup,
-            self.btn_panel_remove,
-        ]:
-            btn.setEnabled(has_selection)
-
-    def _on_panel_table_selection(self):
-        row = self.table_panel_map.currentRow()
-        if row < 0 or row >= len(self.spec.layout.graph_instances):
-            self._update_panel_buttons_enabled()
-            return
-        item = self.table_panel_map.item(row, 0)
-        if item:
-            self.selected_instance_id = item.data(Qt.UserRole)
-            if hasattr(self, "combo_panel_select"):
-                self._refresh_traces_events_tab()
-                self._update_preview()
-        self._update_panel_buttons_enabled()
-
-    def _on_panel_graph_changed(self, instance_id: str, graph_id: str):
-        inst = self._get_graph_instance(instance_id)
-        if inst is None:
-            return
-        if graph_id is None and self.spec.graphs:
-            graph_id = next(iter(self.spec.graphs.keys()))
-        if graph_id is None:
-            return
-        inst.graph_id = graph_id
-        self._push_undo()
-        self._update_preview()
-
-    def _on_panel_position_changed(self, instance_id: str, field: str, value: int):
-        inst = self._get_graph_instance(instance_id)
-        if inst is None:
-            return
-        setattr(inst, field, int(value))
-        layout = self.spec.layout
-        inst.row = min(inst.row, layout.nrows - 1)
-        inst.col = min(inst.col, layout.ncols - 1)
-        inst.rowspan = min(max(inst.rowspan, 1), max(layout.nrows - inst.row, 1))
-        inst.colspan = min(max(inst.colspan, 1), max(layout.ncols - inst.col, 1))
-        self._push_undo()
-        self._refresh_panel_table()
-        self._update_preview()
-
-    def _on_panel_swap_up(self):
-        row = self.table_panel_map.currentRow()
-        if row <= 0:
-            return
-        instances = self.spec.layout.graph_instances
-        instances[row - 1], instances[row] = instances[row], instances[row - 1]
-        self.selected_instance_id = instances[row - 1].instance_id
-        self._push_undo()
-        self._refresh_panel_table()
-        self.table_panel_map.selectRow(row - 1)
-        self._refresh_traces_events_tab()
-        self._update_preview()
-
-    def _on_panel_swap_down(self):
-        row = self.table_panel_map.currentRow()
-        instances = self.spec.layout.graph_instances
-        if row < 0 or row >= len(instances) - 1:
-            return
-        instances[row + 1], instances[row] = instances[row], instances[row + 1]
-        self.selected_instance_id = instances[row + 1].instance_id
-        self._push_undo()
-        self._refresh_panel_table()
-        self.table_panel_map.selectRow(row + 1)
-        self._refresh_traces_events_tab()
-        self._update_preview()
-
-    def _on_panel_duplicate(self):
-        row = self.table_panel_map.currentRow()
-        instances = self.spec.layout.graph_instances
-        if row < 0 or row >= len(instances):
-            return
-        inst = instances[row]
-        new_inst = copy.deepcopy(inst)
-        new_inst.instance_id = f"inst_{uuid.uuid4().hex[:6]}"
-        new_inst.col = min(inst.col + 1, max(self.spec.layout.ncols - 1, 0))
-        instances.insert(row + 1, new_inst)
-        self.selected_instance_id = new_inst.instance_id
-        self._push_undo()
-        self._refresh_panel_table()
-        self.table_panel_map.selectRow(row + 1)
-        self._refresh_traces_events_tab()
-        self._update_preview()
-
-    def _on_panel_remove(self):
-        row = self.table_panel_map.currentRow()
-        instances = self.spec.layout.graph_instances
-        if row < 0 or row >= len(instances):
-            return
-        inst = instances.pop(row)
-        # Drop graph spec if unused elsewhere
-        still_used = any(gi.graph_id == inst.graph_id for gi in instances)
-        if not still_used and inst.graph_id in self.spec.graphs:
-            self.spec.graphs.pop(inst.graph_id, None)
-        self.selected_instance_id = instances[0].instance_id if instances else None
-        self._push_undo()
-        self._refresh_panel_table()
-        if instances:
-            self.table_panel_map.selectRow(min(row, len(instances) - 1))
-        self._refresh_traces_events_tab()
-        self._update_preview()
-
-    def _on_panel_label_toggled(self, checked: bool):
-        pls = self.spec.layout.panel_labels
-        pls.show = checked
-        self._push_undo()
-        self._update_preview()
-
-    def _on_panel_label_changed(self, *_):
-        pls = self.spec.layout.panel_labels
-        pls.font_size = float(self.spin_panel_label_size.value())
-        pls.weight = self.combo_panel_label_weight.currentText()
-        pls.x_offset = float(self.spin_panel_label_x.value())
-        pls.y_offset = float(self.spin_panel_label_y.value())
-        if hasattr(self.spec.font, "panel_label"):
-            self.spec.font.panel_label.size = pls.font_size
-            self.spec.font.panel_label.weight = pls.weight
-        self._push_undo()
-        self._update_preview()
-
-    # ------------------------------------------------------------------
-    # Tab callbacks
-    # ------------------------------------------------------------------
-    def _on_layout_template_changed(self, idx: int):
-        if not hasattr(self, "combo_layout_template"):
-            return
-        label = self.combo_layout_template.currentText()
-        layouts = {
-            "1 panel": (1, 1),
-            "2 horizontal": (1, 2),
-            "2 vertical": (2, 1),
-            "2 x 2": (2, 2),
-        }
-        nrows, ncols = layouts.get(label, (1, 1))
-        self.spec.layout.nrows = nrows
-        self.spec.layout.ncols = ncols
-        instances = []
-        graph_ids = list(self.spec.graphs.keys())
-        idx_counter = 0
-        for r in range(nrows):
-            for c in range(ncols):
-                graph_id = (
-                    graph_ids[idx_counter % len(graph_ids)] if graph_ids else "graph1"
-                )
-                instances.append(
-                    GraphInstance(
-                        instance_id=f"inst_{r}_{c}",
-                        graph_id=graph_id,
-                        row=r,
-                        col=c,
-                    )
-                )
-                idx_counter += 1
-        self.spec.layout.graph_instances = instances
-        if nrows > 1:
-            self.spec.layout.height_in = self.spec.layout.width_in * 0.5 * nrows
-            self.spin_height.setValue(self.spec.layout.height_in)
-        self._push_undo()
-        self._update_preview()
-
-    def _on_size_changed_qt(self, _):
-        if self._suppress_size_events:
-            return
-        sender = self.sender()
-        width = float(self.spin_width.value())
-        height = float(self.spin_height.value())
-        if self._lock_aspect_ratio and width > 0 and height > 0:
-            self._suppress_size_events = True
-            if sender is self.spin_width:
-                new_h = width * (
-                    self._aspect_ratio
-                    if hasattr(self, "_aspect_ratio")
-                    else height / max(width, 1e-6)
-                )
-                self.spin_height.setValue(new_h)
-                height = new_h
-            elif (
-                sender is self.spin_height
-                and hasattr(self, "_aspect_ratio")
-                and self._aspect_ratio > 0
-            ):
-                new_w = height / self._aspect_ratio
-                self.spin_width.setValue(new_w)
-                width = new_w
-            self._suppress_size_events = False
-        self.spec.layout.width_in = width
-        self.spec.layout.height_in = height
-        if hasattr(self, "label_width_mm"):
-            self.label_width_mm.setText(f"{self.spec.layout.width_in * 25.4:.1f} mm")
-        if hasattr(self, "label_height_mm"):
-            self.label_height_mm.setText(f"{self.spec.layout.height_in * 25.4:.1f} mm")
-        if width > 0:
-            self._aspect_ratio = self.spec.layout.height_in / width
-        self._update_width_status_label()
-        self._push_undo()
-        self._update_preview()
-        self._update_footer()
-
-    def _on_lock_aspect_toggled(self, checked: bool):
-        self._lock_aspect_ratio = checked
-        width = float(self.spin_width.value())
-        if width > 0:
-            self._aspect_ratio = float(self.spin_height.value()) / width
-
-    def _on_apply_template(self):
-        name = self.combo_templates.currentText()
-        if not name:
-            return
-        try:
-            tmpl = load_template(name)
-            apply_template_structure(self.spec, tmpl)
-            if self.spec.layout.graph_instances:
-                self.selected_instance_id = self.spec.layout.graph_instances[
-                    0
-                ].instance_id
-            self._push_undo()
-            self._refresh_tabs()
-            self._update_preview()
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "Template Error", f"Failed to apply template:\n{exc}"
-            )
-
-    def _on_save_template(self):
-        name, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Template As",
-            "template",
-            "JSON files (*.json);;All Files (*)",
-            "JSON files (*.json)",
-        )
-        if not name:
-            return
-        try:
-            save_template(Path(name).stem, self.spec)
-            self._refresh_template_list()
-            QMessageBox.information(self, "Template Saved", f"Saved template:\n{name}")
-        except Exception as exc:
-            QMessageBox.critical(
-                self, "Template Error", f"Failed to save template:\n{exc}"
-            )
-
-    def _on_font_family_changed(self, *_):
-        f = self.spec.font
-        f.family = self.combo_font_family.currentText().strip() or f.family
-        if not self._applying_style_preset:
-            self.spec.metadata["style_preset"] = "Custom"
-            if hasattr(self, "combo_style_preset"):
-                self.combo_style_preset.setCurrentText("Custom")
-        self._push_undo()
-        self._update_preview()
-
-    def _on_role_font_size_changed(self, role: str, value: float):
-        f_role = getattr(self.spec.font, role, None)
-        if f_role is None:
-            return
-        f_role.size = float(value)
-        if role == "tick_label":
-            self.spec.font.base_size = float(value)
-        if role == "panel_label" and hasattr(self.spec.layout, "panel_labels"):
-            self.spec.layout.panel_labels.font_size = float(value)
-        if not self._applying_style_preset:
-            self.spec.metadata["style_preset"] = "Custom"
-            if hasattr(self, "combo_style_preset"):
-                self.combo_style_preset.setCurrentText("Custom")
-        self._push_undo()
-        self._update_preview()
-
-    def _on_role_font_weight_changed(self, role: str, checked: bool):
-        f_role = getattr(self.spec.font, role, None)
-        if f_role is None:
-            return
-        f_role.weight = "bold" if checked else "normal"
-        if role == "panel_label" and hasattr(self.spec.layout, "panel_labels"):
-            self.spec.layout.panel_labels.weight = f_role.weight
-        if not self._applying_style_preset:
-            self.spec.metadata["style_preset"] = "Custom"
-            if hasattr(self, "combo_style_preset"):
-                self.combo_style_preset.setCurrentText("Custom")
-        self._push_undo()
-        self._update_preview()
-
-    def _on_role_font_style_changed(self, role: str, checked: bool):
-        f_role = getattr(self.spec.font, role, None)
-        if f_role is None:
-            return
-        f_role.style = "italic" if checked else "normal"
-        if not self._applying_style_preset:
-            self.spec.metadata["style_preset"] = "Custom"
-            if hasattr(self, "combo_style_preset"):
-                self.combo_style_preset.setCurrentText("Custom")
-        self._push_undo()
-        self._update_preview()
-
-    def _on_style_changed(self, *_):
-        s = self.spec.style
-        s.default_linewidth = float(self.spin_default_linewidth.value())
-        s.axis_spine_width = float(self.spin_spine_width.value())
-        s.tick_direction = self.combo_tick_dir.currentText()
-        s.tick_major_length = float(self.spin_tick_major.value())
-        s.tick_minor_length = float(self.spin_tick_minor.value())
-        for graph in self.spec.graphs.values():
-            graph.default_linewidth = s.default_linewidth
-        if not self._applying_style_preset:
-            self.spec.metadata["style_preset"] = "Custom"
-            if hasattr(self, "combo_style_preset"):
-                self.combo_style_preset.setCurrentText("Custom")
-        self._push_undo()
-        self._update_preview()
-
-    def _on_apply_style_preset(self):
-        name = self.combo_style_preset.currentText()
-        preset = STYLE_PRESETS.get(name)
-        if preset is None:
-            return
-        self._applying_style_preset = True
-        apply_style_preset(self.spec, preset)
-        self.spec.metadata["style_preset"] = name
-        self._mark_export_profile_custom()
-        self._push_undo()
-        self._refresh_tabs()
-        self._update_preview()
-        self._applying_style_preset = False
-
-    def _on_style_preset_changed(self, name: str):
-        self._refresh_style_description(name)
-
-    def _refresh_style_description(self, name: str | None = None):
-        if not hasattr(self, "label_style_desc"):
-            return
-        preset_name = name or self.combo_style_preset.currentText()
-        preset = STYLE_PRESETS.get(preset_name)
-        if preset:
-            self.label_style_desc.setText(preset.description)
-        else:
-            self.label_style_desc.setText("Custom style")
-
-    def _refresh_export_profile_description(self, name: str | None = None):
-        if not hasattr(self, "label_export_profile_desc"):
-            return
-        preset_name = name or self.combo_export_profile.currentText()
-        preset = STYLE_PRESETS.get(preset_name)
-        if preset:
-            self.label_export_profile_desc.setText(preset.description)
-        else:
-            self.label_export_profile_desc.setText("Custom export profile")
-
-    def _mark_export_profile_custom(self):
-        """Mark export profile as custom when manual tweaks occur."""
-        self.spec.metadata["export_profile"] = "Custom"
-        if hasattr(self, "combo_export_profile"):
-            self.combo_export_profile.blockSignals(True)
-            self.combo_export_profile.setCurrentText("Custom")
-            self.combo_export_profile.blockSignals(False)
-            self._refresh_export_profile_description("Custom")
-
-    def _update_width_status_label(self):
-        if hasattr(self, "label_width_status"):
-            self.label_width_status.setText(
-                f"Current width: {self.spec.layout.width_in * 25.4:.1f} mm"
-            )
-
-    # ------------------------------------------------------------------
-    # Traces & Events tab helpers
-    # ------------------------------------------------------------------
-    def _connect_traces_events_signals(self):
-        self.combo_panel_select.currentIndexChanged.connect(
-            self._on_panel_selector_changed
-        )
-        # Display
-        self.cb_grid.toggled.connect(self._on_grid_toggled)
-        self.cb_legend.toggled.connect(self._on_legend_toggled)
-        self.combo_legend_loc.currentTextChanged.connect(self._on_legend_loc_changed)
-
-        # Spines
-        self.cb_spine_left.toggled.connect(lambda v: self._on_spine_toggled("left", v))
-        self.cb_spine_right.toggled.connect(
-            lambda v: self._on_spine_toggled("right", v)
-        )
-        self.cb_spine_top.toggled.connect(lambda v: self._on_spine_toggled("top", v))
-        self.cb_spine_bottom.toggled.connect(
-            lambda v: self._on_spine_toggled("bottom", v)
-        )
-
-        # Axes
-        self.combo_x_scale.currentTextChanged.connect(
-            lambda v: self._on_scale_changed("x", v)
-        )
-        self.combo_y_scale.currentTextChanged.connect(
-            lambda v: self._on_scale_changed("y", v)
-        )
-        self.cb_x_auto.toggled.connect(lambda checked: self._on_axis_auto_toggled("x", checked))
-        self.cb_y_auto.toggled.connect(lambda checked: self._on_axis_auto_toggled("y", checked))
-        self.edit_x_min.editingFinished.connect(
-            lambda: self._on_axis_limits_changed("x")
-        )
-        self.edit_x_max.editingFinished.connect(
-            lambda: self._on_axis_limits_changed("x")
-        )
-        self.edit_y_min.editingFinished.connect(
-            lambda: self._on_axis_limits_changed("y")
-        )
-        self.edit_y_max.editingFinished.connect(
-            lambda: self._on_axis_limits_changed("y")
-        )
-
-        # Ticks
-        self.spin_x_tick_every.valueChanged.connect(self._on_x_tick_interval_changed)
-        self.spin_x_max_ticks.valueChanged.connect(self._on_x_max_ticks_changed)
-        self.spin_y_max_ticks.valueChanged.connect(self._on_y_max_ticks_changed)
-
-        # Events
-        self.cb_show_event_lines.toggled.connect(self._on_show_event_lines_toggled)
-        self.cb_show_event_labels.toggled.connect(self._on_show_event_labels_toggled)
-        self.edit_event_color.editingFinished.connect(self._on_event_style_changed)
-        self.spin_event_lw.valueChanged.connect(self._on_event_style_changed)
-        self.combo_event_ls.currentTextChanged.connect(self._on_event_style_changed)
-        self.spin_event_rotation.valueChanged.connect(self._on_event_style_changed)
-        if self.event_times:
-            self.spin_event_index.valueChanged.connect(self._on_event_index_changed)
-            self.edit_event_label.editingFinished.connect(self._on_event_label_changed)
-
-        # Traces
-        self.cb_trace_inner.toggled.connect(lambda v: self._on_trace_toggle("inner", v))
-        self.cb_trace_outer.toggled.connect(lambda v: self._on_trace_toggle("outer", v))
-        self.cb_trace_avg_pressure.toggled.connect(
-            lambda v: self._on_trace_toggle("avg_pressure", v)
-        )
-        self.cb_trace_set_pressure.toggled.connect(
-            lambda v: self._on_trace_toggle("set_pressure", v)
-        )
-        self.cb_twin_y.toggled.connect(self._on_twin_y_toggled)
-        self.edit_y2_label.editingFinished.connect(self._on_y2_label_changed)
-        self.combo_y2_scale.currentTextChanged.connect(self._on_y2_scale_changed)
-        self.edit_y2_min.editingFinished.connect(lambda: self._on_y2_limits_changed())
-        self.edit_y2_max.editingFinished.connect(lambda: self._on_y2_limits_changed())
-
-        # Trace styles
-        self.combo_trace_select.currentTextChanged.connect(
-            self._on_trace_style_target_changed
-        )
-        self.edit_trace_color.editingFinished.connect(self._on_trace_style_changed)
-        self.spin_trace_lw.valueChanged.connect(self._on_trace_style_changed)
-        self.combo_trace_ls.currentTextChanged.connect(self._on_trace_style_changed)
-        self.combo_trace_marker.currentTextChanged.connect(self._on_trace_style_changed)
-
-        spin_widgets = [
-            self.edit_x_min,
-            self.edit_x_max,
-            self.edit_y_min,
-            self.edit_y_max,
-            self.spin_x_tick_every,
-            self.spin_x_max_ticks,
-            self.spin_y_max_ticks,
-            self.spin_event_lw,
-            self.spin_event_rotation,
-            self.spin_trace_lw,
-        ]
-        if self.event_times:
-            spin_widgets.append(self.spin_event_index)
-        self._apply_spinbox_arrows(spin_widgets)
-
-    def _with_graph_spec(self) -> GraphSpec | None:
-        graph = self._get_active_graph_spec()
-        return graph
-
-    def _get_active_graph_and_axes(self):
-        """Return (graph_spec, axes) for the selected panel, or (None, None)."""
-        graph = self._get_active_graph_spec()
-        if graph is None:
-            return None, None
-
-        inst_id = getattr(self, "selected_instance_id", None)
-        if inst_id is None and self.spec.layout.graph_instances:
-            inst_id = self.spec.layout.graph_instances[0].instance_id
-
-        ax = None
-        if inst_id is not None:
-            ax = self._preview_axes_map.get(inst_id)
-        return graph, ax
-
-    def _refresh_traces_events_tab(self):
-        if not hasattr(self, "combo_panel_select"):
-            return
-        graph, ax = self._get_active_graph_and_axes()
-        if not graph:
-            return
-
-        widgets = [
-            self.combo_panel_select,
-            self.cb_grid,
-            self.cb_legend,
-            self.combo_legend_loc,
-            self.cb_spine_left,
-            self.cb_spine_right,
-            self.cb_spine_top,
-            self.cb_spine_bottom,
-            self.combo_x_scale,
-            self.combo_y_scale,
-            self.cb_x_auto,
-            self.cb_y_auto,
-            self.edit_x_min,
-            self.edit_x_max,
-            self.edit_y_min,
-            self.edit_y_max,
-            self.spin_x_tick_every,
-            self.spin_x_max_ticks,
-            self.spin_y_max_ticks,
-            self.cb_show_event_lines,
-            self.cb_show_event_labels,
-            self.edit_event_color,
-            self.spin_event_lw,
-            self.combo_event_ls,
-            self.spin_event_rotation,
-            self.cb_trace_inner,
-            self.cb_trace_outer,
-            self.cb_trace_avg_pressure,
-            self.cb_trace_set_pressure,
-            self.cb_twin_y,
-            self.edit_y2_label,
-            self.combo_y2_scale,
-            self.edit_y2_min,
-            self.edit_y2_max,
-            self.combo_trace_select,
-            self.edit_trace_color,
-            self.spin_trace_lw,
-            self.combo_trace_ls,
-            self.combo_trace_marker,
-        ]
-        if self.event_times:
-            widgets.extend([self.spin_event_index, self.edit_event_label])
-        for w in widgets:
-            w.blockSignals(True)
-
-        # Panel selector
-        self.combo_panel_select.clear()
-        for idx, inst in enumerate(self.spec.layout.graph_instances):
-            g = self.spec.graphs.get(inst.graph_id)
-            label = f"{self._panel_label_from_index(idx)} – {g.name if g else inst.graph_id}"
-            self.combo_panel_select.addItem(label, inst.instance_id)
-        if self.spec.layout.graph_instances:
-            if self.selected_instance_id is None:
-                self.selected_instance_id = self.spec.layout.graph_instances[
-                    0
-                ].instance_id
-            idx = self.combo_panel_select.findData(self.selected_instance_id)
-            if idx < 0:
-                idx = 0
-                self.selected_instance_id = self.spec.layout.graph_instances[
-                    0
-                ].instance_id
-            self.combo_panel_select.setCurrentIndex(idx)
-
-        # Display
-        self.cb_grid.setChecked(graph.grid)
-        self.cb_legend.setChecked(graph.show_legend)
-        idx = self.combo_legend_loc.findText(graph.legend_loc)
-        if idx >= 0:
-            self.combo_legend_loc.setCurrentIndex(idx)
-
-        # Spines
-        self.cb_spine_left.setChecked(graph.show_spines.get("left", True))
-        self.cb_spine_right.setChecked(graph.show_spines.get("right", True))
-        self.cb_spine_top.setChecked(graph.show_spines.get("top", False))
-        self.cb_spine_bottom.setChecked(graph.show_spines.get("bottom", True))
-
-        # Axes
-        self._set_axis_controls(graph, ax)
-
-        # Ticks
-        self.spin_x_tick_every.setValue(
-            0.0 if graph.x_tick_interval is None else graph.x_tick_interval
-        )
-        self.spin_x_max_ticks.setValue(
-            0 if graph.x_max_ticks is None else graph.x_max_ticks
-        )
-        self.spin_y_max_ticks.setValue(
-            0 if graph.y_max_ticks is None else graph.y_max_ticks
-        )
-
-        # Events
-        self.cb_show_event_lines.setChecked(graph.show_event_markers)
-        self.cb_show_event_labels.setChecked(graph.show_event_labels)
-        self.edit_event_color.setText(graph.event_line_color)
-        self.spin_event_lw.setValue(graph.event_line_width)
-        ls_map_inv = {"-": "solid", "--": "dashed", ":": "dotted", "-.": "dashdot"}
-        ls_display = ls_map_inv.get(graph.event_line_style, graph.event_line_style)
-        idx = self.combo_event_ls.findText(ls_display)
-        if idx >= 0:
-            self.combo_event_ls.setCurrentIndex(idx)
-        self.spin_event_rotation.setValue(graph.event_label_rotation)
-        if self.event_times:
-            max_idx = max(len(self.event_times) - 1, 0)
-            self.spin_event_index.setMaximum(max_idx)
-            current_idx = min(self._current_event_index, max_idx)
-            self.spin_event_index.setValue(current_idx)
-            if hasattr(self, "edit_event_label"):
-                label = ""
-                if 0 <= current_idx < len(self.event_labels):
-                    label = self.event_labels[current_idx]
-                self.edit_event_label.setText(label)
-
-        # Traces
-        kinds = {tb.kind for tb in graph.trace_bindings}
-        available = self._available_trace_bindings()
-        available_kinds = {b.kind for b in available}
-        self.cb_trace_inner.setEnabled("inner" in available_kinds)
-        self.cb_trace_outer.setEnabled("outer" in available_kinds)
-        self.cb_trace_avg_pressure.setEnabled("avg_pressure" in available_kinds)
-        self.cb_trace_set_pressure.setEnabled("set_pressure" in available_kinds)
-
-        self.cb_trace_inner.setChecked("inner" in kinds)
-        self.cb_trace_outer.setChecked("outer" in kinds)
-        self.cb_trace_avg_pressure.setChecked("avg_pressure" in kinds)
-        self.cb_trace_set_pressure.setChecked("set_pressure" in kinds)
-        self.cb_twin_y.setChecked(graph.twin_y)
-        self.edit_y2_label.setText(graph.y2_label)
-        self.combo_y2_scale.setCurrentText(graph.y2_scale)
-        self.edit_y2_min.setText("" if graph.y2_lim is None else str(graph.y2_lim[0]))
-        self.edit_y2_max.setText("" if graph.y2_lim is None else str(graph.y2_lim[1]))
-        for ctrl in [
-            self.edit_y2_label,
-            self.combo_y2_scale,
-            self.edit_y2_min,
-            self.edit_y2_max,
-        ]:
-            ctrl.setEnabled(graph.twin_y)
-
-        self._refresh_trace_style_selector(graph)
-
-        for w in widgets:
-            w.blockSignals(False)
-
-    def _parse_optional_float(self, text: str) -> float | None:
-        text = text.strip()
-        if text == "":
-            return None
-        try:
-            return float(text)
-        except ValueError:
-            return None
-
-    def _set_axis_auto_checkbox(self, axis: str, checked: bool):
-        cb = self.cb_x_auto if axis == "x" else self.cb_y_auto
-        if not cb:
-            return
-        cb.blockSignals(True)
-        cb.setChecked(checked)
-        cb.blockSignals(False)
-
-    def _set_axis_controls(self, graph: GraphSpec, ax: Axes | None = None) -> None:
-        """Update axis control widgets from a GraphSpec and optional live Axes."""
-        controls = [
-            self.combo_x_scale,
-            self.combo_y_scale,
-            self.cb_x_auto,
-            self.cb_y_auto,
-            self.edit_x_min,
-            self.edit_x_max,
-            self.edit_y_min,
-            self.edit_y_max,
-        ]
-        for ctrl in controls:
-            ctrl.blockSignals(True)
-
-        self.combo_x_scale.setCurrentText(graph.x_scale)
-        self.combo_y_scale.setCurrentText(graph.y_scale)
-
-        if ax is not None:
-            x_min, x_max = ax.get_xlim()
-            y_min, y_max = ax.get_ylim()
-        else:
-            if graph.x_lim is not None:
-                x_min, x_max = graph.x_lim
-            else:
-                x_min, x_max = 0.0, 0.0
-            if graph.y_lim is not None:
-                y_min, y_max = graph.y_lim
-            else:
-                y_min, y_max = 0.0, 0.0
-
-        auto_x = graph.x_lim is None
-        auto_y = graph.y_lim is None
-        self.cb_x_auto.setChecked(auto_x)
-        self.cb_y_auto.setChecked(auto_y)
-
-        self.edit_x_min.setValue(float(x_min))
-        self.edit_x_max.setValue(float(x_max))
-        self.edit_y_min.setValue(float(y_min))
-        self.edit_y_max.setValue(float(y_max))
-
-        for ctrl in (self.edit_x_min, self.edit_x_max):
-            ctrl.setEnabled(not auto_x)
-        for ctrl in (self.edit_y_min, self.edit_y_max):
-            ctrl.setEnabled(not auto_y)
-
-        for ctrl in controls:
-            ctrl.blockSignals(False)
-
-    def _on_grid_toggled(self, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.grid = checked
-        self._push_undo()
-        self._update_preview()
-
-    def _on_panel_selector_changed(self, idx: int):
-        inst_id = self.combo_panel_select.itemData(idx)
-        if not inst_id:
-            return
-        self.selected_instance_id = inst_id
-        self._refresh_panel_table()
-        self._refresh_traces_events_tab()
-        self._update_preview()
-
-    def _on_legend_toggled(self, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.show_legend = checked
-        self._push_undo()
-        self._update_preview()
-
-    def _on_legend_loc_changed(self, loc: str):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.legend_loc = loc
-        self._push_undo()
-        self._update_preview()
-
-    def _on_spine_toggled(self, spine: str, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.show_spines[spine] = checked
-        self._push_undo()
-        self._update_preview()
-
-    def _on_scale_changed(self, axis: str, value: str):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        if axis == "x":
-            graph.x_scale = value
-        else:
-            graph.y_scale = value
-        self._push_undo()
-        self._update_preview()
-
-    def _on_axis_auto_toggled(self, axis: str, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        if axis == "x":
-            if checked:
-                graph.x_lim = None
-            elif graph.x_lim is None:
-                ax = self._preview_axes_map.get(self.selected_instance_id)
-                if ax is not None:
-                    graph.x_lim = tuple(map(float, ax.get_xlim()))
-            for ctrl in (self.edit_x_min, self.edit_x_max):
-                ctrl.setEnabled(not checked)
-        else:
-            if checked:
-                graph.y_lim = None
-            elif graph.y_lim is None:
-                ax = self._preview_axes_map.get(self.selected_instance_id)
-                if ax is not None:
-                    graph.y_lim = tuple(map(float, ax.get_ylim()))
-            for ctrl in (self.edit_y_min, self.edit_y_max):
-                ctrl.setEnabled(not checked)
-        self._push_undo()
-        self._update_preview()
-        self._refresh_traces_events_tab()
-
-    def _on_axis_limits_changed(self, axis: str):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        if axis == "x":
-            vmin = float(self.edit_x_min.value())
-            vmax = float(self.edit_x_max.value())
-            graph.x_lim = (vmin, vmax)
-            self._set_axis_auto_checkbox("x", graph.x_lim is None)
-            for ctrl in (self.edit_x_min, self.edit_x_max):
-                ctrl.setEnabled(graph.x_lim is not None)
-        else:
-            vmin = float(self.edit_y_min.value())
-            vmax = float(self.edit_y_max.value())
-            graph.y_lim = (vmin, vmax)
-            self._set_axis_auto_checkbox("y", graph.y_lim is None)
-            for ctrl in (self.edit_y_min, self.edit_y_max):
-                ctrl.setEnabled(graph.y_lim is not None)
-        self._push_undo()
-        self._update_preview()
-
-    def _on_x_tick_interval_changed(self, value: float):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.x_tick_interval = None if value <= 0 else float(value)
-        self._push_undo()
-        self._update_preview()
-
-    def _on_x_max_ticks_changed(self, value: int):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.x_max_ticks = None if value == 0 else int(value)
-        self._push_undo()
-        self._update_preview()
-
-    def _on_y_max_ticks_changed(self, value: int):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.y_max_ticks = None if value == 0 else int(value)
-        self._push_undo()
-        self._update_preview()
-
-    def _on_show_event_lines_toggled(self, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.show_event_markers = checked
-        self._push_undo()
-        self._update_preview()
-
-    def _on_show_event_labels_toggled(self, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.show_event_labels = checked
-        self._push_undo()
-        self._update_preview()
-
-    def _on_event_style_changed(self, *_):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        color = self.edit_event_color.text().strip()
-        if color:
-            graph.event_line_color = color
-        graph.event_line_width = float(self.spin_event_lw.value())
-        ls_map = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
-        graph.event_line_style = ls_map.get(
-            self.combo_event_ls.currentText(), self.combo_event_ls.currentText()
-        )
-        graph.event_label_rotation = float(self.spin_event_rotation.value())
-        self._push_undo()
-        self._update_preview()
-
-    def _on_event_index_changed(self, idx: int):
-        self._current_event_index = idx
-        if self.event_labels and 0 <= idx < len(self.event_labels):
-            self.edit_event_label.setText(self.event_labels[idx])
-
-    def _on_event_label_changed(self):
-        idx = getattr(self, "spin_event_index", None)
-        if idx is None:
-            return
-        idx_val = self.spin_event_index.value()
-        if not self.event_labels or not (0 <= idx_val < len(self.event_labels)):
-            return
-        self.event_labels[idx_val] = self.edit_event_label.text().strip()
-        self._update_preview()
-
-    def _on_trace_toggle(self, kind: str, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        # maintain consistent order
-        order = ["inner", "outer", "avg_pressure", "set_pressure"]
-        existing = {tb.kind: tb for tb in graph.trace_bindings}
-        bindings: list[TraceBinding] = []
-        for k in order:
-            if k == kind:
-                if checked:
-                    bindings.append(TraceBinding(name=k, kind=k))
-            elif k in existing:
-                bindings.append(existing[k])
-        graph.trace_bindings = bindings
-        self._refresh_trace_style_selector(graph)
-        self._push_undo()
-        self._update_preview()
-
-    def _on_twin_y_toggled(self, checked: bool):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.twin_y = checked
-        self._push_undo()
-        self._refresh_traces_events_tab()
-        self._update_preview()
-
-    def _on_y2_label_changed(self):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.y2_label = self.edit_y2_label.text()
-        self._push_undo()
-        self._update_preview()
-
-    def _on_y2_scale_changed(self, scale: str):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        graph.y2_scale = scale
-        self._push_undo()
-        self._update_preview()
-
-    def _on_y2_limits_changed(self):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        ymin = self._parse_optional_float(self.edit_y2_min.text())
-        ymax = self._parse_optional_float(self.edit_y2_max.text())
-        graph.y2_lim = None if ymin is None or ymax is None else (ymin, ymax)
-        self._push_undo()
-        self._update_preview()
-
-    def _refresh_trace_style_selector(self, graph: GraphSpec | None = None):
-        if graph is None:
-            graph = self._with_graph_spec()
-        if not graph:
-            return
-        self.combo_trace_select.blockSignals(True)
-        self.combo_trace_select.clear()
-        for tb in graph.trace_bindings:
-            self.combo_trace_select.addItem(tb.name, tb.name)
-        self.combo_trace_select.blockSignals(False)
-        self._load_trace_style_from_spec()
-
-    def _on_trace_style_target_changed(self, _):
-        self._load_trace_style_from_spec()
-
-    def _load_trace_style_from_spec(self):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        name = self.combo_trace_select.currentData()
-        if not name:
-            return
-        style = graph.trace_styles.get(name, {})
-        self.edit_trace_color.blockSignals(True)
-        self.spin_trace_lw.blockSignals(True)
-        self.combo_trace_ls.blockSignals(True)
-        self.combo_trace_marker.blockSignals(True)
-
-        self.edit_trace_color.setText(style.get("color", ""))
-        self.spin_trace_lw.setValue(style.get("linewidth", graph.default_linewidth))
-        ls_map_inv = {"-": "solid", "--": "dashed", ":": "dotted", "-.": "dashdot"}
-        self.combo_trace_ls.setCurrentText(
-            ls_map_inv.get(style.get("linestyle", "-"), "solid")
-        )
-        marker = style.get("marker", "")
-        self.combo_trace_marker.setCurrentText(marker if marker else "(none)")
-
-        self.edit_trace_color.blockSignals(False)
-        self.spin_trace_lw.blockSignals(False)
-        self.combo_trace_ls.blockSignals(False)
-        self.combo_trace_marker.blockSignals(False)
-
-    def _on_trace_style_changed(self, *_):
-        graph = self._with_graph_spec()
-        if not graph:
-            return
-        name = self.combo_trace_select.currentData()
-        if not name:
-            return
-        style = graph.trace_styles.setdefault(name, {})
-        color = self.edit_trace_color.text().strip()
-        if color:
-            style["color"] = color
-        style["linewidth"] = float(self.spin_trace_lw.value())
-        ls_map = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
-        style["linestyle"] = ls_map.get(self.combo_trace_ls.currentText(), "-")
-        marker = self.combo_trace_marker.currentText()
-        style["marker"] = "" if marker == "(none)" else marker
-        self._push_undo()
-        self._update_preview()
-
-    def _on_export_format_changed(self, fmt: str):
-        self.spec.export.format = fmt
-        self._mark_export_profile_custom()
-        self._push_undo()
-        self._update_footer()
-
-    def _on_export_dpi_changed(self, dpi: int):
-        self.spec.export.dpi = int(dpi)
-        self._mark_export_profile_custom()
-        self._push_undo()
-        self._update_footer()
-
-    def _on_export_bg_changed(self, checked: bool):
-        # Radio buttons share the slot; transparent is tied to radio_bg_transparent
-        btn = getattr(self, "radio_bg_transparent", None)
-        if btn is None:
-            return
-        self.spec.export.transparent = btn.isChecked()
-        self._push_undo()
-        self._update_preview()
-
-    def _on_apply_export_profile(self):
-        name = self.combo_export_profile.currentText()
-        preset = STYLE_PRESETS.get(name)
-        if preset:
-            apply_style_preset(self.spec, preset)
-        self.spec.export.format = "pdf"
-        self.spec.metadata["export_profile"] = name
-        self.combo_export_profile.setCurrentText(name)
-        self._refresh_export_profile_description(name)
-        self._push_undo()
-        self._refresh_tabs()
-        self._update_preview()
-
-    def _on_extra_export_changed(self, *_):
-        self.spec.metadata["extra_export_png"] = self.cb_export_png.isChecked()
-        self.spec.metadata["extra_export_tiff"] = self.cb_export_tiff.isChecked()
-        self._push_undo()
-
-    def _on_width_preset_mm(self, mm: int):
-        inches = mm / 25.4
-        self.spec.layout.width_in = inches
-        self.spec.layout.height_in = max(self.spec.layout.height_in, 1.0)
-        if hasattr(self, "spin_width"):
-            self.spin_width.setValue(inches)
-        self._mark_export_profile_custom()
-        self._update_width_status_label()
-        self._push_undo()
-        self._update_preview()
-
-    def _refresh_tabs(self):
-        """Sync Qt controls with current spec."""
-        self._refresh_layout_tab()
-        if hasattr(self, "combo_font_family"):
-            self.combo_font_family.blockSignals(True)
-            self.combo_font_family.setCurrentText(self.spec.font.family)
-            self.combo_font_family.blockSignals(False)
-            if hasattr(self, "font_role_controls"):
-                for role, controls in self.font_role_controls.items():
-                    role_font = getattr(self.spec.font, role, None)
-                    if role_font is None:
-                        continue
-                    for w in controls.values():
-                        w.blockSignals(True)
-                    controls["spin"].setValue(role_font.size)
-                    controls["bold"].setChecked(role_font.weight == "bold")
-                    controls["italic"].setChecked(
-                        role_font.style in ("italic", "oblique")
-                    )
-                    for w in controls.values():
-                        w.blockSignals(False)
-        if hasattr(self, "spin_default_linewidth"):
-            style_widgets = [
-                self.spin_default_linewidth,
-                self.spin_spine_width,
-                self.combo_tick_dir,
-                self.spin_tick_major,
-                self.spin_tick_minor,
-            ]
-            for w in style_widgets:
-                w.blockSignals(True)
-            self.spin_default_linewidth.setValue(self.spec.style.default_linewidth)
-            self.spin_spine_width.setValue(self.spec.style.axis_spine_width)
-            self.combo_tick_dir.setCurrentText(self.spec.style.tick_direction)
-            self.spin_tick_major.setValue(self.spec.style.tick_major_length)
-            self.spin_tick_minor.setValue(self.spec.style.tick_minor_length)
-            for w in style_widgets:
-                w.blockSignals(False)
-            if hasattr(self, "combo_style_preset"):
-                preset_name = self.spec.metadata.get("style_preset", "Custom")
-                if preset_name not in STYLE_PRESETS:
-                    preset_name = "Custom"
-                self.combo_style_preset.setCurrentText(preset_name)
-                self._refresh_style_description(preset_name)
-        self._refresh_traces_events_tab()
-        if hasattr(self, "combo_format"):
-            self.combo_format.blockSignals(True)
-            self.spin_dpi.blockSignals(True)
-            self.combo_format.setCurrentText(self.spec.export.format)
-            self.spin_dpi.setValue(self.spec.export.dpi)
-            self.combo_format.blockSignals(False)
-            self.spin_dpi.blockSignals(False)
-        if hasattr(self, "radio_bg_transparent"):
-            self.radio_bg_white.blockSignals(True)
-            self.radio_bg_transparent.blockSignals(True)
-            self.radio_bg_transparent.setChecked(self.spec.export.transparent)
-            self.radio_bg_white.setChecked(not self.spec.export.transparent)
-            self.radio_bg_white.blockSignals(False)
-            self.radio_bg_transparent.blockSignals(False)
-        if hasattr(self, "combo_export_profile"):
-            profile = self.spec.metadata.get("export_profile", "Lab default")
-            if profile not in [
-                "Lab default",
-                "Journal single-column",
-                "Journal double-column",
-                "Custom",
-            ]:
-                profile = "Custom"
-            self.combo_export_profile.setCurrentText(profile)
-            self._refresh_export_profile_description(profile)
-        if hasattr(self, "cb_export_png"):
-            self.cb_export_png.blockSignals(True)
-            self.cb_export_tiff.blockSignals(True)
-            self.cb_export_png.setChecked(
-                bool(self.spec.metadata.get("extra_export_png", False))
-            )
-            self.cb_export_tiff.setChecked(
-                bool(self.spec.metadata.get("extra_export_tiff", False))
-            )
-            self.cb_export_png.blockSignals(False)
-            self.cb_export_tiff.blockSignals(False)
-        self._update_width_status_label()
-        self._refresh_annotation_ui()
-
-    # ------------------------------------------------------------------
-    # Annotation tab helpers
-    # ------------------------------------------------------------------
-    def _connect_annotation_signals(self):
-        self.list_annotations.currentItemChanged.connect(
-            self._on_annotation_list_selection
-        )
-        self.btn_annot_delete.clicked.connect(self._on_annotation_delete)
-        self.btn_annot_duplicate.clicked.connect(self._on_annotation_duplicate)
-
-        # Text
-        self.edit_annot_text.textChanged.connect(self._on_annotation_text_changed)
-        self.spin_annot_font.valueChanged.connect(self._on_annotation_font_changed)
-        self.combo_annot_weight.currentTextChanged.connect(
-            self._on_annotation_font_changed
-        )
-        self.combo_annot_style.currentTextChanged.connect(
-            self._on_annotation_font_changed
-        )
-        self.edit_annot_color.editingFinished.connect(
-            self._on_annotation_text_style_changed
-        )
-        self.combo_annot_ha.currentTextChanged.connect(
-            self._on_annotation_text_style_changed
-        )
-        self.combo_annot_va.currentTextChanged.connect(
-            self._on_annotation_text_style_changed
-        )
-        self.spin_annot_rotation.valueChanged.connect(
-            self._on_annotation_text_style_changed
-        )
-
-        # Box / line
-        self.edit_annot_edgecolor.editingFinished.connect(
-            self._on_annotation_boxline_changed
-        )
-        self.edit_annot_facecolor.editingFinished.connect(
-            self._on_annotation_boxline_changed
-        )
-        self.spin_annot_alpha.valueChanged.connect(self._on_annotation_boxline_changed)
-        self.spin_annot_linewidth.valueChanged.connect(
-            self._on_annotation_boxline_changed
-        )
-        self.combo_annot_linestyle.currentTextChanged.connect(
-            self._on_annotation_boxline_changed
-        )
-
-        # Arrow
-        self.combo_annot_arrowstyle.currentTextChanged.connect(
-            self._on_annotation_arrow_changed
-        )
-
-        # Defaults
-        self.spin_default_annot_font.valueChanged.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.combo_default_annot_weight.currentTextChanged.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.combo_default_annot_style.currentTextChanged.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.edit_default_annot_color.editingFinished.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.edit_default_edgecolor.editingFinished.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.edit_default_facecolor.editingFinished.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.spin_default_alpha.valueChanged.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.spin_default_linewidth.valueChanged.connect(
-            self._on_annotation_defaults_changed
-        )
-        self.combo_default_linestyle.currentTextChanged.connect(
-            self._on_annotation_defaults_changed
-        )
-
-    def _annotation_display_label(self, annot: AnnotationSpec) -> str:
-        prefix = {
-            "text": "[T]",
-            "box": "[□]",
-            "arrow": "[→]",
-            "line": "[—]",
-        }.get(annot.kind, "[?]")
-        text = (annot.text_content or "").strip().replace("\n", " ")
-        if text:
-            text = (text[:30] + "…") if len(text) > 30 else text
-            return f"{prefix} {text}"
-        return f"{prefix} {annot.annotation_id[:6]}"
-
-    def _annotation_defaults(self) -> dict[str, Any]:
-        annot_font = getattr(self.spec.font, "annotation", None)
-        defaults = {
-            "font_size": getattr(
-                annot_font, "size", getattr(self.spec.font, "annotation_size", 8.0)
-            ),
-            "font_weight": getattr(annot_font, "weight", "normal"),
-            "font_style": getattr(annot_font, "style", "normal"),
-            "color": "#000000",
-            "edgecolor": "#000000",
-            "facecolor": "none",
-            "alpha": 1.0,
-            "linewidth": 1.0,
-            "linestyle": "solid",
-        }
-        stored = self.spec.metadata.get("annotation_defaults")
-        if isinstance(stored, dict):
-            defaults.update({k: v for k, v in stored.items() if k in defaults})
-        return defaults
-
-    def _get_annotation_by_id(self, annot_id: str | None) -> AnnotationSpec | None:
-        if annot_id is None:
-            return None
-        return next(
-            (a for a in self.spec.annotations if a.annotation_id == annot_id), None
-        )
-
-    def _get_selected_annotation(self) -> AnnotationSpec | None:
-        return self._get_annotation_by_id(self.selected_annotation_id)
-
-    def _refresh_annotation_list(self):
-        if not hasattr(self, "list_annotations"):
-            return
-        self.list_annotations.blockSignals(True)
-        self.list_annotations.clear()
-        for annot in self.spec.annotations:
-            item = QListWidgetItem(self._annotation_display_label(annot))
-            item.setData(Qt.UserRole, annot.annotation_id)
-            self.list_annotations.addItem(item)
-            if annot.annotation_id == self.selected_annotation_id:
-                item.setSelected(True)
-        self.list_annotations.blockSignals(False)
-
-    def _refresh_annotation_editor(self):
-        if not hasattr(self, "group_style"):
-            return
-        annot = self._get_selected_annotation()
-        enabled = annot is not None
-        self.group_style.setEnabled(enabled)
-        if not enabled:
-            return
-
-        # Block signals during populate
-        blockers = [
-            self.edit_annot_text,
-            self.spin_annot_font,
-            self.combo_annot_weight,
-            self.combo_annot_style,
-            self.edit_annot_color,
-            self.combo_annot_ha,
-            self.combo_annot_va,
-            self.spin_annot_rotation,
-            self.edit_annot_edgecolor,
-            self.edit_annot_facecolor,
-            self.spin_annot_alpha,
-            self.spin_annot_linewidth,
-            self.combo_annot_linestyle,
-            self.combo_annot_arrowstyle,
-        ]
-        for w in blockers:
-            w.blockSignals(True)
-
-        # Text
-        self.edit_annot_text.setPlainText(annot.text_content or "")
-        self.spin_annot_font.setValue(annot.font_size)
-        self.combo_annot_weight.setCurrentText(annot.font_weight)
-        self.combo_annot_style.setCurrentText(annot.font_style)
-        self.edit_annot_color.setText(annot.color or "")
-        self.combo_annot_ha.setCurrentText(annot.ha)
-        self.combo_annot_va.setCurrentText(annot.va)
-        self.spin_annot_rotation.setValue(annot.rotation)
-
-        # Box/line
-        self.edit_annot_edgecolor.setText(annot.edgecolor or "")
-        self.edit_annot_facecolor.setText(annot.facecolor or "")
-        self.spin_annot_alpha.setValue(annot.alpha)
-        self.spin_annot_linewidth.setValue(annot.linewidth)
-        ls_map_inv = {"-": "solid", "--": "dashed", ":": "dotted", "-.": "dashdot"}
-        self.combo_annot_linestyle.setCurrentText(
-            ls_map_inv.get(annot.linestyle, "solid")
-        )
-
-        # Arrow
-        self.combo_annot_arrowstyle.setCurrentText(annot.arrowstyle or "->")
-
-        for w in blockers:
-            w.blockSignals(False)
-
-        # Enable/disable groups based on kind
-        is_text = annot.kind in ("text", "arrow")
-        is_boxline = annot.kind in ("box", "line", "arrow")
-        self.edit_annot_text.setEnabled(is_text)
-        self.spin_annot_font.setEnabled(is_text)
-        self.combo_annot_weight.setEnabled(is_text)
-        self.combo_annot_style.setEnabled(is_text)
-        self.edit_annot_color.setEnabled(True)
-        self.combo_annot_ha.setEnabled(is_text)
-        self.combo_annot_va.setEnabled(is_text)
-        self.spin_annot_rotation.setEnabled(is_text)
-        self.spin_annot_linewidth.setEnabled(is_boxline or annot.kind == "arrow")
-        self.combo_annot_linestyle.setEnabled(is_boxline or annot.kind == "arrow")
-        self.edit_annot_edgecolor.setEnabled(is_boxline)
-        self.edit_annot_facecolor.setEnabled(annot.kind in ("box", "arrow"))
-        self.spin_annot_alpha.setEnabled(is_boxline or is_text)
-        self.combo_annot_arrowstyle.setEnabled(annot.kind == "arrow")
-
-    def _refresh_annotation_defaults_ui(self):
-        defaults = self._annotation_defaults()
-        widgets = [
-            self.spin_default_annot_font,
-            self.combo_default_annot_weight,
-            self.combo_default_annot_style,
-            self.edit_default_annot_color,
-            self.edit_default_edgecolor,
-            self.edit_default_facecolor,
-            self.spin_default_alpha,
-            self.spin_default_linewidth,
-            self.combo_default_linestyle,
-        ]
-        for w in widgets:
-            w.blockSignals(True)
-        self.spin_default_annot_font.setValue(
-            defaults.get(
-                "font_size",
-                getattr(getattr(self.spec.font, "annotation", None), "size", 8.0),
-            )
-        )
-        self.combo_default_annot_weight.setCurrentText(
-            defaults.get(
-                "font_weight",
-                getattr(
-                    getattr(self.spec.font, "annotation", None), "weight", "normal"
-                ),
-            )
-        )
-        self.combo_default_annot_style.setCurrentText(
-            defaults.get(
-                "font_style",
-                getattr(getattr(self.spec.font, "annotation", None), "style", "normal"),
-            )
-        )
-        self.edit_default_annot_color.setText(defaults.get("color", "#000000"))
-        self.edit_default_edgecolor.setText(defaults.get("edgecolor", "#000000"))
-        self.edit_default_facecolor.setText(defaults.get("facecolor", "none"))
-        self.spin_default_alpha.setValue(float(defaults.get("alpha", 1.0)))
-        self.spin_default_linewidth.setValue(float(defaults.get("linewidth", 1.0)))
-        ls_map_inv = {"-": "solid", "--": "dashed", ":": "dotted", "-.": "dashdot"}
-        self.combo_default_linestyle.setCurrentText(
-            ls_map_inv.get(
-                defaults.get("linestyle", "solid"), defaults.get("linestyle", "solid")
-            )
-        )
-        for w in widgets:
-            w.blockSignals(False)
-
-    def _refresh_annotation_ui(self):
+        self.btn_events_from_dataset = QPushButton("Add from VasoAnalyzer events…")
+        self.btn_event_add = QPushButton("+ Add")
+        self.btn_event_delete = QPushButton("Delete")
+        btn_row.addWidget(self.btn_events_from_dataset)
+        btn_row.addWidget(self.btn_event_add)
+        btn_row.addWidget(self.btn_event_delete)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        self.btn_events_from_dataset.clicked.connect(self._add_events_from_dataset)
+        self.btn_event_add.clicked.connect(self._add_event)
+        self.btn_event_delete.clicked.connect(self._delete_event)
+        self.cb_event_labels.toggled.connect(self._on_event_labels_toggled)
+
+        self._refresh_events_table()
+        return tab
+
+    def _build_annotations_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+        self.annotation_list = QListWidget()
+        layout.addWidget(self.annotation_list)
+        hint = QLabel("Use the toolbar (Text/Box) then click on the canvas to add annotations.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        delete_row = QHBoxLayout()
+        btn_delete = QPushButton("Delete selected")
+        delete_row.addWidget(btn_delete)
+        delete_row.addStretch(1)
+        layout.addLayout(delete_row)
+        btn_delete.clicked.connect(self._delete_selected_annotation)
         self._refresh_annotation_list()
-        self._refresh_annotation_editor()
-        self._refresh_annotation_defaults_ui()
-        # Compatibility with legacy callers
+        return tab
 
-    def _refresh_annotation_controls(self):
-        self._refresh_annotation_ui()
-
-    def _on_annotation_list_selection(
-        self, current: QListWidgetItem, previous: QListWidgetItem | None
-    ):
-        self.selected_annotation_id = current.data(Qt.UserRole) if current else None
-        self._refresh_annotation_editor()
-
-    def _on_annotation_delete(self):
-        self._delete_selected_annotation()
-
-    def _on_annotation_duplicate(self):
-        annot = self._get_selected_annotation()
-        if not annot:
+    def _refresh_events_table(self) -> None:
+        if not hasattr(self, "events_table"):
             return
-        new_annot = copy.deepcopy(annot)
-        new_annot.annotation_id = str(uuid.uuid4())
-        new_annot.x0 += 0.02
-        new_annot.x1 += 0.02
-        new_annot.y0 -= 0.02
-        new_annot.y1 -= 0.02
-        self.spec.annotations.append(new_annot)
-        self.selected_annotation_id = new_annot.annotation_id
-        self._push_undo()
-        self._refresh_annotation_ui()
-        self._create_annotation_artists_for_preview(new_annot)
-        self.canvas.draw_idle()
+        with signals_blocked(self.events_table) as table:
+            table.setRowCount(len(self._fig_spec.events))
+            self._event_controls = []
+            for row, ev in enumerate(self._fig_spec.events):
+                self._populate_event_row(row, ev)
 
-    def _on_annotation_text_changed(self):
-        annot = self._get_selected_annotation()
-        if not annot:
-            return
-        annot.text_content = self.edit_annot_text.toPlainText()
-        self._refresh_annotation_list()
-        self._update_annotation_artists_from_spec(annot)
-        self.canvas.draw_idle()
+    def _populate_event_row(self, row: int, ev: EventSpec) -> None:
+        table = self.events_table
+        controls: Dict[str, Any] = {}
 
-    def _on_annotation_font_changed(self, *_):
-        annot = self._get_selected_annotation()
-        if not annot:
-            return
-        annot.font_size = float(self.spin_annot_font.value())
-        annot.font_weight = self.combo_annot_weight.currentText()
-        annot.font_style = self.combo_annot_style.currentText()
-        self._push_undo()
-        self._update_annotation_artists_from_spec(annot)
-        self.canvas.draw_idle()
+        cb_vis = QCheckBox()
+        cb_vis.setChecked(ev.visible)
+        table.setCellWidget(row, 0, cb_vis)
+        controls["visible"] = cb_vis
 
-    def _on_annotation_text_style_changed(self, *_):
-        annot = self._get_selected_annotation()
-        if not annot:
+        spin_time = QDoubleSpinBox()
+        spin_time.setRange(-1e6, 1e6)
+        spin_time.setDecimals(3)
+        spin_time.setSingleStep(0.1)
+        spin_time.setValue(ev.time_s)
+        table.setCellWidget(row, 1, spin_time)
+        controls["time"] = spin_time
+
+        edit_label = QLineEdit(ev.label)
+        table.setCellWidget(row, 2, edit_label)
+        controls["label"] = edit_label
+
+        cb_above = QCheckBox()
+        cb_above.setChecked(ev.label_above)
+        table.setCellWidget(row, 3, cb_above)
+        controls["above"] = cb_above
+
+        btn_color = QPushButton()
+        btn_color.setFixedWidth(32)
+        btn_color.setStyleSheet(f"background-color: {ev.color};")
+        btn_color.setProperty("color", ev.color)
+        table.setCellWidget(row, 4, btn_color)
+        controls["color"] = btn_color
+
+        combo_style = QComboBox()
+        combo_style.addItems(["-", "--", "-.", ":"])
+        combo_style.setCurrentText(ev.linestyle)
+        table.setCellWidget(row, 5, combo_style)
+        controls["style"] = combo_style
+
+        spin_width = QDoubleSpinBox()
+        spin_width.setRange(0.1, 10.0)
+        spin_width.setSingleStep(0.1)
+        spin_width.setValue(ev.linewidth)
+        table.setCellWidget(row, 6, spin_width)
+        controls["linewidth"] = spin_width
+
+        cb_vis.toggled.connect(lambda _=None, r=row: self._on_event_changed(r))
+        spin_time.valueChanged.connect(lambda _=None, r=row: self._on_event_changed(r))
+        edit_label.editingFinished.connect(lambda r=row: self._on_event_changed(r))
+        cb_above.toggled.connect(lambda _=None, r=row: self._on_event_changed(r))
+        combo_style.currentTextChanged.connect(lambda _=None, r=row: self._on_event_changed(r))
+        spin_width.valueChanged.connect(lambda _=None, r=row: self._on_event_changed(r))
+        btn_color.clicked.connect(lambda _=None, r=row: self._pick_event_color(r))
+
+        self._event_controls.append(controls)
+
+    def _on_event_changed(self, row: int) -> None:
+        if row < 0 or row >= len(self._fig_spec.events):
             return
-        color = self.edit_annot_color.text().strip()
+        ev = self._fig_spec.events[row]
+        controls = self._event_controls[row]
+        ev.visible = controls["visible"].isChecked()
+        ev.time_s = float(controls["time"].value())
+        ev.label = controls["label"].text()
+        ev.label_above = controls["above"].isChecked()
+        ev.linestyle = controls["style"].currentText()
+        ev.linewidth = float(controls["linewidth"].value())
+        color = controls["color"].property("color")
         if color:
-            annot.color = color
-        annot.ha = self.combo_annot_ha.currentText()
-        annot.va = self.combo_annot_va.currentText()
-        annot.rotation = float(self.spin_annot_rotation.value())
-        self._push_undo()
-        self._update_annotation_artists_from_spec(annot)
-        self.canvas.draw_idle()
+            ev.color = str(color)
+        self._refresh_preview()
 
-    def _on_annotation_boxline_changed(self, *_):
-        annot = self._get_selected_annotation()
-        if not annot:
+    def _pick_event_color(self, row: int) -> None:
+        if row < 0 or row >= len(self._fig_spec.events):
             return
-        edge = self.edit_annot_edgecolor.text().strip()
-        face = self.edit_annot_facecolor.text().strip()
-        if edge:
-            annot.edgecolor = edge
-        if face:
-            annot.facecolor = face
-        annot.alpha = float(self.spin_annot_alpha.value())
-        annot.linewidth = float(self.spin_annot_linewidth.value())
-        ls_map = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
-        annot.linestyle = ls_map.get(self.combo_annot_linestyle.currentText(), "-")
-        self._push_undo()
-        self._update_annotation_artists_from_spec(annot)
-        self.canvas.draw_idle()
-
-    def _on_annotation_arrow_changed(self, *_):
-        annot = self._get_selected_annotation()
-        if not annot:
+        controls = self._event_controls[row]
+        color = QColorDialog.getColor()
+        if not color.isValid():
             return
-        annot.arrowstyle = self.combo_annot_arrowstyle.currentText()
-        self._push_undo()
-        self._update_annotation_artists_from_spec(annot)
-        self.canvas.draw_idle()
+        controls["color"].setStyleSheet(f"background-color: {color.name()};")
+        controls["color"].setProperty("color", color.name())
+        self._on_event_changed(row)
 
-    def _on_annotation_defaults_changed(self, *_):
-        ls_map = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
-        defaults = {
-            "font_size": float(self.spin_default_annot_font.value()),
-            "font_weight": self.combo_default_annot_weight.currentText(),
-            "font_style": self.combo_default_annot_style.currentText(),
-            "color": self.edit_default_annot_color.text().strip() or "#000000",
-            "edgecolor": self.edit_default_edgecolor.text().strip() or "#000000",
-            "facecolor": self.edit_default_facecolor.text().strip() or "none",
-            "alpha": float(self.spin_default_alpha.value()),
-            "linewidth": float(self.spin_default_linewidth.value()),
-            "linestyle": ls_map.get(
-                self.combo_default_linestyle.currentText(), "solid"
-            ),
-        }
-        self.spec.metadata["annotation_defaults"] = defaults
-        self._push_undo()
-
-    def _build_title(self):
-        """Title/header bar."""
-        self.ax_title.clear()
-        self.ax_title.set_facecolor(THEME["bg_window"])
-        self.ax_title.set_xlim(0, 1)
-        self.ax_title.set_ylim(0, 1)
-        self.ax_title.axis("off")
-        self.ax_title.text(
-            0.0,
-            0.55,
-            "Pure Matplotlib Figure Composer",
-            fontsize=14,
-            weight="bold",
-            color=THEME["text_primary"],
-            va="center",
+    def _add_event(self) -> None:
+        self._fig_spec.events.append(
+            EventSpec(
+                visible=True,
+                time_s=0.0,
+                color="#444444",
+                linewidth=1.0,
+                linestyle="--",
+                label="",
+                label_above=True,
+            )
         )
-        self.ax_title.text(
-            0.0,
-            0.22,
-            "Preview = Export • Spec-driven layout",
-            fontsize=10,
-            color=THEME["text_secondary"],
-            va="center",
-        )
+        self._refresh_events_table()
+        self._refresh_preview()
 
-    def _active_graph(self) -> GraphSpec | None:
-        if self.spec.graphs:
-            return next(iter(self.spec.graphs.values()))
-        return None
-
-    def _get_active_graph_spec(self) -> GraphSpec | None:
-        """Return GraphSpec for selected instance (or first)."""
-        inst = None
-        if self.selected_instance_id:
-            inst = self._get_graph_instance(self.selected_instance_id)
-        if inst is None and self.spec.layout.graph_instances:
-            inst = self.spec.layout.graph_instances[0]
-            self.selected_instance_id = inst.instance_id
-        if inst is None:
-            return next(iter(self.spec.graphs.values()), None)
-        graph = self.spec.graphs.get(inst.graph_id)
-        if graph is None and self.spec.graphs:
-            graph = next(iter(self.spec.graphs.values()))
-        return graph
-
-    def _available_trace_bindings(self) -> list[TraceBinding]:
-        bindings: list[TraceBinding] = []
-        tm = self.trace_model
-        if tm is None:
-            return bindings
-        if getattr(tm, "inner_full", None) is not None:
-            bindings.append(TraceBinding(name="inner", kind="inner"))
-        if getattr(tm, "outer_full", None) is not None:
-            bindings.append(TraceBinding(name="outer", kind="outer"))
-        if getattr(tm, "avg_pressure_full", None) is not None:
-            bindings.append(TraceBinding(name="avg_pressure", kind="avg_pressure"))
-        if getattr(tm, "set_pressure_full", None) is not None:
-            bindings.append(TraceBinding(name="set_pressure", kind="set_pressure"))
-        return bindings
-
-    def _update_graph_property(self, graph: GraphSpec, prop: str, value):
-        setattr(graph, prop, value)
-        self._push_undo()
-        self._update_preview()
-
-    def _set_trace_style(self, graph: GraphSpec, key: str, value):
-        if self._current_trace_name is None:
+    def _add_events_from_dataset(self) -> None:
+        if not self.event_times:
+            QMessageBox.information(self, "No events", "No dataset events available to add.")
             return
-        style = graph.trace_styles.setdefault(self._current_trace_name, {})
-        style[key] = value
-        self._push_undo()
-        self._update_preview()
+        for idx, t in enumerate(self.event_times):
+            color = self.event_colors[idx] if idx < len(self.event_colors) else "#444444"
+            label = self.event_labels[idx] if idx < len(self.event_labels) else ""
+            self._fig_spec.events.append(
+                EventSpec(
+                    visible=True,
+                    time_s=float(t),
+                    color=color,
+                    linewidth=1.0,
+                    linestyle="--",
+                    label=label,
+                    label_above=True,
+                )
+            )
+        self._refresh_events_table()
+        self._refresh_preview()
 
-    def _update_annotation_property(self, prop, value):
-        """Update a property of the selected annotation."""
-        if self.selected_annotation_id is None:
+    def _delete_event(self) -> None:
+        if not hasattr(self, "events_table"):
             return
-
-        for annot in self.spec.annotations:
-            if annot.annotation_id == self.selected_annotation_id:
-                setattr(annot, prop, value)
-                self._push_undo()
-                self._update_annotation_artists_from_spec(annot)
-                self.canvas.draw_idle()
-                break
-
-    def _update_export_property(self, prop, value):
-        """Update an export spec property."""
-        setattr(self.spec.export, prop, value)
-        self._update_footer()
-        self.canvas.draw_idle()
-
-    def _refocus_self(self):
-        """Bring this window back to the front after dialogs."""
-        try:
-            self.raise_()
-            self.activateWindow()
-            self.setFocus(Qt.ActiveWindowFocusReason)
-        except Exception:
-            pass
-
-    def _build_footer(self):
-        """No-op placeholder for legacy; status handled by QLabel."""
-        self._update_footer()
-
-    def _update_footer(self):
-        """Update footer status."""
-        w_mm = self.spec.layout.width_in * 25.4
-        h_mm = self.spec.layout.height_in * 25.4
-        dpi = self.spec.export.dpi
-        w_px = int(self.spec.layout.width_in * dpi)
-        h_px = int(self.spec.layout.height_in * dpi)
-        n_annot = len(self.spec.annotations)
-
-        mode_str = f"Mode: {self.annotation_mode or 'None'}"
-        status = (
-            f"{mode_str} │ "
-            f"Size: {w_mm:.0f}×{h_mm:.0f} mm ({self.spec.layout.width_in:.2f}×{self.spec.layout.height_in:.2f} in) │ "
-            f"Export: {w_px}×{h_px} px @ {dpi} dpi │ "
-            f"Annotations: {n_annot}"
-        )
-        if hasattr(self, "status_label"):
-            self.status_label.setText(status)
-
-    def _clear_annotation_artists(self):
-        """Remove all live annotation artists from the preview."""
-        for artists in self._annotation_artists.values():
-            for art in artists:
-                try:
-                    art.remove()
-                except Exception:
-                    pass
-        self._annotation_artists.clear()
-
-    def _create_annotation_artists_for_preview(self, annot: AnnotationSpec):
-        # Phase 1 audit: preview annotations are drawn onto the overlay axes
-        # (figure-level transAxes). Graph-targeted annotations reuse the
-        # preview axes transforms but still live on the overlay, so figure vs
-        # data transforms can mix here.
-        artists = create_annotation_artists(
-            self.ui_figure,
-            self._preview_axes_map,
-            annot,
-            figure_transform=self._annotation_overlay_ax.transAxes,
-            figure_axes=self._annotation_overlay_ax,
-        )
-        self._annotation_artists[annot.annotation_id] = artists
-
-    def _connect_events(self):
-        """Connect Matplotlib events."""
-        self.canvas.mpl_connect("button_press_event", self._on_mouse_press)
-        self.canvas.mpl_connect("button_release_event", self._on_mouse_release)
-        self.canvas.mpl_connect("motion_notify_event", self._on_mouse_motion)
-        self.canvas.mpl_connect("key_press_event", self._on_key_press)
-
-    def _sync_annotation_overlay_limits(self, *_):
-        """Keep the overlay axes aligned with the preview view limits."""
-        if not getattr(self, "_annotation_overlay_ax", None):
+        row = self.events_table.currentRow()
+        if row < 0 or row >= len(self._fig_spec.events):
             return
-        self._annotation_overlay_ax.set_xlim(self.preview_ax.get_xlim())
-        self._annotation_overlay_ax.set_ylim(self.preview_ax.get_ylim())
+        del self._fig_spec.events[row]
+        self._refresh_events_table()
+        self._refresh_preview()
 
-    def _disconnect_axis_limit_listeners(self):
-        """Detach x/y limit callbacks from any existing preview axes."""
-        for ax, cids in list(self._axis_limit_cids.items()):
-            for cid in cids:
-                try:
-                    ax.callbacks.disconnect(cid)
-                except Exception:
-                    pass
-        self._axis_limit_cids.clear()
+    def _on_event_labels_toggled(self, checked: bool) -> None:
+        self._fig_spec.axes.show_event_labels = checked
+        self._refresh_preview()
 
-    def _connect_axis_limit_listeners(self):
-        """Attach x/y limit callbacks to live preview axes to mirror toolbar zoom/pan."""
-        self._disconnect_axis_limit_listeners()
-        for inst_id, ax in self._preview_axes_map.items():
-            if ax is None:
-                continue
-            if hasattr(ax, "get_navigate") and not ax.get_navigate():
-                continue
-            self._axis_limit_cids[ax] = [
-                ax.callbacks.connect("xlim_changed", self._on_axis_limits_changed),
-                ax.callbacks.connect("ylim_changed", self._on_axis_limits_changed),
-            ]
-
-    def _on_axis_limits_changed(self, ax):
-        """Handle Matplotlib axis callbacks to capture view changes."""
-        if self._suppress_axis_sync:
+    def _refresh_annotation_list(self) -> None:
+        if not hasattr(self, "annotation_list"):
             return
-        inst_id = self._axes_instance_lookup.get(ax)
-        if inst_id is None:
+        self.annotation_list.clear()
+        for idx, ann in enumerate(self._fig_spec.annotations):
+            label = f"{idx+1}: {ann.kind} ({ann.coord_space})"
+            if ann.text:
+                label += f" \"{ann.text}\""
+            item = QListWidgetItem(label)
+            self.annotation_list.addItem(item)
+
+    def _delete_selected_annotation(self) -> None:
+        if not hasattr(self, "annotation_list"):
             return
-        inst = self._get_graph_instance(inst_id)
-        if inst is None:
+        row = self.annotation_list.currentRow()
+        if row < 0 or row >= len(self._fig_spec.annotations):
             return
-        graph = self.spec.graphs.get(inst.graph_id)
-        if graph is None:
+        del self._fig_spec.annotations[row]
+        self._refresh_annotation_list()
+        self._refresh_preview()
+
+    # ------------------------------------------------------------------
+    # Preview helpers
+    # ------------------------------------------------------------------
+    def _refresh_preview(self) -> None:
+        if not self._preview_initialized or self._figure is None or self._canvas is None:
             return
+        ctx = self._render_context(is_preview=True)
 
-        x_min, x_max = ax.get_xlim()
-        y_min, y_max = ax.get_ylim()
-        graph.x_lim = (float(x_min), float(x_max))
-        graph.y_lim = (float(y_min), float(y_max))
-
-        print(
-            "DEBUG AXIS CALLBACK",
-            inst_id,
-            "xlim",
-            graph.x_lim,
-            "ylim",
-            graph.y_lim,
-        )
-        self._refresh_traces_events_tab()
-
-    def _on_nav_view_changed(self, event=None):
-        """Handle pan/zoom/home/back/forward updates from the navigation toolbar."""
-        target_ax = getattr(event, "inaxes", None) if event is not None else None
-        inst_id = self._axes_instance_lookup.get(target_ax) if target_ax is not None else None
-
-        if target_ax is None or inst_id is None:
-            graph, target_ax = self._get_active_graph_and_axes()
-            inst_id = self.selected_instance_id
+        # Log artist count for debugging
+        if log.isEnabledFor(logging.DEBUG):
+            before = len(self._figure.get_axes())
+            build_figure(self._fig_spec, ctx, fig=self._figure)
+            after = len(self._figure.get_axes())
+            log.debug(f"Figure rebuild: {before} axes before, {after} after (should be 0→1)")
         else:
-            inst = self._get_graph_instance(inst_id)
-            graph = self.spec.graphs.get(inst.graph_id) if inst else None
+            build_figure(self._fig_spec, ctx, fig=self._figure)
 
-        if inst_id is not None and inst_id != self.selected_instance_id:
-            self.selected_instance_id = inst_id
+        self._canvas.draw()
+        if self._zoom_mode == "fit":
+            z = self._compute_fit_zoom()
+            self._set_zoom(z, mode="fit")
+        else:
+            self._apply_zoom()
+        self._update_export_size_label()
 
-        self._refresh_traces_events_tab()
+    def _base_pixels(self) -> tuple[int, int]:
+        page = self._fig_spec.page
+        if page.axes_first and page.axes_width_in and page.axes_height_in:
+            w_in = (page.effective_width_in or (page.axes_width_in + 2 * page.min_margin_in))
+            h_in = (page.effective_height_in or (page.axes_height_in + 2 * page.min_margin_in))
+        else:
+            w_in = page.effective_width_in or page.width_in
+            h_in = page.effective_height_in or page.height_in
+        return int(w_in * page.dpi), int(h_in * page.dpi)
 
-    def _event_in_preview(self, event) -> bool:
-        """Return True if event occurred inside the preview/page bbox."""
-        bbox = self.preview_ax.get_window_extent()
-        return bbox.contains(event.x, event.y)
+    def _compute_fit_zoom(self) -> float:
+        if self._scroll is None:
+            return 1.0
+        base_w, base_h = self._base_pixels()
+        if base_w <= 0 or base_h <= 0:
+            return 1.0
+        viewport = self._scroll.viewport().size()
+        if viewport.width() <= 0 or viewport.height() <= 0:
+            return 1.0
+        zw = viewport.width() / base_w
+        zh = viewport.height() / base_h
+        return max(0.1, min(zw, zh))
 
-    def _event_to_page_fraction(self, event) -> tuple[float, float]:
-        """Convert an event position to page-relative 0-1 coordinates."""
-        inv = self.preview_ax.transData.inverted()
-        x_page, y_page = inv.transform((event.x, event.y))
-        width = max(self.preview_ax.get_xlim()[1] - self.preview_ax.get_xlim()[0], 1e-6)
-        height = max(
-            self.preview_ax.get_ylim()[1] - self.preview_ax.get_ylim()[0], 1e-6
-        )
-        return x_page / width, y_page / height
-
-    def _instance_id_at_event(self, event) -> str | None:
-        """Return graph instance id under the event, if any."""
-        for inst_id, ax in self._preview_axes_map.items():
-            try:
-                if ax.bbox.contains(event.x, event.y):
-                    return inst_id
-            except Exception:
-                continue
-        return None
-
-    def _annotation_transform_for_preview(self, annot: AnnotationSpec):
-        """Return transform/target used to draw an annotation in preview."""
-        figure_transform = self._annotation_overlay_ax.transAxes
-        figure_axes = self._annotation_overlay_ax
-        ax = None
-        if annot.target_type == "graph" and annot.target_id:
-            ax = self._preview_axes_map.get(annot.target_id)
-        if ax is None:
-            # Phase 1 audit:
-            # - Figure-level annotations use overlay axes transAxes (axes fraction).
-            # - Line/box/text linewidths/fonts stay in point units.
-            # TODO: Phase 2 – normalize annotation transforms/widths between
-            # preview overlay axes and export render_figure.
-            return figure_transform, figure_axes
-        if annot.coord_system == "axes":
-            return ax.transAxes, ax
-        if annot.coord_system == "figure":
-            return figure_transform, figure_axes
-        return ax.transData, ax
-
-    def _event_to_annotation_coords(
-        self, event, annot: AnnotationSpec
-    ) -> tuple[float, float]:
-        """Convert an event position into an annotation's coordinate system."""
-        transform, _ = self._annotation_transform_for_preview(annot)
-        inv = transform.inverted()
-        return inv.transform((event.x, event.y))
-
-    def _hit_test_annotations(self, event) -> str | None:
-        """Return annotation id if event hits an annotation artist."""
-        for annot_id, artists in reversed(list(self._annotation_artists.items())):
-            for art in artists:
-                try:
-                    contains, _ = art.contains(event)
-                except Exception:
-                    continue
-                if contains:
-                    return annot_id
-        return None
-
-    def _remove_annotation_artists(self, annot_id: str):
-        """Remove artists for an annotation id."""
-        artists = self._annotation_artists.pop(annot_id, [])
-        for art in artists:
-            try:
-                art.remove()
-            except Exception:
-                pass
-
-    def _update_annotation_artists_from_spec(self, annot: AnnotationSpec):
-        """Sync live artists with the current AnnotationSpec values."""
-        artists = self._annotation_artists.get(annot.annotation_id)
-        if not artists:
+    def _initial_fit_zoom(self) -> None:
+        """Run once after the layout has settled to compute initial zoom."""
+        if not self._preview_initialized:
             return
+        # Compute zoom based on actual viewport size (now valid after layout)
+        z = self._compute_fit_zoom()
+        # Use _set_zoom to ensure slider sync and proper clamping
+        self._set_zoom(z, mode="fit")
 
-        transform, _ = self._annotation_transform_for_preview(annot)
-        if annot.kind == "text":
-            for art in artists:
-                art.set_position((annot.x0, annot.y0))
-                art.set_text(annot.text_content)
-                art.set_fontsize(annot.font_size)
-                art.set_fontfamily(annot.font_family)
-                art.set_fontstyle(annot.font_style)
-                art.set_fontweight(annot.font_weight)
-                art.set_color(annot.color)
-                art.set_ha(annot.ha)
-                art.set_va(annot.va)
-                art.set_rotation(annot.rotation)
-                art.set_alpha(annot.alpha)
-                art.set_transform(transform)
-        elif annot.kind == "box":
-            for art in artists:
-                if hasattr(art, "set_transform"):
-                    art.set_transform(transform)
-                if hasattr(art, "set_xy"):
-                    art.set_xy((min(annot.x0, annot.x1), min(annot.y0, annot.y1)))
-                if hasattr(art, "set_width"):
-                    art.set_width(abs(annot.x1 - annot.x0))
-                if hasattr(art, "set_height"):
-                    art.set_height(abs(annot.y1 - annot.y0))
-                if hasattr(art, "set_edgecolor"):
-                    art.set_edgecolor(annot.edgecolor)
-                if hasattr(art, "set_facecolor"):
-                    art.set_facecolor(annot.facecolor)
-                if hasattr(art, "set_alpha"):
-                    art.set_alpha(annot.alpha)
-                if hasattr(art, "set_linewidth"):
-                    art.set_linewidth(annot.linewidth)
-                if hasattr(art, "set_linestyle"):
-                    art.set_linestyle(annot.linestyle)
-        elif annot.kind == "arrow":
-            for art in artists:
-                try:
-                    art.xy = (annot.x1, annot.y1)
-                    art.set_position((annot.x0, annot.y0))
-                    art.set_transform(transform)
-                except Exception:
-                    pass
-                arrow_patch = getattr(art, "arrow_patch", None)
-                target_patch = arrow_patch if arrow_patch is not None else art
-                if hasattr(target_patch, "set_color"):
-                    target_patch.set_color(annot.color)
-                if hasattr(target_patch, "set_linewidth"):
-                    target_patch.set_linewidth(annot.linewidth)
-                if hasattr(target_patch, "set_alpha"):
-                    target_patch.set_alpha(annot.alpha)
-                if hasattr(target_patch, "set_arrowstyle"):
-                    try:
-                        target_patch.set_arrowstyle(annot.arrowstyle)
-                    except Exception:
-                        pass
-        elif annot.kind == "line":
-            for art in artists:
-                if hasattr(art, "set_data"):
-                    art.set_data([annot.x0, annot.x1], [annot.y0, annot.y1])
-                if hasattr(art, "set_transform"):
-                    art.set_transform(transform)
-                if hasattr(art, "set_color"):
-                    art.set_color(annot.color)
-                if hasattr(art, "set_linewidth"):
-                    art.set_linewidth(annot.linewidth)
-                if hasattr(art, "set_linestyle"):
-                    art.set_linestyle(annot.linestyle)
-                if hasattr(art, "set_alpha"):
-                    art.set_alpha(annot.alpha)
-
-    def _on_mouse_press(self, event):
-        """Handle mouse press for annotation creation/selection."""
-        toolbar = getattr(self, "nav_toolbar", None)
-        if toolbar is not None and getattr(toolbar, "mode", ""):
+    def _apply_zoom(self) -> None:
+        if not self._preview_initialized or self._canvas is None:
             return
+        base_w, base_h = self._base_pixels()
+        scaled_w = int(base_w * self._preview_zoom)
+        scaled_h = int(base_h * self._preview_zoom)
+        self._canvas.resize(scaled_w, scaled_h)
+        self._canvas.updateGeometry()
 
-        if not self._event_in_preview(event):
-            return
-
-        inst_id = self._instance_id_at_event(event)
-        if inst_id and inst_id != self.selected_instance_id:
-            self.selected_instance_id = inst_id
-            if hasattr(self, "combo_panel_select"):
-                self._refresh_traces_events_tab()
-
-        x_norm, y_norm = self._event_to_page_fraction(event)
-
-        if self.annotation_mode == "select":
-            hit_id = self._hit_test_annotations(event)
-            if hit_id:
-                self.selected_annotation_id = hit_id
-                self._dragging_annotation_id = hit_id
-                self._dragging_mode = "moving"
-                annot = self._get_annotation_by_id(hit_id)
-                if annot:
-                    start_x, start_y = self._event_to_annotation_coords(event, annot)
-                    self._drag_start_data = {
-                        "start_event": (start_x, start_y),
-                        "coords": (annot.x0, annot.y0, annot.x1, annot.y1),
-                    }
-                self._refresh_annotation_ui()
-            else:
-                self.selected_annotation_id = None
-                self._dragging_annotation_id = None
-                self._dragging_mode = None
-                self._drag_start_data = None
-                self._refresh_annotation_ui()
-            self.canvas.draw_idle()
-        elif self.annotation_mode == "delete":
-            hit_id = self._hit_test_annotations(event)
-            if hit_id:
-                self._remove_annotation_artists(hit_id)
-                self.spec.annotations = [
-                    a for a in self.spec.annotations if a.annotation_id != hit_id
-                ]
-                if self.selected_annotation_id == hit_id:
-                    self.selected_annotation_id = None
-                self._dragging_annotation_id = None
-                self._dragging_mode = None
-                self._drag_start_data = None
-                self._push_undo()
-                self._refresh_annotation_ui()
-                self.canvas.draw_idle()
-        elif self.annotation_mode == "text":
-            defaults = self._annotation_defaults()
-            annot = AnnotationSpec(
-                annotation_id=str(uuid.uuid4()),
-                kind="text",
-                target_type="figure",
-                coord_system="axes",
-                x0=x_norm,
-                y0=y_norm,
-                text_content="Text",
-                font_size=defaults.get(
-                    "font_size",
-                    getattr(getattr(self.spec.font, "annotation", None), "size", 8.0),
-                ),
-                font_weight=defaults.get(
-                    "font_weight",
-                    getattr(
-                        getattr(self.spec.font, "annotation", None), "weight", "normal"
-                    ),
-                ),
-                font_style=defaults.get(
-                    "font_style",
-                    getattr(
-                        getattr(self.spec.font, "annotation", None), "style", "normal"
-                    ),
-                ),
-                color=defaults.get("color", "#000000"),
-                edgecolor=defaults.get("edgecolor", "#000000"),
-                facecolor=defaults.get("facecolor", "none"),
-                linewidth=defaults.get("linewidth", 1.0),
-                linestyle=defaults.get("linestyle", "solid"),
-                alpha=float(defaults.get("alpha", 1.0)),
-            )
-            self.spec.annotations.append(annot)
-            self._create_annotation_artists_for_preview(annot)
-            self.selected_annotation_id = annot.annotation_id
-            self._push_undo()
-            self._refresh_annotation_ui()
-            self.canvas.draw_idle()
-        elif self.annotation_mode in ("box", "arrow", "line"):
-            defaults = self._annotation_defaults()
-            new_annot = AnnotationSpec(
-                annotation_id=str(uuid.uuid4()),
-                kind=self.annotation_mode,
-                target_type="figure",
-                coord_system="axes",
-                x0=x_norm,
-                y0=y_norm,
-                x1=x_norm,
-                y1=y_norm,
-                color=defaults.get("color", "#000000"),
-                edgecolor=defaults.get("edgecolor", "#000000"),
-                facecolor=defaults.get("facecolor", "none"),
-                linewidth=defaults.get("linewidth", 1.0),
-                linestyle=defaults.get("linestyle", "solid"),
-                alpha=float(defaults.get("alpha", 1.0)),
-            )
-            self.spec.annotations.append(new_annot)
-            self._create_annotation_artists_for_preview(new_annot)
-            self.selected_annotation_id = new_annot.annotation_id
-            self._dragging_annotation_id = new_annot.annotation_id
-            self._dragging_mode = "creating"
-            self._drag_start_data = (new_annot.x0, new_annot.y0)
-            self._refresh_annotation_ui()
-            self.canvas.draw_idle()
-
-    def _on_mouse_release(self, event):
-        """Handle mouse release to finalize annotation creation/move."""
-        toolbar = getattr(self, "nav_toolbar", None)
-        if toolbar is not None and getattr(toolbar, "mode", ""):
-            return
-
-        if self._dragging_mode == "creating":
-            annot = self._get_annotation_by_id(self._dragging_annotation_id)
-            if annot:
-                self._update_annotation_artists_from_spec(annot)
-            self._dragging_annotation_id = None
-            self._dragging_mode = None
-            self._drag_start_data = None
-            self._push_undo()
-            self._refresh_annotation_ui()
-            self.canvas.draw_idle()
-        elif self._dragging_mode == "moving":
-            annot = self._get_annotation_by_id(self._dragging_annotation_id)
-            start_coords = None
-            if isinstance(self._drag_start_data, dict):
-                start_coords = self._drag_start_data.get("coords")
-            moved = False
-            if annot and start_coords:
-                if annot.kind in ("box", "arrow", "line"):
-                    moved = any(
-                        abs(a - b) > 1e-9
-                        for a, b in zip(
-                            start_coords, (annot.x0, annot.y0, annot.x1, annot.y1)
-                        )
-                    )
-                else:
-                    moved = (
-                        abs(start_coords[0] - annot.x0) > 1e-9
-                        or abs(start_coords[1] - annot.y0) > 1e-9
-                    )
-            self._dragging_annotation_id = None
-            self._dragging_mode = None
-            self._drag_start_data = None
-            if moved:
-                self._push_undo()
-                self._refresh_annotation_ui()
-            self.canvas.draw_idle()
-
-    def _on_mouse_motion(self, event):
-        """Handle mouse motion for drag operations."""
-        toolbar = getattr(self, "nav_toolbar", None)
-        if toolbar is not None and getattr(toolbar, "mode", ""):
-            return
-
-        if not self._event_in_preview(event):
-            return
-
-        if self._dragging_mode == "creating" and self._dragging_annotation_id:
-            annot = self._get_annotation_by_id(self._dragging_annotation_id)
-            if annot is None or self._drag_start_data is None:
-                return
-            x, y = self._event_to_annotation_coords(event, annot)
-            anchor_x, anchor_y = self._drag_start_data
-            if annot.kind in ("line", "arrow"):
-                dx = x - anchor_x
-                dy = y - anchor_y
-                key = (event.key or "").lower() if hasattr(event, "key") else ""
-                if "shift" in key:
-                    if abs(dx) > abs(dy):
-                        y = anchor_y
-                    else:
-                        x = anchor_x
-            annot.x1 = x
-            annot.y1 = y
-            self._update_annotation_artists_from_spec(annot)
-            self.canvas.draw_idle()
-        elif self._dragging_mode == "moving" and self._dragging_annotation_id:
-            annot = self._get_annotation_by_id(self._dragging_annotation_id)
-            if annot is None or not isinstance(self._drag_start_data, dict):
-                return
-            start_event = self._drag_start_data.get("start_event")
-            start_coords = self._drag_start_data.get("coords")
-            if start_event is None or start_coords is None:
-                return
-            cur_x, cur_y = self._event_to_annotation_coords(event, annot)
-            dx = cur_x - start_event[0]
-            dy = cur_y - start_event[1]
-            x0, y0, x1, y1 = start_coords
-            annot.x0 = x0 + dx
-            annot.y0 = y0 + dy
-            if annot.kind in ("box", "arrow", "line"):
-                annot.x1 = x1 + dx
-                annot.y1 = y1 + dy
-            self._update_annotation_artists_from_spec(annot)
-            self.canvas.draw_idle()
-
-    def _on_key_press(self, event):
-        """Handle keyboard shortcuts."""
-        if event.key == "delete":
-            self._delete_selected_annotation()
-        elif event.key == "ctrl+z":
-            self._undo()
-        elif event.key == "ctrl+y" or event.key == "ctrl+shift+z":
-            self._redo()
-
-    def _update_preview(self):
-        """Re-render preview from spec."""
-        try:
-            self._suppress_axis_sync = True
-            self._disconnect_axis_limit_listeners()
-            self._clear_annotation_artists()
-            # Remove previously created graph axes from prior renders
-            for ax in self._preview_axes_map.values():
-                try:
-                    ax.remove()
-                except ValueError:
-                    pass
-            self._preview_axes_map = {}
-
-            self.preview_ax.set_facecolor(PAGE_BG_COLOR)
-            self.preview_ax.set_xlim(0, self.spec.layout.width_in)
-            self.preview_ax.set_ylim(0, self.spec.layout.height_in)
-            self.preview_ax.set_box_aspect(
-                max(
-                    self.spec.layout.height_in / max(self.spec.layout.width_in, 1e-6),
-                    0.01,
-                )
-            )
-            for spine in self.preview_ax.spines.values():
-                spine.set_visible(True)
-                spine.set_color("#d0d0d0")
-                spine.set_linewidth(1.0)
-            self.preview_ax.set_xticks([])
-            self.preview_ax.set_yticks([])
-            self.preview_ax.tick_params(
-                left=False, labelleft=False, bottom=False, labelbottom=False
-            )
-            self.preview_ax.set_frame_on(True)
-            self.preview_ax.patch.set_alpha(0.0)
-            if self._annotation_overlay_ax:
-                self._annotation_overlay_ax.set_position(self.preview_ax.get_position())
-                self._annotation_overlay_ax.set_xlim(self.preview_ax.get_xlim())
-                self._annotation_overlay_ax.set_ylim(self.preview_ax.get_ylim())
-
-            if self.trace_model is None:
-                self.preview_ax.text(
-                    0.5,
-                    0.5,
-                    "No trace model loaded",
-                    ha="center",
-                    va="center",
-                    fontsize=12,
-                    color="#999999",
-                )
-                self._axes_instance_lookup = {}
-                self._update_footer()
-                self.canvas.draw_idle()
-                self._suppress_axis_sync = False
-                return
-
-            def trace_provider(sample_id: str):
-                return self.trace_model
-
-            # TODO: Phase 2 – unify preview/export figure construction so preview
-            # and export share the exact same builder surface instead of
-            # render_into_axes vs. render_figure divergence.
-            self._preview_axes_map = render_into_axes(
-                self.preview_ax,
-                self.spec,
-                trace_provider,
-                event_times=self.event_times,
-                event_labels=self.event_labels,
-                event_colors=self.event_colors,
-            )
-            self._axes_instance_lookup = {}
-            for inst_id, ax in self._preview_axes_map.items():
-                self._axes_instance_lookup[ax] = inst_id
-                for other_ax in ax.figure.axes:
-                    if other_ax is ax:
-                        continue
-                    if hasattr(self, "preview_ax") and other_ax is self.preview_ax:
-                        continue
-                    if other_ax.get_position().bounds == ax.get_position().bounds:
-                        self._axes_instance_lookup[other_ax] = inst_id
-
-            for annot in self.spec.annotations:
-                self._create_annotation_artists_for_preview(annot)
-
-            # Debug: capture live view vs spec limits after each preview render
-            debug_inst_id = self.selected_instance_id
-            if debug_inst_id is None and self.spec.layout.graph_instances:
-                debug_inst_id = self.spec.layout.graph_instances[0].instance_id
-            if debug_inst_id:
-                debug_ax = self._preview_axes_map.get(debug_inst_id)
-                debug_inst = self._get_graph_instance(debug_inst_id)
-                debug_graph = (
-                    self.spec.graphs.get(debug_inst.graph_id) if debug_inst else None
-                )
-                if debug_ax is not None and debug_graph is not None:
-                    print(
-                        "DEBUG PREVIEW UPDATE",
-                        debug_inst_id,
-                        "xlim",
-                        debug_ax.get_xlim(),
-                        "ylim",
-                        debug_ax.get_ylim(),
-                        "graph.x_lim",
-                        debug_graph.x_lim,
-                        "graph.y_lim",
-                        debug_graph.y_lim,
-                    )
-
-            self._connect_axis_limit_listeners()
-            self._update_footer()
-            self._refresh_traces_events_tab()
-            self.canvas.draw_idle()
-
-        except Exception as e:
-            log.error(f"Preview error: {e}", exc_info=True)
-            self.preview_ax.text(
-                0.5,
-                0.5,
-                f"Error:\n{str(e)[:100]}",
-                ha="center",
-                va="center",
-                fontsize=10,
-                color="#cc0000",
-            )
-            self.canvas.draw_idle()
-        finally:
-            self._suppress_axis_sync = False
-
-    def _delete_selected_annotation(self):
-        """Delete selected annotation."""
-        if self.selected_annotation_id is None:
-            return
-
-        annot_id = self.selected_annotation_id
-        self._remove_annotation_artists(annot_id)
-        self.spec.annotations = [
-            a for a in self.spec.annotations if a.annotation_id != annot_id
-        ]
-        self.selected_annotation_id = None
-        self._dragging_annotation_id = None
-        self._dragging_mode = None
-        self._drag_start_data = None
-        self._push_undo()
-        self._refresh_annotation_ui()
-        self.canvas.draw_idle()
-
-    def _push_undo(self):
-        """Push current spec to undo stack."""
-        spec_copy = copy.deepcopy(self.spec)
-        self._undo_stack.append(spec_copy)
-        if len(self._undo_stack) > self._max_undo:
-            self._undo_stack.pop(0)
-        self._redo_stack.clear()
-
-    def _undo(self):
-        """Undo last action."""
-        if len(self._undo_stack) < 2:
-            return
-
-        current = self._undo_stack.pop()
-        self._redo_stack.append(current)
-        self.spec = copy.deepcopy(self._undo_stack[-1])
-        self._update_preview()
-        self._refresh_annotation_ui()
-
-    def _redo(self):
-        """Redo last undone action."""
-        if not self._redo_stack:
-            return
-
-        self.spec = copy.deepcopy(self._redo_stack.pop())
-        self._undo_stack.append(copy.deepcopy(self.spec))
-        self._update_preview()
-        self._refresh_annotation_ui()
-
-    def _debug_export_all_backends(
-        self, basename: str = "composer_alignment_test", *, out_dir: str = "_debug_exports"
-    ) -> list[Path]:
-        """Dev-only helper to dump preview/export builds for alignment checks.
-
-        Steps for manual use:
-        1) Open a sample project/trace, add event boxes/lines similar to the bug repro.
-        2) From a REPL or temporary dev hook, call
-           self._debug_export_all_backends("composer_alignment_test").
-        3) Compare the preview screenshot with files in ./_debug_exports:
-           *_screen_like.png (preview DPI), *_highdpi.png (300 dpi), *.pdf.
-
-        The helper reuses render_figure (same as export) with different DPIs so
-        we can visually diff screen-like vs. export outputs without touching the UI.
+    def _set_zoom(self, factor: float, mode: str | None = None) -> None:
         """
-        out_root = Path(out_dir)
-        out_root.mkdir(parents=True, exist_ok=True)
+        Set the preview zoom factor.
 
-        def trace_provider(sample_id: str):
-            return self.trace_model
+        mode:
+            "fit"    → enter auto-fit mode (figure kept fully visible after rebuilds)
+            "manual" → user-controlled zoom; rebuilds keep the same zoom
+            None     → keep current mode, just change factor
+        """
+        factor = max(0.25, min(4.0, factor))
+        if abs(factor - self._preview_zoom) < 1e-3 and mode is None:
+            return
 
-        outputs: list[tuple[str, str, int]] = [
-            ("screen_like", "png", self.preview_dpi),
-            ("highdpi", "png", 300),
-        ]
-        paths: list[Path] = []
-        for suffix, fmt, dpi in outputs:
-            fig = render_figure(
-                self.spec,
-                trace_provider,
-                dpi=dpi,
-                event_times=self.event_times,
-                event_labels=self.event_labels,
-                event_colors=self.event_colors,
+        if mode is not None:
+            self._zoom_mode = mode
+
+        self._preview_zoom = factor
+        if hasattr(self, "zoom_slider"):
+            with signals_blocked(self.zoom_slider):
+                self.zoom_slider.setValue(int(self._preview_zoom * 100))
+        self._apply_zoom()
+
+    def _set_anno_mode(self, mode: str) -> None:
+        self._anno_mode = mode
+        self._update_anno_button_styles()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        """Ensure the first refresh/fit happens after the dialog is visible."""
+        super().showEvent(event)
+        if self._first_show_done:
+            return
+        self._first_show_done = True
+        if self._preview_initialized:
+            self._refresh_preview()
+        QTimer.singleShot(0, self._initial_fit_zoom)
+
+    def _update_anno_button_styles(self) -> None:
+        active_style = "background-color: #4da3ff; color: white; font-weight: bold;"
+        for mode, btn in [
+            ("select", self.btn_anno_select),
+            ("text", self.btn_anno_text),
+            ("box", self.btn_anno_box),
+        ]:
+            if self._anno_mode == mode:
+                btn.setStyleSheet(active_style)
+            else:
+                btn.setStyleSheet("")
+
+    def _on_zoom_fit_clicked(self) -> None:
+        """
+        Reset zoom to keep the entire figure visible and re-enter auto-fit mode.
+        """
+        if not self._preview_initialized:
+            return
+        z = self._compute_fit_zoom()
+        self._set_zoom(z, mode="fit")
+
+    # ------------------------------------------------------------------
+    # Canvas interactions
+    # ------------------------------------------------------------------
+    def _on_canvas_press(self, event) -> None:
+        if event.inaxes is None or event.xdata is None or event.ydata is None:
+            return
+        if self._anno_mode == "text":
+            self._fig_spec.annotations.append(
+                AnnotationSpec(
+                    kind="text",
+                    text="Text",
+                    x=float(event.xdata),
+                    y=float(event.ydata),
+                    coord_space="data",
+                    fontsize=8.0,
+                    color="#000000",
+                )
             )
-            out_path = out_root / f"{basename}_{suffix}.{fmt}"
-            fig.savefig(
+            self._refresh_annotation_list()
+            self._refresh_preview()
+        elif self._anno_mode == "box":
+            self._box_start = (float(event.xdata), float(event.ydata))
+
+    def _on_canvas_release(self, event) -> None:
+        if self._anno_mode != "box":
+            return
+        if self._box_start is None:
+            return
+        if event.inaxes is None or event.xdata is None or event.ydata is None:
+            self._box_start = None
+            return
+        x0, y0 = self._box_start
+        x1, y1 = float(event.xdata), float(event.ydata)
+        self._box_start = None
+        self._fig_spec.annotations.append(
+            AnnotationSpec(
+                kind="box",
+                text="",
+                x=x0,
+                y=y0,
+                x2=x1,
+                y2=y1,
+                coord_space="data",
+                color="#000000",
+                linewidth=1.0,
+            )
+        )
+        self._refresh_annotation_list()
+        self._refresh_preview()
+
+    # ------------------------------------------------------------------
+    # Signal handlers
+    # ------------------------------------------------------------------
+    def _on_page_dimension_changed(self) -> None:
+        """Handle dimension changes with debouncing."""
+        self._page_update_timer.start()
+
+    def _apply_page_changes(self) -> None:
+        """Apply page dimension changes after debounce delay."""
+        page = self._fig_spec.page
+        page.width_in = float(self.spin_width.value())
+        page.height_in = float(self.spin_height.value())
+        page.dpi = float(self.spin_dpi.value())
+        page.axes_first = self.cb_axes_first.isChecked()
+        page.min_margin_in = float(self.spin_axes_margin.value())
+        if page.axes_first:
+            page.axes_width_in = page.width_in
+            page.axes_height_in = page.height_in
+        else:
+            page.axes_width_in = None
+            page.axes_height_in = None
+        self._refresh_preview()
+
+    def _on_export_bg_changed(self, checked: bool) -> None:
+        self._export_transparent = checked
+
+    def _on_axes_changed(self) -> None:
+        axes = self._fig_spec.axes
+        axes.xlabel = self.edit_xlabel.text()
+        axes.ylabel = self.edit_ylabel.text()
+        axes.show_grid = self.cb_grid.isChecked()
+        axes.grid_linestyle = self.combo_grid_style.currentText()
+
+        # Validate grid color before applying
+        grid_color_text = self.edit_grid_color.text().strip()
+        if grid_color_text:
+            color = QColor(grid_color_text)
+            if color.isValid():
+                axes.grid_color = grid_color_text
+            else:
+                log.warning(f"Invalid grid color '{grid_color_text}', keeping: {axes.grid_color}")
+
+        axes.grid_alpha = float(self.spin_grid_alpha.value())
+        self._refresh_preview()
+
+    def _on_axes_fonts_changed(self) -> None:
+        axes = self._fig_spec.axes
+        if self.spin_label_fontsize is not None:
+            axes.xlabel_fontsize = float(self.spin_label_fontsize.value())
+            axes.ylabel_fontsize = float(self.spin_label_fontsize.value())
+        if self.spin_tick_fontsize is not None:
+            axes.tick_label_fontsize = float(self.spin_tick_fontsize.value())
+        if self.spin_legend_fontsize is not None:
+            self._fig_spec.legend_fontsize = float(self.spin_legend_fontsize.value())
+        self._refresh_preview()
+
+    def _validate_grid_color(self, text: str) -> None:
+        """Validate grid color input and provide visual feedback."""
+        if not text.strip():
+            self.edit_grid_color.setStyleSheet("")
+            return
+
+        color = QColor(text)
+        if color.isValid():
+            self.edit_grid_color.setStyleSheet("")
+        else:
+            # Invalid color - red border
+            self.edit_grid_color.setStyleSheet("border: 1px solid red;")
+
+    def _on_legend_changed(self) -> None:
+        self._fig_spec.legend_visible = self.cb_legend.isChecked()
+        self._fig_spec.legend_loc = self.combo_legend_loc.currentText()
+        if self.spin_legend_fontsize is not None:
+            self._fig_spec.legend_fontsize = float(self.spin_legend_fontsize.value())
+        self._refresh_preview()
+
+    def _on_trace_changed(self, key: str) -> None:
+        trace = self._get_trace_spec(key)
+        controls = self._trace_controls.get(key, {})
+        if trace is None or not controls:
+            return
+        trace.visible = controls["visible"].isChecked()
+        trace.linewidth = float(controls["linewidth"].value())
+        trace.linestyle = controls["linestyle"].currentText()
+        trace.marker = controls["marker"].currentText()
+        trace.color = controls["color"].property("color") or trace.color
+        self._refresh_preview()
+
+    def _on_linewidth_scale_changed(self, value: float) -> None:
+        self._fig_spec.line_width_scale = float(value)
+        self._refresh_preview()
+
+    def _pick_trace_color(self, key: str) -> None:
+        trace = self._get_trace_spec(key)
+        controls = self._trace_controls.get(key, {})
+        if trace is None or not controls:
+            return
+        initial = trace.color
+        color = QColorDialog.getColor()
+        if not color.isValid():
+            return
+        trace.color = color.name()
+        btn = controls["color"]
+        btn.setStyleSheet(f"background-color: {trace.color};")
+        btn.setProperty("color", trace.color)
+        self._refresh_preview()
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
+    def _export_dialog(self) -> None:
+        suggested = Path.cwd() / "figure.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export figure",
+            str(suggested),
+            "Images (*.png *.tiff *.tif);;PDF (*.pdf);;SVG (*.svg)",
+        )
+        if not path:
+            return
+        self.export_figure(path)
+
+    def export_figure(self, out_path: str) -> None:
+        try:
+            log.info("Exporting figure to %s", out_path)
+            ctx = self._render_context(is_preview=False)
+            export_figure(
+                self._fig_spec,
                 out_path,
-                format=fmt,
-                dpi=dpi if fmt in ("png", "tiff") else None,
-                bbox_inches="tight",
-                transparent=self.spec.export.transparent,
+                transparent=self._export_transparent,
+                ctx=ctx,
             )
-            plt.close(fig)
-            paths.append(out_path)
+            log.info("Export successful: %s", out_path)
+        except Exception:
+            log.exception("Export failed")
+            QMessageBox.critical(self, "Export failed", "Export failed; see log for details.")
 
-        pdf_fig = render_figure(
-            self.spec,
-            trace_provider,
-            dpi=300,
-            event_times=self.event_times,
-            event_labels=self.event_labels,
-            event_colors=self.event_colors,
-        )
-        pdf_path = out_root / f"{basename}.pdf"
-        pdf_fig.savefig(
-            pdf_path,
-            format="pdf",
-            bbox_inches="tight",
-            transparent=self.spec.export.transparent,
-        )
-        plt.close(pdf_fig)
-        paths.append(pdf_path)
-
-        return paths
-
-    def export_figure(self):
-        """Export figure at target DPI.
-
-        Export rebuilds a fresh Matplotlib Figure via render_figure (Agg/PDF),
-        while the on-screen preview lives in a persistent FigureCanvasQTAgg at
-        preview_dpi (100). They do not currently share a single Figure instance.
-        """
-        if self.trace_model is None:
-            QMessageBox.warning(self, "No data", "No trace model loaded for export.")
-            return
-        current_format = self.spec.export.format
-        filters = [
-            "PDF (*.pdf)",
-            "SVG (*.svg)",
-            "PNG (*.png)",
-            "TIFF (*.tiff *.tif)",
-            "All Files (*)",
-        ]
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export Figure",
-            f"figure.{current_format}",
-            ";;".join(filters),
-            f"{current_format.upper()} (*.{current_format})",
-        )
-
-        if not file_path:
-            self._refocus_self()
-            return
-
-        base_path = Path(file_path)
-        if base_path.suffix.lower().lstrip(".") != current_format:
-            base_path = base_path.with_suffix(f".{current_format}")
-
-        outputs = [(base_path, current_format, self.spec.export.dpi)]
-        if self.cb_export_png.isChecked():
-            outputs.append(
-                (
-                    base_path.with_name(base_path.stem + "_png").with_suffix(".png"),
-                    "png",
-                    300,
-                )
-            )
-        if self.cb_export_tiff.isChecked():
-            outputs.append(
-                (
-                    base_path.with_name(base_path.stem + "_tiff").with_suffix(".tiff"),
-                    "tiff",
-                    600,
-                )
-            )
-
-        try:
-
-            def trace_provider(sample_id: str):
-                return self.trace_model
-
-            for out_path, fmt, dpi in outputs:
-                export_fig = render_figure(
-                    self.spec,
-                    trace_provider,
-                    dpi=dpi,
-                    event_times=self.event_times,
-                    event_labels=self.event_labels,
-                    event_colors=self.event_colors,
-                )
-                export_fig.savefig(
-                    out_path,
-                    format=fmt,
-                    dpi=dpi if fmt in ("png", "tiff") else None,
-                    bbox_inches="tight",
-                    transparent=self.spec.export.transparent,
-                )
-                plt.close(export_fig)
-
-            QMessageBox.information(
-                self,
-                "Export Complete",
-                "Figure exported:\n" + "\n".join(str(p) for p, _, _ in outputs),
-            )
-            for out_path, _, _ in outputs:
-                log.info(f"Exported: {out_path}")
-
-        except Exception as e:
-            log.error(f"Export failed: {e}", exc_info=True)
-            QMessageBox.critical(
-                self,
-                "Export Failed",
-                f"Failed to export:\n{str(e)}",
-            )
-        finally:
-            self._refocus_self()
-
-    def _on_save_spec(self, event=None):
-        """Save current FigureSpec to disk."""
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save Figure Definition",
-            "figure.json",
-            "JSON files (*.json);;All Files (*)",
-            "JSON files (*.json)",
-        )
-        if not file_path:
-            return
-        try:
-            save_figure_spec(file_path, self.spec)
-            QMessageBox.information(self, "Figure Saved", f"Saved to:\n{file_path}")
-        except Exception as exc:
-            QMessageBox.critical(self, "Save Error", f"Failed to save:\n{exc}")
-
-    def _on_load_spec(self, event=None):
-        """Load FigureSpec from disk."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load Figure Definition",
-            "",
-            "JSON files (*.json);;All Files (*)",
-            "JSON files (*.json)",
-        )
-        if not file_path:
-            return
-        try:
-            spec = load_figure_spec(file_path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Load Error", f"Failed to load:\n{exc}")
-            return
-
-        self.spec = spec
-        self.selected_instance_id = (
-            self.spec.layout.graph_instances[0].instance_id
-            if self.spec.layout.graph_instances
-            else None
-        )
-        self.spec.metadata.setdefault("extra_export_png", False)
-        self.spec.metadata.setdefault("extra_export_tiff", False)
-        self._aspect_ratio = self.spec.layout.height_in / max(
-            self.spec.layout.width_in, 1e-6
-        )
-        self._undo_stack.clear()
-        self._redo_stack.clear()
-        self._refresh_tabs()
-        self._update_preview()
-        QMessageBox.information(self, "Figure Loaded", f"Loaded:\n{file_path}")
-
-    def _on_save_to_project_clicked(self):
-        """Save the current FigureSpec into the active project dataset."""
-        if self.project is None or self.dataset_id is None:
-            QMessageBox.information(
-                self,
-                "Save to Project",
-                "No project/dataset context is available for this figure.",
-            )
-            return
-
-        try:
-            save_dataset_figure_spec(self.project, self.dataset_id, self.spec)
-            parent_window = self.parent()
-            if parent_window is not None and hasattr(
-                parent_window, "mark_session_dirty"
-            ):
-                try:
-                    parent_window.mark_session_dirty(reason="figure spec saved")
-                except Exception:
-                    pass
-            if hasattr(self, "status_label"):
-                self.status_label.setText("Saved figure definition to project.")
-        except Exception as exc:
-            log.error("Failed to save FigureSpec to project: %s", exc, exc_info=True)
-            QMessageBox.critical(
-                self, "Save Error", f"Failed to save to project:\n{exc}"
-            )
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _get_trace_spec(self, key: str) -> TraceSpec | None:
+        for trace in self._fig_spec.traces:
+            if trace.key == key:
+                return trace
+        return None

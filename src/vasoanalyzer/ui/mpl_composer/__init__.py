@@ -2,48 +2,32 @@
 
 A publication-quality figure composition tool using only Matplotlib widgets
 for UI controls, embedded in a Qt window as a canvas host.
-
-Architecture:
-    - Spec layer: Declarative models (FigureSpec, GraphSpec, etc.)
-    - Renderer: Pure Matplotlib rendering (render_figure)
-    - Composer UI: Matplotlib widgets + event handling
-
-Key features:
-    - Publication-ready exports (PDF, SVG, PNG, TIFF)
-    - Explicit physical sizing (mm/inches) and DPI control
-    - Multi-panel layouts with graph-level configuration
-    - Rich annotations (text, boxes, arrows, lines)
-    - "What you see is what you export" guarantee
 """
 
 from __future__ import annotations
 
 from .composer_window import PureMplFigureComposer
-from .specs import (
+from .renderer import (
     AnnotationSpec,
-    ExportSpec,
+    AxesSpec,
+    EventSpec,
     FigureSpec,
-    GraphInstance,
-    GraphSpec,
-    LayoutSpec,
-    FontSpec,
-    TextRoleFont,
-    StyleSpec,
-    PanelLabelSpec,
-    TraceBinding,
+    PageSpec,
+    RenderContext,
+    TraceSpec,
+    build_figure,
+    export_figure,
 )
 
 __all__ = [
     "PureMplFigureComposer",
     "FigureSpec",
-    "GraphSpec",
-    "GraphInstance",
-    "LayoutSpec",
-    "FontSpec",
-    "TextRoleFont",
-    "StyleSpec",
-    "PanelLabelSpec",
+    "PageSpec",
+    "AxesSpec",
+    "TraceSpec",
+    "EventSpec",
     "AnnotationSpec",
-    "ExportSpec",
-    "TraceBinding",
+    "RenderContext",
+    "build_figure",
+    "export_figure",
 ]
