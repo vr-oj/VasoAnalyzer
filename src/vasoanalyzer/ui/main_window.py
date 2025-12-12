@@ -835,6 +835,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_state = {}
         self._style_holder = _StyleHolder(DEFAULT_STYLE.copy())
         self._style_manager = PlotStyleManager(self._style_holder.get_style())
+        self._data_quality_icons: dict[str | None, QIcon] = {}
         self.actGrid: QAction | None = None
         self.actStyle: QAction | None = None
         self._nav_mode_actions: list[QAction] = []
@@ -2389,6 +2390,71 @@ class VasoAnalyzerApp(QMainWindow):
             return
         self.auto_save_project(reason="timer")
 
+    def _get_sample_data_quality(self, sample: SampleN) -> str | None:
+        """Read the stored data-quality flag from a sample's UI state."""
+        state = getattr(sample, "ui_state", None)
+        if isinstance(state, dict):
+            value = state.get("data_quality")
+            if value in {"good", "questionable", "bad"}:
+                return value
+        return None
+
+    def _data_quality_label(self, quality: str | None) -> str:
+        labels = {
+            "good": "Good data",
+            "questionable": "Questionable data",
+            "bad": "Bad data",
+        }
+        return labels.get(quality, "No decision")
+
+    def _data_quality_icon(self, quality: str | None) -> QIcon:
+        """Return a color-coded icon for dataset quality."""
+        icon_map = {
+            "good": "green.svg",
+            "questionable": "yellow.svg",
+            "bad": "red.svg",
+        }
+        if quality not in self._data_quality_icons:
+            filename = icon_map.get(quality)
+            if filename:
+                self._data_quality_icons[quality] = QIcon(self.icon_path(filename))
+            else:
+                self._data_quality_icons[quality] = self.style().standardIcon(
+                    QStyle.SP_FileIcon
+                )
+        return self._data_quality_icons[quality]
+
+    def _update_tree_icons_for_samples(self, samples: Sequence[SampleN]) -> None:
+        if not self.project_tree:
+            return
+        for sample in samples:
+            found = False
+            for i in range(self.project_tree.topLevelItemCount()):
+                project_item = self.project_tree.topLevelItem(i)
+                if project_item is None:
+                    continue
+                for j in range(project_item.childCount()):
+                    exp_item = project_item.child(j)
+                    if exp_item is None:
+                        continue
+                    for k in range(exp_item.childCount()):
+                        sample_item = exp_item.child(k)
+                        if sample_item is None:
+                            continue
+                        if sample_item.data(0, Qt.UserRole) is sample:
+                            quality = self._get_sample_data_quality(sample)
+                            sample_item.setIcon(0, self._data_quality_icon(quality))
+                            sample_item.setToolTip(
+                                0,
+                                f"Data quality: {self._data_quality_label(quality)}",
+                            )
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+
     def refresh_project_tree(self):
         if not self.project_tree:
             return
@@ -2417,10 +2483,15 @@ class VasoAnalyzerApp(QMainWindow):
                     s.trace_path or s.trace_data is not None or s.dataset_id is not None
                 )
                 status = "✓" if has_data else "✗"
+                quality = self._get_sample_data_quality(s)
                 item = QTreeWidgetItem([f"{s.name} {status}"])
                 item.setData(0, Qt.UserRole, s)
                 item.setFlags(item.flags() | Qt.ItemIsEditable)
-                item.setIcon(0, self.style().standardIcon(QStyle.SP_FileIcon))
+                item.setIcon(0, self._data_quality_icon(quality))
+                item.setToolTip(
+                    0,
+                    f"Data quality: {self._data_quality_label(quality)}",
+                )
                 exp_item.addChild(item)
 
                 # Check for NEW figure composer figures (figure_configs)
@@ -2510,6 +2581,27 @@ class VasoAnalyzerApp(QMainWindow):
         self._schedule_missing_asset_scan()
         if self.current_sample:
             self._select_tree_item_for_sample(self.current_sample)
+
+    def _set_samples_data_quality(
+        self, samples: Sequence[SampleN], quality: str | None
+    ) -> None:
+        if not samples:
+            return
+        changed = False
+        for sample in samples:
+            if not isinstance(sample.ui_state, dict):
+                sample.ui_state = {}
+            previous = sample.ui_state.get("data_quality")
+            if quality is None:
+                if sample.ui_state.pop("data_quality", None) is not None:
+                    changed = True
+            elif previous != quality:
+                sample.ui_state["data_quality"] = quality
+                changed = True
+            self.project_state[id(sample)] = sample.ui_state
+        if changed:
+            self._update_tree_icons_for_samples(samples)
+            self.mark_session_dirty(reason="sample data quality updated")
 
     def _select_tree_item_for_sample(self, sample: SampleN | None) -> None:
         if sample is None or not self.project_tree:
@@ -4086,6 +4178,19 @@ class VasoAnalyzerApp(QMainWindow):
             load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save Data As…")
             del_n = menu.addAction("Delete Data")
+            quality_menu = menu.addMenu("Mark Data Quality")
+            quality_clear = quality_menu.addAction(
+                self._data_quality_icon(None), "No decision (white)"
+            )
+            quality_good = quality_menu.addAction(
+                self._data_quality_icon("good"), "Good data (green)"
+            )
+            quality_questionable = quality_menu.addAction(
+                self._data_quality_icon("questionable"), "Questionable data (yellow)"
+            )
+            quality_bad = quality_menu.addAction(
+                self._data_quality_icon("bad"), "Bad data (red)"
+            )
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
             if action == load_data:
                 self.load_data_into_sample(obj)
@@ -4093,6 +4198,20 @@ class VasoAnalyzerApp(QMainWindow):
                 self.save_sample_as(obj)
             elif action == del_n:
                 self.delete_sample(obj)
+            elif action in {
+                quality_clear,
+                quality_good,
+                quality_questionable,
+                quality_bad,
+            }:
+                target_samples = selected_samples or [obj]
+                quality_value = {
+                    quality_clear: None,
+                    quality_good: "good",
+                    quality_questionable: "questionable",
+                    quality_bad: "bad",
+                }.get(action)
+                self._set_samples_data_quality(target_samples, quality_value)
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
             elif action == dual_act:
@@ -14726,12 +14845,16 @@ QPushButton[isGhost="true"]:hover {{
             return self._cached_sample_state
 
         self._normalize_event_label_meta(len(self.event_table_data))
-        # preserve any previously saved style_settings
-        prev = {}
+        # Start from existing UI state so we don't drop custom keys (e.g., data_quality)
+        base_state: dict[str, Any] = {}
         if self.current_sample and isinstance(self.current_sample.ui_state, dict):
-            prev = self.current_sample.ui_state.get("style_settings", {}) or {}
+            base_state = copy.deepcopy(self.current_sample.ui_state)
+        # preserve any previously saved style_settings
+        prev = base_state.get("style_settings", {}) or {}
         x_axis = self._x_axis_for_style()
-        state = {
+        state = {**base_state}
+        state.update(
+            {
             "table_fontsize": self.event_table.font().pointSize(),
             "event_table_data": list(self.event_table_data),
             "event_label_meta": copy.deepcopy(self.event_label_meta),
@@ -14781,7 +14904,8 @@ QPushButton[isGhost="true"]:hover {{
                 "x": {"label": x_axis.get_xlabel() if x_axis else ""},
                 "y": {"label": self.ax.get_ylabel()},
             },
-        }
+            }
+        )
         if isinstance(self.legend_settings, dict):
             state["legend_settings"] = copy.deepcopy(self.legend_settings)
         # Always record whatever is in ui_state["style_settings"], even if empty

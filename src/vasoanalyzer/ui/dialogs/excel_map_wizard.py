@@ -66,6 +66,50 @@ DEFAULT_QMODEL_INDEX = QModelIndex()
 SESSION_EVENT_MIME = "application/vnd.vaso.session-event"
 
 
+# UI Design Tokens
+# ---------------------------------------------------------------------------
+
+def get_semantic_colors() -> dict[str, str]:
+    """Get semantic colors from theme."""
+    return {
+        "success": theme.CURRENT_THEME.get("success_text", "#10B981"),
+        "success_bg": theme.CURRENT_THEME.get("success_bg", "#D1FAE5"),
+        "warning": theme.CURRENT_THEME.get("warning_text", "#F59E0B"),
+        "warning_bg": theme.CURRENT_THEME.get("warning_bg", "#FEF3C7"),
+        "error": theme.CURRENT_THEME.get("error_text", "#EF4444"),
+        "error_bg": theme.CURRENT_THEME.get("error_bg", "#FEE2E2"),
+        "info": theme.CURRENT_THEME.get("info_text", "#3B82F6"),
+        "info_bg": theme.CURRENT_THEME.get("info_bg", "#DBEAFE"),
+        "muted": theme.CURRENT_THEME.get("muted_text", "#9CA3AF"),
+        "muted_bg": theme.CURRENT_THEME.get("muted_bg", "#374151"),
+    }
+
+
+SPACING = {
+    "xs": 4,   # Between tightly related items
+    "sm": 8,   # Between form elements
+    "md": 12,  # Between subsections
+    "lg": 16,  # Between major sections
+    "xl": 24,  # Between page sections
+    "2xl": 32, # Between distinct areas
+}
+
+
+def get_fonts() -> dict[str, QFont]:
+    """Get font styles for different text roles."""
+    return {
+        "h1": QFont("System", 16, QFont.Bold),      # Page titles
+        "h2": QFont("System", 14, QFont.DemiBold),  # Section headers
+        "h3": QFont("System", 12, QFont.DemiBold),  # Subsection headers
+        "body": QFont("System", 11),                 # Normal text
+        "small": QFont("System", 10),                # Helper text
+        "mono": QFont("Menlo", 10),                  # Code/numbers
+    }
+
+
+# Wizard Classes
+# ---------------------------------------------------------------------------
+
 class _WizardUnavailableError(RuntimeError):
     """Raised when a wizard page cannot resolve its hosting wizard."""
 
@@ -298,6 +342,10 @@ class TemplatePage(WizardPageBase):
         super().__init__()
         self.setTitle("Step 1: Load Template & CSV")
         layout = QVBoxLayout(self)
+        layout.setSpacing(SPACING["md"])
+        layout.setContentsMargins(
+            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
+        )
 
         self._templatePath = ""
         self._csvPath = ""
@@ -337,10 +385,14 @@ class TemplatePage(WizardPageBase):
         layout.addWidget(self.recent_templates_label)
         layout.addWidget(self.recent_templates_list)
         recent_buttons_row = QHBoxLayout()
+        recent_buttons_row.setSpacing(SPACING["sm"])
         recent_buttons_row.addStretch()
         recent_buttons_row.addWidget(self.remove_recent_button)
         recent_buttons_row.addWidget(self.clear_recent_button)
         layout.addLayout(recent_buttons_row)
+
+        # Add extra spacing before CSV section
+        layout.addSpacing(SPACING["xl"])
 
         self.btn_csv = QPushButton("Load Events CSV…")
         self.lbl_csv = QLabel("No events loaded.")
@@ -411,11 +463,13 @@ class TemplatePage(WizardPageBase):
             self.lbl_excel.setText(
                 f"Loaded: {Path(path).name} - Select a worksheet to continue"
             )
-            self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
+            colors = get_semantic_colors()
+            self.lbl_excel.setStyleSheet(f"color: {colors['warning']};")
         else:
             # No sheets available (shouldn't happen)
             self.lbl_excel.setText(f"Loaded: {Path(path).name} - No worksheets found")
-            self.lbl_excel.setStyleSheet("color: #a94442;")  # Red
+            colors = get_semantic_colors()
+            self.lbl_excel.setStyleSheet(f"color: {colors['error']};")
 
         self._update_recent_templates(path)
         self.completeChanged.emit()
@@ -660,7 +714,8 @@ class TemplatePage(WizardPageBase):
                 template_path = self.field("templatePath")
                 status_msg = f"✓ Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata detected)"
                 self.lbl_excel.setText(status_msg)
-                self.lbl_excel.setStyleSheet("color: #3c763d;")  # Green
+                colors = get_semantic_colors()
+                self.lbl_excel.setStyleSheet(f"color: {colors['success']};")
         except Exception as exc:
             from pathlib import Path
             template_path = self.field("templatePath")
@@ -670,7 +725,8 @@ class TemplatePage(WizardPageBase):
                 f"Could not load metadata for sheet '{sheet_name}':\n{exc}"
             )
             self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata error)")
-            self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
+            colors = get_semantic_colors()
+            self.lbl_excel.setStyleSheet(f"color: {colors['warning']};")
 
     # ------------------------------------------------------
     @staticmethod
@@ -786,12 +842,20 @@ class RowMappingPage(WizardPageBase):
         self._initialised = False
 
         root = QVBoxLayout(self)
+        root.setSpacing(SPACING["md"])
+        root.setContentsMargins(
+            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
+        )
 
         self.info_label = QLabel()
         self.info_label.setWordWrap(True)
         root.addWidget(self.info_label)
 
         control_row = QHBoxLayout()
+        control_row.setSpacing(SPACING["md"])
+        control_row.setContentsMargins(
+            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
+        )
         control_row.addWidget(QLabel("Measurement:"))
         self.measurement_combo = QComboBox()
         control_row.addWidget(self.measurement_combo)
@@ -824,6 +888,10 @@ class RowMappingPage(WizardPageBase):
         self.preview_table.set_drop_context(self)
         self._apply_table_theme(self.preview_table)
         preview_container = QVBoxLayout()
+        preview_container.setSpacing(SPACING["sm"])
+        preview_container.setContentsMargins(
+            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
+        )
         preview_widget = QFrame()
         preview_widget.setLayout(preview_container)
         preview_container.addWidget(QLabel("Template Preview"))
@@ -851,6 +919,10 @@ class RowMappingPage(WizardPageBase):
         self.session_values_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.session_values_table.verticalHeader().setDefaultSectionSize(24)
         session_container = QVBoxLayout()
+        session_container.setSpacing(SPACING["sm"])
+        session_container.setContentsMargins(
+            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
+        )
         session_widget = QFrame()
         session_widget.setLayout(session_container)
         session_container.addWidget(QLabel("Session Values"))
@@ -869,7 +941,8 @@ class RowMappingPage(WizardPageBase):
         ]
         helper_text = QLabel("\n".join(helper_lines))
         helper_text.setWordWrap(True)
-        helper_text.setStyleSheet("color: #555;")
+        colors = get_semantic_colors()
+        helper_text.setStyleSheet(f"color: {colors['muted']};")
         root.addWidget(helper_text)
 
         self.measurement_combo.currentTextChanged.connect(self._on_measurement_changed)
@@ -1091,20 +1164,21 @@ class RowMappingPage(WizardPageBase):
         )
         duplicates = {idx for idx, count in assignments.items() if count > 1}
 
+        colors = get_semantic_colors()
         for row_index, item in self._status_items.items():
             assignment = wiz.row_assignments.get(row_index)
             if assignment is None:
                 item.setText("○")
                 item.setToolTip("No session event mapped")
-                item.setForeground(QBrush(QColor("#a94442")))
+                item.setForeground(QBrush(QColor(colors["error"])))
             elif assignment in duplicates:
                 item.setText("!")
                 item.setToolTip("Session event reused on multiple rows")
-                item.setForeground(QBrush(QColor("#8a6d3b")))
+                item.setForeground(QBrush(QColor(colors["warning"])))
             else:
                 item.setText("✓")
                 item.setToolTip("Mapped")
-                item.setForeground(QBrush(QColor("#3c763d")))
+                item.setForeground(QBrush(QColor(colors["success"])))
 
     # --------------------------------------------------
     def _refresh_preview(self) -> None:
@@ -1278,24 +1352,25 @@ class RowMappingPage(WizardPageBase):
     # --------------------------------------------------
     def _update_status_banner(self) -> None:
         wiz = self._wizard()
+        colors = get_semantic_colors()
         if getattr(wiz, "manual_date_selection_required", False):
             self.info_label.setText(
                 "Multiple date columns detected. Pick the active date column before continuing."
             )
-            self.info_label.setStyleSheet("color: #8a6d3b;")
+            self.info_label.setStyleSheet(f"color: {colors['warning']};")
             return
         unmapped = sum(1 for value in wiz.row_assignments.values() if value is None)
         if unmapped:
             self.info_label.setText(
                 f"{unmapped} event row(s) are still unmapped. Only mapped rows will be written."
             )
-            self.info_label.setStyleSheet("color: #8a6d3b;")
+            self.info_label.setStyleSheet(f"color: {colors['warning']};")
             self.select_unmapped_btn.setVisible(True)
         else:
             self.info_label.setText(
                 "Review the mappings below. You can override any row before saving."
             )
-            self.info_label.setStyleSheet("color: #333;")
+            self.info_label.setStyleSheet(f"color: {colors['muted']};")
             self.select_unmapped_btn.setVisible(False)
 
     # --------------------------------------------------
@@ -1312,8 +1387,9 @@ class RowMappingPage(WizardPageBase):
     def _on_redetect(self) -> None:
         wiz = self._wizard()
         if not wiz.prepare_layout(auto=True, force=True):
+            colors = get_semantic_colors()
             self.info_label.setText(wiz.layout_error or "Could not re-run detection.")
-            self.info_label.setStyleSheet("color: #a94442;")
+            self.info_label.setStyleSheet(f"color: {colors['error']};")
             return
         self._populate_date_options()
         self._rebuild_mapping_table()
