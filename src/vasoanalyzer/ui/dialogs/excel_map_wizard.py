@@ -88,23 +88,260 @@ def get_semantic_colors() -> dict[str, str]:
 SPACING = {
     "xs": 4,   # Between tightly related items
     "sm": 8,   # Between form elements
-    "md": 12,  # Between subsections
-    "lg": 16,  # Between major sections
-    "xl": 24,  # Between page sections
-    "2xl": 32, # Between distinct areas
+    "md": 16,  # Between subsections
+    "lg": 24,  # Between major sections
+    "xl": 32,  # Between page sections
+    "2xl": 48, # Between distinct areas
+}
+
+# Modern UI design tokens
+BORDER_RADIUS = {
+    "sm": 4,   # Form controls
+    "md": 6,   # Buttons
+    "lg": 8,   # Cards
+}
+
+BUTTON_HEIGHT = 36  # Consistent button height
+
+# Color constants for modern styling
+COLORS = {
+    "primary": "#0066cc",
+    "success": "#28a745",
+    "warning": "#ffc107",
+    "border_light": "#e0e0e0",
+    "border_dark": "#374151",
+    "hover_light": "#f0f7ff",
+    "hover_dark": "#172554",
 }
 
 
 def get_fonts() -> dict[str, QFont]:
     """Get font styles for different text roles."""
-    return {
-        "h1": QFont("System", 16, QFont.Bold),      # Page titles
-        "h2": QFont("System", 14, QFont.DemiBold),  # Section headers
-        "h3": QFont("System", 12, QFont.DemiBold),  # Subsection headers
-        "body": QFont("System", 11),                 # Normal text
-        "small": QFont("System", 10),                # Helper text
-        "mono": QFont("Menlo", 10),                  # Code/numbers
+    # Use system font stack for modern typography
+    system_font = QFont()
+    system_font.setFamily("-apple-system")
+
+    fonts = {
+        "h1": QFont(system_font),      # Page titles
+        "h2": QFont(system_font),      # Section headers
+        "h3": QFont(system_font),      # Subsection headers
+        "body": QFont(system_font),    # Normal text
+        "small": QFont(system_font),   # Helper text
+        "mono": QFont("SF Mono"),      # Code/numbers
     }
+
+    # Configure sizes and weights
+    fonts["h1"].setPointSize(16)
+    fonts["h1"].setWeight(QFont.Bold)
+
+    fonts["h2"].setPointSize(14)
+    fonts["h2"].setWeight(QFont.DemiBold)
+
+    fonts["h3"].setPointSize(12)
+    fonts["h3"].setWeight(QFont.DemiBold)
+
+    fonts["body"].setPointSize(14)  # Increased from 11
+    fonts["body"].setWeight(QFont.Normal)
+
+    fonts["small"].setPointSize(12)  # Increased from 10
+    fonts["small"].setWeight(QFont.Normal)
+
+    fonts["mono"].setPointSize(12)  # Increased from 10
+
+    return fonts
+
+
+def get_modern_table_stylesheet() -> str:
+    """Generate modern table stylesheet with theme awareness."""
+    colors = get_semantic_colors()
+    is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+
+    if is_dark:
+        # Dark mode colors
+        base_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = theme.CURRENT_THEME.get("alternate_bg", "#0B1120")
+        border = COLORS["border_dark"]
+        hover = COLORS["hover_dark"]
+        text = theme.CURRENT_THEME.get("table_text", "#E5E7EB")
+        header_bg = theme.CURRENT_THEME.get("button_hover_bg", "#111827")
+    else:
+        # Light mode colors
+        base_bg = "#ffffff"
+        alt_bg = "#f9f9f9"
+        border = COLORS["border_light"]
+        hover = COLORS["hover_light"]
+        text = "#000000"
+        header_bg = "#f5f5f5"
+
+    return f"""
+        QTableWidget, QTableView {{
+            gridline-color: {border};
+            background: {base_bg};
+            alternate-background-color: {alt_bg};
+            color: {text};
+            border: 1px solid {border};
+            border-radius: {BORDER_RADIUS["sm"]}px;
+            selection-background-color: {theme.CURRENT_THEME.get("selection_bg", "#E6F0FF")};
+        }}
+
+        QTableWidget::item, QTableView::item {{
+            padding: 8px 12px;
+            border: none;
+        }}
+
+        QTableWidget::item:hover, QTableView::item:hover {{
+            background-color: {hover};
+        }}
+
+        QHeaderView::section {{
+            background: {header_bg};
+            color: {text};
+            font-weight: 600;
+            font-size: 12px;
+            padding: 8px 12px;
+            border: none;
+            border-right: 1px solid {border};
+            border-bottom: 1px solid {border};
+        }}
+
+        QHeaderView::section:first {{
+            border-top-left-radius: {BORDER_RADIUS["sm"]}px;
+        }}
+
+        QHeaderView::section:last {{
+            border-top-right-radius: {BORDER_RADIUS["sm"]}px;
+            border-right: none;
+        }}
+    """
+
+
+def get_modern_combobox_stylesheet() -> str:
+    """Generate modern combobox stylesheet."""
+    is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+
+    if is_dark:
+        bg = "#1b212d"
+        border = "#4a5368"
+        border_focus = "#3B82F6"
+        text = "#E5E7EB"
+        hover_bg = "#252b3a"
+    else:
+        bg = "#ffffff"
+        border = COLORS["border_light"]
+        border_focus = COLORS["primary"]
+        text = "#000000"
+        hover_bg = "#f5f5f5"
+
+    return f"""
+        QComboBox {{
+            background-color: {bg};
+            border: 1px solid {border};
+            border-radius: {BORDER_RADIUS["sm"]}px;
+            padding: 6px 8px;
+            min-height: 24px;
+            color: {text};
+            font-size: 14px;
+        }}
+
+        QComboBox:hover {{
+            background-color: {hover_bg};
+        }}
+
+        QComboBox:focus {{
+            border: 1px solid {border_focus};
+            outline: none;
+        }}
+
+        QComboBox::drop-down {{
+            border: none;
+            width: 20px;
+        }}
+
+        QComboBox::down-arrow {{
+            width: 12px;
+            height: 12px;
+        }}
+
+        QComboBox:editable {{
+            background-color: {bg};
+        }}
+    """
+
+
+def get_modern_button_stylesheet() -> str:
+    """Generate modern button stylesheet with flat design."""
+    is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+
+    if is_dark:
+        primary_bg = "#3B82F6"
+        primary_hover = "#2563EB"
+        primary_active = "#1D4ED8"
+        secondary_bg = "#1b212d"
+        secondary_hover = "#252b3a"
+        secondary_border = "#4a5368"
+        text_primary = "#FFFFFF"
+        text_secondary = "#E5E7EB"
+    else:
+        primary_bg = COLORS["primary"]
+        primary_hover = "#0052a3"
+        primary_active = "#003d7a"
+        secondary_bg = "#ffffff"
+        secondary_hover = "#f5f5f5"
+        secondary_border = COLORS["border_light"]
+        text_primary = "#ffffff"
+        text_secondary = "#000000"
+
+    return f"""
+        QPushButton {{
+            background-color: {secondary_bg};
+            color: {text_secondary};
+            border: 1px solid {secondary_border};
+            border-radius: {BORDER_RADIUS["md"]}px;
+            padding: 8px 16px;
+            min-height: {BUTTON_HEIGHT}px;
+            font-size: 14px;
+            font-weight: 500;
+        }}
+
+        QPushButton:hover {{
+            background-color: {secondary_hover};
+        }}
+
+        QPushButton:pressed {{
+            background-color: {primary_active};
+        }}
+
+        QPushButton:disabled {{
+            opacity: 0.5;
+        }}
+
+        QPushButton#PrimaryButton {{
+            background-color: {primary_bg};
+            color: {text_primary};
+            border: none;
+        }}
+
+        QPushButton#PrimaryButton:hover {{
+            background-color: {primary_hover};
+        }}
+
+        QPushButton#PrimaryButton:pressed {{
+            background-color: {primary_active};
+        }}
+
+        QToolButton {{
+            background-color: {secondary_bg};
+            color: {text_secondary};
+            border: 1px solid {secondary_border};
+            border-radius: {BORDER_RADIUS["md"]}px;
+            padding: 8px;
+            min-height: {BUTTON_HEIGHT}px;
+        }}
+
+        QToolButton:hover {{
+            background-color: {secondary_hover};
+        }}
+    """
 
 
 # Wizard Classes
@@ -296,7 +533,6 @@ class TemplatePreviewTable(QTableWidget):
         alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
         text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
-        grid = theme.CURRENT_THEME.get("grid_color", "#374151")
 
         palette.setColor(self.backgroundRole(), QColor(table_bg))
         palette.setColor(self.foregroundRole(), QColor(text))
@@ -308,21 +544,8 @@ class TemplatePreviewTable(QTableWidget):
         palette.setColor(QPalette.HighlightedText, QColor(text))
 
         self.setPalette(palette)
-        self.setStyleSheet(
-            f"""
-            QTableView {{
-                gridline-color: {grid};
-                background: {table_bg};
-                alternate-background-color: {alt_bg};
-                color: {text};
-                selection-background-color: {highlight};
-            }}
-            QHeaderView::section {{
-                background: {table_bg};
-                color: {text};
-            }}
-        """
-        )
+        # Use the new modern table stylesheet
+        self.setStyleSheet(get_modern_table_stylesheet())
 
     def apply_theme(self) -> None:
         """Public hook to refresh palette after theme changes."""
@@ -353,7 +576,11 @@ class TemplatePage(WizardPageBase):
         self.registerField("csvPath*", self, "csvPath")
 
         self.btn_excel = QPushButton("Load Excel Template…")
+        self.btn_excel.setMinimumHeight(BUTTON_HEIGHT)
+        self.btn_excel.setStyleSheet(get_modern_button_stylesheet())
         self.lbl_excel = QLabel("No template loaded.")
+        fonts = get_fonts()
+        self.lbl_excel.setFont(fonts["body"])
         self.btn_excel.clicked.connect(self.load_template)
         layout.addWidget(self.btn_excel)
         layout.addWidget(self.lbl_excel)
@@ -361,6 +588,7 @@ class TemplatePage(WizardPageBase):
         # Sheet selector UI
         self.lbl_sheet = QLabel("Select worksheet:")
         self.combo_sheet = QComboBox()
+        self.combo_sheet.setStyleSheet(get_modern_combobox_stylesheet())
         self.lbl_sheet.setVisible(False)
         self.combo_sheet.setVisible(False)
         self.combo_sheet.currentIndexChanged.connect(self._on_sheet_changed)
@@ -374,8 +602,43 @@ class TemplatePage(WizardPageBase):
         self.recent_templates_list.setAlternatingRowColors(True)
         self.recent_templates_list.setUniformItemSizes(True)
         self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
+        # Apply modern list styling
+        is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+        if is_dark:
+            list_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+            list_border = COLORS["border_dark"]
+            list_hover = COLORS["hover_dark"]
+            list_text = theme.CURRENT_THEME.get("table_text", "#E5E7EB")
+        else:
+            list_bg = "#ffffff"
+            list_border = COLORS["border_light"]
+            list_hover = COLORS["hover_light"]
+            list_text = "#000000"
+        self.recent_templates_list.setStyleSheet(f"""
+            QListWidget {{
+                border: 1px solid {list_border};
+                border-radius: {BORDER_RADIUS["sm"]}px;
+                background-color: {list_bg};
+                padding: 4px;
+                color: {list_text};
+            }}
+            QListWidget::item {{
+                padding: 8px 12px;
+                border-radius: {BORDER_RADIUS["sm"]}px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {list_hover};
+            }}
+            QListWidget::item:selected {{
+                background-color: {theme.CURRENT_THEME.get("selection_bg", "#E6F0FF")};
+            }}
+        """)
         self.remove_recent_button = QPushButton("Remove selected")
+        self.remove_recent_button.setMinimumHeight(BUTTON_HEIGHT)
+        self.remove_recent_button.setStyleSheet(get_modern_button_stylesheet())
         self.clear_recent_button = QPushButton("Clear all")
+        self.clear_recent_button.setMinimumHeight(BUTTON_HEIGHT)
+        self.clear_recent_button.setStyleSheet(get_modern_button_stylesheet())
         self.remove_recent_button.clicked.connect(self._on_remove_selected_recent_template)
         self.clear_recent_button.clicked.connect(self._on_clear_recent_templates)
         self.recent_templates_label.setVisible(False)
@@ -395,7 +658,10 @@ class TemplatePage(WizardPageBase):
         layout.addSpacing(SPACING["xl"])
 
         self.btn_csv = QPushButton("Load Events CSV…")
+        self.btn_csv.setMinimumHeight(BUTTON_HEIGHT)
+        self.btn_csv.setStyleSheet(get_modern_button_stylesheet())
         self.lbl_csv = QLabel("No events loaded.")
+        self.lbl_csv.setFont(fonts["body"])
         self.btn_csv.clicked.connect(self.load_csv)
         layout.addWidget(self.btn_csv)
         layout.addWidget(self.lbl_csv)
@@ -849,6 +1115,8 @@ class RowMappingPage(WizardPageBase):
 
         self.info_label = QLabel()
         self.info_label.setWordWrap(True)
+        fonts = get_fonts()
+        self.info_label.setFont(fonts["body"])
         root.addWidget(self.info_label)
 
         control_row = QHBoxLayout()
@@ -858,18 +1126,23 @@ class RowMappingPage(WizardPageBase):
         )
         control_row.addWidget(QLabel("Measurement:"))
         self.measurement_combo = QComboBox()
+        self.measurement_combo.setStyleSheet(get_modern_combobox_stylesheet())
         control_row.addWidget(self.measurement_combo)
 
         self.pick_date_combo = QComboBox()
+        self.pick_date_combo.setStyleSheet(get_modern_combobox_stylesheet())
         self.pick_date_combo.setVisible(False)
         control_row.addWidget(self.pick_date_combo)
 
         self.redetect_btn = QToolButton()
         self.redetect_btn.setText("Re-detect")
+        self.redetect_btn.setStyleSheet(get_modern_button_stylesheet())
         control_row.addWidget(self.redetect_btn)
 
         self.select_unmapped_btn = QToolButton()
         self.select_unmapped_btn.setText("Select Unmapped…")
+        self.select_unmapped_btn.setObjectName("PrimaryButton")  # Make it primary
+        self.select_unmapped_btn.setStyleSheet(get_modern_button_stylesheet())
         self.select_unmapped_btn.setVisible(False)
         control_row.addWidget(self.select_unmapped_btn)
 
@@ -884,7 +1157,7 @@ class RowMappingPage(WizardPageBase):
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.horizontalHeader().setStretchLastSection(True)
         self.preview_table.verticalHeader().setVisible(False)
-        self.preview_table.verticalHeader().setDefaultSectionSize(24)
+        self.preview_table.verticalHeader().setDefaultSectionSize(36)
         self.preview_table.set_drop_context(self)
         self._apply_table_theme(self.preview_table)
         preview_container = QVBoxLayout()
@@ -904,7 +1177,7 @@ class RowMappingPage(WizardPageBase):
             ["Row", "Template Label", "Session Event", "Value to Write", "Status"]
         )
         self.mapping_table.verticalHeader().setVisible(False)
-        self.mapping_table.verticalHeader().setDefaultSectionSize(24)
+        self.mapping_table.verticalHeader().setDefaultSectionSize(36)
         self.mapping_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._apply_table_theme(self.mapping_table)
         self.mapping_table.setAlternatingRowColors(True)
@@ -917,7 +1190,7 @@ class RowMappingPage(WizardPageBase):
 
         self.session_values_table = SessionValuesTable()
         self.session_values_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.session_values_table.verticalHeader().setDefaultSectionSize(24)
+        self.session_values_table.verticalHeader().setDefaultSectionSize(36)
         session_container = QVBoxLayout()
         session_container.setSpacing(SPACING["sm"])
         session_container.setContentsMargins(
@@ -941,6 +1214,7 @@ class RowMappingPage(WizardPageBase):
         ]
         helper_text = QLabel("\n".join(helper_lines))
         helper_text.setWordWrap(True)
+        helper_text.setFont(fonts["small"])
         colors = get_semantic_colors()
         helper_text.setStyleSheet(f"color: {colors['muted']};")
         root.addWidget(helper_text)
@@ -957,7 +1231,6 @@ class RowMappingPage(WizardPageBase):
         alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
         text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
-        grid = theme.CURRENT_THEME.get("grid_color", "#374151")
 
         palette.setColor(QPalette.Base, QColor(table_bg))
         palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
@@ -967,21 +1240,8 @@ class RowMappingPage(WizardPageBase):
         palette.setColor(QPalette.HighlightedText, QColor(text))
 
         table.setPalette(palette)
-        table.setStyleSheet(
-            f"""
-            QTableView {{
-                gridline-color: {grid};
-                background: {table_bg};
-                alternate-background-color: {alt_bg};
-                color: {text};
-                selection-background-color: {highlight};
-            }}
-            QHeaderView::section {{
-                background: {table_bg};
-                color: {text};
-            }}
-        """
-        )
+        # Use the new modern table stylesheet
+        table.setStyleSheet(get_modern_table_stylesheet())
 
     # --------------------------------------------------
     def initializePage(self) -> None:
@@ -1109,6 +1369,7 @@ class RowMappingPage(WizardPageBase):
             combo.setEditable(True)
             combo.setInsertPolicy(QComboBox.NoInsert)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setStyleSheet(get_modern_combobox_stylesheet())
             combo.addItem("<leave unmapped>", None)
             for event in wiz.session_events:
                 combo.addItem(event.combo_text, event.index)
@@ -1171,14 +1432,26 @@ class RowMappingPage(WizardPageBase):
                 item.setText("○")
                 item.setToolTip("No session event mapped")
                 item.setForeground(QBrush(QColor(colors["error"])))
+                # Larger font for better visibility
+                font = item.font()
+                font.setPointSize(14)
+                item.setFont(font)
             elif assignment in duplicates:
-                item.setText("!")
+                item.setText("⚠")  # Warning triangle instead of !
                 item.setToolTip("Session event reused on multiple rows")
                 item.setForeground(QBrush(QColor(colors["warning"])))
+                font = item.font()
+                font.setPointSize(14)
+                item.setFont(font)
             else:
                 item.setText("✓")
                 item.setToolTip("Mapped")
-                item.setForeground(QBrush(QColor(colors["success"])))
+                item.setForeground(QBrush(QColor(COLORS["success"])))  # Use explicit green color
+                # Bold green checkmark
+                font = item.font()
+                font.setPointSize(16)
+                font.setBold(True)
+                item.setFont(font)
 
     # --------------------------------------------------
     def _refresh_preview(self) -> None:
@@ -1445,6 +1718,9 @@ class PreviewPage(WizardPageBase):
         layout = QVBoxLayout(self)
         self.preview_view = QTableView()
         self.btn_save = QPushButton("Update Template")
+        self.btn_save.setMinimumHeight(BUTTON_HEIGHT)
+        self.btn_save.setObjectName("PrimaryButton")  # Make it primary
+        self.btn_save.setStyleSheet(get_modern_button_stylesheet())
         self.btn_save.clicked.connect(self.save_file)
         layout.addWidget(self.preview_view, 1)
         layout.addWidget(self.btn_save)
@@ -1522,6 +1798,10 @@ class ExcelMapWizard(QWizard):
         self.setOption(QWizard.HaveFinishButtonOnEarlyPages)
         self.setMinimumSize(1100, 720)
         self.resize(1200, 750)
+
+        # Apply modern dialog styling
+        combined_stylesheet = get_modern_button_stylesheet() + "\n" + get_modern_combobox_stylesheet()
+        self.setStyleSheet(combined_stylesheet)
 
         # Workbook/session state
         self.wb = None
