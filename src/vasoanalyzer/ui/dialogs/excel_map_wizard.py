@@ -310,6 +310,15 @@ class TemplatePage(WizardPageBase):
         layout.addWidget(self.btn_excel)
         layout.addWidget(self.lbl_excel)
 
+        # Sheet selector UI
+        self.lbl_sheet = QLabel("Select worksheet:")
+        self.combo_sheet = QComboBox()
+        self.lbl_sheet.setVisible(False)
+        self.combo_sheet.setVisible(False)
+        self.combo_sheet.currentIndexChanged.connect(self._on_sheet_changed)
+        layout.addWidget(self.lbl_sheet)
+        layout.addWidget(self.combo_sheet)
+
         # Recent templates UI
         self.recent_templates_label = QLabel("Recent templates")
         self.recent_templates_list = QListWidget()
@@ -375,38 +384,38 @@ class TemplatePage(WizardPageBase):
             QMessageBox.critical(self, "Load Failed", str(exc))
             return
 
-        ws = wb.active
+        # Don't set ws yet - wait for sheet selection
         wiz = self._wizard()
         wiz.setField("templatePath", path)
         wiz.wb = wb
-        wiz.ws = ws
+        wiz.ws = None  # Will be set after sheet selection
+        wiz.selected_sheet_name = None
         wiz.reset_mapping_state()
 
-        # Check for VasoAnalyzer metadata
-        metadata_detected = has_vaso_metadata(wb)
-        if metadata_detected:
-            try:
-                metadata = read_template_metadata(path, wb)
-                if metadata:
-                    wiz.template_metadata = metadata
-                    status_msg = f"✓ Loaded: {Path(path).name} (metadata detected)"
-                    self.lbl_excel.setText(status_msg)
-                    self.lbl_excel.setStyleSheet("color: #3c763d;")  # Green
-                else:
-                    self.lbl_excel.setText(f"Loaded: {Path(path).name}")
-                    self.lbl_excel.setStyleSheet("")
-            except Exception as exc:
-                QMessageBox.warning(
-                    self,
-                    "Metadata Error",
-                    f"Template loaded but metadata is invalid:\n{exc}\n\n"
-                    "Will use manual configuration.",
-                )
-                self.lbl_excel.setText(f"Loaded: {Path(path).name} (metadata error)")
-                self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
+        # Populate sheet selector
+        self._populate_sheet_selector(wb)
+
+        # Try to restore previous sheet preference
+        saved_sheet = self._load_sheet_preference(path)
+        if saved_sheet and saved_sheet in wb.sheetnames:
+            idx = self.combo_sheet.findText(saved_sheet)
+            if idx >= 0:
+                self.combo_sheet.setCurrentIndex(idx)
+                # _on_sheet_changed will be called automatically
+        elif self.combo_sheet.count() == 1:
+            # Auto-select if only one sheet
+            self.combo_sheet.setCurrentIndex(0)
+            # _on_sheet_changed will be called automatically
+        elif self.combo_sheet.count() > 1:
+            # Show selection required message
+            self.lbl_excel.setText(
+                f"Loaded: {Path(path).name} - Select a worksheet to continue"
+            )
+            self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
         else:
-            self.lbl_excel.setText(f"Loaded: {Path(path).name}")
-            self.lbl_excel.setStyleSheet("")
+            # No sheets available (shouldn't happen)
+            self.lbl_excel.setText(f"Loaded: {Path(path).name} - No worksheets found")
+            self.lbl_excel.setStyleSheet("color: #a94442;")  # Red
 
         self._update_recent_templates(path)
         self.completeChanged.emit()
@@ -448,7 +457,8 @@ class TemplatePage(WizardPageBase):
     def isComplete(self) -> bool:
         wiz = self._wizard()
         has_events = bool(self.field("csvPath")) or getattr(wiz, "eventsDF", None) is not None
-        return bool(self.field("templatePath") and has_events)
+        has_sheet_selected = wiz.ws is not None  # Check sheet selection
+        return bool(self.field("templatePath") and has_events and has_sheet_selected)
 
     # ------------------------------------------------------
     def _update_events_status(self) -> None:
@@ -558,6 +568,109 @@ class TemplatePage(WizardPageBase):
     @staticmethod
     def _get_settings() -> QSettings:
         return QSettings("TykockiLab", "VasoAnalyzer")
+
+    # ------------------------------------------------------
+    def _load_sheet_preference(self, file_path: str) -> str | None:
+        """Load previously selected sheet for this file."""
+        settings = self._get_settings()
+        key = f"excel_sheet_selection/{file_path}"
+        return settings.value(key, None, type=str)
+
+    # ------------------------------------------------------
+    def _save_sheet_preference(self, file_path: str, sheet_name: str) -> None:
+        """Save sheet selection preference."""
+        settings = self._get_settings()
+        key = f"excel_sheet_selection/{file_path}"
+        settings.setValue(key, sheet_name)
+
+    # ------------------------------------------------------
+    def _populate_sheet_selector(self, wb) -> None:
+        """Populate sheet selector with workbook sheets."""
+        from openpyxl import Workbook
+
+        self.combo_sheet.blockSignals(True)
+        self.combo_sheet.clear()
+
+        for sheet_name in wb.sheetnames:
+            # Skip hidden metadata sheets
+            if sheet_name.startswith("VasoMetadata"):
+                continue
+            # Skip hidden sheets
+            sheet = wb[sheet_name]
+            if hasattr(sheet, 'sheet_state') and sheet.sheet_state == "hidden":
+                continue
+            self.combo_sheet.addItem(sheet_name)
+
+        self.combo_sheet.blockSignals(False)
+
+        # Show selector if sheets available
+        has_sheets = self.combo_sheet.count() > 0
+        self.lbl_sheet.setVisible(has_sheets)
+        self.combo_sheet.setVisible(has_sheets)
+
+    # ------------------------------------------------------
+    def _on_sheet_changed(self, index: int) -> None:
+        """Handle sheet selection change."""
+        if index < 0:
+            return
+
+        sheet_name = self.combo_sheet.currentText()
+        if not sheet_name:
+            return
+
+        wiz = self._wizard()
+        template_path = self.field("templatePath")
+
+        if not wiz.wb:
+            return
+
+        # Update wizard state
+        wiz.ws = wiz.wb[sheet_name]
+        wiz.selected_sheet_name = sheet_name
+        wiz.reset_mapping_state()
+
+        # Save preference
+        if template_path:
+            self._save_sheet_preference(template_path, sheet_name)
+
+        # Reload metadata for new sheet
+        self._reload_metadata_for_sheet(sheet_name)
+
+        # Update UI label
+        from pathlib import Path
+        self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name})")
+        self.lbl_excel.setStyleSheet("")
+
+        self.completeChanged.emit()
+
+    # ------------------------------------------------------
+    def _reload_metadata_for_sheet(self, sheet_name: str) -> None:
+        """Reload metadata for the selected sheet."""
+        from vasoanalyzer.excel.template_metadata import read_sheet_specific_metadata
+
+        wiz = self._wizard()
+        if not wiz.wb:
+            return
+
+        try:
+            metadata = read_sheet_specific_metadata(wiz.wb, sheet_name)
+            if metadata:
+                wiz.template_metadata = metadata
+                from pathlib import Path
+                template_path = self.field("templatePath")
+                status_msg = f"✓ Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata detected)"
+                self.lbl_excel.setText(status_msg)
+                self.lbl_excel.setStyleSheet("color: #3c763d;")  # Green
+        except Exception as exc:
+            from pathlib import Path
+            template_path = self.field("templatePath")
+            QMessageBox.warning(
+                self,
+                "Metadata Error",
+                f"Could not load metadata for sheet '{sheet_name}':\n{exc}"
+            )
+            self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata error)")
+            self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
 
     # ------------------------------------------------------
     @staticmethod
@@ -1035,7 +1148,14 @@ class RowMappingPage(WizardPageBase):
             template_row_index = row.get("Row")
             for col_idx, key in enumerate(headers):
                 value = row.get(key)
-                item = QTableWidgetItem("" if value is None else str(value))
+                # Format numerical values to 2 decimal places
+                if value is None:
+                    display_text = ""
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    display_text = f"{value:.2f}"
+                else:
+                    display_text = str(value)
+                item = QTableWidgetItem(display_text)
                 item.setForeground(QBrush(QColor(table_text)))
                 bg_color = alt_bg if row_idx % 2 else table_bg
                 if key not in ("Row", "Label"):
@@ -1050,7 +1170,13 @@ class RowMappingPage(WizardPageBase):
                         and is_event
                         and template_row_index is not None
                     ):
-                        base_text = "" if value is None else str(value)
+                        # Format base value to 2 decimal places
+                        if value is None:
+                            base_text = ""
+                        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                            base_text = f"{value:.2f}"
+                        else:
+                            base_text = str(value)
                         self._preview_base_values[template_row_index] = base_text
                         assignment = wiz.row_assignments.get(template_row_index)
                         if assignment is not None:
@@ -1324,6 +1450,7 @@ class ExcelMapWizard(QWizard):
         # Workbook/session state
         self.wb = None
         self.ws = None
+        self.selected_sheet_name: str | None = None
         self.eventsDF: pd.DataFrame | None = None
         self.events_source: str | None = None
 
@@ -1444,13 +1571,19 @@ class ExcelMapWizard(QWizard):
         if not defined:
             return None
         destinations = list(defined.destinations)
+
+        # First, try to find a range specifically for the selected sheet
         for sheet_name, coord in destinations:
             if sheet_name == self.ws.title:
                 return coord
+
+        # Fallback: if there's only one destination and it references a different sheet,
+        # use that range anyway (assumes same structure across sheets)
         if destinations and len(destinations) == 1:
             sheet_name, coord = destinations[0]
-            if sheet_name == self.ws.title:
-                return coord
+            # Use the same coordinate range on the selected sheet
+            return coord
+
         return None
 
     # --------------------------------------------------

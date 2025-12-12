@@ -8,8 +8,8 @@ from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QShowEvent
+from PyQt5.QtCore import Qt, QTimer, QEvent
+from PyQt5.QtGui import QColor, QShowEvent, QKeySequence
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +28,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QShortcut,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -325,6 +326,10 @@ class PureMplFigureComposer(QMainWindow):
         h_px = int(h_in * dpi)
         self.label_export_size.setText(f"{w_in:.2f} in × {h_in:.2f} in ({w_px} × {h_px} px @ {dpi:.0f} dpi)")
 
+        # Also update status bar
+        if hasattr(self, "status_size"):
+            self.status_size.setText(f"  Figure: {w_in:.2f} × {h_in:.2f} in  ")
+
     # ------------------------------------------------------------------
     # UI setup
     # ------------------------------------------------------------------
@@ -416,6 +421,28 @@ class PureMplFigureComposer(QMainWindow):
         self.btn_anno_delete.clicked.connect(self._delete_selected_annotation)
         self._update_anno_button_styles()
 
+        # Status bar at bottom of window
+        self.status_bar = self.statusBar()
+        self.status_zoom = QLabel("Zoom: 100%")
+        self.status_size = QLabel("Figure: 6.0 × 3.0 in")
+        self.status_coords = QLabel("")
+
+        # Style status widgets
+        for widget in [self.status_zoom, self.status_size, self.status_coords]:
+            widget.setStyleSheet("padding: 0 8px; color: #555;")
+
+        self.status_bar.addPermanentWidget(self.status_zoom)
+        self.status_bar.addPermanentWidget(QLabel("|"))
+        self.status_bar.addPermanentWidget(self.status_size)
+        self.status_bar.addPermanentWidget(QLabel("|"))
+        self.status_bar.addPermanentWidget(self.status_coords)
+
+        # Set up keyboard shortcuts
+        self._setup_shortcuts()
+
+        # Add tooltips
+        self._add_tooltips()
+
     def _create_preview(self) -> None:
         if self._preview_initialized:
             return
@@ -426,10 +453,21 @@ class PureMplFigureComposer(QMainWindow):
         self._canvas = FigureCanvasQTAgg(fig)
         self._canvas.mpl_connect("button_press_event", self._on_canvas_press)
         self._canvas.mpl_connect("button_release_event", self._on_canvas_release)
+        self._canvas.mpl_connect("motion_notify_event", self._on_canvas_motion)
 
         scroll = QScrollArea(self)
         scroll.setWidget(self._canvas)
         scroll.setWidgetResizable(False)
+        scroll.setStyleSheet("""
+            QScrollArea {
+                border: 1px solid #d0d0d0;
+                background-color: #e8e8e8;
+            }
+        """)
+
+        # Install event filter for mouse wheel zoom
+        scroll.viewport().installEventFilter(self)
+
         self._scroll = scroll
 
         self._preview_initialized = True
@@ -915,10 +953,22 @@ class PureMplFigureComposer(QMainWindow):
         """Run once after the layout has settled to compute initial zoom."""
         if not self._preview_initialized:
             return
-        # Compute zoom based on actual viewport size (now valid after layout)
+
+        # Ensure scroll area has valid size
+        if self._scroll.viewport().width() <= 1 or self._scroll.viewport().height() <= 1:
+            # Layout not ready yet, try again
+            QTimer.singleShot(50, self._initial_fit_zoom)
+            return
+
+        # Compute zoom based on actual viewport size
         z = self._compute_fit_zoom()
-        # Use _set_zoom to ensure slider sync and proper clamping
+
+        # Ensure zoom is reasonable (not too small/large)
+        z = max(0.1, min(2.0, z))  # Clamp initial zoom to 10%-200%
+
         self._set_zoom(z, mode="fit")
+
+        log.debug(f"Initial fit zoom: {z:.2%}")
 
     def _apply_zoom(self) -> None:
         if not self._preview_initialized or self._canvas is None:
@@ -951,6 +1001,11 @@ class PureMplFigureComposer(QMainWindow):
                 self.zoom_slider.setValue(int(self._preview_zoom * 100))
         self._apply_zoom()
 
+        # Update status bar
+        if hasattr(self, "status_zoom"):
+            mode_icon = "🔒" if self._zoom_mode == "manual" else "↔️"
+            self.status_zoom.setText(f"{mode_icon} Zoom: {self._preview_zoom * 100:.0f}%")
+
     def _set_anno_mode(self, mode: str) -> None:
         self._anno_mode = mode
         self._update_anno_button_styles()
@@ -963,7 +1018,44 @@ class PureMplFigureComposer(QMainWindow):
         self._first_show_done = True
         if self._preview_initialized:
             self._refresh_preview()
-        QTimer.singleShot(0, self._initial_fit_zoom)
+        # Use 50ms delay for more reliable layout
+        QTimer.singleShot(50, self._initial_fit_zoom)
+        # Also ensure export size label is updated
+        QTimer.singleShot(60, self._update_export_size_label)
+
+    def eventFilter(self, obj, event):
+        """Intercept wheel events on scroll viewport for zoom."""
+        if obj == self._scroll.viewport() and event.type() == QEvent.Wheel:
+            # Get wheel delta
+            delta = event.angleDelta().y()
+            if delta == 0:
+                return super().eventFilter(obj, event)
+
+            # Zoom in/out
+            zoom_factor = 1.15 if delta > 0 else 1.0 / 1.15
+            new_zoom = self._preview_zoom * zoom_factor
+
+            # Get mouse position relative to scroll area
+            scroll_pos = event.pos()
+
+            # Get current scroll bar positions
+            h_bar = self._scroll.horizontalScrollBar()
+            v_bar = self._scroll.verticalScrollBar()
+            old_h = h_bar.value()
+            old_v = v_bar.value()
+
+            # Apply zoom
+            self._set_zoom(new_zoom, mode="manual")
+
+            # Adjust scrollbars to zoom "into" cursor position
+            new_h = old_h + scroll_pos.x() * (zoom_factor - 1)
+            new_v = old_v + scroll_pos.y() * (zoom_factor - 1)
+            h_bar.setValue(int(new_h))
+            v_bar.setValue(int(new_v))
+
+            return True  # Event handled
+
+        return super().eventFilter(obj, event)
 
     def _update_anno_button_styles(self) -> None:
         active_style = "background-color: #4da3ff; color: white; font-weight: bold;"
@@ -1035,6 +1127,15 @@ class PureMplFigureComposer(QMainWindow):
         )
         self._refresh_annotation_list()
         self._refresh_preview()
+
+    def _on_canvas_motion(self, event) -> None:
+        """Update status bar with mouse coordinates."""
+        if not hasattr(self, "status_coords"):
+            return
+        if event.inaxes and event.xdata is not None and event.ydata is not None:
+            self.status_coords.setText(f"  x={event.xdata:.2f}, y={event.ydata:.2f}  ")
+        else:
+            self.status_coords.setText("")
 
     # ------------------------------------------------------------------
     # Signal handlers
@@ -1172,6 +1273,129 @@ class PureMplFigureComposer(QMainWindow):
         except Exception:
             log.exception("Export failed")
             QMessageBox.critical(self, "Export failed", "Export failed; see log for details.")
+
+    # ------------------------------------------------------------------
+    # Keyboard Shortcuts & Tooltips
+    # ------------------------------------------------------------------
+    def _setup_shortcuts(self):
+        """Set up keyboard shortcuts for common actions."""
+        # Zoom shortcuts
+        QShortcut(QKeySequence("Ctrl++"), self).activated.connect(
+            lambda: self._set_zoom(self._preview_zoom * 1.25, mode="manual")
+        )
+        QShortcut(QKeySequence("Ctrl+="), self).activated.connect(  # Also handle Ctrl+=
+            lambda: self._set_zoom(self._preview_zoom * 1.25, mode="manual")
+        )
+        QShortcut(QKeySequence("Ctrl+-"), self).activated.connect(
+            lambda: self._set_zoom(self._preview_zoom * 0.8, mode="manual")
+        )
+        QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self._on_zoom_fit_clicked)
+
+        # Export
+        QShortcut(QKeySequence("Ctrl+E"), self).activated.connect(self._export_dialog)
+        QShortcut(QKeySequence("Ctrl+S"), self).activated.connect(self._export_dialog)
+
+        # Annotation modes
+        QShortcut(QKeySequence("T"), self).activated.connect(
+            lambda: self._set_anno_mode("text")
+        )
+        QShortcut(QKeySequence("B"), self).activated.connect(
+            lambda: self._set_anno_mode("box")
+        )
+        QShortcut(QKeySequence("V"), self).activated.connect(
+            lambda: self._set_anno_mode("select")
+        )
+        QShortcut(QKeySequence("Escape"), self).activated.connect(
+            lambda: self._set_anno_mode("select")
+        )
+        QShortcut(QKeySequence("Delete"), self).activated.connect(
+            self._delete_selected_annotation
+        )
+
+        log.info("Keyboard shortcuts enabled: Ctrl+/- (zoom), Ctrl+0 (fit), Ctrl+E (export), T/B/V (tools)")
+
+    def _add_tooltips(self):
+        """Add helpful tooltips to all controls."""
+        # Figure setup
+        self.spin_width.setToolTip(
+            "Figure width in inches\n"
+            "Common sizes: 6–8 in (slides), 3–4 in (manuscript)"
+        )
+        self.spin_height.setToolTip(
+            "Figure height in inches\n"
+            "Typical aspect ratio: 1.5:1 to 2:1 (width:height)"
+        )
+        self.spin_dpi.setToolTip(
+            "Resolution in dots per inch\n"
+            "150 dpi: screen preview\n"
+            "300 dpi: print quality (recommended)\n"
+            "600 dpi: high-resolution publication"
+        )
+        self.cb_axes_first.setToolTip(
+            "Size by axes dimensions instead of total figure\n"
+            "Ensures exact control of plot area size\n"
+            "Final figure = axes + labels + margins"
+        )
+        self.spin_axes_margin.setToolTip(
+            "Minimum white space around axes (inches)\n"
+            "Typical: 0.3–0.5 in for manuscripts"
+        )
+
+        # Axes/fonts
+        self.edit_xlabel.setToolTip("Label for horizontal axis")
+        self.edit_ylabel.setToolTip("Label for vertical axis")
+
+        if self.spin_label_fontsize:
+            self.spin_label_fontsize.setToolTip(
+                "Font size for axis labels (points)\n"
+                "Typical: 10–12 pt for manuscripts"
+            )
+        if self.spin_tick_fontsize:
+            self.spin_tick_fontsize.setToolTip(
+                "Font size for tick labels (points)\n"
+                "Typical: 8–10 pt (slightly smaller than axis labels)"
+            )
+        if self.spin_legend_fontsize:
+            self.spin_legend_fontsize.setToolTip(
+                "Font size for legend text (points)\n"
+                "Typical: 8–9 pt"
+            )
+
+        # Grid
+        self.cb_grid.setToolTip("Show/hide grid lines")
+        self.combo_grid_style.setToolTip("Grid line style: solid, dashed, dotted")
+        self.edit_grid_color.setToolTip("Grid color (hex code or name)\nExample: #d0d0d0, lightgray")
+        self.spin_grid_alpha.setToolTip("Grid transparency (0=invisible, 1=opaque)")
+
+        # Line width
+        if self.spin_linewidth_scale:
+            self.spin_linewidth_scale.setToolTip(
+                "Global multiplier for all trace line widths\n"
+                "Use to make all lines thicker/thinner together\n"
+                "Typical: 0.8–1.5"
+            )
+
+        # Events
+        self.cb_event_labels.setToolTip("Show text labels above/below event markers")
+
+        # Zoom controls
+        self.btn_zoom_in.setToolTip("Zoom in (Ctrl++)")
+        self.btn_zoom_out.setToolTip("Zoom out (Ctrl+-)")
+        self.btn_zoom_fit.setToolTip(
+            "Auto-fit: keep entire figure visible (Ctrl+0)\n"
+            "Also re-enables auto-fit mode (figure stays fit after edits)"
+        )
+        self.zoom_slider.setToolTip("Zoom level (use mouse wheel over preview)")
+
+        # Annotation tools
+        self.btn_anno_select.setToolTip("Select mode (V) - click to select annotations")
+        self.btn_anno_text.setToolTip("Text tool (T) - click to add text label")
+        self.btn_anno_box.setToolTip("Box tool (B) - click and drag to draw rectangle")
+        self.btn_anno_delete.setToolTip("Delete selected annotation (Delete)")
+
+        # Export
+        self.btn_export.setToolTip("Export to PNG/PDF/SVG (Ctrl+E)")
+        self.cb_transparent.setToolTip("Export with transparent background (for overlays)")
 
     # ------------------------------------------------------------------
     # Helpers
