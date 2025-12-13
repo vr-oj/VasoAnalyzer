@@ -5230,7 +5230,8 @@ class VasoAnalyzerApp(QMainWindow):
         # Figure Composer - New version only
         self.action_figure_composer = QAction("Figure Composer…", self)
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
-        self.action_figure_composer.triggered.connect(self.open_new_figure_composer)
+        # Wire the toolbar/menu button to the single-axes Matplotlib composer
+        self.action_figure_composer.triggered.connect(self.open_matplotlib_composer)
         tools_menu.addAction(self.action_figure_composer)
 
         self.action_matplotlib_composer = QAction("Matplotlib Composer…", self)

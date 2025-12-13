@@ -65,6 +65,7 @@ class AxesSpec:
     xlabel_fontsize: Optional[float] = None
     ylabel_fontsize: Optional[float] = None
     tick_label_fontsize: Optional[float] = None
+    label_bold: bool = True
 
 
 @dataclass
@@ -147,7 +148,16 @@ def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None
         fig.set_size_inches(page.width_in, page.height_in, forward=True)
         fig.set_dpi(page.dpi)
     ax = fig.add_subplot(111)
-    fig.subplots_adjust(left=0.14, right=0.98, bottom=0.20, top=0.95)
+    # Extra left margin keeps y-label visible on tall/narrow sizes; slightly tighter right/bottom.
+    base_left = 0.18
+    w_in = max(page.width_in, 1e-6)
+    h_in = max(page.height_in, 1e-6)
+    aspect = h_in / w_in
+    extra_left = 0.0
+    if aspect >= 1.6 or w_in <= 3.0:
+        extra_left = 0.02  # 2% of width for extreme tall/narrow
+    left = min(0.35, base_left + extra_left)
+    fig.subplots_adjust(left=left, right=0.97, bottom=0.16, top=0.95)
 
     _render_traces(ax, spec, ctx)
 
@@ -301,6 +311,14 @@ def export_figure(
             max_dim,
         )
 
+    # Fallback tight layout for extreme tall/narrow exports to keep labels visible.
+    try:
+        aspect = h_in / max(w_in, 1e-6)
+        if aspect >= 1.6 or w_in <= 3.0:
+            fig.tight_layout(pad=0.02)
+    except Exception:
+        log.debug("tight_layout skipped", exc_info=True)
+
     fig.savefig(
         out_path,
         dpi=dpi,
@@ -384,18 +402,19 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
     xlabel_fs = axes_spec.xlabel_fontsize or default_label_fs
     ylabel_fs = axes_spec.ylabel_fontsize or default_label_fs
     tick_fs = axes_spec.tick_label_fontsize or default_tick_fs
+    label_weight = "bold" if getattr(axes_spec, "label_bold", True) else "normal"
 
     # Axis labels
     ax.set_xlabel(
         axes_spec.xlabel,
         fontsize=xlabel_fs,
-        fontweight="bold",
+        fontweight=label_weight,
         labelpad=8,
     )
     ax.set_ylabel(
         axes_spec.ylabel,
         fontsize=ylabel_fs,
-        fontweight="bold",
+        fontweight=label_weight,
         labelpad=10,
     )
 
