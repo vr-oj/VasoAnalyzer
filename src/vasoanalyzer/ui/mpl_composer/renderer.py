@@ -145,7 +145,9 @@ def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None
         fig = Figure(figsize=(page.width_in, page.height_in), dpi=page.dpi)
     else:
         fig.clear()
-        fig.set_size_inches(page.width_in, page.height_in, forward=True)
+        # Use forward=False to prevent matplotlib from resizing the Qt canvas widget.
+        # The composer window manually controls canvas sizing via setFixedSize().
+        fig.set_size_inches(page.width_in, page.height_in, forward=False)
         fig.set_dpi(page.dpi)
     ax = fig.add_subplot(111)
     # Extra left margin keeps y-label visible on tall/narrow sizes; slightly tighter right/bottom.
@@ -156,8 +158,22 @@ def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None
     extra_left = 0.0
     if aspect >= 1.6 or w_in <= 3.0:
         extra_left = 0.02  # 2% of width for extreme tall/narrow
-    left = min(0.35, base_left + extra_left)
-    fig.subplots_adjust(left=left, right=0.97, bottom=0.16, top=0.95)
+    if w_in <= 2.0:  # Very small figures need even more left margin for ylabel
+        extra_left = max(extra_left, 0.08)  # At least 8% extra for small figures
+    if w_in <= 1.5:  # Tiny figures need aggressive margins
+        extra_left = max(extra_left, 0.12)  # At least 12% extra for tiny figures
+    left = min(0.40, base_left + extra_left)
+    # Dynamic bottom margin: tall/square figures and very small figures need more space for xlabel
+    base_bottom = 0.16
+    extra_bottom = 0.0
+    if aspect >= 1.0:  # Square or taller figures
+        extra_bottom = 0.06  # Add 6% for xlabel visibility
+    if h_in <= 2.0:  # Very small figures need even more bottom margin
+        extra_bottom = max(extra_bottom, 0.10)  # At least 10% extra for small figures
+    if h_in <= 1.5:  # Tiny figures need aggressive margins
+        extra_bottom = max(extra_bottom, 0.14)  # At least 14% extra for tiny figures
+    bottom = min(0.35, base_bottom + extra_bottom)
+    fig.subplots_adjust(left=left, right=0.97, bottom=bottom, top=0.95)
 
     _render_traces(ax, spec, ctx)
 
@@ -245,7 +261,8 @@ def _build_axes_first_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure |
         fig = Figure(figsize=(fig_w, fig_h), dpi=dpi)
     else:
         fig.clear()
-        fig.set_size_inches(fig_w, fig_h, forward=True)
+        # Use forward=False to prevent matplotlib from resizing the Qt canvas widget.
+        fig.set_size_inches(fig_w, fig_h, forward=False)
         fig.set_dpi(dpi)
 
     # Store effective size for downstream consumers (preview/export UI).
