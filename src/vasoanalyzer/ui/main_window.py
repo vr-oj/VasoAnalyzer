@@ -5234,7 +5234,11 @@ class VasoAnalyzerApp(QMainWindow):
         tools_menu.addAction(layout_act)
 
         # Single supported composer entrypoint
-        self.action_figure_composer = QAction("Figure Composer (Matplotlib)…", self)
+        self.action_figure_composer = QAction(
+            QIcon(self.icon_path("figure-composer.svg")),
+            "Figure Composer (Matplotlib)…",
+            self,
+        )
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
         self.action_figure_composer.triggered.connect(self.open_matplotlib_composer)
         tools_menu.addAction(self.action_figure_composer)
@@ -7398,6 +7402,12 @@ class VasoAnalyzerApp(QMainWindow):
             self.home_action.setIcon(QIcon(self.icon_path("Home.svg")))
         if hasattr(self, "save_session_action"):
             self.save_session_action.setIcon(QIcon(self.icon_path("Save.svg")))
+        if hasattr(self, "review_events_action"):
+            self.review_events_action.setIcon(QIcon(self.icon_path("review-events.svg")))
+        if hasattr(self, "action_figure_composer"):
+            self.action_figure_composer.setIcon(QIcon(self.icon_path("figure-composer.svg")))
+        if hasattr(self, "excel_action"):
+            self.excel_action.setIcon(QIcon(self.icon_path("excel-mapper.svg")))
 
     def apply_theme(self, mode: str, *, persist: bool = True) -> None:
         """Apply light or dark theme at runtime and refresh all UI widgets."""
@@ -7597,13 +7607,15 @@ class VasoAnalyzerApp(QMainWindow):
         self.load_snapshot_action.triggered.connect(self.load_snapshot)
 
         self.excel_action = QAction(
-            QIcon(self.icon_path("chart-bar.svg")), "Excel mapper…", self
+            QIcon(self.icon_path("excel-mapper.svg")), "Excel mapper…", self
         )
         self.excel_action.setToolTip("Map events to an Excel template")
         self.excel_action.setEnabled(False)
         self.excel_action.triggered.connect(self.open_excel_mapping_dialog)
 
-        self.review_events_action = QAction(QIcon(), "Review Events", self)
+        self.review_events_action = QAction(
+            QIcon(self.icon_path("review-events.svg")), "Review Events", self
+        )
         self.review_events_action.setToolTip(
             "Open review panel to confirm or edit event values (Ctrl+Shift+R)"
         )
@@ -8055,16 +8067,19 @@ class VasoAnalyzerApp(QMainWindow):
 QPushButton[isPrimary="true"] {{
     background-color: {primary_bg};
     color: {primary_text};
-    border: none;
+    border: 2px solid {primary_bg};
     border-radius: 10px;
     padding: 8px 20px;
     font-weight: 600;
 }}
 QPushButton[isPrimary="true"]:hover {{
     background-color: {primary_hover};
+    border: 2px solid {primary_hover};
 }}
 QPushButton[isPrimary="true"]:pressed {{
     background-color: {button_active_bg};
+    border: 2px solid {button_active_bg};
+    padding: 9px 20px 7px 20px;
 }}
 QPushButton[isSecondary="true"] {{
     background-color: {secondary_bg};
@@ -8076,9 +8091,13 @@ QPushButton[isSecondary="true"] {{
 }}
 QPushButton[isSecondary="true"]:hover {{
     background-color: {secondary_hover};
+    border: 2px solid {border};
+    padding: 7px 19px;
 }}
 QPushButton[isSecondary="true"]:pressed {{
     background-color: {button_active_bg};
+    border: 2px solid {border};
+    padding: 8px 19px 6px 19px;
 }}
 QPushButton[isGhost="true"] {{
     background-color: transparent;
@@ -8089,6 +8108,13 @@ QPushButton[isGhost="true"] {{
 }}
 QPushButton[isGhost="true"]:hover {{
     background-color: {button_hover_bg};
+    border: 2px solid {border};
+    padding: 7px 19px;
+}}
+QPushButton[isGhost="true"]:pressed {{
+    background-color: {button_active_bg};
+    border: 2px solid {border};
+    padding: 8px 19px 6px 19px;
 }}
 """
 

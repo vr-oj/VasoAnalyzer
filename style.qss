@@ -55,18 +55,43 @@ QMenu {
 /* ----- Buttons and dropdowns hover/press feedback ----- */
 QToolButton,
 QPushButton {
+  background-color: palette(button);
+  border: 1px solid palette(mid);
   border-radius: 4px;
+  padding: 4px 8px;
+  color: palette(buttonText);
 }
 
 QToolButton:hover,
 QPushButton:hover {
   background-color: palette(light);
-  border: 1px solid palette(mid);
+  border: 1px solid palette(dark);
 }
 
 QToolButton:pressed,
 QPushButton:pressed {
   background-color: palette(midlight);
+  border: 1px solid palette(dark);
+}
+
+QToolButton:checked,
+QPushButton:checked {
+  background-color: palette(highlight);
+  border: 1px solid palette(highlight);
+  color: palette(highlightedText);
+}
+
+QToolButton:checked:hover,
+QPushButton:checked:hover {
+  background-color: palette(highlight);
+  border: 2px solid palette(dark);
+}
+
+QToolButton:disabled,
+QPushButton:disabled {
+  background-color: palette(window);
+  border: 1px solid palette(mid);
+  color: palette(mid);
 }
 
 QComboBox {
@@ -149,13 +174,26 @@ QToolBar#PrimaryToolbar > QWidget > QToolButton {
 QToolBar#PrimaryToolbar > QToolButton:hover,
 QToolBar#PrimaryToolbar > QWidget > QToolButton:hover {
   background-color: palette(light);
-  border-color: palette(mid);
+  border: 2px solid palette(dark);
 }
 
 QToolBar#PrimaryToolbar > QToolButton:pressed,
 QToolBar#PrimaryToolbar > QWidget > QToolButton:pressed {
   background-color: palette(midlight);
-  border-color: palette(dark);
+  border: 2px solid palette(dark);
+}
+
+QToolBar#PrimaryToolbar > QToolButton:checked,
+QToolBar#PrimaryToolbar > QWidget > QToolButton:checked {
+  background-color: palette(highlight);
+  border: 2px solid palette(highlight);
+  color: palette(highlightedText);
+}
+
+QToolBar#PrimaryToolbar > QToolButton:checked:hover,
+QToolBar#PrimaryToolbar > QWidget > QToolButton:checked:hover {
+  background-color: palette(highlight);
+  border: 2px solid palette(dark);
 }
 
 /* Plot toolbar (canvas) buttons share the same button look */
@@ -182,11 +220,24 @@ QToolBar[objectName="PlotToolbar"] > QToolButton {
 QToolBar#PlotToolbar > QToolButton:hover,
 QToolBar[objectName="PlotToolbar"] > QToolButton:hover {
   background-color: palette(light);
-  border-color: palette(mid);
+  border: 2px solid palette(dark);
 }
 
 QToolBar#PlotToolbar > QToolButton:pressed,
 QToolBar[objectName="PlotToolbar"] > QToolButton:pressed {
   background-color: palette(midlight);
-  border-color: palette(dark);
+  border: 2px solid palette(dark);
+}
+
+QToolBar#PlotToolbar > QToolButton:checked,
+QToolBar[objectName="PlotToolbar"] > QToolButton:checked {
+  background-color: palette(highlight);
+  border: 2px solid palette(highlight);
+  color: palette(highlightedText);
+}
+
+QToolBar#PlotToolbar > QToolButton:checked:hover,
+QToolBar[objectName="PlotToolbar"] > QToolButton:checked:hover {
+  background-color: palette(highlight);
+  border: 2px solid palette(dark);
 }

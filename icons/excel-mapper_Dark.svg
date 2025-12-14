@@ -1,0 +1,16 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Excel/Spreadsheet mapper icon - Dark mode -->
+  <!-- Document/Sheet -->
+  <path d="M5 4C5 2.89543 5.89543 2 7 2H14L19 7V20C19 21.1046 18.1046 22 17 22H7C5.89543 22 5 21.1046 5 20V4Z" stroke="#E5E7EB" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Folded corner -->
+  <path d="M14 2V7H19" stroke="#E5E7EB" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Table grid -->
+  <line x1="8" y1="11" x2="16" y2="11" stroke="#10B981" stroke-width="1.5"/>
+  <line x1="8" y1="14" x2="16" y2="14" stroke="#10B981" stroke-width="1.5"/>
+  <line x1="8" y1="17" x2="16" y2="17" stroke="#10B981" stroke-width="1.5"/>
+  <line x1="10" y1="9" x2="10" y2="19" stroke="#10B981" stroke-width="1.5"/>
+  <line x1="14" y1="9" x2="14" y2="19" stroke="#10B981" stroke-width="1.5"/>
+  <!-- Excel indicator (X) -->
+  <path d="M9 9.5L11 11.5L9 13.5" stroke="#60A5FA" stroke-width="1.2" stroke-linecap="round"/>
+  <path d="M11.5 9.5L13.5 11.5L11.5 13.5" stroke="#60A5FA" stroke-width="1.2" stroke-linecap="round"/>
+</svg>
