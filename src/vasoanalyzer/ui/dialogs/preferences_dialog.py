@@ -102,12 +102,11 @@ class PreferencesDialog(QDialog):
         appearance_layout.setSpacing(8)
 
         self.theme_mode_combo = QComboBox()
-        self.theme_mode_combo.addItem("Follow system", "system")
         self.theme_mode_combo.addItem("Light", "light")
         self.theme_mode_combo.addItem("Dark", "dark")
         self.theme_mode_combo.setEditable(False)
 
-        appearance_layout.addRow("Theme (requires restart):", self.theme_mode_combo)
+        appearance_layout.addRow("Color theme:", self.theme_mode_combo)
         layout.addWidget(appearance_group)
 
         # Startup Options
@@ -389,11 +388,14 @@ class PreferencesDialog(QDialog):
         )
 
         # Appearance
-        mode = self.settings.value("appearance/themeMode", "system", type=str)
+        mode = self.settings.value("appearance/themeMode", "light", type=str)
+        # Map old system/auto to light for backwards compatibility
+        if mode in ("system", "auto"):
+            mode = "light"
         self._initial_theme_mode = mode
         index = self.theme_mode_combo.findData(mode)
         if index < 0:
-            index = 0
+            index = 0  # Default to light
         self.theme_mode_combo.setCurrentIndex(index)
 
         # Projects
@@ -477,15 +479,19 @@ class PreferencesDialog(QDialog):
 
         theme_changed = getattr(self, "_initial_theme_mode", None) != mode
         if theme_changed:
-            try:
-                from PyQt5.QtWidgets import QMessageBox
+            # Apply immediately when the parent window supports it
+            from vasoanalyzer.ui import theme as theme_module
 
-                QMessageBox.information(
-                    self,
-                    "Restart required",
-                    "Theme changes will take effect after you restart VasoAnalyzer.",
-                )
+            try:
+                theme_module.set_theme_mode(mode, persist=True)
             except Exception:
                 pass
+            parent = self.parent()
+            apply_theme = getattr(parent, "apply_theme", None)
+            if callable(apply_theme):
+                try:
+                    apply_theme(mode, persist=False)
+                except Exception:
+                    pass
 
         super().accept()

@@ -341,6 +341,26 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         hover_bg = CURRENT_THEME["button_hover_bg"]
         content_bg = CURRENT_THEME.get("table_bg", CURRENT_THEME["window_bg"])
 
+        def rgba_from_hex(color: str, alpha: float) -> str:
+            """Return rgba string from a hex color with alpha applied."""
+            color = (color or "").strip()
+            if color.startswith("rgba"):
+                return color
+            color = color.lstrip("#")
+            if len(color) == 3:
+                color = "".join(ch * 2 for ch in color)
+            try:
+                r, g, b = (int(color[i : i + 2], 16) for i in (0, 2, 4))
+            except Exception:
+                return color or "transparent"
+            alpha = max(0.0, min(1.0, float(alpha)))
+            return f"rgba({r}, {g}, {b}, {alpha:.2f})"
+
+        subtitle_color = rgba_from_hex(text_color, 0.70)
+        section_color = rgba_from_hex(text_color, 0.82)
+        status_color = rgba_from_hex(text_color, 0.68)
+        preview_color = rgba_from_hex(text_color, 0.58)
+
         window.data_page.setStyleSheet(
             window._shared_button_css()
             + f"""
@@ -357,7 +377,7 @@ QLabel#HeaderTitle {{
     font-weight: 600;
 }}
 QLabel#HeaderSubtitle {{
-    color: #5b6375;
+    color: {subtitle_color};
 }}
 QLabel#TraceChip {{
     background: {hover_bg};
@@ -384,7 +404,7 @@ QWidget#SnapshotControls {{
     background: transparent;
 }}
 QLabel#SnapshotStatusLabel {{
-    color: #4d5466;
+    color: {status_color};
     font-size: 12px;
 }}
 QLabel#SnapshotSubsampleLabel {{
@@ -397,14 +417,14 @@ QLabel#SnapshotSubsampleLabel {{
 }}
 QLabel#SectionTitle {{
     font-weight: 600;
-    color: #3a4255;
+    color: {section_color};
     padding-bottom: 4px;
 }}
 QLabel#SnapshotPreview {{
     background: {content_bg};
     border: 1px dashed {border_color};
     border-radius: 12px;
-    color: #7a8194;
+    color: {preview_color};
 }}
 QSplitter#DataSplitter::handle {{
     background: {border_color};

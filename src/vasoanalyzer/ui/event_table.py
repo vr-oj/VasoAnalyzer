@@ -12,7 +12,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QHelpEvent, QKeySequence, QPainter, QPen, QPixmap, QResizeEvent
+from PyQt5.QtGui import QColor, QHelpEvent, QKeySequence, QPainter, QPalette, QPen, QPixmap, QResizeEvent
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -574,14 +574,20 @@ class EventTableWidget(QTableView):
 
     def apply_theme(self) -> None:
         print(f"[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)={id(self)}")
+        palette = self.palette()
         header_bg = CURRENT_THEME.get("button_active_bg", CURRENT_THEME["button_bg"])
         header_text = CURRENT_THEME["text"]
         hover = CURRENT_THEME.get("button_hover_bg", header_bg)
-        base = CURRENT_THEME["table_bg"]
-        alt = CURRENT_THEME["alternate_bg"]
+        is_dark = bool(CURRENT_THEME.get("is_dark", False))
+
+        base = CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
+        alt = CURRENT_THEME.get("alternate_bg", base)
         selection = CURRENT_THEME["selection_bg"]
-        grid = CURRENT_THEME["grid_color"]
-        header_border = CURRENT_THEME.get("table_header_border", grid)
+        grid_base = palette.color(QPalette.Mid)
+        grid = QColor(
+            grid_base.red(), grid_base.green(), grid_base.blue(), int(0.35 * 255)
+        ).name(QColor.HexArgb)
+        header_border = CURRENT_THEME.get("table_header_border", grid_base.name())
 
         header = self.horizontalHeader()
         header_style = f"""
@@ -597,6 +603,12 @@ class EventTableWidget(QTableView):
             }}
             QHeaderView::section:hover {{
                 background-color: {hover};
+            }}
+            QTableCornerButton::section {{
+                background-color: {header_bg};
+                border: none;
+                border-right: 1px solid {header_border};
+                border-bottom: 2px solid {grid};
             }}
         """
         header.setStyleSheet(header_style)

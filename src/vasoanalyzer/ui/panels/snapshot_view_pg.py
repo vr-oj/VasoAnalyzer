@@ -15,7 +15,7 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
 
-from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
 
@@ -65,8 +65,9 @@ class SnapshotViewPG(QtWidgets.QWidget):
             view_box.setMouseEnabled(x=False, y=False)
             view_box.setAspectLocked(True)
             view_box.setDefaultPadding(0.0)
-            bg_color = QtGui.QColor(CURRENT_THEME.get("snapshot_bg", "#2B2B2B"))
-            view_box.setBackgroundColor(bg_color)
+            bg_hex = CURRENT_THEME.get("snapshot_bg", "#2B2B2B")
+            bg_rgb = hex_to_pyqtgraph_color(bg_hex)
+            view_box.setBackgroundColor(bg_rgb)
         except Exception:
             log.debug(
                 "SnapshotViewPG: unable to configure ImageView viewBox", exc_info=True

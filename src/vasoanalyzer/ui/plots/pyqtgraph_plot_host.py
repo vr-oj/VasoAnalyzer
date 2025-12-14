@@ -31,7 +31,7 @@ from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
     PyQtGraphEventHighlightOverlay,
     PyQtGraphTimeCursorOverlay,
 )
-from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 __all__ = ["PyQtGraphPlotHost"]
 
@@ -176,6 +176,10 @@ class PyQtGraphPlotHost(InteractionHost):
                 plot_item.getViewBox().setBorder(self._lane_border_pen)
             except Exception:
                 pass
+
+        # Force immediate visual update
+        self._widget.repaint()
+        QApplication.processEvents()
 
         if self._event_strip_track is not None:
             try:

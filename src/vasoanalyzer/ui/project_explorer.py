@@ -105,5 +105,11 @@ class ProjectExplorerWidget(QDockWidget):
                 background: {bg};
                 border: none;
             }}
+            QTreeWidget#ProjectTree::item {{
+                background: {bg};
+            }}
+            QTreeWidget#ProjectTree::item:alternate {{
+                background: {CURRENT_THEME.get("alternate_bg", bg)};
+            }}
         """
         )

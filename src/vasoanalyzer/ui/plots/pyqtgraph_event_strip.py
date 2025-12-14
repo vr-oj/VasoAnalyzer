@@ -8,9 +8,10 @@ import time
 from collections.abc import Iterable
 
 import pyqtgraph as pg
+from PyQt5.QtWidgets import QApplication
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
-from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
 
@@ -48,8 +49,9 @@ class PyQtGraphEventStripTrack:
         self._plot_item.showGrid(x=False, y=False)
         # Match app theme background - use plot_bg for white content area
         bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
+        bg_rgb = hex_to_pyqtgraph_color(bg)
         with contextlib.suppress(Exception):
-            vb.setBackgroundColor(bg)
+            vb.setBackgroundColor(bg_rgb)
 
     @property
     def plot_item(self) -> pg.PlotItem:
@@ -191,8 +193,16 @@ class PyQtGraphEventStripTrack:
         vb = self._plot_item.getViewBox()
         # Use plot_bg for white content area in light mode
         bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
+        bg_rgb = hex_to_pyqtgraph_color(bg)
         with contextlib.suppress(Exception):
-            vb.setBackgroundColor(bg)
+            vb.setBackgroundColor(bg_rgb)
 
         if self._options is not None:
             self.apply_style(self._options)
+
+        # Force immediate visual update
+        try:
+            self._plot_item.update()
+            QApplication.processEvents()
+        except Exception:
+            pass

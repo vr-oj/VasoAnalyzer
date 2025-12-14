@@ -62,20 +62,23 @@ class VasoAnalyzerLauncher:
     # ------------------------------------------------------------------
     def _apply_theme(self) -> None:
         """
-        Apply OS-native theme before showing the main window.
+        Apply user's preferred theme (light or dark) from settings.
 
-        The theme is automatically derived from the OS palette (macOS/Windows).
-        No manual theme selection - always follows system preference.
+        Loads the theme preference and applies it. Defaults to light theme.
         """
         try:
-            # Refresh theme from OS palette
-            theme.refresh_theme_from_os()
-            theme._apply_theme(theme.CURRENT_THEME)
-        except Exception:  # pragma: no cover - very defensive fallback
-            # Fallback: try to extract from OS anyway
-            theme.refresh_theme_from_os()
+            # Load user's theme preference from settings
+            from PyQt5.QtCore import QSettings
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            mode = settings.value("appearance/themeMode", "light", type=str)
 
-        # Use native OS style instead of Fusion for automatic theme integration
+            # Apply the theme using our preset system
+            theme.set_theme_mode(mode, persist=False)
+        except Exception:  # pragma: no cover - very defensive fallback
+            # Fallback to light theme
+            theme.set_theme_mode("light", persist=False)
+
+        # Use native OS style for better platform integration
         if sys.platform == "darwin":
             self.app.setStyle("macintosh")
         # Windows uses default style which is already native

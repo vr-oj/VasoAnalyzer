@@ -634,6 +634,7 @@ class VasoAnalyzerApp(QMainWindow):
     def __init__(self, check_updates: bool = True):
         super().__init__()
 
+        self._active_theme_mode = "system"
         icon_ext = "svg"
         if sys.platform.startswith("win"):
             icon_ext = "ico"
@@ -1917,25 +1918,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._save_progress_bar.setValue(0)
 
     def changeEvent(self, event):
-        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
-            # OS theme changed - refresh CURRENT_THEME from new OS palette
-            from vasoanalyzer.ui import theme as theme_module
-            theme_module.refresh_theme_from_os()
-
-            # Force Qt to recompute stylesheet with new palette() values
-            app = QApplication.instance()
-            if app:
-                current_qss = app.styleSheet()
-                app.setStyleSheet("")  # Clear
-                app.setStyleSheet(current_qss)  # Reapply to pick up new palette
-
-            # Propagate theme to all widgets
-            self._apply_status_bar_theme()
-            self.apply_theme("system", persist=False)
-
-            # Force repaint of all widgets
-            self.update()
-            QApplication.processEvents()
+        # Note: PaletteChange events are no longer handled since we don't follow OS theme.
+        # Theme changes are controlled explicitly via View > Color Theme menu.
         super().changeEvent(event)
 
     def _status_bar_theme_colors(self) -> dict[str, str]:
@@ -4801,11 +4785,17 @@ class VasoAnalyzerApp(QMainWindow):
             from vasoanalyzer.ui import theme as theme_module
 
             current_theme = getattr(theme_module, "CURRENT_THEME", None)
+            is_dark = False
+            if isinstance(current_theme, dict):
+                is_dark = bool(current_theme.get("is_dark", False))
             dark_theme = getattr(theme_module, "DARK_THEME", None)
             if (
-                current_theme is not None
-                and dark_theme is not None
-                and current_theme is dark_theme
+                is_dark
+                or (
+                    current_theme is not None
+                    and dark_theme is not None
+                    and current_theme is dark_theme
+                )
             ):
                 name, ext = os.path.splitext(filename)
                 dark_filename = f"{name}_Dark{ext}"
@@ -4916,6 +4906,7 @@ class VasoAnalyzerApp(QMainWindow):
             mode = self.settings.value("appearance/themeMode", "system", type=str)
         except Exception:
             mode = "system"
+        self._active_theme_mode = (mode or "system").lower()
         self._update_theme_action_checks(mode)
 
     def _build_file_menu(self, menubar):
@@ -5094,18 +5085,15 @@ class VasoAnalyzerApp(QMainWindow):
         view_menu.addAction(renderer_note)
 
         # Color scheme selection
-        theme_menu = view_menu.addMenu("Color Scheme")
+        theme_menu = view_menu.addMenu("Color Theme")
         self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
         self.action_theme_dark = QAction("Dark", self, checkable=True)
-        self.action_theme_auto = QAction("Auto (System)", self, checkable=True)
         self.action_theme_light.triggered.connect(
             lambda: self.set_color_scheme("light")
         )
         self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
-        self.action_theme_auto.triggered.connect(lambda: self.set_color_scheme("auto"))
         theme_menu.addAction(self.action_theme_light)
         theme_menu.addAction(self.action_theme_dark)
-        theme_menu.addAction(self.action_theme_auto)
 
         view_menu.addSeparator()
 
@@ -7377,36 +7365,56 @@ class VasoAnalyzerApp(QMainWindow):
             )
 
     def _update_theme_action_checks(self, mode: str) -> None:
-        """Sync Color Scheme menu checkboxes with the active mode."""
+        """Sync Color Theme menu checkboxes with the active mode."""
 
-        scheme = (mode or "system").lower()
-        if scheme == "auto":
-            scheme = "system"
+        scheme = (mode or "light").lower()
+        # Map old system/auto to light
+        if scheme in ("system", "auto"):
+            scheme = "light"
 
         action_map = {
             "light": getattr(self, "action_theme_light", None),
             "dark": getattr(self, "action_theme_dark", None),
-            "system": getattr(self, "action_theme_auto", None),
         }
 
         for key, action in action_map.items():
             if isinstance(action, QAction):
                 action.setChecked(scheme == key)
 
+    def _update_action_icons(self) -> None:
+        """Update action icons to match current theme (light/dark)."""
+        # Update trace toggle button icons
+        if hasattr(self, "id_toggle_act"):
+            self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
+        if hasattr(self, "od_toggle_act"):
+            self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
+        if hasattr(self, "avg_pressure_toggle_act"):
+            self.avg_pressure_toggle_act.setIcon(QIcon(self.icon_path("P.svg")))
+        if hasattr(self, "set_pressure_toggle_act"):
+            self.set_pressure_toggle_act.setIcon(QIcon(self.icon_path("SP.svg")))
+
+        # Update toolbar action icons
+        if hasattr(self, "home_action"):
+            self.home_action.setIcon(QIcon(self.icon_path("Home.svg")))
+        if hasattr(self, "save_session_action"):
+            self.save_session_action.setIcon(QIcon(self.icon_path("Save.svg")))
+
     def apply_theme(self, mode: str, *, persist: bool = True) -> None:
-        """Apply a light/dark/system theme at runtime and refresh UI widgets."""
+        """Apply light or dark theme at runtime and refresh all UI widgets."""
         print(
             f"[THEME-DEBUG] App.apply_theme called with mode={mode!r}, persist={persist}, id(self)={id(self)}"
         )
 
-        scheme = (mode or "system").lower()
-        if scheme == "auto":
-            scheme = "system"
+        scheme = (mode or "light").lower()
+        # Map old system/auto to light for backwards compatibility
+        if scheme in ("system", "auto"):
+            scheme = "light"
 
         try:
             set_theme_mode(scheme, persist=persist)
         except Exception:
             return
+        self._active_theme_mode = scheme
         current_name = (
             CURRENT_THEME.get("name")
             if isinstance(CURRENT_THEME, dict)
@@ -7414,7 +7422,8 @@ class VasoAnalyzerApp(QMainWindow):
         )
         print(f"[THEME-DEBUG] After set_theme_mode, CURRENT_THEME={current_name!r}")
 
-        self._update_theme_action_checks(scheme)
+        self._update_theme_action_checks(self._active_theme_mode)
+        self._update_action_icons()
         self._apply_status_bar_theme()
         apply_data_page_style = getattr(self, "_apply_data_page_style", None)
         if callable(apply_data_page_style):
@@ -7474,20 +7483,16 @@ class VasoAnalyzerApp(QMainWindow):
             with contextlib.suppress(Exception):
                 self._apply_primary_toolbar_theme()
 
+        # Force complete repaint to ensure all widgets pick up new colors
+        self.update()
+        QApplication.processEvents()
+        print(f"[THEME-DEBUG] Forced repaint after theme change")
+
     # View Menu Actions
     def set_color_scheme(self, scheme: str):
-        """Set application color scheme."""
-        target = "system" if scheme == "auto" else scheme
-        try:
-            settings = QSettings("TykockiLab", "VasoAnalyzer")
-            settings.setValue("appearance/themeMode", target)
-        except Exception:
-            pass
-        QMessageBox.information(
-            self,
-            "Restart required",
-            "Theme changes will take effect after you restart VasoAnalyzer.",
-        )
+        """Set application color scheme (light or dark)."""
+        # Apply immediately; no restart required
+        self.apply_theme(scheme, persist=True)
 
     # Tools Menu Actions
     def show_statistics_dialog(self, checked: bool = False):

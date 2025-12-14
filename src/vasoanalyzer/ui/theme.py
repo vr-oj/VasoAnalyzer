@@ -21,8 +21,135 @@ except Exception:  # pragma: no cover - resource helper missing or not packaged
     resource_path = None
 
 # -----------------------------------------------------------------------------
-# Color Derivation Helpers
+# Color Derivation Helpers / Presets
 # -----------------------------------------------------------------------------
+
+# Complete theme presets - no OS palette dependency
+LIGHT_THEME = {
+    # Surfaces
+    "window_bg": "#F3F4F6",  # Gray chrome (toolbars, status bar)
+    "plot_bg": "#FFFFFF",     # White content area
+    "toolbar_bg": "#F3F4F6",
+    "table_bg": "#FFFFFF",
+    "alternate_bg": "#F9FAFB",
+
+    # Text
+    "text": "#111827",
+    "text_disabled": "#9CA3AF",
+    "table_text": "#111827",
+
+    # Buttons
+    "button_bg": "#F3F4F6",
+    "button_hover_bg": "#E5E7EB",
+    "button_active_bg": "#3B82F6",
+
+    # Grids and borders
+    "grid_color": "#E5E7EB",
+    "table_header_border": "#D1D5DB",
+    "hover_label_bg": "rgba(243, 244, 246, 0.9)",
+    "hover_label_border": "#D1D5DB",
+
+    # Selection
+    "selection_bg": "#3B82F6",
+    "highlighted_text": "#FFFFFF",
+
+    # Lines / cursors / semantic colors
+    "cursor_a": "#3366FF",
+    "cursor_b": "#FF6B3D",
+    "cursor_text": "#111827",
+    "cursor_line": "#3366FF",
+    "accent": "#3B82F6",
+    "accent_fill": "#2563EB",
+    "accent_fill_secondary": "#FF6B3D",
+    "event_line": "#9CA3AF",
+    "event_highlight": "#3B82F6",
+    "time_cursor": "#FF6B3D",
+    "trace_color": "#111827",
+    "trace_color_secondary": "#FF6B3D",
+
+    # Warnings
+    "warning_bg": "#FEF3C7",
+    "warning_border": "#F59E0B",
+    "warning_text": "#78350F",
+
+    # Snapshot
+    "snapshot_bg": "#2B2B2B",
+    "table_hover": "#F3F4F6",
+    "table_editable_hover": "#DBEAFE",
+    "table_focused_border": "#3366FF",
+}
+
+DARK_THEME = {
+    # Surfaces
+    "window_bg": "#1E242D",  # Dark gray chrome
+    "plot_bg": "#0D1117",    # Dark content area
+    "toolbar_bg": "#1E242D",
+    "table_bg": "#0D1117",
+    "alternate_bg": "#161B22",
+
+    # Text
+    "text": "#E6EDF3",
+    "text_disabled": "#7D8590",
+    "table_text": "#E6EDF3",
+
+    # Buttons
+    "button_bg": "#21262D",
+    "button_hover_bg": "#30363D",
+    "button_active_bg": "#388BFD",
+
+    # Grids and borders
+    "grid_color": "#30363D",
+    "table_header_border": "#373E47",
+    "hover_label_bg": "rgba(30, 36, 45, 0.9)",
+    "hover_label_border": "#30363D",
+
+    # Selection
+    "selection_bg": "#1F6FEB",
+    "highlighted_text": "#FFFFFF",
+
+    # Lines / cursors / semantic colors
+    "cursor_a": "#58A6FF",
+    "cursor_b": "#F97316",
+    "cursor_text": "#E6EDF3",
+    "cursor_line": "#58A6FF",
+    "accent": "#58A6FF",
+    "accent_fill": "#1F6FEB",
+    "accent_fill_secondary": "#F97316",
+    "event_line": "#6E7681",
+    "event_highlight": "#1F6FEB",
+    "time_cursor": "#F97316",
+    "trace_color": "#E6EDF3",
+    "trace_color_secondary": "#F97316",
+
+    # Warnings
+    "warning_bg": "#451A03",
+    "warning_border": "#F97316",
+    "warning_text": "#FDE68A",
+
+    # Snapshot
+    "snapshot_bg": "#1F2933",
+    "table_hover": "#21262D",
+    "table_editable_hover": "#1C3D5A",
+    "table_focused_border": "#3B82F6",
+}
+
+
+def hex_to_pyqtgraph_color(hex_color: str) -> tuple[int, int, int]:
+    """Convert CSS hex color to RGB tuple for PyQtGraph.
+
+    PyQtGraph's setBackground() requires RGB tuple, not CSS hex strings.
+
+    Args:
+        hex_color: CSS hex color like "#FFFFFF" or "#FFF"
+
+    Returns:
+        RGB tuple like (255, 255, 255)
+    """
+    qcolor = QColor(hex_color)
+    if not qcolor.isValid():
+        qcolor = QColor("#FFFFFF")  # Fallback to white
+
+    return (qcolor.red(), qcolor.green(), qcolor.blue())
 
 
 def _lighten_color(color: QColor, factor: float) -> str:
@@ -102,6 +229,7 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "window_bg": window_bg.name(),
         "plot_bg": base.name(),  # Use Base for plot backgrounds
         "toolbar_bg": window_bg.name(),
+        "is_dark": bool(is_dark),
 
         # Text
         "text": window_text.name(),
@@ -156,30 +284,30 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "table_header_border": _derive_grid_color(base, is_dark),
     }
 
-    return theme
+    # For backwards compatibility, just return the preset directly
+    # We no longer derive from OS palette - use complete presets instead
+    return DARK_THEME.copy() if is_dark else LIGHT_THEME.copy()
 
 
 def extract_os_palette() -> dict:
     """
-    Extract colors from OS-native QPalette and build theme dictionary.
+    Deprecated: Returns light theme preset for backwards compatibility.
 
-    Returns:
-        Theme dict with colors derived from OS system palette (auto-detect light/dark).
+    We no longer follow OS theme. Use LIGHT_THEME or DARK_THEME directly instead.
     """
-    return _build_theme_from_palette(force_dark=None)
+    return LIGHT_THEME.copy()
 
 
 def refresh_theme_from_os() -> None:
     """
-    Refresh CURRENT_THEME from OS palette and apply to Qt + matplotlib.
+    Deprecated: Sets light theme for backwards compatibility.
 
-    This should be called when:
-    - Application starts
-    - OS theme changes (via PaletteChange event)
-    - User requests theme refresh
+    We no longer follow OS theme. Use set_theme_mode() instead.
     """
     global CURRENT_THEME
-    CURRENT_THEME = extract_os_palette()
+    # Update in place so all imported references stay valid
+    CURRENT_THEME.clear()
+    CURRENT_THEME.update(LIGHT_THEME)
 
     # Apply to matplotlib
     apply_matplotlib_style(CURRENT_THEME)
@@ -243,31 +371,29 @@ QGroupBox::title {
 }
 """
 
-# Currently applied theme; initialized from OS palette
-# Starts with comprehensive fallback values, will be replaced by refresh_theme_from_os()
-# This prevents KeyErrors if CURRENT_THEME is accessed before refresh_theme_from_os() is called
-CURRENT_THEME = {
+LIGHT_THEME = {
     # Surfaces
-    "window_bg": "#FFFFFF",
+    "window_bg": "#F3F4F6",
     "plot_bg": "#FFFFFF",
-    "toolbar_bg": "#F0F0F0",
+    "toolbar_bg": "#F3F4F6",
+    "is_dark": False,
     # Text
-    "text": "#000000",
-    "text_disabled": "#888888",
+    "text": "#111827",
+    "text_disabled": "#9CA3AF",
     # Tables
     "table_bg": "#FFFFFF",
-    "table_text": "#000000",
-    "alternate_bg": "#F5F5F5",
+    "table_text": "#111827",
+    "alternate_bg": "#F3F6FB",
     "selection_bg": "#E6F0FF",
     # Buttons
     "button_bg": "#FFFFFF",
-    "button_hover_bg": "#E6F0FF",
-    "button_active_bg": "#CCE0FF",
+    "button_hover_bg": "#EAF2FF",
+    "button_active_bg": "#D7E5FF",
     # Overlays / tooltips
     "hover_label_bg": "rgba(255,255,255,220)",
-    "hover_label_border": "#888888",
+    "hover_label_border": "#CBD5E1",
     # Lines / grids / cursors
-    "grid_color": "#CCCCCC",
+    "grid_color": "#D1D5DB",
     "cursor_a": "#3366FF",
     "cursor_b": "#FF6B3D",
     "cursor_text": "#222222",
@@ -292,8 +418,61 @@ CURRENT_THEME = {
     "table_hover": "#F0F0F0",
     "table_editable_hover": "#E6F0FF",
     "table_focused_border": "#3366FF",
-    "table_header_border": "#CCCCCC",
+    "table_header_border": "#CBD5E1",
 }
+
+DARK_THEME = {
+    # Surfaces
+    "window_bg": "#1E242D",
+    "plot_bg": "#10141C",
+    "toolbar_bg": "#1E242D",
+    "is_dark": True,
+    # Text
+    "text": "#E5E7EB",
+    "text_disabled": "#9CA3AF",
+    # Tables
+    "table_bg": "#0F141B",
+    "table_text": "#E5E7EB",
+    "alternate_bg": "#161C25",
+    "selection_bg": "#263248",
+    # Buttons
+    "button_bg": "#1A212B",
+    "button_hover_bg": "#232E3C",
+    "button_active_bg": "#2F3F55",
+    # Overlays / tooltips
+    "hover_label_bg": "rgba(30,36,45,230)",
+    "hover_label_border": "#364659",
+    # Lines / grids / cursors
+    "grid_color": "#2E3A49",
+    "cursor_a": "#38BDF8",
+    "cursor_b": "#F97316",
+    "cursor_text": "#E5E7EB",
+    "cursor_line": "#38BDF8",
+    # Accents
+    "accent": "#38BDF8",
+    "accent_fill": "#0EA5E9",
+    "accent_fill_secondary": "#F97316",
+    "event_line": "#4B5563",
+    "event_highlight": "#2563EB",
+    "time_cursor": "#F97316",
+    # Trace defaults
+    "trace_color": "#FFFFFF",
+    "trace_color_secondary": "#F97316",
+    # Warnings
+    "warning_bg": "#451A03",
+    "warning_border": "#F59E0B",
+    "warning_text": "#FDE68A",
+    # Snapshot
+    "snapshot_bg": "#0B1017",
+    # Table-specific
+    "table_hover": "#1F2835",
+    "table_editable_hover": "#2F3F55",
+    "table_focused_border": "#38BDF8",
+    "table_header_border": "#364659",
+}
+
+# Currently applied theme; initialized from light preset to avoid KeyErrors
+CURRENT_THEME = dict(LIGHT_THEME)
 
 # Font settings
 FONTS = {
@@ -329,15 +508,70 @@ def css_rgba_to_mpl(color: str):
 
 def apply_qt_palette(theme: dict):
     """
-    No-op function kept for compatibility.
+    Apply theme colors to Qt's application palette.
 
-    The OS palette is already applied by Qt automatically.
-    This function exists to maintain backward compatibility with code
-    that calls apply_qt_palette(), but it no longer modifies the palette.
+    When forcing light/dark mode (not "system"), this ensures that
+    palette() CSS references use the forced theme colors instead of OS defaults.
+
+    Args:
+        theme: Theme dictionary with color values
     """
-    # OS native palette is already applied by Qt
-    # No need to override it
-    pass
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    # Create a new palette based on theme colors
+    palette = QPalette()
+
+    # Parse colors from theme
+    def parse_color(color_str: str) -> QColor:
+        return QColor(color_str) if color_str else QColor()
+
+    # Window colors (toolbars, status bar, chrome)
+    window_bg = parse_color(theme.get("window_bg", "#F3F4F6"))
+    window_text = parse_color(theme.get("text", "#111827"))
+
+    # Base colors (content areas - plots, tables, etc.)
+    base_bg = parse_color(theme.get("plot_bg", "#FFFFFF"))
+    alternate_bg = parse_color(theme.get("alternate_bg", "#F9FAFB"))
+
+    # Button colors
+    button_bg = parse_color(theme.get("button_bg", "#E5E7EB"))
+
+    # Highlight colors
+    highlight_bg = parse_color(theme.get("selection_bg", "#3B82F6"))
+    highlight_text = parse_color(theme.get("text", "#FFFFFF"))
+
+    # Mid/border colors
+    mid_color = parse_color(theme.get("grid_color", "#D1D5DB"))
+
+    # Apply to all color groups (Active, Inactive, Disabled)
+    for group in [QPalette.Active, QPalette.Inactive, QPalette.Disabled]:
+        # Window (toolbars, status bar - gray chrome)
+        palette.setColor(group, QPalette.Window, window_bg)
+        palette.setColor(group, QPalette.WindowText, window_text)
+
+        # Base (content areas - white/dark backgrounds)
+        palette.setColor(group, QPalette.Base, base_bg)
+        palette.setColor(group, QPalette.AlternateBase, alternate_bg)
+        palette.setColor(group, QPalette.Text, window_text)
+
+        # Buttons
+        palette.setColor(group, QPalette.Button, button_bg)
+        palette.setColor(group, QPalette.ButtonText, window_text)
+
+        # Highlight (selections)
+        palette.setColor(group, QPalette.Highlight, highlight_bg)
+        palette.setColor(group, QPalette.HighlightedText, highlight_text)
+
+        # Mid/borders
+        palette.setColor(group, QPalette.Mid, mid_color)
+        palette.setColor(group, QPalette.Dark, mid_color.darker(120))
+        palette.setColor(group, QPalette.Light, window_bg.lighter(150))
+        palette.setColor(group, QPalette.Midlight, window_bg.lighter(125))
+
+    # Apply the palette to the application
+    app.setPalette(palette)
 
 
 def apply_qt_stylesheet(theme: dict):
@@ -418,16 +652,20 @@ def apply_matplotlib_style(theme: dict):
 
 def _apply_theme(theme: dict) -> None:
     """
-    Internal helper to apply theme to Qt stylesheet + matplotlib.
+    Internal helper to apply theme to Qt palette, stylesheet, and matplotlib.
 
-    Note: QPalette is not modified here as it comes from OS.
-    This function only applies stylesheets and matplotlib settings.
+    This function updates Qt's palette to match the theme (important for forced
+    light/dark modes), then applies stylesheets and matplotlib settings.
     """
     global CURRENT_THEME
-    CURRENT_THEME = theme
+    # Update in place so all imported references stay valid
+    CURRENT_THEME.clear()
+    CURRENT_THEME.update(theme)
 
-    # No need to call apply_qt_palette - OS palette is already set
-    # Just apply stylesheet and matplotlib
+    # Update Qt's palette with theme colors (critical for forced light/dark modes)
+    apply_qt_palette(theme)
+
+    # Apply stylesheet and matplotlib
     app = QApplication.instance()
     if app is not None:
         cast(QApplication, app).setStyleSheet(apply_qt_stylesheet(theme))
@@ -470,21 +708,23 @@ def _load_light_stylesheet() -> str:
 
 def set_theme_mode(mode: str, *, persist: bool = True) -> str:
     """
-    Apply theme mode: light, dark, or system.
+    Apply theme mode: light or dark.
 
     Args:
-        mode: "light" (force light), "dark" (force dark), or "system" (follow OS).
+        mode: "light" or "dark". Defaults to "light" if invalid.
         persist: Whether to persist the mode to QSettings.
 
     Returns:
-        The mode that was set: "light", "dark", or "system".
+        The mode that was set: "light" or "dark".
     """
-    requested = (mode or "system").lower()
-    if requested == "auto":
-        requested = "system"
+    requested = (mode or "light").lower()
 
-    if requested not in {"light", "dark", "system"}:
-        requested = "system"
+    # Map old "system"/"auto" to light for backwards compatibility
+    if requested in ("system", "auto"):
+        requested = "light"
+
+    if requested not in {"light", "dark"}:
+        requested = "light"
 
     try:
         if persist:
@@ -493,36 +733,34 @@ def set_theme_mode(mode: str, *, persist: bool = True) -> str:
     except Exception:
         pass
 
-    # Refresh theme from OS palette or override
-    if requested == "system":
-        refresh_theme_from_os()
-    else:
-        # Force light or dark by overriding is_dark in palette extraction
-        global CURRENT_THEME
-        CURRENT_THEME = extract_os_palette()
-        # Override the is_dark detection
-        is_dark = requested == "dark"
-        # Re-derive colors with forced mode
-        CURRENT_THEME = _build_theme_from_palette(force_dark=is_dark if requested != "system" else None)
-        apply_matplotlib_style(CURRENT_THEME)
+    # Use complete theme presets (no OS palette dependency)
+    global CURRENT_THEME
+    # Update in place so all imported references stay valid
+    CURRENT_THEME.clear()
+    CURRENT_THEME.update(DARK_THEME if requested == "dark" else LIGHT_THEME)
 
-    # Apply stylesheet and matplotlib
-    _apply_theme(CURRENT_THEME)
+    # Update Qt's palette and matplotlib
+    apply_qt_palette(CURRENT_THEME)
+    apply_matplotlib_style(CURRENT_THEME)
 
-    # Load optional stylesheets (all use palette() refs, work for both light/dark)
+    # Build complete stylesheet with all components
     app = QApplication.instance()
     if app is not None:
         q_app = cast(QApplication, app)
 
-        # Load main stylesheet
-        stylesheet = _load_light_stylesheet()
-        if stylesheet:
-            _append_stylesheet(q_app, stylesheet)
+        # Start with base stylesheet
+        complete_qss = apply_qt_stylesheet(CURRENT_THEME)
 
-        # Always apply widget contrast styles (now uses palette(), works for both themes)
-        existing_qss = q_app.styleSheet() or ""
-        if DARK_WIDGET_CONTRAST_QSS not in existing_qss:
-            q_app.setStyleSheet(existing_qss + "\n" + DARK_WIDGET_CONTRAST_QSS)
+        # Add main application stylesheet (style.qss)
+        main_stylesheet = _load_light_stylesheet()
+        if main_stylesheet:
+            complete_qss += "\n" + main_stylesheet
+
+        # Add widget contrast styles
+        complete_qss += "\n" + DARK_WIDGET_CONTRAST_QSS
+
+        # Apply complete stylesheet (this forces re-evaluation of palette() refs)
+        q_app.setStyleSheet(complete_qss)
 
     return requested
 

@@ -11,6 +11,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QEvent, QObject, Qt
 from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import QApplication
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -18,7 +19,7 @@ from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
 from vasoanalyzer.ui.plots.pan_only_viewbox import PanOnlyViewBox
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
-from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
 
@@ -263,7 +264,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Apply color theme from CURRENT_THEME."""
         # Background colors - use plot_bg for white content area in light mode
         bg_color = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
-        self._plot_widget.setBackground(bg_color)
+        bg_rgb = hex_to_pyqtgraph_color(bg_color)
+        self._plot_widget.setBackground(bg_rgb)
 
         # Axis colors
         text_color = CURRENT_THEME.get("text", "#000000")
@@ -275,11 +277,40 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Grid visibility
         self._plot_item.showGrid(x=True, y=True, alpha=0.10)
 
+        # Update trace line colors
+        if self.inner_curve is not None:
+            inner_color = CURRENT_THEME.get("trace_color", "#000000")
+            pen = pg.mkPen(color=inner_color, width=1.5)
+            self.inner_curve.setPen(pen)
+
+        if self.outer_curve is not None:
+            outer_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
+            pen = pg.mkPen(color=outer_color, width=1.2)
+            self.outer_curve.setPen(pen)
+
+        # Update event line colors
+        event_color = CURRENT_THEME.get("event_line", "#8A8A8A")
+        if event_color != self._event_line_color:
+            self._event_line_color = event_color
+            qcolor = QColor(self._event_line_color)
+            qcolor.setAlphaF(self._event_line_alpha)
+            for line in self.event_lines:
+                pen = pg.mkPen(
+                    color=qcolor,
+                    width=self._event_line_width,
+                    style=self._event_line_style,
+                )
+                line.setPen(pen)
+
     def apply_theme(self) -> None:
         """Public hook to refresh colors after a theme change."""
 
         self._apply_theme()
         self._init_hover_label()
+
+        # Force immediate visual update
+        self._plot_widget.repaint()
+        QApplication.processEvents()
 
     def get_widget(self) -> pg.PlotWidget:
         """Return the PyQtGraph PlotWidget for embedding."""
@@ -898,7 +929,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         # Update background
         if "background_color" in style:
-            self._plot_widget.setBackground(style["background_color"])
+            bg_rgb = hex_to_pyqtgraph_color(style["background_color"])
+            self._plot_widget.setBackground(bg_rgb)
 
         # Update grid
         if "grid_color" in style:
