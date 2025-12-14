@@ -1,5 +1,9 @@
 """Single Figure Studio composer window (simplified single-axes UI)."""
 
+# NOTE:
+# This is the sole maintained Matplotlib composer UI (PureMplFigureComposer).
+# Legacy/parallel composers are archived under src/vasoanalyzer/ui/_archive and must not be re-wired.
+
 from __future__ import annotations
 
 import logging
@@ -60,6 +64,10 @@ class PureMplFigureComposer(QMainWindow):
     DEFAULT_WIDTH_IN = 6.0
     DEFAULT_HEIGHT_IN = 3.0
     DEFAULT_DPI = 300.0
+    MIN_WIDTH_IN = 2.0
+    MIN_HEIGHT_IN = 1.5
+    MAX_WIDTH_IN = 20.0
+    MAX_HEIGHT_IN = 20.0
 
     SHAPE_PRESETS = {
         "Wide": (6.0, 3.0),
@@ -78,6 +86,7 @@ class PureMplFigureComposer(QMainWindow):
         event_labels: list[str] | None = None,
         event_colors: list[str] | None = None,
         visible_channels: dict[str, bool] | None = None,
+        series_map: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Single Figure Studio")
@@ -88,11 +97,13 @@ class PureMplFigureComposer(QMainWindow):
         self.event_labels = event_labels or []
         self.event_colors = event_colors or []
         self.visible_channels = visible_channels or {}
+        self._series_map_override = series_map
 
         self._fig_spec: FigureSpec = self._build_initial_fig_spec(trace_model)
         self._active_trace_key = self._fig_spec.traces[0].key if self._fig_spec.traces else "inner"
         self._initial_ranges = self._guess_initial_ranges()
         self._export_transparent = False
+        self._size_was_clamped = False
 
         self._figure = None
         self._canvas = None
@@ -132,6 +143,7 @@ class PureMplFigureComposer(QMainWindow):
         self._right_panel: QWidget | None = None
         self._updating_canvas_size: bool = False
 
+        self._enforce_page_bounds(update_controls=False)
         self._setup_ui()
         self._sync_controls_from_spec()
         self._refresh_preview()
@@ -145,6 +157,7 @@ class PureMplFigureComposer(QMainWindow):
             width_in=self.DEFAULT_WIDTH_IN,
             height_in=self.DEFAULT_HEIGHT_IN,
             dpi=self.DEFAULT_DPI,
+            export_background="white",
         )
         axes = AxesSpec(
             x_range=None,
@@ -224,12 +237,28 @@ class PureMplFigureComposer(QMainWindow):
         return RenderContext(
             is_preview=is_preview,
             trace_model=self.trace_model,
-            series_map=None,
+            series_map=self._series_map_override,
         )
 
     def _guess_initial_ranges(self) -> tuple[float, float, float, float]:
         """Derive basic axis limits from the trace model for manual ranges."""
         tm = self.trace_model
+        if self._series_map_override:
+            maybe = self._series_map_override.get(self._active_trace_key)
+            if maybe is not None:
+                time_arr, data_arr = maybe
+                try:
+                    x_min = float(np.nanmin(time_arr))
+                    x_max = float(np.nanmax(time_arr))
+                    y_min = float(np.nanmin(data_arr))
+                    y_max = float(np.nanmax(data_arr))
+                except Exception:
+                    log.debug("Failed to derive ranges from series_map override", exc_info=True)
+                if x_max <= x_min:
+                    x_max = x_min + 1.0
+                if y_max <= y_min:
+                    y_max = y_min + 1.0
+                return x_min, x_max, y_min, y_max
         x_min, x_max = 0.0, 10.0
         y_min, y_max = 0.0, 1.0
         if tm is None:
@@ -510,13 +539,13 @@ class PureMplFigureComposer(QMainWindow):
 
         dims_row = QHBoxLayout()
         self.spin_width = QDoubleSpinBox()
-        self.spin_width.setRange(1.0, 30.0)
+        self.spin_width.setRange(self.MIN_WIDTH_IN, self.MAX_WIDTH_IN)
         self.spin_width.setDecimals(2)
         self.spin_width.setSingleStep(0.05)
         self.spin_width.setValue(self._fig_spec.page.width_in)
         self.spin_width.setEnabled(False)
         self.spin_height = QDoubleSpinBox()
-        self.spin_height.setRange(1.0, 30.0)
+        self.spin_height.setRange(self.MIN_HEIGHT_IN, self.MAX_HEIGHT_IN)
         self.spin_height.setDecimals(2)
         self.spin_height.setSingleStep(0.05)
         self.spin_height.setValue(self._fig_spec.page.height_in)
@@ -618,6 +647,29 @@ class PureMplFigureComposer(QMainWindow):
 
         self._update_export_size_label()
 
+    def _enforce_page_bounds(self, update_controls: bool = True) -> None:
+        """Clamp page size to min/max bounds to prevent label clipping or runaway sizes."""
+        page = self._fig_spec.page
+        clamped = False
+        if page.width_in < self.MIN_WIDTH_IN:
+            page.width_in = self.MIN_WIDTH_IN
+            clamped = True
+        if page.width_in > self.MAX_WIDTH_IN:
+            page.width_in = self.MAX_WIDTH_IN
+            clamped = True
+        if page.height_in < self.MIN_HEIGHT_IN:
+            page.height_in = self.MIN_HEIGHT_IN
+            clamped = True
+        if page.height_in > self.MAX_HEIGHT_IN:
+            page.height_in = self.MAX_HEIGHT_IN
+            clamped = True
+        self._size_was_clamped = clamped
+        if update_controls and self.spin_width and self.spin_height:
+            with signals_blocked(self.spin_width):
+                self.spin_width.setValue(page.width_in)
+            with signals_blocked(self.spin_height):
+                self.spin_height.setValue(page.height_in)
+
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -718,6 +770,7 @@ class PureMplFigureComposer(QMainWindow):
         if not size:
             return
         page.width_in, page.height_in = size
+        self._enforce_page_bounds(update_controls=False)
         if self.spin_width and self.spin_height:
             with signals_blocked(self.spin_width):
                 self.spin_width.setValue(page.width_in)
@@ -734,6 +787,7 @@ class PureMplFigureComposer(QMainWindow):
         page = self._fig_spec.page
         page.width_in = float(self.spin_width.value())
         page.height_in = float(self.spin_height.value())
+        self._enforce_page_bounds(update_controls=True)
         if self.combo_shape:
             with signals_blocked(self.combo_shape):
                 self.combo_shape.setCurrentText("Custom")
@@ -1012,6 +1066,7 @@ class PureMplFigureComposer(QMainWindow):
     def _refresh_preview(self) -> None:
         if not self._preview_initialized or self._figure is None or self._canvas is None:
             return
+        self._enforce_page_bounds(update_controls=True)
         ctx = self._render_context(is_preview=True)
         build_figure(self._fig_spec, ctx, fig=self._figure)
         ax = self._current_axes()
@@ -1040,7 +1095,15 @@ class PureMplFigureComposer(QMainWindow):
         dpi = page.dpi
         w_px = int(w_in * dpi)
         h_px = int(h_in * dpi)
-        self.label_export_size.setText(f"{w_in:.2f} in × {h_in:.2f} in ({w_px} × {h_px} px @ {dpi:.0f} dpi)")
+        clamp_note = ""
+        if self._size_was_clamped:
+            clamp_note = (
+                f" (clamped to {self.MIN_WIDTH_IN:.1f}-{self.MAX_WIDTH_IN:.1f} in width "
+                f"and {self.MIN_HEIGHT_IN:.1f}-{self.MAX_HEIGHT_IN:.1f} in height)"
+            )
+        self.label_export_size.setText(
+            f"{w_in:.2f} in × {h_in:.2f} in ({w_px} × {h_px} px @ {dpi:.0f} dpi){clamp_note}"
+        )
 
     # ------------------------------------------------------------------
     # Export
@@ -1060,12 +1123,17 @@ class PureMplFigureComposer(QMainWindow):
     def export_figure(self, out_path: str) -> None:
         try:
             log.info("Exporting figure to %s", out_path)
+            self._enforce_page_bounds(update_controls=True)
+            bg = "transparent" if self._export_transparent else "white"
+            if hasattr(self._fig_spec.page, "export_background"):
+                self._fig_spec.page.export_background = bg
             ctx = self._render_context(is_preview=False)
             export_figure(
                 self._fig_spec,
                 out_path,
                 transparent=self._export_transparent,
                 ctx=ctx,
+                export_background=bg,
             )
             log.info("Export successful: %s", out_path)
         except Exception:

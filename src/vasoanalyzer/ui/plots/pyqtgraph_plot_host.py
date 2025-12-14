@@ -117,6 +117,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_font_size: float = 20.0
         self._tick_font_size: float = 16.0
         self._default_line_width: float = 4.0
+        self._selection_region: pg.LinearRegionItem | None = None
         self._window_bg_color: tuple[int, int, int] | None = None
         self._plot_bg_color: tuple[int, int, int] | None = None
         self._compact_legend_enabled: bool = False
@@ -1691,6 +1692,93 @@ class PyQtGraphPlotHost(InteractionHost):
         """Return current interaction mode ("pan" or "rect")."""
         return getattr(self, "_mouse_mode", "pan")
 
+    def _primary_plot_item(self) -> pg.PlotItem | None:
+        """Return the first track's PlotItem."""
+        if not self._channel_specs:
+            return None
+        first_id = self._channel_specs[0].track_id
+        track = self._tracks.get(first_id)
+        return None if track is None else track.view.get_widget().getPlotItem()
+
+    def set_range_selection_visible(self, visible: bool, *, default_span: float = 5.0) -> None:
+        """Show or hide a movable X-range selector on the primary track."""
+        if not visible:
+            self.clear_range_selection()
+            return
+
+        plot_item = self._primary_plot_item()
+        if plot_item is None:
+            return
+
+        if self._selection_region is None:
+            window = self.current_window() or self.full_range()
+            if window is None:
+                window = (0.0, default_span)
+            x0, x1 = window
+            if x1 <= x0:
+                x1 = x0 + default_span
+            region = pg.LinearRegionItem(
+                values=(x0, x1),
+                orientation=pg.LinearRegionItem.Vertical,
+                movable=True,
+            )
+            region.setZValue(5)
+            region.setBrush(pg.mkBrush(0, 0, 0, 30))
+            region.sigRegionChanged.connect(self._on_selection_region_changed)
+            self._selection_region = region
+            plot_item.addItem(region)
+        else:
+            with contextlib.suppress(Exception):
+                self._selection_region.setVisible(True)
+
+    def _on_selection_region_changed(self) -> None:
+        """Normalize region bounds on change."""
+        region = self._selection_region
+        if region is None:
+            return
+        try:
+            x0, x1 = region.getRegion()
+        except Exception:
+            return
+        if x1 < x0:
+            region.setRegion((x1, x0))
+
+    def selected_range(self) -> tuple[float, float] | None:
+        """Return the currently selected X-range, if any."""
+        if self._selection_region is None:
+            return None
+        try:
+            x0, x1 = self._selection_region.getRegion()
+            return float(min(x0, x1)), float(max(x0, x1))
+        except Exception:
+            return None
+
+    def set_selection_range(self, x0: float, x1: float) -> None:
+        """Programmatically set the selection range."""
+        plot_item = self._primary_plot_item()
+        if plot_item is None:
+            return
+        if self._selection_region is None:
+            self.set_range_selection_visible(True, default_span=abs(x1 - x0) or 1.0)
+        region = self._selection_region
+        if region is None:
+            return
+        try:
+            region.setRegion((float(x0), float(x1)))
+        except Exception:
+            log.debug("Failed to set selection region", exc_info=True)
+
+    def clear_range_selection(self) -> None:
+        """Remove the selection region if present."""
+        if self._selection_region is None:
+            return
+        try:
+            if self._selection_region.scene() is not None:
+                self._selection_region.scene().removeItem(self._selection_region)
+        except Exception:
+            log.debug("Failed to remove selection region", exc_info=True)
+        self._selection_region = None
+
     def full_range(self) -> tuple[float, float] | None:
         """Get full time range from model."""
         if self._model is None:
@@ -1867,6 +1955,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._event_labels = []
         self._event_label_meta = None
         self._current_layout_signature = None
+        self.clear_range_selection()
 
     def tracks(self) -> tuple[PyQtGraphChannelTrack, ...]:
         """Get all tracks as an immutable tuple."""

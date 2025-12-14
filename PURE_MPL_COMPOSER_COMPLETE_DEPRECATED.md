@@ -1,3 +1,6 @@
+# > DEPRECATED: This document is stale marketing and does not reflect the current implementation.
+# > Source of truth: src/vasoanalyzer/ui/mpl_composer/composer_window.py and src/vasoanalyzer/ui/mpl_composer/renderer.py
+
 # ✅ Pure Matplotlib Figure Composer - IMPLEMENTATION COMPLETE
 
 **Implementation Date:** December 8, 2025

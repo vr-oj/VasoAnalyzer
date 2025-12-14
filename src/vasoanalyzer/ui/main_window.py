@@ -16,6 +16,7 @@ import contextlib
 import copy
 import html
 import io
+import csv
 import json
 import logging
 import math
@@ -135,8 +136,6 @@ from vasoanalyzer.ui.dialogs.subplot_layout_dialog import SubplotLayoutDialog
 from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
-from vasoanalyzer.ui.figure_composer_new import NewFigureComposerWindow
-from vasoanalyzer.ui.matplotlib_composer import MatplotlibComposerWindow
 from vasoanalyzer.ui.mpl_composer import PureMplFigureComposer
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
@@ -811,7 +810,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.zoom_dock = None
         self.scope_dock = None
         self.figure_composer = None
-        self._matplotlib_composer_windows: list[MatplotlibComposerWindow] = []
+        self._matplotlib_composer_windows: list[PureMplFigureComposer] = []
         self.current_experiment = None
         self.current_sample = None
         self._last_track_layout_sample_id: int | None = None
@@ -5227,17 +5226,30 @@ class VasoAnalyzerApp(QMainWindow):
         layout_act.triggered.connect(self.open_subplot_layout_dialog)
         tools_menu.addAction(layout_act)
 
-        # Figure Composer - New version only
-        self.action_figure_composer = QAction("Figure Composer…", self)
+        # Single supported composer entrypoint
+        self.action_figure_composer = QAction("Figure Composer (Matplotlib)…", self)
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
-        # Wire the toolbar/menu button to the single-axes Matplotlib composer
         self.action_figure_composer.triggered.connect(self.open_matplotlib_composer)
         tools_menu.addAction(self.action_figure_composer)
 
-        self.action_matplotlib_composer = QAction("Matplotlib Composer…", self)
-        self.action_matplotlib_composer.setShortcut("Ctrl+Alt+M")
-        self.action_matplotlib_composer.triggered.connect(self.open_matplotlib_composer)
-        tools_menu.addAction(self.action_matplotlib_composer)
+        tools_menu.addSeparator()
+
+        self.action_select_range = QAction("Select Range on Trace", self)
+        self.action_select_range.setCheckable(True)
+        self.action_select_range.toggled.connect(self._toggle_trace_range_selection)
+        tools_menu.addAction(self.action_select_range)
+
+        self.action_compose_selected_range = QAction("Compose Selected Range…", self)
+        self.action_compose_selected_range.triggered.connect(self._compose_selected_range)
+        tools_menu.addAction(self.action_compose_selected_range)
+
+        self.action_copy_selected_range = QAction("Copy Selected Range Data", self)
+        self.action_copy_selected_range.triggered.connect(self._copy_selected_range_data)
+        tools_menu.addAction(self.action_copy_selected_range)
+
+        self.action_export_selected_range = QAction("Export Selected Range Data…", self)
+        self.action_export_selected_range.triggered.connect(self._export_selected_range_data)
+        tools_menu.addAction(self.action_export_selected_range)
 
         tools_menu.addSeparator()
 
@@ -11893,9 +11905,15 @@ QPushButton[isGhost="true"]:hover {{
 
     def _plot_host_is_pyqtgraph(self) -> bool:
         plot_host = getattr(self, "plot_host", None)
-        return bool(
+        is_pg = bool(
             plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
         )
+        if not is_pg and hasattr(self, "action_select_range") and self.action_select_range is not None:
+            with contextlib.suppress(Exception):
+                self.action_select_range.blockSignals(True)
+                self.action_select_range.setChecked(False)
+                self.action_select_range.blockSignals(False)
+        return is_pg
 
     def _attach_plot_host_window_listener(self) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -13157,38 +13175,41 @@ QPushButton[isGhost="true"]:hover {{
         self.figure_composer.activateWindow()
 
     def open_new_figure_composer(self, figure_id: str = None, figure_data: dict = None):
-        """Launch the new Figure Composer window.
-
-        Args:
-            figure_id: Optional ID of existing figure to load
-            figure_data: Optional figure data to load
-        """
-        # Check if trace is loaded
-        if self.trace_model is None:
-            from PyQt5.QtWidgets import QMessageBox
-
-            QMessageBox.information(
-                self,
-                "No Trace Loaded",
-                "Please load a trace file before opening Figure Composer.",
-            )
-            return
-
-        # Create and show new composer
-        new_composer = NewFigureComposerWindow(
-            trace_model=self.trace_model, parent=self
+        """Archived legacy composer entrypoint; intentionally not wired."""
+        log.info(
+            "Legacy Figure Composer requested (figure_id=%s) but legacy composer is archived; "
+            "use the Matplotlib Figure Composer instead.",
+            figure_id,
+        )
+        QMessageBox.information(
+            self,
+            "Figure Composer Archived",
+            "The legacy Figure Composer has been archived.\n"
+            "Use Figure Composer (Matplotlib) from the Tools menu.",
         )
 
-        # Load existing figure if provided
-        if figure_id and figure_data:
-            new_composer.load_from_project(figure_id, figure_data)
+    def _composer_visible_channels(self) -> dict[str, bool]:
+        visible_channels = {
+            "inner": bool(getattr(self, "id_toggle_act", None) and self.id_toggle_act.isChecked()),
+            "outer": bool(getattr(self, "od_toggle_act", None) and self.od_toggle_act.isChecked()),
+            "avg_pressure": bool(getattr(self, "avg_pressure_toggle_act", None) and self.avg_pressure_toggle_act.isChecked()),
+            "set_pressure": bool(getattr(self, "set_pressure_toggle_act", None) and self.set_pressure_toggle_act.isChecked()),
+        }
+        if not any(visible_channels.values()):
+            visible_channels["inner"] = True
+        return visible_channels
 
-        # Connect signal to handle figure saves
-        new_composer.figure_saved.connect(self._on_figure_saved_to_project)
-
-        new_composer.show()
-        new_composer.raise_()
-        new_composer.activateWindow()
+    def _composer_event_payload(self) -> tuple[list[float], list[str], list[str] | None]:
+        event_times = getattr(self, "event_times", [])
+        event_labels = getattr(self, "event_labels", [])
+        style = (
+            self.get_current_plot_style()
+            if hasattr(self, "get_current_plot_style")
+            else {}
+        )
+        event_color = style.get("event_color") if isinstance(style, dict) else None
+        event_colors = [event_color] * len(event_times) if event_color and event_times else None
+        return event_times, event_labels, event_colors
 
     def open_matplotlib_composer(self, checked: bool = False) -> None:
         """Launch the Pure Matplotlib Figure Composer."""
@@ -13198,34 +13219,11 @@ QPushButton[isGhost="true"]:hover {{
             )
             return
 
-        # Get event data
-        event_times = getattr(self, "event_times", [])
-        event_labels = getattr(self, "event_labels", [])
-
-        # Get event colors from current style
-        style = (
-            self.get_current_plot_style()
-            if hasattr(self, "get_current_plot_style")
-            else {}
-        )
-        event_color = style.get("event_color") if isinstance(style, dict) else None
-
-        # Create event colors list
-        if event_color and event_times:
-            event_colors = [event_color] * len(event_times)
-        else:
-            event_colors = None
+        event_times, event_labels, event_colors = self._composer_event_payload()
 
         dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
 
-        visible_channels = {
-            "inner": bool(getattr(self, "id_toggle_act", None) and self.id_toggle_act.isChecked()),
-            "outer": bool(getattr(self, "od_toggle_act", None) and self.od_toggle_act.isChecked()),
-            "avg_pressure": bool(getattr(self, "avg_pressure_toggle_act", None) and self.avg_pressure_toggle_act.isChecked()),
-            "set_pressure": bool(getattr(self, "set_pressure_toggle_act", None) and self.set_pressure_toggle_act.isChecked()),
-        }
-        if not any(visible_channels.values()):
-            visible_channels["inner"] = True
+        visible_channels = self._composer_visible_channels()
 
         # Launch the Pure Matplotlib composer
         window = PureMplFigureComposer(
@@ -13255,6 +13253,193 @@ QPushButton[isGhost="true"]:hover {{
         window.activateWindow()
 
         log.info("Pure Matplotlib Figure Composer launched")
+
+    def _toggle_trace_range_selection(self, checked: bool) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if (
+            plot_host is None
+            or not hasattr(plot_host, "get_render_backend")
+            or plot_host.get_render_backend() != "pyqtgraph"
+        ):
+            QMessageBox.information(
+                self,
+                "Range Selection",
+                "Range selection is available only when using the PyQtGraph backend.",
+            )
+            if hasattr(self, "action_select_range") and self.action_select_range is not None:
+                with contextlib.suppress(Exception):
+                    self.action_select_range.blockSignals(True)
+                    self.action_select_range.setChecked(False)
+                    self.action_select_range.blockSignals(False)
+            return
+        setter = getattr(plot_host, "set_range_selection_visible", None)
+        if callable(setter):
+            setter(bool(checked))
+
+    def _get_selected_range_from_plot_host(self) -> tuple[float, float] | None:
+        plot_host = getattr(self, "plot_host", None)
+        if (
+            plot_host is None
+            or not hasattr(plot_host, "get_render_backend")
+            or plot_host.get_render_backend() != "pyqtgraph"
+        ):
+            return None
+        if hasattr(plot_host, "selected_range"):
+            rng = plot_host.selected_range()
+            if rng is not None:
+                return rng
+        if hasattr(plot_host, "current_window"):
+            return plot_host.current_window()
+        return None
+
+    def _slice_trace_model_for_range(
+        self, x_range: tuple[float, float], visible_channels: dict[str, bool]
+    ) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], dict[str, np.ndarray]] | None:
+        if self.trace_model is None:
+            return None
+        time = getattr(self.trace_model, "time_full", None)
+        if time is None:
+            return None
+        time = np.asarray(time)
+        x0, x1 = x_range
+        mask = (time >= x0) & (time <= x1)
+        if not mask.any():
+            return None
+        time_slice = time[mask]
+        series_map: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        data_columns: dict[str, np.ndarray] = {"time": time_slice}
+        for key in ["inner", "outer", "avg_pressure", "set_pressure"]:
+            arr = getattr(self.trace_model, f"{key}_full", None)
+            if arr is None or not visible_channels.get(key, True):
+                continue
+            y = np.asarray(arr)[mask]
+            series_map[key] = (time_slice, y)
+            data_columns[key] = y
+        if not series_map:
+            return None
+        return series_map, data_columns
+
+    def _compose_selected_range(self) -> None:
+        if self.trace_model is None:
+            QMessageBox.information(self, "Compose Selected Range", "No trace is currently loaded.")
+            return
+
+        x_range = self._get_selected_range_from_plot_host()
+        if x_range is None:
+            QMessageBox.information(
+                self,
+                "Compose Selected Range",
+                "No range is selected. Use 'Select Range on Trace' first.",
+            )
+            return
+
+        visible_channels = self._composer_visible_channels()
+        sliced = self._slice_trace_model_for_range(x_range, visible_channels)
+        if sliced is None:
+            QMessageBox.information(
+                self,
+                "Compose Selected Range",
+                "No data available in the selected range.",
+            )
+            return
+        series_map, _ = sliced
+        event_times, event_labels, event_colors = self._composer_event_payload()
+        dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
+
+        window = PureMplFigureComposer(
+            trace_model=self.trace_model,
+            parent=self,
+            project=self.current_project,
+            dataset_id=dataset_id,
+            event_times=event_times,
+            event_labels=event_labels,
+            event_colors=event_colors,
+            visible_channels=visible_channels,
+            series_map=series_map,
+        )
+
+        if not hasattr(self, "_matplotlib_composer_windows"):
+            self._matplotlib_composer_windows = []
+
+        self._matplotlib_composer_windows.append(window)
+        window.destroyed.connect(
+            lambda _=None, w=window: self._matplotlib_composer_windows.remove(w)
+            if w in self._matplotlib_composer_windows
+            else None
+        )
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
+
+    def _build_selected_range_table(
+        self, *, use_visible_channels: bool = True
+    ) -> tuple[list[str], list[list[float]]] | None:
+        x_range = self._get_selected_range_from_plot_host()
+        if x_range is None and hasattr(self, "plot_host") and self.plot_host is not None:
+            if hasattr(self.plot_host, "current_window"):
+                x_range = self.plot_host.current_window()
+        if x_range is None:
+            return None
+        channels = self._composer_visible_channels() if use_visible_channels else {
+            "inner": True,
+            "outer": True,
+            "avg_pressure": True,
+            "set_pressure": True,
+        }
+        sliced = self._slice_trace_model_for_range(x_range, channels)
+        if sliced is None:
+            return None
+        _, data_columns = sliced
+        headers = list(data_columns.keys())
+        rows: list[list[float]] = []
+        length = len(next(iter(data_columns.values())))
+        for idx in range(length):
+            row = [float(data_columns[h][idx]) for h in headers]
+            rows.append(row)
+        return headers, rows
+
+    def _copy_selected_range_data(self) -> None:
+        payload = self._build_selected_range_table()
+        if payload is None:
+            QMessageBox.information(
+                self,
+                "Copy Selected Range",
+                "No selection available to copy. Use 'Select Range on Trace' first.",
+            )
+            return
+        headers, rows = payload
+        lines = ["\t".join(headers)]
+        for row in rows:
+            lines.append("\t".join(f"{val:.6g}" for val in row))
+        text = "\n".join(lines)
+        QApplication.clipboard().setText(text)
+
+    def _export_selected_range_data(self) -> None:
+        payload = self._build_selected_range_table()
+        if payload is None:
+            QMessageBox.information(
+                self,
+                "Export Selected Range",
+                "No selection available to export. Use 'Select Range on Trace' first.",
+            )
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Selected Range",
+            "selected_range.csv",
+            "CSV Files (*.csv)",
+        )
+        if not path:
+            return
+        headers, rows = payload
+        try:
+            with open(path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+        except Exception:
+            log.exception("Failed to export selected range data")
 
     def _on_figure_saved_to_project(self, figure_id: str, figure_data: dict):
         """Handle when a figure is saved to the project.

@@ -5,6 +5,9 @@ rendering pipeline used by both preview and export. It is intentionally
 independent of Qt so it can be reused for headless exports/tests.
 """
 
+# NOTE:
+# Renderer for the maintained PureMplFigureComposer. Legacy composer code lives in src/vasoanalyzer/ui/_archive.
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -21,6 +24,11 @@ if TYPE_CHECKING:
     from vasoanalyzer.core.trace_model import TraceModel
 
 log = logging.getLogger(__name__)
+
+_MIN_PAGE_WIDTH_IN = 2.0
+_MIN_PAGE_HEIGHT_IN = 1.5
+_MAX_PAGE_WIDTH_IN = 20.0
+_MAX_PAGE_HEIGHT_IN = 20.0
 
 __all__ = [
     "PageSpec",
@@ -44,6 +52,7 @@ class PageSpec:
     axes_width_in: Optional[float] = None
     axes_height_in: Optional[float] = None
     min_margin_in: float = 0.5
+    export_background: str = "white"  # "white" or "transparent"
     # effective_* are computed by build_figure; callers should treat them as
     # readonly outputs (they are reset at the beginning of each build).
     effective_width_in: Optional[float] = None
@@ -128,9 +137,16 @@ class RenderContext:
 def build_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None) -> Figure:
     """Entry point: choose figure-first or axes-first sizing."""
     page = spec.page
+    _clamp_page_size(page)
     if page.axes_first and page.axes_width_in and page.axes_height_in:
         return _build_axes_first_figure(spec, ctx, fig=fig)
     return _build_figure_first(spec, ctx, fig=fig)
+
+
+def _clamp_page_size(page: PageSpec) -> None:
+    """Enforce a minimum physical size to keep labels visible."""
+    page.width_in = min(max(float(page.width_in), _MIN_PAGE_WIDTH_IN), _MAX_PAGE_WIDTH_IN)
+    page.height_in = min(max(float(page.height_in), _MIN_PAGE_HEIGHT_IN), _MAX_PAGE_HEIGHT_IN)
 
 
 def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None) -> Figure:
@@ -298,6 +314,7 @@ def export_figure(
     out_path: str,
     transparent: bool = False,
     ctx: RenderContext | None = None,
+    export_background: str | None = None,
 ) -> None:
     """Export a FigureSpec to disk using only page size + DPI."""
     render_ctx = ctx or RenderContext(is_preview=False, trace_model=None)
@@ -336,12 +353,24 @@ def export_figure(
     except Exception:
         log.debug("tight_layout skipped", exc_info=True)
 
+    # Ensure required elements remain visible; one corrective pass only.
+    try:
+        _ensure_required_visibility(fig, spec)
+    except Exception as exc:
+        log.warning("Visibility validation failed: %s", exc)
+        raise
+
+    # Determine export background behavior
+    bg_mode = export_background or getattr(spec.page, "export_background", "white")
+    if transparent:
+        bg_mode = "transparent"
+    savefig_kwargs = _apply_export_background(fig, bg_mode)
+
     fig.savefig(
         out_path,
         dpi=dpi,
-        facecolor="white" if not transparent else "none",
         bbox_inches="tight",
-        transparent=transparent,
+        **savefig_kwargs,
     )
 
 
@@ -434,6 +463,12 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
         fontweight=label_weight,
         labelpad=10,
     )
+    try:
+        ax.xaxis.label.set_clip_on(False)
+        ax.yaxis.label.set_clip_on(False)
+        ax.title.set_clip_on(False)
+    except Exception:
+        log.debug("Failed to disable label clipping", exc_info=True)
 
     # Tick labels and tick appearance
     ax.tick_params(
@@ -467,6 +502,34 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
         )
     else:
         ax.grid(False)
+
+
+def _apply_export_background(fig: Figure, mode: str) -> Dict[str, object]:
+    """Set figure/axes background and return savefig kwargs for the mode."""
+    normalized = "transparent" if str(mode).lower() == "transparent" else "white"
+    facecolor = "none" if normalized == "transparent" else "white"
+    edgecolor = facecolor
+    try:
+        fig.patch.set_facecolor(facecolor)
+        fig.patch.set_alpha(0.0 if normalized == "transparent" else 1.0)
+        for axis in fig.axes:
+            axis.set_facecolor(facecolor)
+    except Exception:
+        log.debug("Failed to set export background", exc_info=True)
+
+    if normalized == "transparent":
+        return {"transparent": True}
+    return {"transparent": False, "facecolor": facecolor, "edgecolor": edgecolor}
+
+
+def _get_renderer_for_figure(fig: Figure):
+    """
+    Return a renderer suitable for measuring artist extents using an Agg canvas.
+    Always uses FigureCanvasAgg to avoid backend-specific renderer differences.
+    """
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    return canvas.get_renderer(), canvas
 
 
 def _render_events(ax: "Axes", spec: FigureSpec) -> None:
@@ -548,3 +611,92 @@ def _render_annotations(fig: Figure, ax: "Axes", annos: List[AnnotationSpec]) ->
                 arrowstyle="->",
             )
             ax.add_patch(arrow)
+
+
+def _collect_required_artists(ax: "Axes", spec: FigureSpec) -> List[object]:
+    """Gather artists that must remain visible."""
+    artists: List[object] = []
+    try:
+        if ax.get_xlabel():
+            artists.append(ax.xaxis.label)
+        if ax.get_ylabel():
+            artists.append(ax.yaxis.label)
+        title_text = ax.get_title()
+        if title_text:
+            artists.append(ax.title)
+    except Exception:
+        log.debug("Failed to collect axis labels", exc_info=True)
+
+    # Legend
+    if spec.legend_visible:
+        try:
+            leg = ax.get_legend()
+            if leg is not None:
+                artists.append(leg)
+        except Exception:
+            log.debug("Legend collection failed", exc_info=True)
+
+    # Tick labels
+    try:
+        artists.extend([lbl for lbl in ax.get_xticklabels() if lbl.get_text()])
+        artists.extend([lbl for lbl in ax.get_yticklabels() if lbl.get_text()])
+    except Exception:
+        log.debug("Failed to collect tick labels", exc_info=True)
+
+    return artists
+
+
+def _validate_artists(fig: Figure, artists: List[object], *, tolerance: float = 1.5) -> List[str]:
+    """Return list of failure messages for artists outside the figure bbox."""
+    failures: List[str] = []
+    if not artists:
+        return failures
+
+    # Ensure we have a renderer
+    renderer, _canvas = _get_renderer_for_figure(fig)
+    fig_bbox = fig.bbox
+
+    for art in artists:
+        try:
+            if hasattr(art, "get_visible") and not art.get_visible():
+                continue
+            bbox = art.get_window_extent(renderer=renderer)
+            if bbox is None:
+                continue
+            if (
+                bbox.x0 < fig_bbox.x0 - tolerance
+                or bbox.y0 < fig_bbox.y0 - tolerance
+                or bbox.x1 > fig_bbox.x1 + tolerance
+                or bbox.y1 > fig_bbox.y1 + tolerance
+            ):
+                label = getattr(art, "get_text", lambda: "")()
+                kind = art.__class__.__name__
+                failures.append(f"{kind} '{label}' not fully visible")
+        except Exception:
+            log.debug("Artist validation failed", exc_info=True)
+            continue
+    return failures
+
+
+def _ensure_required_visibility(fig: Figure, spec: FigureSpec) -> None:
+    """Validate required artists; try one corrective layout pass before erroring."""
+    if not fig.axes:
+        return
+    ax = fig.axes[0]
+    artists = _collect_required_artists(ax, spec)
+    failures = _validate_artists(fig, artists)
+    if not failures:
+        return
+
+    # One corrective pass
+    try:
+        fig.tight_layout(pad=0.8)
+    except Exception:
+        log.debug("tight_layout corrective pass skipped", exc_info=True)
+    failures = _validate_artists(fig, artists)
+    if failures:
+        msg = "; ".join(failures)
+        raise ValueError(
+            "Figure too small to render required elements. "
+            "Increase figure size or reduce text. Details: " + msg
+        )
