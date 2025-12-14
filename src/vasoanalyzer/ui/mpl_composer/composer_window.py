@@ -34,6 +34,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from vasoanalyzer.ui.theme import CURRENT_THEME
+
 from .renderer import (
     AxesSpec,
     EventSpec,
@@ -166,7 +168,7 @@ class PureMplFigureComposer(QMainWindow):
             ylabel="Diameter (µm)",
             show_grid=True,
             grid_linestyle="--",
-            grid_color="#c0c0c0",
+            grid_color=CURRENT_THEME.get("grid_color", "#c0c0c0"),
             grid_alpha=0.7,
             show_event_labels=False,
             xlabel_fontsize=12.0,
@@ -206,7 +208,7 @@ class PureMplFigureComposer(QMainWindow):
             color = (
                 self.event_colors[idx]
                 if idx < len(self.event_colors)
-                else "#444444"
+                else CURRENT_THEME.get("text", "#444444")
             )
             label = self.event_labels[idx] if idx < len(self.event_labels) else ""
             events.append(
@@ -336,7 +338,8 @@ class PureMplFigureComposer(QMainWindow):
 
         export_row = QHBoxLayout()
         self.label_export_size = QLabel("")
-        self.label_export_size.setStyleSheet("color: #6c757d;")
+        text_color = CURRENT_THEME.get("text", "#6c757d")
+        self.label_export_size.setStyleSheet(f"color: {text_color};")
         export_row.addWidget(self.label_export_size)
         export_row.addStretch(1)
         self.btn_export = QPushButton("Export…")
@@ -892,7 +895,12 @@ class PureMplFigureComposer(QMainWindow):
             button=[1],
             interactive=False,
             drag_from_anywhere=True,
-            props=dict(edgecolor="#000000", facecolor="none", linewidth=1.0, linestyle="--"),
+            props=dict(
+                edgecolor=CURRENT_THEME.get("text", "#000000"),
+                facecolor="none",
+                linewidth=1.0,
+                linestyle="--"
+            ),
         )
         self._box_selector.connect_event("motion_notify_event", self._on_box_drag)
 

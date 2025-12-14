@@ -15,6 +15,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from vasoanalyzer.ui.theme import CURRENT_THEME
+
 
 class ProjectExplorerWidget(QDockWidget):
     """Simple dock with a tree widget for project exploration."""
@@ -65,6 +67,7 @@ class ProjectExplorerWidget(QDockWidget):
 
         container_layout.addWidget(card)
         self.setWidget(container)
+        self.apply_theme()
 
     def set_open(self, open_: bool):
         """Show or hide the dock; keep API consistent with toolbar toggle."""
@@ -74,3 +77,33 @@ class ProjectExplorerWidget(QDockWidget):
             self.hide()
         if open_:
             self.raise_()
+
+    def apply_theme(self) -> None:
+        """Apply palette-derived colors to the dock contents."""
+
+        border = CURRENT_THEME.get("grid_color", "#d0d0d0")
+        bg = CURRENT_THEME.get("table_bg", "#ffffff")
+        text = CURRENT_THEME.get("text", "#000000")
+
+        self.setStyleSheet(
+            f"""
+            QDockWidget#ProjectDock {{
+                background: {bg};
+                border: none;
+            }}
+            QDockWidget#ProjectDock QWidget {{
+                background: {bg};
+                color: {text};
+            }}
+            QFrame#ProjectCard {{
+                background: {bg};
+                border: 1px solid {border};
+                border-radius: 9px;
+                padding: 3px 3px 6px 3px;
+            }}
+            QTreeWidget#ProjectTree {{
+                background: {bg};
+                border: none;
+            }}
+        """
+        )

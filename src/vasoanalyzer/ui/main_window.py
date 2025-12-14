@@ -949,6 +949,8 @@ class VasoAnalyzerApp(QMainWindow):
         )
         self.project_dock.visibilityChanged.connect(self.project_toggle_btn.setChecked)
         self.toolbar.addWidget(self.project_toggle_btn)
+        if hasattr(self.project_dock, "apply_theme"):
+            self.project_dock.apply_theme()
         self.project_dock.hide()
 
     def _bold_font(self, size_delta: int = 0) -> QFont:
@@ -1915,8 +1917,25 @@ class VasoAnalyzerApp(QMainWindow):
         self._save_progress_bar.setValue(0)
 
     def changeEvent(self, event):
-        if event.type() == QEvent.PaletteChange:
+        if event.type() in (QEvent.PaletteChange, QEvent.ApplicationPaletteChange):
+            # OS theme changed - refresh CURRENT_THEME from new OS palette
+            from vasoanalyzer.ui import theme as theme_module
+            theme_module.refresh_theme_from_os()
+
+            # Force Qt to recompute stylesheet with new palette() values
+            app = QApplication.instance()
+            if app:
+                current_qss = app.styleSheet()
+                app.setStyleSheet("")  # Clear
+                app.setStyleSheet(current_qss)  # Reapply to pick up new palette
+
+            # Propagate theme to all widgets
             self._apply_status_bar_theme()
+            self.apply_theme("system", persist=False)
+
+            # Force repaint of all widgets
+            self.update()
+            QApplication.processEvents()
         super().changeEvent(event)
 
     def _status_bar_theme_colors(self) -> dict[str, str]:
@@ -7397,6 +7416,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         self._update_theme_action_checks(scheme)
         self._apply_status_bar_theme()
+        apply_data_page_style = getattr(self, "_apply_data_page_style", None)
+        if callable(apply_data_page_style):
+            apply_data_page_style()
 
         if hasattr(self, "home_page") and self.home_page is not None:
             self.home_page._apply_stylesheet()
@@ -7409,6 +7431,11 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "_apply_event_table_card_theme"):
             with contextlib.suppress(Exception):
                 self._apply_event_table_card_theme()
+
+        project_dock = getattr(self, "project_dock", None)
+        apply_project_theme = getattr(project_dock, "apply_theme", None)
+        if callable(apply_project_theme):
+            apply_project_theme()
 
         plot_host = getattr(self, "plot_host", None)
         if plot_host is not None and hasattr(plot_host, "apply_theme"):

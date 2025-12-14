@@ -261,8 +261,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def _apply_theme(self) -> None:
         """Apply color theme from CURRENT_THEME."""
-        # Background colors
-        bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Background colors - use plot_bg for white content area in light mode
+        bg_color = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
         self._plot_widget.setBackground(bg_color)
 
         # Axis colors

@@ -64,8 +64,8 @@ class PyQtGraphPlotHost(InteractionHost):
         # Create graphics layout for tracks
         # Tracks are managed as individual widgets stacked vertically.
 
-        # Apply theme
-        bg_color = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Apply theme - use plot_bg for white content area in light mode
+        bg_color = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
         self._widget.setStyleSheet(f"background-color: {bg_color};")
 
         # Create matplotlib-compatible canvas wrapper for event handling
@@ -160,7 +160,8 @@ class PyQtGraphPlotHost(InteractionHost):
         """Refresh plot host colors from the active theme."""
         print(f"[THEME-DEBUG] PyQtGraphPlotHost.apply_theme called, id(self)={id(self)}")
 
-        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Use plot_bg for white content area in light mode (not window_bg which is gray toolbar)
+        bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
         border_color = CURRENT_THEME.get(
             "hover_label_border",
             CURRENT_THEME.get("text", "#000000"),

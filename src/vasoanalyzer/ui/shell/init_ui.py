@@ -335,14 +335,18 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window._update_status_chip()
 
-    border_color = CURRENT_THEME["grid_color"]
-    text_color = CURRENT_THEME["text"]
-    hover_bg = CURRENT_THEME["button_hover_bg"]
-    window_bg = CURRENT_THEME["window_bg"]
+    def _apply_data_page_style() -> None:
+        border_color = CURRENT_THEME["grid_color"]
+        text_color = CURRENT_THEME["text"]
+        hover_bg = CURRENT_THEME["button_hover_bg"]
+        content_bg = CURRENT_THEME.get("table_bg", CURRENT_THEME["window_bg"])
 
-    window.data_page.setStyleSheet(
-        window._shared_button_css()
-        + f"""
+        window.data_page.setStyleSheet(
+            window._shared_button_css()
+            + f"""
+QWidget#DataPage {{
+    background: {content_bg};
+}}
 QFrame#DataHeader {{
     background: transparent;
     border: none;
@@ -367,12 +371,12 @@ QFrame#PlotPanel, QFrame#SidePanel {{
     border: none;
 }}
 QFrame#PlotContainer {{
-    background: {window_bg};
+    background: {content_bg};
     border: 1px solid {border_color};
     border-radius: 16px;
 }}
 QFrame#SnapshotCard, QFrame#TableCard {{
-    background: {window_bg};
+    background: {content_bg};
     border: 1px solid {border_color};
     border-radius: 16px;
 }}
@@ -397,7 +401,7 @@ QLabel#SectionTitle {{
     padding-bottom: 4px;
 }}
 QLabel#SnapshotPreview {{
-    background: {window_bg};
+    background: {content_bg};
     border: 1px dashed {border_color};
     border-radius: 12px;
     color: #7a8194;
@@ -408,7 +412,7 @@ QSplitter#DataSplitter::handle {{
     border-radius: 3px;
 }}
 QFrame#MetadataPanel {{
-    background: {window_bg};
+    background: {content_bg};
     border: 1px solid {border_color};
     border-radius: 12px;
 }}
@@ -423,7 +427,10 @@ QLabel#MetadataDetails {{
     color: {text_color};
 }}
 """
-    )
+        )
+
+    window._apply_data_page_style = _apply_data_page_style
+    window._apply_data_page_style()
 
     window.stack.setCurrentWidget(window.home_page)
     window._set_toolbars_visible(False)

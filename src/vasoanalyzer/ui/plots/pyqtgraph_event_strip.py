@@ -46,8 +46,8 @@ class PyQtGraphEventStripTrack:
         self._plot_item.hideAxis("left")
         self._plot_item.hideAxis("bottom")
         self._plot_item.showGrid(x=False, y=False)
-        # Match app theme background
-        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Match app theme background - use plot_bg for white content area
+        bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
         with contextlib.suppress(Exception):
             vb.setBackgroundColor(bg)
 
@@ -189,7 +189,8 @@ class PyQtGraphEventStripTrack:
         """Refresh background and label colors from CURRENT_THEME."""
 
         vb = self._plot_item.getViewBox()
-        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Use plot_bg for white content area in light mode
+        bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
         with contextlib.suppress(Exception):
             vb.setBackgroundColor(bg)
 
