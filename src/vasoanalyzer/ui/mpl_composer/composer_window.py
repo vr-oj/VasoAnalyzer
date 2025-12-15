@@ -18,7 +18,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.widgets import RectangleSelector
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QShowEvent
-from PyQt5.QtWidgets import QColorDialog
+from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -27,12 +27,12 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -175,8 +175,10 @@ class PureMplFigureComposer(QMainWindow):
         self.spin_height: QDoubleSpinBox | None = None
         self.cb_legend: QCheckBox | None = None
         self.cb_export_transparent: QCheckBox | None = None
+        self.spin_dpi: QSpinBox | None = None
         self.label_export_size: QLabel | None = None
         self.btn_export: QPushButton | None = None
+        self.btn_save_project: QPushButton | None = None
         self.btn_box_select: QPushButton | None = None
         self.btn_trace_color: QPushButton | None = None
         self.spin_trace_width: QDoubleSpinBox | None = None
@@ -185,6 +187,11 @@ class PureMplFigureComposer(QMainWindow):
         self._right_panel: QWidget | None = None
         self._updating_canvas_size: bool = False
         self._last_figure_size: tuple[float, float] | None = None  # Track (width_px, height_px)
+        self._export_dpi: float = float(self._fig_spec.page.dpi)
+        self._persist_timer: QTimer | None = None
+        self._pending_dirty: bool = False
+        self._signal_emit_timer: QTimer | None = None
+        self._pending_signal_emit: bool = False
 
         self._enforce_page_bounds(update_controls=False)
         self._setup_ui()
@@ -389,11 +396,22 @@ class PureMplFigureComposer(QMainWindow):
         export_row.addWidget(self.label_export_size)
         export_row.addStretch(1)
 
+        self.spin_dpi = QSpinBox()
+        self.spin_dpi.setRange(72, 1200)
+        self.spin_dpi.setSingleStep(25)
+        self.spin_dpi.setValue(int(self._export_dpi))
+        self.spin_dpi.setToolTip("Export resolution (dots per inch)")
+        export_row.addWidget(QLabel("DPI"))
+        export_row.addWidget(self.spin_dpi)
+
         self.cb_export_transparent = QCheckBox("Transparent background")
         self.cb_export_transparent.setChecked(False)
         export_row.addWidget(self.cb_export_transparent)
         self.btn_export = QPushButton("Export…")
         export_row.addWidget(self.btn_export)
+        self.btn_save_project = QPushButton("Save to Project")
+        self.btn_save_project.setEnabled(self.dataset_id is not None and self.project is not None)
+        export_row.addWidget(self.btn_save_project)
         left_layout.addLayout(export_row)
         root.addWidget(left, stretch=2)
 
@@ -415,6 +433,10 @@ class PureMplFigureComposer(QMainWindow):
             self.btn_export.clicked.connect(self._export_dialog)
         if self.cb_export_transparent is not None:
             self.cb_export_transparent.toggled.connect(self._on_export_background_toggled)
+        if self.spin_dpi is not None:
+            self.spin_dpi.valueChanged.connect(self._on_export_dpi_changed)
+        if self.btn_save_project is not None:
+            self.btn_save_project.clicked.connect(self._save_to_project)
 
     def _create_preview(self) -> None:
         ctx = self._render_context(is_preview=True)
@@ -660,6 +682,9 @@ class PureMplFigureComposer(QMainWindow):
             self.edit_xlabel.setText(axes.xlabel)
         if self.edit_ylabel:
             self.edit_ylabel.setText(axes.ylabel)
+        if self.spin_dpi:
+            with signals_blocked(self.spin_dpi):
+                self.spin_dpi.setValue(int(self._export_dpi))
 
         # Axis ranges
         x_auto = axes.x_range is None
@@ -904,49 +929,17 @@ class PureMplFigureComposer(QMainWindow):
             self._fig_spec.page.export_background = "transparent" if checked else "white"
         self._update_export_size_label()
 
-    def _prompt_export_dpi(self) -> float | None:
-        """Ask the user for export DPI via a simple dropdown, defaulting to current spec."""
-        dpi_default = int(getattr(self._fig_spec.page, "dpi", self.DEFAULT_DPI))
-        options = [
-            f"Use current ({dpi_default} dpi)",
-            "300 dpi",
-            "450 dpi",
-            "600 dpi",
-            "Custom…",
-        ]
-        choice, ok = QInputDialog.getItem(
-            self,
-            "Export resolution",
-            "Select export DPI:",
-            options,
-            0,
-            False,
-        )
-        if not ok:
-            return None
-        if choice.startswith("Use current"):
-            return None
-        if choice.endswith("dpi"):
-            try:
-                return float(choice.split()[0])
-            except Exception:
-                return None
-        # Custom branch
-        dpi_val, ok_int = QInputDialog.getInt(
-            self,
-            "Custom DPI",
-            "DPI (pixels per inch)",
-            dpi_default,
-            72,
-            1200,
-            25,
-        )
-        if not ok_int:
-            return None
-        return float(dpi_val)
+    def _on_export_dpi_changed(self, value: int) -> None:
+        """Update export DPI without altering the live preview figure."""
+        self._export_dpi = float(value)
+        self._update_export_size_label()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # Persist any pending changes
         self._persist_recipe_snapshot()
+        # Immediately emit signal on close (don't wait for debounce timer)
+        if self._pending_signal_emit and self.dataset_id:
+            self._emit_tree_update_signal()
         super().closeEvent(event)
 
     def _on_events_toggled(self, checked: bool) -> None:
@@ -1322,6 +1315,7 @@ class PureMplFigureComposer(QMainWindow):
         self._update_canvas_size_to_fit()
         self._canvas.draw()
         self._update_export_size_label()
+        self._mark_dirty_and_schedule_persist()
 
     def resizeEvent(self, event) -> None:
         """Keep current view; do not reset state on resize."""
@@ -1364,9 +1358,9 @@ class PureMplFigureComposer(QMainWindow):
         axes_h_in = page.height_in
         fig_w_in = page.effective_width_in or axes_w_in
         fig_h_in = page.effective_height_in or axes_h_in
-        dpi = page.dpi
-        w_px = int(fig_w_in * dpi)
-        h_px = int(fig_h_in * dpi)
+        export_dpi = self._export_dpi or page.dpi
+        w_px = int(fig_w_in * export_dpi)
+        h_px = int(fig_h_in * export_dpi)
         clamp_note = ""
         if self._size_was_clamped:
             clamp_note = (
@@ -1374,7 +1368,7 @@ class PureMplFigureComposer(QMainWindow):
                 f"and {self.MIN_HEIGHT_IN:.1f}-{self.MAX_HEIGHT_IN:.1f} in height)"
             )
         text = (
-            f"Axes: {axes_w_in:.2f} × {axes_h_in:.2f} in @ {dpi:.0f} dpi\n"
+            f"Axes: {axes_w_in:.2f} × {axes_h_in:.2f} in @ {export_dpi:.0f} dpi (export)\n"
             f"Resulting figure size: {fig_w_in:.2f} × {fig_h_in:.2f} in ({w_px} × {h_px} px){clamp_note}"
         )
         if self._default_view_note:
@@ -1415,9 +1409,13 @@ class PureMplFigureComposer(QMainWindow):
         if not self._recipe_id:
             log.debug("No recipe_id set, skipping persistence")
             return
+        self._pending_dirty = False
+
+        print(f"\n[COMPOSER AUTOSAVE] Persisting recipe {self._recipe_id} for dataset {self.dataset_id}")
 
         with self._project_repo() as repo:
             if repo is None:
+                print(f"[COMPOSER AUTOSAVE] ✗ No repository available")
                 log.warning("Cannot persist recipe: no repository available")
                 return
 
@@ -1439,22 +1437,70 @@ class PureMplFigureComposer(QMainWindow):
                     y_max=y_range[1] if y_range else None,
                     export_background=export_bg,
                 )
-                log.info(f"Persisted recipe {self._recipe_id} for dataset {self.dataset_id}")
+                print(f"[COMPOSER AUTOSAVE] ✓ Recipe updated in database")
+                log.debug(f"Persisted recipe {self._recipe_id} for dataset {self.dataset_id}")
 
-                # Emit signal to parent
-                parent = self.parent()
-                signal = getattr(parent, "figure_recipes_changed", None)
-                if signal is not None and hasattr(signal, "emit") and self.dataset_id is not None:
-                    try:
-                        signal.emit(int(self.dataset_id))
-                        log.info(f"Emitted figure_recipes_changed signal for dataset {self.dataset_id}")
-                    except Exception as e:
-                        log.error(f"Failed to emit figure_recipes_changed signal: {e}", exc_info=True)
-                else:
-                    log.warning(f"Cannot emit signal: signal={signal is not None}, dataset_id={self.dataset_id}")
+                # Signal the tree to refresh immediately after persistence
+                print(f"[COMPOSER AUTOSAVE] Scheduling tree signal emission...")
+                self._schedule_signal_emission(immediate=True)
 
             except Exception as e:
+                print(f"[COMPOSER AUTOSAVE] ✗ Failed to persist: {e}")
                 log.error(f"Failed to persist recipe snapshot: {e}", exc_info=True)
+
+    def _mark_dirty_and_schedule_persist(self) -> None:
+        """Mark pending changes and debounce persistence to reduce DB churn."""
+        if not self._recipe_id:
+            return
+        self._pending_dirty = True
+        if self._persist_timer is None:
+            self._persist_timer = QTimer(self)
+            self._persist_timer.setSingleShot(True)
+            self._persist_timer.timeout.connect(self._persist_recipe_snapshot)
+        self._persist_timer.stop()
+        # Longer debounce to coalesce edits; prevents rapid reopen/close of sqlite
+        self._persist_timer.start(1500)
+
+    def _schedule_signal_emission(self, *, immediate: bool = False) -> None:
+        """Emit (or schedule) a tree update after persistence."""
+        if not self.dataset_id:
+            return
+        self._pending_signal_emit = True
+        if immediate:
+            if self._signal_emit_timer is not None:
+                self._signal_emit_timer.stop()
+            self._emit_tree_update_signal()
+            return
+        if self._signal_emit_timer is None:
+            self._signal_emit_timer = QTimer(self)
+            self._signal_emit_timer.setSingleShot(True)
+            self._signal_emit_timer.timeout.connect(self._emit_tree_update_signal)
+        self._signal_emit_timer.stop()
+        # Longer debounce (3 seconds) to avoid tree update spam during active editing
+        self._signal_emit_timer.start(3000)
+
+    def _emit_tree_update_signal(self) -> None:
+        """Emit signal to parent window to update the project tree."""
+        if not self._pending_signal_emit or not self.dataset_id:
+            return
+        self._pending_signal_emit = False
+
+        parent = self.parent()
+        signal = getattr(parent, "figure_recipes_changed", None)
+        if signal is not None and hasattr(signal, "emit"):
+            try:
+                signal.emit(int(self.dataset_id))
+                log.debug(f"Emitted debounced figure_recipes_changed signal for dataset {self.dataset_id}")
+            except Exception as e:
+                log.error(f"Failed to emit figure_recipes_changed signal: {e}", exc_info=True)
+        # Fallback: call the tree updater directly if available (ensures immediate refresh)
+        updater = getattr(parent, "_update_sample_tree_figures", None)
+        if callable(updater):
+            try:
+                updater(int(self.dataset_id))
+                log.debug(f"Called _update_sample_tree_figures for dataset {self.dataset_id}")
+            except Exception as e:
+                log.error(f"Failed to call _update_sample_tree_figures: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Export
@@ -1506,9 +1552,7 @@ class PureMplFigureComposer(QMainWindow):
         kind = meta.get("kind", "any")
         dpi_override: float | None = None
         if kind in ("png", "tiff"):
-            dpi_override = self._prompt_export_dpi()
-            if dpi_override is None:
-                return
+            dpi_override = float(self._export_dpi)
 
         self.export_figure(path, dpi_override=dpi_override)
 
@@ -1536,6 +1580,83 @@ class PureMplFigureComposer(QMainWindow):
             log.info("Export successful: %s", out_path)
         except Exception:
             log.exception("Export failed")
+
+    # ------------------------------------------------------------------
+    # Project save
+    # ------------------------------------------------------------------
+    def _figure_name_for_save(self) -> str:
+        axes = getattr(self._fig_spec, "axes", None)
+        trace_key = self._active_trace_key or "trace"
+        if axes and axes.x_range:
+            x0, x1 = axes.x_range
+            return f"{trace_key} {x0:.1f}-{x1:.1f}s"
+        return f"{trace_key} figure"
+
+    def _save_to_project(self) -> None:
+        """Create or update a recipe on demand, then enable autosave."""
+        if self.project is None or self.dataset_id is None:
+            QMessageBox.warning(
+                self,
+                "Save to Project",
+                "No active project/dataset is available. Load a dataset and try again.",
+            )
+            return
+
+        with self._project_repo() as repo:
+            if repo is None:
+                QMessageBox.warning(
+                    self,
+                    "Save to Project",
+                    "Project repository is unavailable; cannot save figure.",
+                )
+                return
+            try:
+                spec_dict = figure_spec_to_dict(self._fig_spec)
+                axes = self._fig_spec.axes
+                x_range = axes.x_range
+                y_range = axes.y_range
+                trace_key = self._active_trace_key
+                export_bg = getattr(self._fig_spec.page, "export_background", "white")
+                if self._recipe_id:
+                    repo.update_figure_recipe(
+                        self._recipe_id,
+                        spec_json=json.dumps(spec_dict),
+                        trace_key=trace_key,
+                        x_min=x_range[0] if x_range else None,
+                        x_max=x_range[1] if x_range else None,
+                        y_min=y_range[0] if y_range else None,
+                        y_max=y_range[1] if y_range else None,
+                        export_background=export_bg,
+                    )
+                else:
+                    name = self._figure_name_for_save()
+                    dsid = int(self.dataset_id)
+                    self._recipe_id = repo.add_figure_recipe(
+                        dsid,
+                        name,
+                        json.dumps(spec_dict),
+                        source="composer_manual",
+                        trace_key=trace_key,
+                        x_min=x_range[0] if x_range else None,
+                        x_max=x_range[1] if x_range else None,
+                        y_min=y_range[0] if y_range else None,
+                        y_max=y_range[1] if y_range else None,
+                        export_background=export_bg,
+                    )
+                self._pending_dirty = False
+                self._schedule_signal_emission(immediate=True)
+                QMessageBox.information(
+                    self,
+                    "Save Complete",
+                    "Figure saved to project. Future edits will auto-save.",
+                )
+            except Exception as e:
+                log.error("Failed to save figure to project: %s", e, exc_info=True)
+                QMessageBox.warning(
+                    self,
+                    "Save Failed",
+                    f"Could not save figure to project:\n{e}",
+                )
 
     # ------------------------------------------------------------------
     # Helpers

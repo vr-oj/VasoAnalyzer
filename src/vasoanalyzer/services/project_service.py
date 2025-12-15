@@ -396,6 +396,7 @@ class SQLiteProjectRepository(ProjectRepository):
 
     def __init__(self, store: sqlite_store.ProjectStore):
         self._store = store
+        self._store_path = getattr(store, "path", None)
 
     # Context manager support
     def __enter__(self) -> SQLiteProjectRepository:
@@ -545,6 +546,24 @@ class SQLiteProjectRepository(ProjectRepository):
             sqlite_store.get_results(self._store, dataset_id, kind),
         )
 
+    # Internal helpers -------------------------------------------------
+    def _open_recipe_store(self) -> tuple[sqlite_store.ProjectStore, bool]:
+        """
+        Get the ProjectStore for figure recipe operations.
+
+        Returns a tuple of (store, should_close). If ``should_close`` is True,
+        the caller must close/commit the store when finished.
+
+        Note: Always returns the shared store to avoid transaction isolation issues.
+        Using fresh connections per operation causes queries to not see recently
+        committed data, especially on cloud-synced storage like iCloud.
+        """
+        if self._store is None:
+            raise RuntimeError("Project store is not available for figure recipe operations")
+        # Always use the shared store - never open fresh connections for recipes
+        # This ensures all operations see each other's changes immediately
+        return self._store, False
+
     def iter_datasets(self) -> Sequence[Mapping[str, Any]]:
         return list(sqlite_store.iter_datasets(self._store))
 
@@ -564,20 +583,38 @@ class SQLiteProjectRepository(ProjectRepository):
         export_background: str = "white",
         recipe_id: str | None = None,
     ) -> str:
-        return sqlite_store.add_figure_recipe(
-            self._store,
-            dataset_id,
-            name,
-            spec_json,
-            source=source,
-            trace_key=trace_key,
-            x_min=x_min,
-            x_max=x_max,
-            y_min=y_min,
-            y_max=y_max,
-            export_background=export_background,
-            recipe_id=recipe_id,
-        )
+        print(f"[DB] add_figure_recipe called: dataset_id={dataset_id}, name='{name}', source={source}")
+        store, should_close = self._open_recipe_store()
+        print(f"[DB]   Store opened, should_close={should_close}")
+        try:
+            rid = sqlite_store.add_figure_recipe(
+                store,
+                dataset_id,
+                name,
+                spec_json,
+                source=source,
+                trace_key=trace_key,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                export_background=export_background,
+                recipe_id=recipe_id,
+            )
+            print(f"[DB]   ✓ Recipe added to store, recipe_id={rid}")
+            if should_close:
+                print(f"[DB]   Committing transaction...")
+                with contextlib.suppress(Exception):
+                    store.commit()
+                print(f"[DB]   ✓ Transaction committed")
+            else:
+                print(f"[DB]   No commit needed (using shared store)")
+            return cast(str, rid)
+        finally:
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.close()
+                print(f"[DB]   Store closed")
 
     def update_figure_recipe(
         self,
@@ -593,31 +630,75 @@ class SQLiteProjectRepository(ProjectRepository):
         y_max: float | None = None,
         export_background: str | None = None,
     ) -> None:
-        sqlite_store.update_figure_recipe(
-            self._store,
-            recipe_id,
-            name=name,
-            spec_json=spec_json,
-            source=source,
-            trace_key=trace_key,
-            x_min=x_min,
-            x_max=x_max,
-            y_min=y_min,
-            y_max=y_max,
-            export_background=export_background,
-        )
+        store, should_close = self._open_recipe_store()
+        try:
+            sqlite_store.update_figure_recipe(
+                store,
+                recipe_id,
+                name=name,
+                spec_json=spec_json,
+                source=source,
+                trace_key=trace_key,
+                x_min=x_min,
+                x_max=x_max,
+                y_min=y_min,
+                y_max=y_max,
+                export_background=export_background,
+            )
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.commit()
+        finally:
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.close()
 
     def list_figure_recipes(self, dataset_id: int) -> list[dict[str, Any]]:
-        return sqlite_store.list_figure_recipes(self._store, dataset_id)
+        print(f"[DB] list_figure_recipes called for dataset_id={dataset_id}")
+        store, should_close = self._open_recipe_store()
+        try:
+            recipes = cast(list[dict[str, Any]], sqlite_store.list_figure_recipes(store, dataset_id))
+            print(f"[DB]   Found {len(recipes)} recipe(s)")
+            for i, r in enumerate(recipes, 1):
+                print(f"[DB]     Recipe {i}: id={r.get('recipe_id')}, name='{r.get('name')}'")
+            return recipes
+        finally:
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.close()
 
     def get_figure_recipe(self, recipe_id: str) -> dict[str, Any] | None:
-        return sqlite_store.get_figure_recipe(self._store, recipe_id)
+        store, should_close = self._open_recipe_store()
+        try:
+            return cast(dict[str, Any] | None, sqlite_store.get_figure_recipe(store, recipe_id))
+        finally:
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.close()
 
     def delete_figure_recipe(self, recipe_id: str) -> None:
-        sqlite_store.delete_figure_recipe(self._store, recipe_id)
+        store, should_close = self._open_recipe_store()
+        try:
+            sqlite_store.delete_figure_recipe(store, recipe_id)
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.commit()
+        finally:
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.close()
 
     def rename_figure_recipe(self, recipe_id: str, name: str) -> None:
-        sqlite_store.rename_figure_recipe(self._store, recipe_id, name)
+        store, should_close = self._open_recipe_store()
+        try:
+            sqlite_store.rename_figure_recipe(store, recipe_id, name)
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.commit()
+        finally:
+            if should_close:
+                with contextlib.suppress(Exception):
+                    store.close()
 
     def save(self, *, skip_optimize: bool = False) -> None:
         log.info(
@@ -637,6 +718,40 @@ class SQLiteProjectRepository(ProjectRepository):
         """Return the underlying :class:`ProjectStore`."""
 
         return self._store
+
+    # Internal helpers -------------------------------------------------
+    def _run_with_fresh_store(self, func: Callable[[sqlite_store.ProjectStore], Any], *, commit: bool = False) -> Any:
+        """
+        Run ``func`` with a fresh ProjectStore (new sqlite connection) when a path is available.
+        Falls back to the cached store if no path is set.
+
+        Args:
+            func: Function to run with the store
+            commit: If True, commit changes before closing (only needed for write operations)
+        """
+        path = getattr(self, "_store_path", None)
+        store = None
+        use_fresh = False
+        try:
+            if path:
+                store = sqlite_store.open_project(str(path))
+                use_fresh = True
+            else:
+                store = self._store
+            result = func(store)
+            # Commit changes before closing if requested (for write operations)
+            if commit and use_fresh and store is not None:
+                try:
+                    store.commit()
+                except Exception:
+                    log.debug("Failed to commit fresh store after figure recipe op", exc_info=True)
+            return result
+        finally:
+            if use_fresh and store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    log.debug("Failed to close fresh store after figure recipe op", exc_info=True)
 
 
 def open_project_repository(path: str) -> SQLiteProjectRepository:

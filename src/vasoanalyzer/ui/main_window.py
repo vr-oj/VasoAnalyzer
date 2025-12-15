@@ -2652,7 +2652,7 @@ class VasoAnalyzerApp(QMainWindow):
             self._select_tree_item_for_sample(self.current_sample)
 
     def _on_figure_recipes_changed(self, dataset_id: int) -> None:
-        """Handle figure recipe changes - triggers tree rebuild."""
+        """Handle figure recipe changes - updates only the affected sample's tree node."""
         log.info(f"=== Figure recipes changed signal received for dataset_id={dataset_id} ===")
 
         try:
@@ -2665,23 +2665,186 @@ class VasoAnalyzerApp(QMainWindow):
                 log.warning("Cannot refresh recipes: dataset_id is None")
                 return
 
-            # Query recipes with explicit error handling
-            try:
-                recipes = repo.list_figure_recipes(int(dataset_id))
-                count = len(recipes)
-                log.info(f"Found {count} recipe(s) for dataset {dataset_id}")
-                if count > 0:
-                    log.info(f"Recipe IDs: {[r.get('recipe_id') for r in recipes]}")
-            except Exception as e:
-                log.error(f"Failed to query recipes for dataset {dataset_id}: {e}", exc_info=True)
-                count = 0
-
-            log.info(f"Triggering full tree rebuild (found {count} recipes)")
-            self.refresh_project_tree()
-            log.info("=== Tree rebuild complete ===")
+            # Targeted update - only refresh the specific sample's figures node
+            log.info(f"Triggering targeted tree update for dataset {dataset_id}")
+            self._update_sample_tree_figures(dataset_id)
+            log.info("=== Tree update complete ===")
 
         except Exception as e:
             log.error(f"Figure recipes change handler failed: {e}", exc_info=True)
+
+    def _update_sample_tree_figures(self, dataset_id: int) -> None:
+        """Update the figures node for a specific sample without rebuilding the entire tree."""
+        print(f"\n[TREE UPDATE] Called _update_sample_tree_figures(dataset_id={dataset_id})")
+        try:
+            if not self.project_tree or not self.current_project:
+                print(f"[TREE UPDATE] ✗ Missing tree or project: tree={self.project_tree is not None}, project={self.current_project is not None}")
+                log.warning(f"Cannot update tree: project_tree={self.project_tree is not None}, current_project={self.current_project is not None}")
+                return
+
+            # Find the sample with this dataset_id
+            print(f"[TREE UPDATE] Searching for sample with dataset_id={dataset_id}...")
+            target_sample = None
+            target_experiment = None
+            for exp in self.current_project.experiments:
+                for sample in exp.samples:
+                    if getattr(sample, "dataset_id", None) == dataset_id:
+                        target_sample = sample
+                        target_experiment = exp
+                        break
+                if target_sample:
+                    break
+
+            if not target_sample:
+                print(f"[TREE UPDATE] ✗ Could not find sample with dataset_id={dataset_id}")
+                log.warning(f"Could not find sample with dataset_id={dataset_id}")
+                return
+
+            print(f"[TREE UPDATE] ✓ Found sample: '{target_sample.name}'")
+            log.info(f"Updating figures for sample '{target_sample.name}' (dataset_id={dataset_id})")
+
+            # Find the tree item for this sample
+            print(f"[TREE UPDATE] Searching for tree item for sample '{target_sample.name}'...")
+            sample_item = None
+            root = self.project_tree.topLevelItem(0)
+            if root:
+                for exp_idx in range(root.childCount()):
+                    exp_item = root.child(exp_idx)
+                    exp_data = exp_item.data(0, Qt.UserRole)
+                    if exp_data == target_experiment:
+                        for sample_idx in range(exp_item.childCount()):
+                            child = exp_item.child(sample_idx)
+                            sample_data = child.data(0, Qt.UserRole)
+                            if sample_data == target_sample:
+                                sample_item = child
+                                break
+                    if sample_item:
+                        break
+
+            if not sample_item:
+                print(f"[TREE UPDATE] ✗ Could not find tree item for sample '{target_sample.name}'")
+                log.warning(f"Could not find tree item for sample '{target_sample.name}'")
+                return
+
+            print(f"[TREE UPDATE] ✓ Found tree item for sample")
+
+            # Remove existing figures node if present
+            print(f"[TREE UPDATE] Removing existing figures node if present...")
+            for idx in range(sample_item.childCount()):
+                child = sample_item.child(idx)
+                child_data = child.data(0, Qt.UserRole)
+                if isinstance(child_data, dict) and child_data.get("type") == "figure_folder":
+                    sample_item.removeChild(child)
+                    print(f"[TREE UPDATE] ✓ Removed old figures node")
+                    break
+
+            # Query recipes for this sample
+            print(f"[TREE UPDATE] Querying database for recipes...")
+            recipes: list[dict] = []
+            repo = self._project_repo()
+            if repo:
+                try:
+                    recipes = list(repo.list_figure_recipes(int(dataset_id)))
+                    print(f"[TREE UPDATE] ✓ Found {len(recipes)} recipe(s) in database")
+                    log.info(f"Found {len(recipes)} recipe(s) for dataset {dataset_id}")
+                    if recipes:
+                        for i, r in enumerate(recipes, 1):
+                            print(f"[TREE UPDATE]   Recipe {i}: '{r.get('name')}' (id={r.get('recipe_id')})")
+                        log.info(f"  Recipe names: {[r.get('name') for r in recipes]}")
+                except Exception as e:
+                    print(f"[TREE UPDATE] ✗ Failed to query recipes: {e}")
+                    log.error(f"Failed to load recipes for dataset {dataset_id}: {e}", exc_info=True)
+                    recipes = []
+            else:
+                print(f"[TREE UPDATE] ✗ No repository available for querying")
+
+            # Check for legacy figures
+            has_new_figures = target_sample.figure_configs and len(target_sample.figure_configs) > 0
+            slides = self._get_sample_figure_slides(target_sample, create=False)
+            has_old_figures = slides and len(slides) > 0
+
+            print(f"[TREE UPDATE] Figure counts: new={len(target_sample.figure_configs) if has_new_figures else 0}, old={len(slides) if has_old_figures else 0}, recipes={len(recipes)}")
+
+            # Only add figures node if there are any figures/recipes
+            if has_new_figures or has_old_figures or recipes:
+                print(f"[TREE UPDATE] Creating figures node...")
+                figures_root = QTreeWidgetItem(["📊 Figures"])
+                figures_root.setData(
+                    0,
+                    Qt.UserRole,
+                    {"type": "figure_folder", "sample": target_sample, "experiment": target_experiment},
+                )
+                figures_root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
+                sample_item.addChild(figures_root)
+                print(f"[TREE UPDATE] ✓ Added figures node to tree")
+
+                # Add NEW figure composer figures
+                if has_new_figures:
+                    for fig_id, fig_data in target_sample.figure_configs.items():
+                        fig_name = fig_data.get("figure_name", fig_id)
+                        fig_item = QTreeWidgetItem([f"{fig_name} [New]"])
+                        fig_item.setData(0, Qt.UserRole, ("figure", target_sample, fig_id, fig_data))
+                        fig_item.setFlags(fig_item.flags() & ~Qt.ItemIsEditable)
+                        fig_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+                        fig_item.setToolTip(
+                            0,
+                            f"New Figure Composer\nCreated: {fig_data.get('metadata', {}).get('created', 'Unknown')}",
+                        )
+                        figures_root.addChild(fig_item)
+
+                # Add OLD figure composer figures (slides)
+                if has_old_figures:
+                    for idx, slide in enumerate(slides, start=1):
+                        slide_name = slide.get("name") or f"Figure {idx}"
+                        timestamp = slide.get("updated_at") or slide.get("created_at")
+                        slide_label = f"{slide_name} ({timestamp})" if timestamp else slide_name
+                        slide_item = QTreeWidgetItem([f"{slide_label} [Legacy]"])
+                        slide_item.setData(
+                            0,
+                            Qt.UserRole,
+                            {
+                                "type": "figure_slide",
+                                "sample": target_sample,
+                                "experiment": target_experiment,
+                                "slide": slide,
+                            },
+                        )
+                        slide_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+                        figures_root.addChild(slide_item)
+
+                # Add figure recipes
+                print(f"[TREE UPDATE] Adding {len(recipes)} recipe item(s) to tree...")
+                for rec in recipes:
+                    rec_name = rec.get("name") or "Figure"
+                    print(f"[TREE UPDATE]   Adding recipe: '{rec_name}'")
+                    rec_item = QTreeWidgetItem([rec_name])
+                    rec_item.setData(
+                        0,
+                        Qt.UserRole,
+                        {
+                            "type": "figure_recipe",
+                            "sample": target_sample,
+                            "experiment": target_experiment,
+                            "recipe_id": rec.get("recipe_id"),
+                            "dataset_id": dataset_id,
+                        },
+                    )
+                    rec_item.setFlags(rec_item.flags() & ~Qt.ItemIsEditable)
+                    rec_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+                    figures_root.addChild(rec_item)
+                    print(f"[TREE UPDATE]   ✓ Recipe item added to tree")
+
+                # Expand the figures node to show the new recipe
+                sample_item.setExpanded(True)
+                figures_root.setExpanded(True)
+                print(f"[TREE UPDATE] ✓ Tree update complete - {len(recipes)} recipe(s) added")
+                log.info(f"Successfully updated tree with {len(recipes)} recipe(s) for sample '{target_sample.name}'")
+            else:
+                print(f"[TREE UPDATE] No figures to display (no recipes, new figures, or old figures)")
+
+        except Exception as e:
+            print(f"[TREE UPDATE] ✗ Exception during tree update: {e}")
+            log.error(f"Failed to update sample tree figures for dataset_id={dataset_id}: {e}", exc_info=True)
 
     def _set_samples_data_quality(
         self, samples: Sequence[SampleN], quality: str | None
@@ -5458,22 +5621,12 @@ class VasoAnalyzerApp(QMainWindow):
         # Single supported composer entrypoint
         self.action_figure_composer = QAction(
             QIcon(self.icon_path("figure-composer.svg")),
-            "Figure Composer (Matplotlib)…",
+            "Compose Current View…",
             self,
         )
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
         self.action_figure_composer.triggered.connect(self.open_matplotlib_composer_from_current_view)
         tools_menu.addAction(self.action_figure_composer)
-
-        self.action_figure_composer_current_view = QAction(
-            QIcon(self.icon_path("figure-composer.svg")),
-            "Compose Current View…",
-            self,
-        )
-        self.action_figure_composer_current_view.triggered.connect(
-            self.open_matplotlib_composer_from_current_view
-        )
-        tools_menu.addAction(self.action_figure_composer_current_view)
 
         tools_menu.addSeparator()
 
@@ -5482,9 +5635,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_select_range.toggled.connect(self._toggle_trace_range_selection)
         tools_menu.addAction(self.action_select_range)
 
-        self.action_compose_selected_range = QAction("Compose Selected Range…", self)
-        self.action_compose_selected_range.triggered.connect(self._compose_selected_range)
-        tools_menu.addAction(self.action_compose_selected_range)
+        # Note: "Compose Selected Range" removed - use "Compose Current View" instead
+        # All composer sessions now create persistent recipes
 
         self.action_copy_selected_range = QAction("Copy Selected Range Data", self)
         self.action_copy_selected_range.triggered.connect(self._copy_selected_range_data)
@@ -13686,6 +13838,13 @@ QPushButton[isGhost="true"]:pressed {{
         repo = self._project_repo()
         dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
         recipe_id = None
+
+        print(f"\n{'='*60}")
+        print(f"[COMPOSER DEBUG] Starting 'Compose Current View'")
+        print(f"[COMPOSER DEBUG] repo available: {repo is not None}")
+        print(f"[COMPOSER DEBUG] dataset_id: {dataset_id}")
+        print(f"{'='*60}\n")
+
         if repo is not None and dataset_id is not None:
             name = (
                 f"{default_trace_key or 'trace'} {xlim[0]:.1f}-{xlim[1]:.1f}s"
@@ -13693,6 +13852,7 @@ QPushButton[isGhost="true"]:pressed {{
                 else "Figure Recipe"
             )
             try:
+                print(f"[COMPOSER DEBUG] About to create recipe with name: '{name}'")
                 recipe_id = repo.add_figure_recipe(
                     int(dataset_id),
                     name,
@@ -13705,14 +13865,17 @@ QPushButton[isGhost="true"]:pressed {{
                     y_max=ylim[1] if ylim else None,
                     export_background=spec.page.export_background,
                 )
+                print(f"[COMPOSER DEBUG] ✓ Recipe created successfully!")
+                print(f"[COMPOSER DEBUG]   recipe_id: {recipe_id}")
+                print(f"[COMPOSER DEBUG]   dataset_id: {dataset_id}")
                 log.info(f"Created figure recipe {recipe_id} for dataset {dataset_id}")
 
-                # Emit signal to trigger tree refresh
-                if hasattr(self, 'figure_recipes_changed'):
-                    self.figure_recipes_changed.emit(int(dataset_id))
-                    log.info(f"Emitted figure_recipes_changed signal for dataset {dataset_id}")
-                else:
-                    log.error("figure_recipes_changed signal not found!")
+                # Immediately update the tree (don't wait for signal/query cycle)
+                # This avoids transaction isolation issues
+                print(f"[COMPOSER DEBUG] About to update tree for dataset {dataset_id}...")
+                self._update_sample_tree_figures(int(dataset_id))
+                print(f"[COMPOSER DEBUG] ✓ Tree update completed")
+                log.info(f"Updated tree for dataset {dataset_id} after recipe creation")
             except Exception as e:
                 log.error(f"Failed to create figure recipe: {e}", exc_info=True)
                 QMessageBox.warning(
@@ -13729,7 +13892,7 @@ QPushButton[isGhost="true"]:pressed {{
             recipe_id=recipe_id,
             figure_spec=spec,
         )
-        self.refresh_project_tree()
+        # Note: Tree update is handled by the figure_recipes_changed signal above
 
     def open_matplotlib_composer(
         self,
@@ -13922,6 +14085,8 @@ QPushButton[isGhost="true"]:pressed {{
         event_times, event_labels, event_colors = self._composer_event_payload()
         dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
 
+        # NOTE: This method is deprecated - use "Compose Current View" instead
+        # Kept for backward compatibility but no longer accessible from menu
         window = PureMplFigureComposer(
             trace_model=self.trace_model,
             parent=self,
