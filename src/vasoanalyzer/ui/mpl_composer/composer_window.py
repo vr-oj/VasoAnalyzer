@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import json
+from copy import deepcopy
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -182,6 +184,7 @@ class PureMplFigureComposer(QMainWindow):
         self._preview_scale_label: QLabel | None = None
         self._right_panel: QWidget | None = None
         self._updating_canvas_size: bool = False
+        self._last_figure_size: tuple[float, float] | None = None  # Track (width_px, height_px)
 
         self._enforce_page_bounds(update_controls=False)
         self._setup_ui()
@@ -385,6 +388,7 @@ class PureMplFigureComposer(QMainWindow):
         self.label_export_size.setStyleSheet(f"color: {text_color};")
         export_row.addWidget(self.label_export_size)
         export_row.addStretch(1)
+
         self.cb_export_transparent = QCheckBox("Transparent background")
         self.cb_export_transparent.setChecked(False)
         export_row.addWidget(self.cb_export_transparent)
@@ -898,6 +902,48 @@ class PureMplFigureComposer(QMainWindow):
         self._export_transparent = bool(checked)
         if hasattr(self._fig_spec.page, "export_background"):
             self._fig_spec.page.export_background = "transparent" if checked else "white"
+        self._update_export_size_label()
+
+    def _prompt_export_dpi(self) -> float | None:
+        """Ask the user for export DPI via a simple dropdown, defaulting to current spec."""
+        dpi_default = int(getattr(self._fig_spec.page, "dpi", self.DEFAULT_DPI))
+        options = [
+            f"Use current ({dpi_default} dpi)",
+            "300 dpi",
+            "450 dpi",
+            "600 dpi",
+            "Custom…",
+        ]
+        choice, ok = QInputDialog.getItem(
+            self,
+            "Export resolution",
+            "Select export DPI:",
+            options,
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        if choice.startswith("Use current"):
+            return None
+        if choice.endswith("dpi"):
+            try:
+                return float(choice.split()[0])
+            except Exception:
+                return None
+        # Custom branch
+        dpi_val, ok_int = QInputDialog.getInt(
+            self,
+            "Custom DPI",
+            "DPI (pixels per inch)",
+            dpi_default,
+            72,
+            1200,
+            25,
+        )
+        if not ok_int:
+            return None
+        return float(dpi_val)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._persist_recipe_snapshot()
@@ -1031,13 +1077,17 @@ class PureMplFigureComposer(QMainWindow):
             avail_w = max(1, rect.width())
             avail_h = max(1, rect.height())
 
-            # Only resize if container size actually changed (prevent resize on widget focus changes)
-            current_size = (avail_w, avail_h)
-            if self._last_container_size == current_size:
-                return
-            self._last_container_size = current_size
             base_w_px = int(self._figure.get_figwidth() * self._figure.get_dpi())
             base_h_px = int(self._figure.get_figheight() * self._figure.get_dpi())
+
+            # Only resize if container size or figure size changed (prevent unnecessary resizes)
+            current_container_size = (avail_w, avail_h)
+            current_figure_size = (base_w_px, base_h_px)
+            if (self._last_container_size == current_container_size and
+                self._last_figure_size == current_figure_size):
+                return
+            self._last_container_size = current_container_size
+            self._last_figure_size = current_figure_size
             if base_w_px <= 0 or base_h_px <= 0:
                 return
             # Always compute scale using both dimensions to ensure canvas never exceeds preview pane
@@ -1331,18 +1381,34 @@ class PureMplFigureComposer(QMainWindow):
             text = f"{text}\n{self._default_view_note}"
         self.label_export_size.setText(text)
 
+    @contextmanager
     def _project_repo(self):
-        """Return a SQLiteProjectRepository if available."""
-        store = getattr(self.project, "_store", None)
-        if store is None:
-            return None
+        """Yield a short-lived SQLiteProjectRepository for persistence."""
+        repo = None
+        close_repo = False
+        project_path = getattr(self.project, "path", None)
         try:
-            from vasoanalyzer.services.project_service import SQLiteProjectRepository
+            if project_path:
+                try:
+                    from vasoanalyzer.services.project_service import open_project_repository
 
-            return SQLiteProjectRepository(store)
-        except Exception:
-            log.debug("Failed to construct project repository for recipe persistence", exc_info=True)
-            return None
+                    repo = open_project_repository(project_path)
+                    close_repo = True
+                except Exception:
+                    log.debug("Failed to open fresh project repository", exc_info=True)
+            if repo is None:
+                store = getattr(self.project, "_store", None)
+                if store is not None:
+                    from vasoanalyzer.services.project_service import SQLiteProjectRepository
+
+                    repo = SQLiteProjectRepository(store)
+            yield repo
+        finally:
+            if close_repo and repo is not None:
+                try:
+                    repo.close()
+                except Exception:
+                    log.debug("Failed to close project repository", exc_info=True)
 
     def _persist_recipe_snapshot(self) -> None:
         """Persist the current FigureSpec back to the recipe record."""
@@ -1350,45 +1416,45 @@ class PureMplFigureComposer(QMainWindow):
             log.debug("No recipe_id set, skipping persistence")
             return
 
-        repo = self._project_repo()
-        if repo is None:
-            log.warning("Cannot persist recipe: no repository available")
-            return
+        with self._project_repo() as repo:
+            if repo is None:
+                log.warning("Cannot persist recipe: no repository available")
+                return
 
-        try:
-            spec_dict = figure_spec_to_dict(self._fig_spec)
-            axes = self._fig_spec.axes
-            x_range = axes.x_range
-            y_range = axes.y_range
-            trace_key = self._active_trace_key
-            export_bg = getattr(self._fig_spec.page, "export_background", "white")
+            try:
+                spec_dict = figure_spec_to_dict(self._fig_spec)
+                axes = self._fig_spec.axes
+                x_range = axes.x_range
+                y_range = axes.y_range
+                trace_key = self._active_trace_key
+                export_bg = getattr(self._fig_spec.page, "export_background", "white")
 
-            repo.update_figure_recipe(
-                self._recipe_id,
-                spec_json=json.dumps(spec_dict),
-                trace_key=trace_key,
-                x_min=x_range[0] if x_range else None,
-                x_max=x_range[1] if x_range else None,
-                y_min=y_range[0] if y_range else None,
-                y_max=y_range[1] if y_range else None,
-                export_background=export_bg,
-            )
-            log.info(f"Persisted recipe {self._recipe_id} for dataset {self.dataset_id}")
+                repo.update_figure_recipe(
+                    self._recipe_id,
+                    spec_json=json.dumps(spec_dict),
+                    trace_key=trace_key,
+                    x_min=x_range[0] if x_range else None,
+                    x_max=x_range[1] if x_range else None,
+                    y_min=y_range[0] if y_range else None,
+                    y_max=y_range[1] if y_range else None,
+                    export_background=export_bg,
+                )
+                log.info(f"Persisted recipe {self._recipe_id} for dataset {self.dataset_id}")
 
-            # Emit signal to parent
-            parent = self.parent()
-            signal = getattr(parent, "figure_recipes_changed", None)
-            if signal is not None and hasattr(signal, "emit") and self.dataset_id is not None:
-                try:
-                    signal.emit(int(self.dataset_id))
-                    log.info(f"Emitted figure_recipes_changed signal for dataset {self.dataset_id}")
-                except Exception as e:
-                    log.error(f"Failed to emit figure_recipes_changed signal: {e}", exc_info=True)
-            else:
-                log.warning(f"Cannot emit signal: signal={signal is not None}, dataset_id={self.dataset_id}")
+                # Emit signal to parent
+                parent = self.parent()
+                signal = getattr(parent, "figure_recipes_changed", None)
+                if signal is not None and hasattr(signal, "emit") and self.dataset_id is not None:
+                    try:
+                        signal.emit(int(self.dataset_id))
+                        log.info(f"Emitted figure_recipes_changed signal for dataset {self.dataset_id}")
+                    except Exception as e:
+                        log.error(f"Failed to emit figure_recipes_changed signal: {e}", exc_info=True)
+                else:
+                    log.warning(f"Cannot emit signal: signal={signal is not None}, dataset_id={self.dataset_id}")
 
-        except Exception as e:
-            log.error(f"Failed to persist recipe snapshot: {e}", exc_info=True)
+            except Exception as e:
+                log.error(f"Failed to persist recipe snapshot: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # Export
@@ -1398,44 +1464,55 @@ class PureMplFigureComposer(QMainWindow):
         default_name = "figure"
         if self._recipe_id:
             # Try to get recipe name
-            repo = self._project_repo()
-            if repo:
-                try:
-                    recipe = repo.get_figure_recipe(self._recipe_id)
-                    if recipe and recipe.get("name"):
-                        # Clean the name for filesystem
-                        default_name = recipe["name"].replace("/", "-").replace("\\", "-")
-                except Exception:
-                    pass
+            with self._project_repo() as repo:
+                if repo:
+                    try:
+                        recipe = repo.get_figure_recipe(self._recipe_id)
+                        if recipe and recipe.get("name"):
+                            # Clean the name for filesystem
+                            default_name = recipe["name"].replace("/", "-").replace("\\", "-")
+                    except Exception:
+                        pass
 
         suggested = Path.cwd() / f"{default_name}.png"
+        filter_defs = [
+            {"label": "PNG Image (*.png)", "exts": [".png"], "kind": "png"},
+            {"label": "TIFF Image (*.tiff *.tif)", "exts": [".tiff", ".tif"], "kind": "tiff"},
+            {"label": "PDF Document (*.pdf)", "exts": [".pdf"], "kind": "pdf"},
+            {"label": "SVG Vector (*.svg)", "exts": [".svg"], "kind": "svg"},
+            {"label": "All Files (*)", "exts": [], "kind": "any"},
+        ]
+        filter_labels = ";;".join([f["label"] for f in filter_defs])
         path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Export Figure",
             str(suggested),
-            "PNG Image (*.png);;TIFF Image (*.tiff);;PDF Document (*.pdf);;SVG Vector (*.svg);;All Files (*)",
+            filter_labels,
         )
         if not path:
             return
 
+        meta_lookup = {f["label"]: f for f in filter_defs}
+        meta = meta_lookup.get(selected_filter, {"exts": [], "kind": "any"})
+
         # Ensure the file has the correct extension based on selected filter
+        exts = meta.get("exts", [])
         path_obj = Path(path)
-        if selected_filter.startswith("PNG"):
-            if not path_obj.suffix.lower() in ['.png']:
-                path = str(path_obj.with_suffix('.png'))
-        elif selected_filter.startswith("TIFF"):
-            if not path_obj.suffix.lower() in ['.tiff', '.tif']:
-                path = str(path_obj.with_suffix('.tiff'))
-        elif selected_filter.startswith("PDF"):
-            if not path_obj.suffix.lower() in ['.pdf']:
-                path = str(path_obj.with_suffix('.pdf'))
-        elif selected_filter.startswith("SVG"):
-            if not path_obj.suffix.lower() in ['.svg']:
-                path = str(path_obj.with_suffix('.svg'))
+        if exts:
+            lower_suffix = path_obj.suffix.lower()
+            if lower_suffix not in exts:
+                path = str(path_obj.with_suffix(exts[0]))
 
-        self.export_figure(path)
+        kind = meta.get("kind", "any")
+        dpi_override: float | None = None
+        if kind in ("png", "tiff"):
+            dpi_override = self._prompt_export_dpi()
+            if dpi_override is None:
+                return
 
-    def export_figure(self, out_path: str) -> None:
+        self.export_figure(path, dpi_override=dpi_override)
+
+    def export_figure(self, out_path: str, dpi_override: float | None = None) -> None:
         try:
             log.info("Exporting figure to %s", out_path)
             self._enforce_page_bounds(update_controls=True)
@@ -1444,8 +1521,13 @@ class PureMplFigureComposer(QMainWindow):
                 self._fig_spec.page.export_background = bg
             self._persist_recipe_snapshot()
             ctx = self._render_context(is_preview=False)
+            spec_for_export = (
+                self._fig_spec if dpi_override is None else deepcopy(self._fig_spec)
+            )
+            if dpi_override is not None:
+                spec_for_export.page.dpi = float(dpi_override)
             export_figure(
-                self._fig_spec,
+                spec_for_export,
                 out_path,
                 transparent=self._export_transparent,
                 ctx=ctx,

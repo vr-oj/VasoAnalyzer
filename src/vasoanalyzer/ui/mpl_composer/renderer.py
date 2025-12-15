@@ -139,10 +139,7 @@ def build_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None
     """Entry point: choose figure-first or axes-first sizing."""
     page = spec.page
     _clamp_page_size(page)
-    sizing_mode = getattr(page, "sizing_mode", "axes_first")
-    # Backwards compatibility for legacy flag
-    if sizing_mode not in ("axes_first", "figure_first"):
-        sizing_mode = "axes_first" if getattr(page, "axes_first", False) else "figure_first"
+    sizing_mode = _resolve_sizing_mode(page)
     if sizing_mode == "axes_first":
         return _build_axes_first_figure(spec, ctx, fig=fig)
     return _build_figure_first(spec, ctx, fig=fig)
@@ -395,10 +392,14 @@ def export_figure(
         bg_mode = "transparent"
     savefig_kwargs = _apply_export_background(fig, bg_mode)
 
+    sizing_mode = _resolve_sizing_mode(page)
+    bbox_inches = "tight" if sizing_mode == "figure_first" else None
+    if bbox_inches is not None:
+        savefig_kwargs["bbox_inches"] = bbox_inches
+
     fig.savefig(
         out_path,
         dpi=dpi,
-        bbox_inches="tight",
         **savefig_kwargs,
     )
 
@@ -567,11 +568,38 @@ def _get_renderer_for_figure(fig: Figure):
     return canvas.get_renderer(), canvas
 
 
+def _resolve_sizing_mode(page: PageSpec) -> Literal["axes_first", "figure_first"]:
+    """Normalize sizing mode (accepts legacy ``axes_first`` flag)."""
+    sizing_mode = getattr(page, "sizing_mode", "axes_first")
+    if sizing_mode not in ("axes_first", "figure_first"):
+        sizing_mode = "axes_first" if getattr(page, "axes_first", False) else "figure_first"
+    return sizing_mode
+
+
 def _render_events(ax: "Axes", spec: FigureSpec) -> None:
     show_labels = getattr(spec.axes, "show_event_labels", False)
+
+    # Prefer the user-specified x-range when present; otherwise use current limits
+    manual_xrange = getattr(spec.axes, "x_range", None)
+    if (
+        isinstance(manual_xrange, tuple)
+        and len(manual_xrange) == 2
+        and manual_xrange[0] is not None
+        and manual_xrange[1] is not None
+    ):
+        x_min, x_max = min(manual_xrange), max(manual_xrange)
+    else:
+        xlim = ax.get_xlim()
+        x_min, x_max = min(xlim), max(xlim)
+
     for ev in spec.events:
         if not ev.visible:
             continue
+
+        # Only render events that are within the visible x-axis range
+        if not (x_min <= ev.time_s <= x_max):
+            continue
+
         ax.vlines(
             x=ev.time_s,
             ymin=0.0,
@@ -591,6 +619,7 @@ def _render_events(ax: "Axes", spec: FigureSpec) -> None:
                 ha="center",
                 va="bottom" if ev.label_above else "top",
                 fontsize=8.0,
+                color="black",
             )
 
 
