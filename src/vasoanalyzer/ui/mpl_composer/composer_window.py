@@ -479,8 +479,9 @@ class PureMplFigureComposer(QMainWindow):
         form.addRow(self.cb_event_labels)
         form.addRow(self.cb_legend)
 
-        self.edit_xlabel.textChanged.connect(self._on_axis_labels_changed)
-        self.edit_ylabel.textChanged.connect(self._on_axis_labels_changed)
+        # Use editingFinished instead of textChanged so user can type full label before update
+        self.edit_xlabel.editingFinished.connect(self._on_axis_labels_changed)
+        self.edit_ylabel.editingFinished.connect(self._on_axis_labels_changed)
         self.cb_grid.toggled.connect(self._on_grid_toggled)
         self.cb_events.toggled.connect(self._on_events_toggled)
         self.cb_event_labels.toggled.connect(self._on_event_labels_toggled)
@@ -553,10 +554,11 @@ class PureMplFigureComposer(QMainWindow):
 
         self.cb_x_auto.toggled.connect(lambda checked: self._on_axis_range_mode_changed("x", checked))
         self.cb_y_auto.toggled.connect(lambda checked: self._on_axis_range_mode_changed("y", checked))
-        self.spin_x_min.valueChanged.connect(lambda _: self._apply_axis_ranges())
-        self.spin_x_max.valueChanged.connect(lambda _: self._apply_axis_ranges())
-        self.spin_y_min.valueChanged.connect(lambda _: self._apply_axis_ranges())
-        self.spin_y_max.valueChanged.connect(lambda _: self._apply_axis_ranges())
+        # Use editingFinished instead of valueChanged so user can type full number before update
+        self.spin_x_min.editingFinished.connect(lambda: self._apply_axis_ranges())
+        self.spin_x_max.editingFinished.connect(lambda: self._apply_axis_ranges())
+        self.spin_y_min.editingFinished.connect(lambda: self._apply_axis_ranges())
+        self.spin_y_max.editingFinished.connect(lambda: self._apply_axis_ranges())
         self.btn_reset_view.clicked.connect(self._reset_view_ranges)
         return grp
 
