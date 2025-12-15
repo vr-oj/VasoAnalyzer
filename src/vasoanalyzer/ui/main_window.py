@@ -139,6 +139,7 @@ from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
 from vasoanalyzer.ui.mpl_composer import PureMplFigureComposer
 from vasoanalyzer.ui.mpl_composer.renderer import (
     AxesSpec as ComposerAxesSpec,
+    EventSpec as ComposerEventSpec,
     FigureSpec as ComposerFigureSpec,
     PageSpec as ComposerPageSpec,
     TraceSpec as ComposerTraceSpec,
@@ -4343,6 +4344,25 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_new_windows(selected_samples)
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
+        elif isinstance(obj, dict) and obj.get("type") == "figure_recipe":
+            # Handle figure recipe items from database
+            recipe_id = obj.get("recipe_id")
+            dataset_id = obj.get("dataset_id")
+            sample = obj.get("sample")
+            open_recipe = menu.addAction("Open Figure Recipe")
+            rename_recipe = menu.addAction("Rename Recipe…")
+            delete_recipe = menu.addAction("Delete Recipe")
+            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            if action == open_recipe:
+                self.open_matplotlib_composer_from_recipe(recipe_id, dataset_id)
+            elif action == rename_recipe:
+                self._rename_figure_recipe(recipe_id, dataset_id, sample)
+            elif action == delete_recipe:
+                self._delete_figure_recipe(recipe_id, dataset_id, sample)
+            elif action == open_act:
+                self.open_samples_in_new_windows(selected_samples)
+            elif action == dual_act:
+                self.open_samples_in_dual_view(selected_samples)
 
     def add_experiment(self, checked: bool = False):
         """Add a new experiment to the current project.
@@ -4411,6 +4431,99 @@ class VasoAnalyzerApp(QMainWindow):
         sample.figure_configs.pop(figure_id, None)
         self.mark_session_dirty(reason="figure deleted")
         self.refresh_project_tree()
+
+    def _rename_figure_recipe(
+        self, recipe_id: str, dataset_id: int, sample: SampleN | None = None
+    ) -> None:
+        """Rename a figure recipe from the database."""
+        repo = self._project_repo()
+        if repo is None:
+            log.warning("Cannot rename recipe: no repository available")
+            return
+
+        # Get current recipe to find current name
+        try:
+            recipe = repo.get_figure_recipe(recipe_id)
+            if recipe is None:
+                log.error(f"Recipe {recipe_id} not found")
+                return
+            current_name = recipe.get("name", "Figure Recipe")
+        except Exception as e:
+            log.error(f"Failed to get recipe {recipe_id}: {e}", exc_info=True)
+            return
+
+        # Prompt for new name
+        new_name, ok = QInputDialog.getText(
+            self,
+            "Rename Figure Recipe",
+            f"Recipe name:",
+            text=current_name,
+        )
+        if not ok or not new_name.strip():
+            return
+
+        # Update recipe name
+        try:
+            repo.rename_figure_recipe(recipe_id, new_name.strip())
+            log.info(f"Renamed recipe {recipe_id} to '{new_name.strip()}'")
+
+            # Emit signal to refresh tree
+            if hasattr(self, 'figure_recipes_changed'):
+                self.figure_recipes_changed.emit(int(dataset_id))
+        except Exception as e:
+            log.error(f"Failed to rename recipe {recipe_id}: {e}", exc_info=True)
+            QMessageBox.warning(
+                self,
+                "Rename Failed",
+                f"Could not rename recipe: {e}"
+            )
+
+    def _delete_figure_recipe(
+        self, recipe_id: str, dataset_id: int, sample: SampleN | None = None
+    ) -> None:
+        """Delete a figure recipe from the database."""
+        repo = self._project_repo()
+        if repo is None:
+            log.warning("Cannot delete recipe: no repository available")
+            return
+
+        # Get recipe to find name for confirmation dialog
+        try:
+            recipe = repo.get_figure_recipe(recipe_id)
+            if recipe is None:
+                log.error(f"Recipe {recipe_id} not found")
+                return
+            recipe_name = recipe.get("name", "Figure Recipe")
+            sample_name = sample.name if sample else "this dataset"
+        except Exception as e:
+            log.error(f"Failed to get recipe {recipe_id}: {e}", exc_info=True)
+            return
+
+        # Confirm deletion
+        confirm = QMessageBox.question(
+            self,
+            "Delete Figure Recipe",
+            f"Delete recipe '{recipe_name}' from {sample_name}?\n\nThis cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+
+        # Delete recipe
+        try:
+            repo.delete_figure_recipe(recipe_id)
+            log.info(f"Deleted recipe {recipe_id}")
+
+            # Emit signal to refresh tree
+            if hasattr(self, 'figure_recipes_changed'):
+                self.figure_recipes_changed.emit(int(dataset_id))
+        except Exception as e:
+            log.error(f"Failed to delete recipe {recipe_id}: {e}", exc_info=True)
+            QMessageBox.warning(
+                self,
+                "Delete Failed",
+                f"Could not delete recipe: {e}"
+            )
 
     def delete_experiment(self, experiment: Experiment) -> None:
         if (
@@ -13459,6 +13572,9 @@ QPushButton[isGhost="true"]:pressed {{
         default_ylim: tuple[float, float] | None,
         default_trace_key: str | None,
         visible_channels: dict[str, bool],
+        event_times: list[float] | None = None,
+        event_labels: list[str] | None = None,
+        event_colors: list[str] | None = None,
     ) -> ComposerFigureSpec:
         page = ComposerPageSpec(
             width_in=PureMplFigureComposer.DEFAULT_WIDTH_IN,
@@ -13510,11 +13626,33 @@ QPushButton[isGhost="true"]:pressed {{
                     marker="",
                 )
             )
+
+        # Build event specs from event data
+        events: list[ComposerEventSpec] = []
+        if event_times:
+            for idx, t in enumerate(event_times):
+                color = (
+                    event_colors[idx] if event_colors and idx < len(event_colors)
+                    else CURRENT_THEME.get("text", "#444444")
+                )
+                label = event_labels[idx] if event_labels and idx < len(event_labels) else ""
+                events.append(
+                    ComposerEventSpec(
+                        visible=True,
+                        time_s=float(t),
+                        color=color,
+                        linewidth=1.0,
+                        linestyle="--",
+                        label=label,
+                        label_above=True,
+                    )
+                )
+
         return ComposerFigureSpec(
             page=page,
             axes=axes,
             traces=traces,
-            events=[],
+            events=events,
             annotations=[],
             legend_visible=False,
             legend_fontsize=9.0,
@@ -13536,8 +13674,13 @@ QPushButton[isGhost="true"]:pressed {{
         xlim, ylim, meta = view_ranges
         default_trace_key = meta.get("component") or meta.get("track_id")
 
+        # Get event data to include in the spec
+        event_times, event_labels, event_colors = self._composer_event_payload()
+
         visible_channels = self._composer_visible_channels()
-        spec = self._build_composer_spec_for_view(xlim, ylim, default_trace_key, visible_channels)
+        spec = self._build_composer_spec_for_view(
+            xlim, ylim, default_trace_key, visible_channels, event_times, event_labels, event_colors
+        )
         spec_dict = figure_spec_to_dict(spec)
 
         repo = self._project_repo()

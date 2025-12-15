@@ -150,6 +150,7 @@ class PureMplFigureComposer(QMainWindow):
         self._event_visibility_cache: dict[int, bool] = {}
         self._box_selector: RectangleSelector | None = None
         self._box_dragging: bool = False
+        self._last_container_size: tuple[int, int] | None = None  # Track canvas container size
 
         # UI widgets (assigned during setup)
         self.trace_selector: QComboBox | None = None
@@ -1029,6 +1030,12 @@ class PureMplFigureComposer(QMainWindow):
             rect = self._canvas_container.contentsRect()
             avail_w = max(1, rect.width())
             avail_h = max(1, rect.height())
+
+            # Only resize if container size actually changed (prevent resize on widget focus changes)
+            current_size = (avail_w, avail_h)
+            if self._last_container_size == current_size:
+                return
+            self._last_container_size = current_size
             base_w_px = int(self._figure.get_figwidth() * self._figure.get_dpi())
             base_h_px = int(self._figure.get_figheight() * self._figure.get_dpi())
             if base_w_px <= 0 or base_h_px <= 0:
@@ -1387,15 +1394,45 @@ class PureMplFigureComposer(QMainWindow):
     # Export
     # ------------------------------------------------------------------
     def _export_dialog(self) -> None:
-        suggested = Path.cwd() / "figure.png"
-        path, _ = QFileDialog.getSaveFileName(
+        # Generate a smart default filename
+        default_name = "figure"
+        if self._recipe_id:
+            # Try to get recipe name
+            repo = self._project_repo()
+            if repo:
+                try:
+                    recipe = repo.get_figure_recipe(self._recipe_id)
+                    if recipe and recipe.get("name"):
+                        # Clean the name for filesystem
+                        default_name = recipe["name"].replace("/", "-").replace("\\", "-")
+                except Exception:
+                    pass
+
+        suggested = Path.cwd() / f"{default_name}.png"
+        path, selected_filter = QFileDialog.getSaveFileName(
             self,
-            "Export figure",
+            "Export Figure",
             str(suggested),
-            "Images (*.png *.tiff *.tif);;PDF (*.pdf);;SVG (*.svg)",
+            "PNG Image (*.png);;TIFF Image (*.tiff);;PDF Document (*.pdf);;SVG Vector (*.svg);;All Files (*)",
         )
         if not path:
             return
+
+        # Ensure the file has the correct extension based on selected filter
+        path_obj = Path(path)
+        if selected_filter.startswith("PNG"):
+            if not path_obj.suffix.lower() in ['.png']:
+                path = str(path_obj.with_suffix('.png'))
+        elif selected_filter.startswith("TIFF"):
+            if not path_obj.suffix.lower() in ['.tiff', '.tif']:
+                path = str(path_obj.with_suffix('.tiff'))
+        elif selected_filter.startswith("PDF"):
+            if not path_obj.suffix.lower() in ['.pdf']:
+                path = str(path_obj.with_suffix('.pdf'))
+        elif selected_filter.startswith("SVG"):
+            if not path_obj.suffix.lower() in ['.svg']:
+                path = str(path_obj.with_suffix('.svg'))
+
         self.export_figure(path)
 
     def export_figure(self, out_path: str) -> None:
