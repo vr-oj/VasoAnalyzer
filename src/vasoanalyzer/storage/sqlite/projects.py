@@ -169,6 +169,24 @@ def ensure_schema(
             dataset_id INTEGER PRIMARY KEY REFERENCES dataset(id) ON DELETE CASCADE,
             png BLOB NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS figure_recipe (
+            recipe_id TEXT PRIMARY KEY,
+            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            spec_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            trace_key TEXT,
+            x_min REAL,
+            x_max REAL,
+            y_min REAL,
+            y_max REAL,
+            export_background TEXT NOT NULL DEFAULT 'white'
+        );
+
+        CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
         """
     )
     set_user_version(conn, schema_version)
@@ -252,6 +270,31 @@ def run_migrations(
 
             log.info("Schema migration to v4 complete (checksums added)")
             version = 4
+
+        elif version == 4:
+            # Migration from v4 to v5: Add figure_recipe table
+            log.info("Migrating schema from v4 to v5 (figure recipes)")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS figure_recipe (
+                    recipe_id TEXT PRIMARY KEY,
+                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    spec_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    trace_key TEXT,
+                    x_min REAL,
+                    x_max REAL,
+                    y_min REAL,
+                    y_max REAL,
+                    export_background TEXT NOT NULL DEFAULT 'white'
+                );
+                CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
+                """
+            )
+            version = 5
 
         else:
             raise RuntimeError(

@@ -548,6 +548,77 @@ class SQLiteProjectRepository(ProjectRepository):
     def iter_datasets(self) -> Sequence[Mapping[str, Any]]:
         return list(sqlite_store.iter_datasets(self._store))
 
+    # Figure recipes
+    def add_figure_recipe(
+        self,
+        dataset_id: int,
+        name: str,
+        spec_json: str,
+        *,
+        source: str = "current_view",
+        trace_key: str | None = None,
+        x_min: float | None = None,
+        x_max: float | None = None,
+        y_min: float | None = None,
+        y_max: float | None = None,
+        export_background: str = "white",
+        recipe_id: str | None = None,
+    ) -> str:
+        return sqlite_store.add_figure_recipe(
+            self._store,
+            dataset_id,
+            name,
+            spec_json,
+            source=source,
+            trace_key=trace_key,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+            export_background=export_background,
+            recipe_id=recipe_id,
+        )
+
+    def update_figure_recipe(
+        self,
+        recipe_id: str,
+        *,
+        name: str | None = None,
+        spec_json: str | None = None,
+        source: str | None = None,
+        trace_key: str | None = None,
+        x_min: float | None = None,
+        x_max: float | None = None,
+        y_min: float | None = None,
+        y_max: float | None = None,
+        export_background: str | None = None,
+    ) -> None:
+        sqlite_store.update_figure_recipe(
+            self._store,
+            recipe_id,
+            name=name,
+            spec_json=spec_json,
+            source=source,
+            trace_key=trace_key,
+            x_min=x_min,
+            x_max=x_max,
+            y_min=y_min,
+            y_max=y_max,
+            export_background=export_background,
+        )
+
+    def list_figure_recipes(self, dataset_id: int) -> list[dict[str, Any]]:
+        return sqlite_store.list_figure_recipes(self._store, dataset_id)
+
+    def get_figure_recipe(self, recipe_id: str) -> dict[str, Any] | None:
+        return sqlite_store.get_figure_recipe(self._store, recipe_id)
+
+    def delete_figure_recipe(self, recipe_id: str) -> None:
+        sqlite_store.delete_figure_recipe(self._store, recipe_id)
+
+    def rename_figure_recipe(self, recipe_id: str, name: str) -> None:
+        sqlite_store.rename_figure_recipe(self._store, recipe_id, name)
+
     def save(self, *, skip_optimize: bool = False) -> None:
         log.info(
             "SAVE: SQLiteProjectRepository.save entry path=%s skip_optimize=%s",

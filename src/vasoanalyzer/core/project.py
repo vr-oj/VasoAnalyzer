@@ -57,7 +57,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 3  # v3: Full VasoTracker support (Time_s_exact, frame_number, tiff_page, etc.)
+SCHEMA_VERSION = 5  # v5: Figure recipes table (composer)
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
 

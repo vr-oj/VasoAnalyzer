@@ -141,3 +141,43 @@ class ProjectRepository(TraceProvider, EventProvider, AssetProvider, Protocol):
     def iter_datasets(self) -> Sequence[DatasetRecord]: ...
 
     def save(self) -> None: ...
+
+    # Figure recipes
+    def add_figure_recipe(
+        self,
+        dataset_id: int,
+        name: str,
+        spec_json: str,
+        *,
+        source: str = "current_view",
+        trace_key: str | None = None,
+        x_min: float | None = None,
+        x_max: float | None = None,
+        y_min: float | None = None,
+        y_max: float | None = None,
+        export_background: str = "white",
+        recipe_id: str | None = None,
+    ) -> str: ...
+
+    def update_figure_recipe(
+        self,
+        recipe_id: str,
+        *,
+        name: str | None = None,
+        spec_json: str | None = None,
+        source: str | None = None,
+        trace_key: str | None = None,
+        x_min: float | None = None,
+        x_max: float | None = None,
+        y_min: float | None = None,
+        y_max: float | None = None,
+        export_background: str | None = None,
+    ) -> None: ...
+
+    def list_figure_recipes(self, dataset_id: int) -> Sequence[Mapping[str, Any]]: ...
+
+    def get_figure_recipe(self, recipe_id: str) -> Mapping[str, Any] | None: ...
+
+    def delete_figure_recipe(self, recipe_id: str) -> None: ...
+
+    def rename_figure_recipe(self, recipe_id: str, name: str) -> None: ...

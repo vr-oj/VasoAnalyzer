@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,7 @@ import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.widgets import RectangleSelector
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QShowEvent
+from PyQt5.QtGui import QCloseEvent, QShowEvent
 from PyQt5.QtWidgets import QColorDialog
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -46,13 +47,14 @@ from .renderer import (
     build_figure,
     export_figure,
 )
+from .spec_serialization import figure_spec_from_dict, figure_spec_to_dict
 
 log = logging.getLogger(__name__)
 
 MIN_PREVIEW_W = 560  # Minimum usable preview width (px)
 MIN_PREVIEW_H = 360  # Minimum usable preview height (px)
 EXTRA_W_PAD = 48     # Window chrome/layout breathing room (px)
-EXTRA_H_PAD = 120    # Header/export rows + margins (px)
+EXTRA_H_PAD = 140    # Header/export rows + margins (px)
 
 
 @contextmanager
@@ -97,12 +99,15 @@ class PureMplFigureComposer(QMainWindow):
         default_xlim: tuple[float, float] | None = None,
         default_ylim: tuple[float, float] | None = None,
         default_trace_key: str | None = None,
+        recipe_id: str | None = None,
+        figure_spec: FigureSpec | dict | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Single Figure Studio")
         self.trace_model = trace_model
         self.project = project
         self.dataset_id = dataset_id
+        self._recipe_id = recipe_id
         self.event_times = event_times or []
         self.event_labels = event_labels or []
         self.event_colors = event_colors or []
@@ -114,7 +119,13 @@ class PureMplFigureComposer(QMainWindow):
         self._applied_default_view = False
         self._default_view_note: str | None = None
 
-        self._fig_spec: FigureSpec = self._build_initial_fig_spec(trace_model)
+        if figure_spec is not None:
+            if isinstance(figure_spec, dict):
+                self._fig_spec = figure_spec_from_dict(figure_spec)
+            else:
+                self._fig_spec = figure_spec
+        else:
+            self._fig_spec: FigureSpec = self._build_initial_fig_spec(trace_model)
         self._active_trace_key = next(
             (trace.key for trace in self._fig_spec.traces if trace.visible),
             self._fig_spec.traces[0].key if self._fig_spec.traces else "inner",
@@ -160,6 +171,7 @@ class PureMplFigureComposer(QMainWindow):
         self.spin_width: QDoubleSpinBox | None = None
         self.spin_height: QDoubleSpinBox | None = None
         self.cb_legend: QCheckBox | None = None
+        self.cb_export_transparent: QCheckBox | None = None
         self.label_export_size: QLabel | None = None
         self.btn_export: QPushButton | None = None
         self.btn_box_select: QPushButton | None = None
@@ -372,6 +384,9 @@ class PureMplFigureComposer(QMainWindow):
         self.label_export_size.setStyleSheet(f"color: {text_color};")
         export_row.addWidget(self.label_export_size)
         export_row.addStretch(1)
+        self.cb_export_transparent = QCheckBox("Transparent background")
+        self.cb_export_transparent.setChecked(False)
+        export_row.addWidget(self.cb_export_transparent)
         self.btn_export = QPushButton("Export…")
         export_row.addWidget(self.btn_export)
         left_layout.addLayout(export_row)
@@ -393,6 +408,8 @@ class PureMplFigureComposer(QMainWindow):
 
         if self.btn_export is not None:
             self.btn_export.clicked.connect(self._export_dialog)
+        if self.cb_export_transparent is not None:
+            self.cb_export_transparent.toggled.connect(self._on_export_background_toggled)
 
     def _create_preview(self) -> None:
         ctx = self._render_context(is_preview=True)
@@ -523,6 +540,12 @@ class PureMplFigureComposer(QMainWindow):
         y_row.addWidget(self.spin_y_max)
         layout.addLayout(y_row)
 
+        reset_row = QHBoxLayout()
+        self.btn_reset_view = QPushButton("Reset view")
+        reset_row.addStretch(1)
+        reset_row.addWidget(self.btn_reset_view)
+        layout.addLayout(reset_row)
+
         self.btn_box_select = QPushButton("Box select range")
         self.btn_box_select.setCheckable(True)
         self.btn_box_select.toggled.connect(self._toggle_box_select)
@@ -534,6 +557,7 @@ class PureMplFigureComposer(QMainWindow):
         self.spin_x_max.valueChanged.connect(lambda _: self._apply_axis_ranges())
         self.spin_y_min.valueChanged.connect(lambda _: self._apply_axis_ranges())
         self.spin_y_max.valueChanged.connect(lambda _: self._apply_axis_ranges())
+        self.btn_reset_view.clicked.connect(self._reset_view_ranges)
         return grp
 
     def _build_font_group(self) -> QGroupBox:
@@ -679,6 +703,9 @@ class PureMplFigureComposer(QMainWindow):
                 self.spin_height.setEnabled(False)
 
         self._update_export_size_label()
+        if self.cb_export_transparent is not None:
+            with signals_blocked(self.cb_export_transparent):
+                self.cb_export_transparent.setChecked(bool(self._export_transparent))
 
     def _enforce_page_bounds(self, update_controls: bool = True) -> None:
         """Clamp page size to min/max bounds to prevent label clipping or runaway sizes."""
@@ -841,9 +868,37 @@ class PureMplFigureComposer(QMainWindow):
         axes.ylabel = self.edit_ylabel.text() if self.edit_ylabel else axes.ylabel
         self._refresh_preview()
 
+    def _reset_view_ranges(self) -> None:
+        """Restore full-trace view by re-enabling autoscale on both axes."""
+        axes = self._fig_spec.axes
+        axes.x_range = None
+        axes.y_range = None
+
+        if self.cb_x_auto:
+            with signals_blocked(self.cb_x_auto):
+                self.cb_x_auto.setChecked(True)
+        if self.cb_y_auto:
+            with signals_blocked(self.cb_y_auto):
+                self.cb_y_auto.setChecked(True)
+
+        for spin in [self.spin_x_min, self.spin_x_max, self.spin_y_min, self.spin_y_max]:
+            if spin is not None:
+                spin.setEnabled(False)
+
+        self._refresh_preview()
+
     def _on_grid_toggled(self, checked: bool) -> None:
         self._fig_spec.axes.show_grid = checked
         self._refresh_preview()
+
+    def _on_export_background_toggled(self, checked: bool) -> None:
+        self._export_transparent = bool(checked)
+        if hasattr(self._fig_spec.page, "export_background"):
+            self._fig_spec.page.export_background = "transparent" if checked else "white"
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._persist_recipe_snapshot()
+        super().closeEvent(event)
 
     def _on_events_toggled(self, checked: bool) -> None:
         self._set_events_visible(checked)
@@ -1226,6 +1281,7 @@ class PureMplFigureComposer(QMainWindow):
                 rp_w = rp.sizeHint().width()
             if rp_w <= 0:
                 rp_w = rp.width()
+        rp_w = max(0, rp_w)
 
         central = self.centralWidget()
         layout = central.layout() if central is not None else None
@@ -1266,6 +1322,65 @@ class PureMplFigureComposer(QMainWindow):
             text = f"{text}\n{self._default_view_note}"
         self.label_export_size.setText(text)
 
+    def _project_repo(self):
+        """Return a SQLiteProjectRepository if available."""
+        store = getattr(self.project, "_store", None)
+        if store is None:
+            return None
+        try:
+            from vasoanalyzer.services.project_service import SQLiteProjectRepository
+
+            return SQLiteProjectRepository(store)
+        except Exception:
+            log.debug("Failed to construct project repository for recipe persistence", exc_info=True)
+            return None
+
+    def _persist_recipe_snapshot(self) -> None:
+        """Persist the current FigureSpec back to the recipe record."""
+        if not self._recipe_id:
+            log.debug("No recipe_id set, skipping persistence")
+            return
+
+        repo = self._project_repo()
+        if repo is None:
+            log.warning("Cannot persist recipe: no repository available")
+            return
+
+        try:
+            spec_dict = figure_spec_to_dict(self._fig_spec)
+            axes = self._fig_spec.axes
+            x_range = axes.x_range
+            y_range = axes.y_range
+            trace_key = self._active_trace_key
+            export_bg = getattr(self._fig_spec.page, "export_background", "white")
+
+            repo.update_figure_recipe(
+                self._recipe_id,
+                spec_json=json.dumps(spec_dict),
+                trace_key=trace_key,
+                x_min=x_range[0] if x_range else None,
+                x_max=x_range[1] if x_range else None,
+                y_min=y_range[0] if y_range else None,
+                y_max=y_range[1] if y_range else None,
+                export_background=export_bg,
+            )
+            log.info(f"Persisted recipe {self._recipe_id} for dataset {self.dataset_id}")
+
+            # Emit signal to parent
+            parent = self.parent()
+            signal = getattr(parent, "figure_recipes_changed", None)
+            if signal is not None and hasattr(signal, "emit") and self.dataset_id is not None:
+                try:
+                    signal.emit(int(self.dataset_id))
+                    log.info(f"Emitted figure_recipes_changed signal for dataset {self.dataset_id}")
+                except Exception as e:
+                    log.error(f"Failed to emit figure_recipes_changed signal: {e}", exc_info=True)
+            else:
+                log.warning(f"Cannot emit signal: signal={signal is not None}, dataset_id={self.dataset_id}")
+
+        except Exception as e:
+            log.error(f"Failed to persist recipe snapshot: {e}", exc_info=True)
+
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
@@ -1288,6 +1403,7 @@ class PureMplFigureComposer(QMainWindow):
             bg = "transparent" if self._export_transparent else "white"
             if hasattr(self._fig_spec.page, "export_background"):
                 self._fig_spec.page.export_background = bg
+            self._persist_recipe_snapshot()
             ctx = self._render_context(is_preview=False)
             export_figure(
                 self._fig_spec,

@@ -727,10 +727,17 @@ class TemplatePage(WizardPageBase):
         elif self.combo_sheet.count() > 1:
             # Show selection required message
             self.lbl_excel.setText(
-                f"Loaded: {Path(path).name} - Select a worksheet to continue"
+                f"Loaded: {Path(path).name} - Please select a worksheet to continue"
             )
             colors = get_semantic_colors()
             self.lbl_excel.setStyleSheet(f"color: {colors['warning']};")
+
+            # Set placeholder text on combo box for clarity
+            self.combo_sheet.setPlaceholderText("Select a worksheet...")
+
+            # Ensure currentIndex is -1 (nothing selected)
+            if self.combo_sheet.currentIndex() == 0:
+                self.combo_sheet.setCurrentIndex(-1)
         else:
             # No sheets available (shouldn't happen)
             self.lbl_excel.setText(f"Loaded: {Path(path).name} - No worksheets found")
@@ -922,6 +929,10 @@ class TemplatePage(WizardPageBase):
             self.combo_sheet.addItem(sheet_name)
 
         self.combo_sheet.blockSignals(False)
+
+        # Clear auto-selection - force user to explicitly choose when multiple sheets
+        if self.combo_sheet.count() > 1:
+            self.combo_sheet.setCurrentIndex(-1)
 
         # Show selector if sheets available
         has_sheets = self.combo_sheet.count() > 0

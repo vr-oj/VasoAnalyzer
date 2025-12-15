@@ -137,6 +137,16 @@ from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
 from vasoanalyzer.ui.mpl_composer import PureMplFigureComposer
+from vasoanalyzer.ui.mpl_composer.renderer import (
+    AxesSpec as ComposerAxesSpec,
+    FigureSpec as ComposerFigureSpec,
+    PageSpec as ComposerPageSpec,
+    TraceSpec as ComposerTraceSpec,
+)
+from vasoanalyzer.ui.mpl_composer.spec_serialization import (
+    figure_spec_from_dict,
+    figure_spec_to_dict,
+)
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.overlays import AnnotationSpec
 from vasoanalyzer.ui.point_editor_session import PointEditorSession, SessionSummary
@@ -631,6 +641,7 @@ def onboarding_needed(settings: QSettings) -> bool:
 
 # [B] ========================= MAIN CLASS DEFINITION ================================
 class VasoAnalyzerApp(QMainWindow):
+    figure_recipes_changed = pyqtSignal(int)
     def __init__(self, check_updates: bool = True):
         super().__init__()
 
@@ -929,6 +940,17 @@ class VasoAnalyzerApp(QMainWindow):
         log.info(
             "Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked"
         )
+        try:
+            self.figure_recipes_changed.connect(self._on_figure_recipes_changed)
+            log.info("Connected figure_recipes_changed signal to handler")
+        except Exception as e:
+            log.error(f"CRITICAL: Failed to connect figure_recipes_changed signal: {e}", exc_info=True)
+            # This is critical - show error to user
+            QMessageBox.warning(
+                self,
+                "Feature Initialization Failed",
+                "Figure recipe auto-save may not work. Check logs for details."
+            )
         # Single-click opens a sample; double-click is reserved for editing or opening figures
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.project_tree.customContextMenuRequested.connect(
@@ -2506,10 +2528,33 @@ class VasoAnalyzerApp(QMainWindow):
                 slides = self._get_sample_figure_slides(s, create=False)
                 has_old_figures = slides and len(slides) > 0
 
-                # If sample has either type of figure, create Figures folder
-                if has_new_figures or has_old_figures:
+                # Query recipes for this sample
+                recipes: list[dict] = []
+                repo = self._project_repo()
+                sample_dataset_id = getattr(s, "dataset_id", None)
+
+                if repo is None:
+                    log.debug(f"Sample '{s.name}': No repository available")
+                elif sample_dataset_id is None:
+                    log.debug(f"Sample '{s.name}': No dataset_id (legacy or no data loaded)")
+                else:
+                    try:
+                        recipes = list(repo.list_figure_recipes(int(sample_dataset_id)))
+                        if recipes:
+                            log.info(f"Sample '{s.name}' (dataset_id={sample_dataset_id}): Found {len(recipes)} recipe(s)")
+                            log.info(f"  Recipe names: {[r.get('name') for r in recipes]}")
+                        else:
+                            log.debug(f"Sample '{s.name}' (dataset_id={sample_dataset_id}): No recipes found")
+                    except Exception as e:
+                        log.error(
+                            f"Failed to load recipes for sample '{s.name}' (dataset_id={sample_dataset_id}): {e}",
+                            exc_info=True
+                        )
+                        recipes = []
+
+                if has_new_figures or has_old_figures or recipes:
                     log.info(
-                        f"Sample '{s.name}' has figures: new={has_new_figures}, old={has_old_figures}"
+                        f"Sample '{s.name}' has figures: new={has_new_figures}, old={has_old_figures}, recipes={len(recipes)}"
                     )
                     figures_root = QTreeWidgetItem(["📊 Figures"])
                     figures_root.setData(
@@ -2578,11 +2623,64 @@ class VasoAnalyzerApp(QMainWindow):
                                 ),
                             )
                             figures_root.addChild(slide_item)
+                    # Add figure recipes
+                    for rec in recipes:
+                        rec_name = rec.get("name") or "Figure"
+                        rec_item = QTreeWidgetItem([rec_name])
+                        rec_item.setData(
+                            0,
+                            Qt.UserRole,
+                            {
+                                "type": "figure_recipe",
+                                "sample": s,
+                                "experiment": exp,
+                                "recipe_id": rec.get("recipe_id"),
+                                "dataset_id": getattr(s, "dataset_id", None),
+                            },
+                        )
+                        rec_item.setFlags(rec_item.flags() & ~Qt.ItemIsEditable)
+                        rec_item.setIcon(
+                            0,
+                            self.style().standardIcon(QStyle.SP_FileDialogDetailedView),
+                        )
+                        figures_root.addChild(rec_item)
         self.project_tree.expandAll()
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()
         if self.current_sample:
             self._select_tree_item_for_sample(self.current_sample)
+
+    def _on_figure_recipes_changed(self, dataset_id: int) -> None:
+        """Handle figure recipe changes - triggers tree rebuild."""
+        log.info(f"=== Figure recipes changed signal received for dataset_id={dataset_id} ===")
+
+        try:
+            repo = self._project_repo()
+            if repo is None:
+                log.warning("Cannot refresh recipes: repository not available")
+                return
+
+            if dataset_id is None:
+                log.warning("Cannot refresh recipes: dataset_id is None")
+                return
+
+            # Query recipes with explicit error handling
+            try:
+                recipes = repo.list_figure_recipes(int(dataset_id))
+                count = len(recipes)
+                log.info(f"Found {count} recipe(s) for dataset {dataset_id}")
+                if count > 0:
+                    log.info(f"Recipe IDs: {[r.get('recipe_id') for r in recipes]}")
+            except Exception as e:
+                log.error(f"Failed to query recipes for dataset {dataset_id}: {e}", exc_info=True)
+                count = 0
+
+            log.info(f"Triggering full tree rebuild (found {count} recipes)")
+            self.refresh_project_tree()
+            log.info("=== Tree rebuild complete ===")
+
+        except Exception as e:
+            log.error(f"Figure recipes change handler failed: {e}", exc_info=True)
 
     def _set_samples_data_quality(
         self, samples: Sequence[SampleN], quality: str | None
@@ -2894,10 +2992,21 @@ class VasoAnalyzerApp(QMainWindow):
             obj.name = name
 
     def on_tree_item_double_clicked(self, item, _):
-        """Deprecated handler kept for backward compatibility."""
+        """Handle tree double-click (sample or figure recipe)."""
         obj = item.data(0, Qt.UserRole)
         if isinstance(obj, SampleN):
             self.load_sample_into_view(obj)
+            return
+        if isinstance(obj, dict):
+            kind = obj.get("type")
+            if kind == "figure_recipe":
+                recipe_id = obj.get("recipe_id")
+                dataset_id = obj.get("dataset_id")
+                sample = obj.get("sample")
+                experiment = obj.get("experiment")
+                if isinstance(sample, SampleN):
+                    self._activate_sample(sample, experiment if isinstance(experiment, Experiment) else None, ensure_loaded=True)
+                self.open_matplotlib_composer_from_recipe(recipe_id, dataset_id=dataset_id)
 
     def on_tree_selection_changed(self):
         if not self.project_tree:
@@ -5240,7 +5349,7 @@ class VasoAnalyzerApp(QMainWindow):
             self,
         )
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
-        self.action_figure_composer.triggered.connect(self.open_matplotlib_composer)
+        self.action_figure_composer.triggered.connect(self.open_matplotlib_composer_from_current_view)
         tools_menu.addAction(self.action_figure_composer)
 
         self.action_figure_composer_current_view = QAction(
@@ -13286,6 +13395,18 @@ QPushButton[isGhost="true"]:pressed {{
         event_colors = [event_color] * len(event_times) if event_color and event_times else None
         return event_times, event_labels, event_colors
 
+    def _project_repo(self):
+        store = getattr(self.current_project, "_store", None) if hasattr(self, "current_project") else None
+        if store is None:
+            return None
+        try:
+            from vasoanalyzer.services.project_service import SQLiteProjectRepository
+
+            return SQLiteProjectRepository(store)
+        except Exception:
+            log.debug("Failed to construct project repository")
+            return None
+
     def _current_trace_view_ranges(
         self,
     ) -> tuple[tuple[float, float], tuple[float, float], dict] | None:
@@ -13332,6 +13453,75 @@ QPushButton[isGhost="true"]:pressed {{
         y_tuple = (float(y_range[0]), float(y_range[1]))
         return x_tuple, y_tuple, meta
 
+    def _build_composer_spec_for_view(
+        self,
+        default_xlim: tuple[float, float] | None,
+        default_ylim: tuple[float, float] | None,
+        default_trace_key: str | None,
+        visible_channels: dict[str, bool],
+    ) -> ComposerFigureSpec:
+        page = ComposerPageSpec(
+            width_in=PureMplFigureComposer.DEFAULT_WIDTH_IN,
+            height_in=PureMplFigureComposer.DEFAULT_HEIGHT_IN,
+            dpi=PureMplFigureComposer.DEFAULT_DPI,
+            sizing_mode="axes_first",
+            export_background="white",
+        )
+        axes = ComposerAxesSpec(
+            x_range=default_xlim,
+            y_range=default_ylim,
+            xlabel="Time (s)",
+            ylabel="Diameter (µm)",
+            show_grid=True,
+            grid_linestyle="--",
+            grid_color=CURRENT_THEME.get("grid_color", "#c0c0c0"),
+            grid_alpha=0.7,
+            show_event_labels=False,
+            xlabel_fontsize=12.0,
+            ylabel_fontsize=12.0,
+            tick_label_fontsize=9.0,
+            label_bold=True,
+        )
+        traces: list[ComposerTraceSpec] = []
+        default_key = default_trace_key or "inner"
+        colors = ["#000000", "#ff7f0e", "#2ca02c", "#d62728"]
+        order = ["inner", "outer", "avg_pressure", "set_pressure"]
+        for idx, key in enumerate(order):
+            if not visible_channels.get(key, True):
+                continue
+            traces.append(
+                ComposerTraceSpec(
+                    key=key,
+                    visible=key == default_key,
+                    color=colors[idx % len(colors)],
+                    linewidth=1.5,
+                    linestyle="-",
+                    marker="",
+                )
+            )
+        if not traces:
+            traces.append(
+                ComposerTraceSpec(
+                    key=default_key,
+                    visible=True,
+                    color=colors[0],
+                    linewidth=1.5,
+                    linestyle="-",
+                    marker="",
+                )
+            )
+        return ComposerFigureSpec(
+            page=page,
+            axes=axes,
+            traces=traces,
+            events=[],
+            annotations=[],
+            legend_visible=False,
+            legend_fontsize=9.0,
+            legend_loc="upper right",
+            line_width_scale=1.0,
+        )
+
     def open_matplotlib_composer_from_current_view(self, checked: bool = False) -> None:
         """Open the composer initialised to the active PyQtGraph view box."""
         view_ranges = self._current_trace_view_ranges()
@@ -13346,12 +13536,57 @@ QPushButton[isGhost="true"]:pressed {{
         xlim, ylim, meta = view_ranges
         default_trace_key = meta.get("component") or meta.get("track_id")
 
+        visible_channels = self._composer_visible_channels()
+        spec = self._build_composer_spec_for_view(xlim, ylim, default_trace_key, visible_channels)
+        spec_dict = figure_spec_to_dict(spec)
+
+        repo = self._project_repo()
+        dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
+        recipe_id = None
+        if repo is not None and dataset_id is not None:
+            name = (
+                f"{default_trace_key or 'trace'} {xlim[0]:.1f}-{xlim[1]:.1f}s"
+                if xlim
+                else "Figure Recipe"
+            )
+            try:
+                recipe_id = repo.add_figure_recipe(
+                    int(dataset_id),
+                    name,
+                    json.dumps(spec_dict),
+                    source="current_view",
+                    trace_key=default_trace_key,
+                    x_min=xlim[0] if xlim else None,
+                    x_max=xlim[1] if xlim else None,
+                    y_min=ylim[0] if ylim else None,
+                    y_max=ylim[1] if ylim else None,
+                    export_background=spec.page.export_background,
+                )
+                log.info(f"Created figure recipe {recipe_id} for dataset {dataset_id}")
+
+                # Emit signal to trigger tree refresh
+                if hasattr(self, 'figure_recipes_changed'):
+                    self.figure_recipes_changed.emit(int(dataset_id))
+                    log.info(f"Emitted figure_recipes_changed signal for dataset {dataset_id}")
+                else:
+                    log.error("figure_recipes_changed signal not found!")
+            except Exception as e:
+                log.error(f"Failed to create figure recipe: {e}", exc_info=True)
+                QMessageBox.warning(
+                    self,
+                    "Recipe Creation Failed",
+                    f"Could not save figure recipe: {e}\nThe composer will open but changes won't be saved."
+                )
+
         self.open_matplotlib_composer(
             checked=checked,
             default_xlim=xlim,
             default_ylim=ylim,
             default_trace_key=default_trace_key,
+            recipe_id=recipe_id,
+            figure_spec=spec,
         )
+        self.refresh_project_tree()
 
     def open_matplotlib_composer(
         self,
@@ -13360,6 +13595,8 @@ QPushButton[isGhost="true"]:pressed {{
         default_xlim: tuple[float, float] | None = None,
         default_ylim: tuple[float, float] | None = None,
         default_trace_key: str | None = None,
+        recipe_id: str | None = None,
+        figure_spec: ComposerFigureSpec | dict | None = None,
     ) -> None:
         """Launch the Pure Matplotlib Figure Composer."""
         if self.trace_model is None:
@@ -13387,6 +13624,8 @@ QPushButton[isGhost="true"]:pressed {{
             default_xlim=default_xlim,
             default_ylim=default_ylim,
             default_trace_key=default_trace_key,
+            recipe_id=recipe_id,
+            figure_spec=figure_spec,
         )
 
         # Track window for cleanup
@@ -13405,6 +13644,48 @@ QPushButton[isGhost="true"]:pressed {{
         window.activateWindow()
 
         log.info("Pure Matplotlib Figure Composer launched")
+
+    def open_matplotlib_composer_from_recipe(
+        self, recipe_id: str | None, *, dataset_id: int | None = None
+    ) -> None:
+        if recipe_id is None:
+            return
+        repo = self._project_repo()
+        if repo is None:
+            return
+        try:
+            rec = repo.get_figure_recipe(recipe_id)
+        except Exception:
+            log.debug("Failed to load figure recipe")
+            return
+        if rec is None:
+            return
+        ds_id = dataset_id or rec.get("dataset_id")
+        if ds_id is None:
+            return
+        try:
+            spec_dict = json.loads(rec.get("spec_json") or "{}")
+            spec = figure_spec_from_dict(spec_dict)
+        except Exception:
+            spec = None
+        default_trace_key = rec.get("trace_key")
+        xlim = (
+            (rec.get("x_min"), rec.get("x_max"))
+            if rec.get("x_min") is not None and rec.get("x_max") is not None
+            else None
+        )
+        ylim = (
+            (rec.get("y_min"), rec.get("y_max"))
+            if rec.get("y_min") is not None and rec.get("y_max") is not None
+            else None
+        )
+        self.open_matplotlib_composer(
+            default_xlim=xlim,
+            default_ylim=ylim,
+            default_trace_key=default_trace_key,
+            recipe_id=recipe_id,
+            figure_spec=spec,
+        )
 
     def _toggle_trace_range_selection(self, checked: bool) -> None:
         plot_host = getattr(self, "plot_host", None)

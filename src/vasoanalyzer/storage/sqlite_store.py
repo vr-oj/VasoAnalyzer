@@ -19,6 +19,7 @@ import sqlite3
 import tempfile
 import time
 import zipfile
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +33,7 @@ from vasoanalyzer.storage.sqlite import assets as _assets
 from vasoanalyzer.storage.sqlite import events as _events
 from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite import traces as _traces
-from vasoanalyzer.storage.sqlite.utils import open_db
+from vasoanalyzer.storage.sqlite.utils import open_db, transaction
 
 from .sqlite_utils import backup_to_delete_mode as _sqlite_backup_to_delete_mode
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
@@ -64,9 +65,15 @@ __all__ = [
     "write_autosave",
     "restore_autosave",
     "convert_legacy_project",
+    "add_figure_recipe",
+    "update_figure_recipe",
+    "list_figure_recipes",
+    "get_figure_recipe",
+    "delete_figure_recipe",
+    "rename_figure_recipe",
 ]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 5
 DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
 
 
@@ -1175,6 +1182,224 @@ def restore_autosave(
     with sqlite3.connect(autosave.as_posix()) as src, sqlite3.connect(dest.as_posix()) as dst:
         src.backup(dst)
     return dest
+
+
+# ---------------------------------------------------------------------------
+# Figure recipes
+# ---------------------------------------------------------------------------
+
+
+def _now_iso() -> str:
+    import datetime
+
+    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+
+
+def _ensure_figure_recipe_table(store: ProjectStore) -> None:
+    """Ensure the figure_recipe table exists (for projects that haven't migrated to v5)."""
+    try:
+        # Check if table exists by querying it
+        store.conn.execute("SELECT 1 FROM figure_recipe LIMIT 1")
+    except sqlite3.OperationalError:
+        # Table doesn't exist - create it
+        log.warning("figure_recipe table missing - creating it now (project may need migration)")
+        with transaction(store.conn):
+            store.conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS figure_recipe (
+                    recipe_id TEXT PRIMARY KEY,
+                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    spec_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    trace_key TEXT,
+                    x_min REAL,
+                    x_max REAL,
+                    y_min REAL,
+                    y_max REAL,
+                    export_background TEXT NOT NULL DEFAULT 'white'
+                );
+                CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
+                """
+            )
+        store.mark_dirty()
+        log.info("Created figure_recipe table successfully")
+
+
+def add_figure_recipe(
+    store: ProjectStore,
+    dataset_id: int,
+    name: str,
+    spec_json: str,
+    *,
+    source: str = "current_view",
+    trace_key: str | None = None,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
+    export_background: str = "white",
+    recipe_id: str | None = None,
+) -> str:
+    """Insert a new figure recipe row."""
+    _ensure_figure_recipe_table(store)
+    rid = recipe_id or str(uuid.uuid4())
+    now = _now_iso()
+    with transaction(store.conn):
+        store.conn.execute(
+            """
+            INSERT INTO figure_recipe (
+                recipe_id, dataset_id, name, created_at, updated_at,
+                spec_json, source, trace_key, x_min, x_max, y_min, y_max, export_background
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                rid,
+                dataset_id,
+                name,
+                now,
+                now,
+                spec_json,
+                source,
+                trace_key,
+                x_min,
+                x_max,
+                y_min,
+                y_max,
+                export_background,
+            ),
+        )
+    store.mark_dirty()
+    return rid
+
+
+def update_figure_recipe(
+    store: ProjectStore,
+    recipe_id: str,
+    *,
+    name: str | None = None,
+    spec_json: str | None = None,
+    source: str | None = None,
+    trace_key: str | None = None,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
+    export_background: str | None = None,
+) -> None:
+    """Update an existing figure recipe row."""
+    _ensure_figure_recipe_table(store)
+    now = _now_iso()
+    fields = ["updated_at = ?"]
+    params: list[Any] = [now]
+    if name is not None:
+        fields.append("name = ?")
+        params.append(name)
+    if spec_json is not None:
+        fields.append("spec_json = ?")
+        params.append(spec_json)
+    if source is not None:
+        fields.append("source = ?")
+        params.append(source)
+    if trace_key is not None:
+        fields.append("trace_key = ?")
+        params.append(trace_key)
+    if x_min is not None:
+        fields.append("x_min = ?")
+        params.append(x_min)
+    if x_max is not None:
+        fields.append("x_max = ?")
+        params.append(x_max)
+    if y_min is not None:
+        fields.append("y_min = ?")
+        params.append(y_min)
+    if y_max is not None:
+        fields.append("y_max = ?")
+        params.append(y_max)
+    if export_background is not None:
+        fields.append("export_background = ?")
+        params.append(export_background)
+    if len(fields) == 1:
+        return
+    params.append(recipe_id)
+    with transaction(store.conn):
+        store.conn.execute(
+            f"UPDATE figure_recipe SET {', '.join(fields)} WHERE recipe_id = ?",
+            params,
+        )
+    store.mark_dirty()
+
+
+def list_figure_recipes(store: ProjectStore, dataset_id: int) -> list[dict[str, Any]]:
+    _ensure_figure_recipe_table(store)
+    cur = store.conn.execute(
+        """
+        SELECT recipe_id, name, updated_at, trace_key, x_min, x_max, y_min, y_max, export_background
+        FROM figure_recipe
+        WHERE dataset_id = ?
+        ORDER BY updated_at DESC
+        """,
+        (dataset_id,),
+    )
+    return [
+        {
+            "recipe_id": row[0],
+            "name": row[1],
+            "updated_at": row[2],
+            "trace_key": row[3],
+            "x_min": row[4],
+            "x_max": row[5],
+            "y_min": row[6],
+            "y_max": row[7],
+            "export_background": row[8],
+        }
+        for row in cur.fetchall()
+    ]
+
+
+def get_figure_recipe(store: ProjectStore, recipe_id: str) -> dict[str, Any] | None:
+    _ensure_figure_recipe_table(store)
+    cur = store.conn.execute(
+        """
+        SELECT recipe_id, dataset_id, name, created_at, updated_at, spec_json, source,
+               trace_key, x_min, x_max, y_min, y_max, export_background
+        FROM figure_recipe
+        WHERE recipe_id = ?
+        """,
+        (recipe_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "recipe_id": row[0],
+        "dataset_id": row[1],
+        "name": row[2],
+        "created_at": row[3],
+        "updated_at": row[4],
+        "spec_json": row[5],
+        "source": row[6],
+        "trace_key": row[7],
+        "x_min": row[8],
+        "x_max": row[9],
+        "y_min": row[10],
+        "y_max": row[11],
+        "export_background": row[12],
+    }
+
+
+def delete_figure_recipe(store: ProjectStore, recipe_id: str) -> None:
+    _ensure_figure_recipe_table(store)
+    with transaction(store.conn):
+        store.conn.execute("DELETE FROM figure_recipe WHERE recipe_id = ?", (recipe_id,))
+    store.mark_dirty()
+
+
+def rename_figure_recipe(store: ProjectStore, recipe_id: str, name: str) -> None:
+    update_figure_recipe(store, recipe_id, name=name)
 
 
 # ---------------------------------------------------------------------------

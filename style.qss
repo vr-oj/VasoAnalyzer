@@ -82,6 +82,52 @@ QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
   border-top-color: palette(mid);
   border-bottom-color: palette(mid);
 }
+
+/* Checkbox styling - vibrant colors with clear on/off states */
+QCheckBox {
+  spacing: 6px;
+  color: palette(text);
+}
+
+QCheckBox::indicator {
+  width: 18px;
+  height: 18px;
+  border: 2px solid palette(mid);
+  border-radius: 3px;
+  background-color: palette(base);
+}
+
+QCheckBox::indicator:hover {
+  border: 2px solid palette(dark);
+  background-color: palette(light);
+}
+
+QCheckBox::indicator:pressed {
+  background-color: palette(midlight);
+}
+
+QCheckBox::indicator:checked {
+  background-color: palette(highlight);
+  border: 2px solid palette(highlight);
+  image: url(icons/checkmark.svg);
+}
+
+QCheckBox::indicator:checked:hover {
+  background-color: palette(highlight);
+  border: 2px solid palette(dark);
+  image: url(icons/checkmark.svg);
+}
+
+QCheckBox::indicator:disabled {
+  background-color: palette(window);
+  border: 2px solid palette(mid);
+}
+
+QCheckBox::indicator:checked:disabled {
+  background-color: palette(mid);
+  border: 2px solid palette(mid);
+}
+
 QTabWidget::pane {
   border: none;
 }
