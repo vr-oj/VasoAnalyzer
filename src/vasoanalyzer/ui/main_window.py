@@ -5243,6 +5243,16 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_figure_composer.triggered.connect(self.open_matplotlib_composer)
         tools_menu.addAction(self.action_figure_composer)
 
+        self.action_figure_composer_current_view = QAction(
+            QIcon(self.icon_path("figure-composer.svg")),
+            "Compose Current View…",
+            self,
+        )
+        self.action_figure_composer_current_view.triggered.connect(
+            self.open_matplotlib_composer_from_current_view
+        )
+        tools_menu.addAction(self.action_figure_composer_current_view)
+
         tools_menu.addSeparator()
 
         self.action_select_range = QAction("Select Range on Trace", self)
@@ -13276,7 +13286,81 @@ QPushButton[isGhost="true"]:pressed {{
         event_colors = [event_color] * len(event_times) if event_color and event_times else None
         return event_times, event_labels, event_colors
 
-    def open_matplotlib_composer(self, checked: bool = False) -> None:
+    def _current_trace_view_ranges(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float], dict] | None:
+        """Return the active PyQtGraph ViewBox ranges (bottom-axis owner)."""
+        plot_host = getattr(self, "plot_host", None)
+        if (
+            plot_host is None
+            or not hasattr(plot_host, "get_render_backend")
+            or plot_host.get_render_backend() != "pyqtgraph"
+        ):
+            return None
+
+        track_id: str | None = None
+        track_obj = None
+        ranges = None
+        x_range: tuple[float, float] | None = None
+        y_range: tuple[float, float] | None = None
+
+        getter = getattr(plot_host, "active_viewbox_range", None)
+        if callable(getter):
+            ranges = getter()
+            if ranges is not None:
+                (x_range, y_range, track_id) = ranges
+        if ranges is None and hasattr(plot_host, "get_trace_view_range"):
+            fallback = plot_host.get_trace_view_range()
+            if fallback is not None:
+                x_range, y_range = fallback
+        if x_range is None or y_range is None:
+            return None
+
+        meta: dict[str, Any] = {}
+        if track_id and hasattr(plot_host, "track"):
+            track_obj = plot_host.track(track_id)
+            meta["track_id"] = track_id
+            component = getattr(getattr(track_obj, "spec", None), "component", None)
+            if component:
+                meta["component"] = component
+        if track_obj is not None and hasattr(track_obj, "view"):
+            y_auto_fn = getattr(track_obj.view, "is_autoscale_enabled", None)
+            if callable(y_auto_fn):
+                meta["y_auto"] = bool(y_auto_fn())
+
+        x_tuple = (float(x_range[0]), float(x_range[1]))
+        y_tuple = (float(y_range[0]), float(y_range[1]))
+        return x_tuple, y_tuple, meta
+
+    def open_matplotlib_composer_from_current_view(self, checked: bool = False) -> None:
+        """Open the composer initialised to the active PyQtGraph view box."""
+        view_ranges = self._current_trace_view_ranges()
+        if view_ranges is None:
+            QMessageBox.information(
+                self,
+                "Compose Current View",
+                "No active PyQtGraph trace view is available.",
+            )
+            return
+
+        xlim, ylim, meta = view_ranges
+        default_trace_key = meta.get("component") or meta.get("track_id")
+
+        self.open_matplotlib_composer(
+            checked=checked,
+            default_xlim=xlim,
+            default_ylim=ylim,
+            default_trace_key=default_trace_key,
+        )
+
+    def open_matplotlib_composer(
+        self,
+        checked: bool = False,
+        *,
+        default_xlim: tuple[float, float] | None = None,
+        default_ylim: tuple[float, float] | None = None,
+        default_trace_key: str | None = None,
+    ) -> None:
         """Launch the Pure Matplotlib Figure Composer."""
         if self.trace_model is None:
             QMessageBox.information(
@@ -13300,6 +13384,9 @@ QPushButton[isGhost="true"]:pressed {{
             event_labels=event_labels,
             event_colors=event_colors,
             visible_channels=visible_channels,
+            default_xlim=default_xlim,
+            default_ylim=default_ylim,
+            default_trace_key=default_trace_key,
         )
 
         # Track window for cleanup

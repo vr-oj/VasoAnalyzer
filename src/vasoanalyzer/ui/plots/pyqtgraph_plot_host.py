@@ -1626,6 +1626,59 @@ class PyQtGraphPlotHost(InteractionHost):
             log.exception("Failed to fetch trace view range from PyQtGraphPlotHost")
             return None
 
+    def active_viewbox_range(
+        self,
+    ) -> tuple[tuple[float, float], tuple[float, float], str] | None:
+        """Return (x_range, y_range, track_id) for the bottom-visible track's ViewBox."""
+        if not self._tracks:
+            return None
+
+        # Refresh bottom-axis ownership to keep the active track in sync with visibility.
+        with contextlib.suppress(Exception):
+            self._update_bottom_axis_assignments()
+
+        track_id: str | None = None
+        visible_ids = [
+            spec.track_id
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks and self.is_channel_visible(spec.track_id)
+        ]
+        if visible_ids:
+            track_id = visible_ids[-1]
+        elif (
+            self._bottom_visible_track_id is not None
+            and self._bottom_visible_track_id in self._tracks
+        ):
+            track_id = self._bottom_visible_track_id
+        else:
+            for spec in reversed(self._channel_specs):
+                if spec.track_id in self._tracks:
+                    track_id = spec.track_id
+                    break
+
+        if track_id is None:
+            return None
+
+        track = self._tracks.get(track_id)
+        if track is None:
+            return None
+
+        try:
+            plot_item = track.view.get_widget().getPlotItem()
+            x_range, y_range = plot_item.viewRange()
+            x_tuple = (float(x_range[0]), float(x_range[1]))
+            y_tuple = (float(y_range[0]), float(y_range[1]))
+            log.debug(
+                "PyQtGraphPlotHost.active_viewbox_range track=%s x=%s y=%s",
+                track_id,
+                x_tuple,
+                y_tuple,
+            )
+            return x_tuple, y_tuple, track_id
+        except Exception:
+            log.exception("Failed to fetch active ViewBox range for track %s", track_id)
+            return None
+
     def set_trace_model(self, model: TraceModel) -> None:
         """Set trace model (matplotlib PlotHost compatibility - alias for set_model)."""
         self.set_model(model)

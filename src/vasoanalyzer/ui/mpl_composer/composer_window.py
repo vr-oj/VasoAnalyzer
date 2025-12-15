@@ -94,6 +94,9 @@ class PureMplFigureComposer(QMainWindow):
         event_colors: list[str] | None = None,
         visible_channels: dict[str, bool] | None = None,
         series_map: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+        default_xlim: tuple[float, float] | None = None,
+        default_ylim: tuple[float, float] | None = None,
+        default_trace_key: str | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("Single Figure Studio")
@@ -105,10 +108,27 @@ class PureMplFigureComposer(QMainWindow):
         self.event_colors = event_colors or []
         self.visible_channels = visible_channels or {}
         self._series_map_override = series_map
+        self._default_xlim = default_xlim
+        self._default_ylim = default_ylim
+        self._default_trace_key = default_trace_key
+        self._applied_default_view = False
+        self._default_view_note: str | None = None
 
         self._fig_spec: FigureSpec = self._build_initial_fig_spec(trace_model)
-        self._active_trace_key = self._fig_spec.traces[0].key if self._fig_spec.traces else "inner"
+        self._active_trace_key = next(
+            (trace.key for trace in self._fig_spec.traces if trace.visible),
+            self._fig_spec.traces[0].key if self._fig_spec.traces else "inner",
+        )
         self._initial_ranges = self._guess_initial_ranges()
+        if self._default_xlim is not None or self._default_ylim is not None:
+            x_min, x_max, y_min, y_max = self._initial_ranges
+            if self._default_xlim is not None:
+                x_min = float(self._default_xlim[0])
+                x_max = float(self._default_xlim[1])
+            if self._default_ylim is not None:
+                y_min = float(self._default_ylim[0])
+                y_max = float(self._default_ylim[1])
+            self._initial_ranges = (x_min, x_max, y_min, y_max)
         self._export_transparent = False
         self._size_was_clamped = False
 
@@ -196,7 +216,10 @@ class PureMplFigureComposer(QMainWindow):
         if not available_keys:
             available_keys = ["inner"]
 
-        default_key = "inner" if "inner" in available_keys else available_keys[0]
+        preferred_key = (
+            self._default_trace_key if self._default_trace_key in available_keys else None
+        )
+        default_key = preferred_key or ("inner" if "inner" in available_keys else available_keys[0])
         colors = ["#000000", "#ff7f0e", "#2ca02c", "#d62728"]
         for idx, key in enumerate(available_keys):
             traces.append(
@@ -680,6 +703,60 @@ class PureMplFigureComposer(QMainWindow):
             with signals_blocked(self.spin_height):
                 self.spin_height.setValue(page.height_in)
 
+    def _format_default_view_note(self) -> str | None:
+        if self._default_xlim is None and self._default_ylim is None:
+            return None
+        parts: list[str] = []
+        if self._default_xlim is not None:
+            parts.append(f"X={self._default_xlim[0]:.3g}–{self._default_xlim[1]:.3g}")
+        if self._default_ylim is not None:
+            parts.append(f"Y={self._default_ylim[0]:.3g}–{self._default_ylim[1]:.3g}")
+        if not parts:
+            return None
+        return f"Initialized from main window view: {'; '.join(parts)}"
+
+    def _apply_default_view_once(self) -> None:
+        """Apply provided default axis limits a single time on first show."""
+        if self._applied_default_view:
+            return
+
+        axes = self._fig_spec.axes
+        applied = False
+
+        if self._default_xlim is not None:
+            x0, x1 = self._default_xlim
+            axes.x_range = (float(x0), float(x1))
+            applied = True
+            if self.cb_x_auto:
+                with signals_blocked(self.cb_x_auto):
+                    self.cb_x_auto.setChecked(False)
+            if self.spin_x_min and self.spin_x_max:
+                with signals_blocked(self.spin_x_min):
+                    self.spin_x_min.setValue(float(x0))
+                with signals_blocked(self.spin_x_max):
+                    self.spin_x_max.setValue(float(x1))
+                self.spin_x_min.setEnabled(True)
+                self.spin_x_max.setEnabled(True)
+
+        if self._default_ylim is not None:
+            y0, y1 = self._default_ylim
+            axes.y_range = (float(y0), float(y1))
+            applied = True
+            if self.cb_y_auto:
+                with signals_blocked(self.cb_y_auto):
+                    self.cb_y_auto.setChecked(False)
+            if self.spin_y_min and self.spin_y_max:
+                with signals_blocked(self.spin_y_min):
+                    self.spin_y_min.setValue(float(y0))
+                with signals_blocked(self.spin_y_max):
+                    self.spin_y_max.setValue(float(y1))
+                self.spin_y_min.setEnabled(True)
+                self.spin_y_max.setEnabled(True)
+
+        if applied:
+            self._applied_default_view = True
+            self._default_view_note = self._format_default_view_note()
+
     # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
@@ -690,6 +767,7 @@ class PureMplFigureComposer(QMainWindow):
         if self._first_show_done:
             return
         self._first_show_done = True
+        self._apply_default_view_once()
         self._refresh_preview()
 
     def apply_theme(self) -> None:
@@ -1180,10 +1258,13 @@ class PureMplFigureComposer(QMainWindow):
                 f" (clamped to {self.MIN_WIDTH_IN:.1f}-{self.MAX_WIDTH_IN:.1f} in width "
                 f"and {self.MIN_HEIGHT_IN:.1f}-{self.MAX_HEIGHT_IN:.1f} in height)"
             )
-        self.label_export_size.setText(
+        text = (
             f"Axes: {axes_w_in:.2f} × {axes_h_in:.2f} in @ {dpi:.0f} dpi\n"
             f"Resulting figure size: {fig_w_in:.2f} × {fig_h_in:.2f} in ({w_px} × {h_px} px){clamp_note}"
         )
+        if self._default_view_note:
+            text = f"{text}\n{self._default_view_note}"
+        self.label_export_size.setText(text)
 
     # ------------------------------------------------------------------
     # Export

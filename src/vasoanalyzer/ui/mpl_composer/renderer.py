@@ -197,12 +197,6 @@ def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None
     fig.subplots_adjust(left=left, right=0.97, bottom=bottom, top=0.95)
 
     _render_traces(ax, spec, ctx)
-
-    if spec.axes.x_range is not None:
-        ax.set_xlim(*spec.axes.x_range)
-    if spec.axes.y_range is not None:
-        ax.set_ylim(*spec.axes.y_range)
-
     _apply_axes_styles(ax, spec.axes)
     _render_events(ax, spec)
     _render_annotations(fig, ax, spec.annotations)
@@ -218,6 +212,12 @@ def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None
             frame = leg.get_frame()
             if frame is not None:
                 frame.set_linewidth(0.8)
+
+    # Apply manual ranges last so nothing overrides the requested view.
+    if spec.axes.x_range is not None:
+        ax.set_xlim(*spec.axes.x_range)
+    if spec.axes.y_range is not None:
+        ax.set_ylim(*spec.axes.y_range)
 
     # After any subplots_adjust, the figure size is fixed; store it as effective size.
     page.effective_width_in = fig.get_figwidth()
@@ -318,6 +318,12 @@ def _build_axes_first_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure |
             axes_h / fig_h,
         ]
     )
+
+    # Apply manual ranges after layout so autoscale does not override them.
+    if spec.axes.x_range is not None:
+        ax.set_xlim(*spec.axes.x_range)
+    if spec.axes.y_range is not None:
+        ax.set_ylim(*spec.axes.y_range)
 
     # Store effective figure size for downstream consumers.
     page.effective_width_in = fig_w
