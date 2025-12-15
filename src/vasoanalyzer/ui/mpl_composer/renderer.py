@@ -71,11 +71,19 @@ class AxesSpec:
     grid_color: str = "#c0c0c0"
     grid_alpha: float = 0.7
     show_event_labels: bool = False
-    # New: optional font sizes
+    # Font properties
     xlabel_fontsize: Optional[float] = None
     ylabel_fontsize: Optional[float] = None
     tick_label_fontsize: Optional[float] = None
     label_bold: bool = True
+    label_fontfamily: str = "sans-serif"
+    label_fontstyle: str = "normal"  # "normal" or "italic"
+    tick_fontfamily: str = "sans-serif"
+    tick_fontstyle: str = "normal"  # "normal" or "italic"
+    event_label_fontsize: Optional[float] = 9.0
+    event_label_fontfamily: str = "sans-serif"
+    event_label_fontstyle: str = "normal"
+    event_label_bold: bool = False
 
 
 @dataclass
@@ -485,6 +493,8 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
         axes_spec.xlabel,
         fontsize=xlabel_fs,
         fontweight=label_weight,
+        fontfamily=axes_spec.label_fontfamily,
+        fontstyle=axes_spec.label_fontstyle,
         labelpad=8,
         color="black",
     )
@@ -492,6 +502,8 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
         axes_spec.ylabel,
         fontsize=ylabel_fs,
         fontweight=label_weight,
+        fontfamily=axes_spec.label_fontfamily,
+        fontstyle=axes_spec.label_fontstyle,
         labelpad=10,
         color="black",
     )
@@ -513,6 +525,10 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
         colors="black",
         labelcolor="black",
     )
+    # Apply tick label font properties
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontfamily(axes_spec.tick_fontfamily)
+        label.set_fontstyle(axes_spec.tick_fontstyle)
     ax.tick_params(
         axis="both",
         which="minor",
@@ -611,6 +627,8 @@ def _render_events(ax: "Axes", spec: FigureSpec) -> None:
         )
         if show_labels and ev.label:
             y = 1.02 if ev.label_above else -0.02
+            event_label_fs = spec.axes.event_label_fontsize or 9.0
+            event_label_weight = "bold" if spec.axes.event_label_bold else "normal"
             ax.text(
                 ev.time_s,
                 y,
@@ -618,7 +636,10 @@ def _render_events(ax: "Axes", spec: FigureSpec) -> None:
                 transform=ax.get_xaxis_transform(),
                 ha="center",
                 va="bottom" if ev.label_above else "top",
-                fontsize=8.0,
+                fontsize=event_label_fs,
+                fontfamily=spec.axes.event_label_fontfamily,
+                fontstyle=spec.axes.event_label_fontstyle,
+                fontweight=event_label_weight,
                 color="black",
             )
 

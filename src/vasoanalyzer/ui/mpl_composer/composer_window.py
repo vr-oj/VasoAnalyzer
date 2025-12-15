@@ -167,7 +167,15 @@ class PureMplFigureComposer(QMainWindow):
         self.spin_y_max: QDoubleSpinBox | None = None
         self.spin_axis_fontsize: QDoubleSpinBox | None = None
         self.spin_tick_fontsize: QDoubleSpinBox | None = None
+        self.spin_event_label_fontsize: QDoubleSpinBox | None = None
         self.cb_axis_bold: QCheckBox | None = None
+        self.cb_axis_italic: QCheckBox | None = None
+        self.cb_tick_italic: QCheckBox | None = None
+        self.cb_event_label_bold: QCheckBox | None = None
+        self.cb_event_label_italic: QCheckBox | None = None
+        self.combo_label_font: QComboBox | None = None
+        self.combo_tick_font: QComboBox | None = None
+        self.combo_event_label_font: QComboBox | None = None
         self.edit_xlabel: QLineEdit | None = None
         self.edit_ylabel: QLineEdit | None = None
         self.combo_shape: QComboBox | None = None
@@ -389,30 +397,12 @@ class PureMplFigureComposer(QMainWindow):
             canvas_layout.addLayout(scale_row)
             left_layout.addWidget(canvas_frame, stretch=1)
 
-        export_row = QHBoxLayout()
+        # Export size info label
         self.label_export_size = QLabel("")
         text_color = CURRENT_THEME.get("text", "#6c757d")
-        self.label_export_size.setStyleSheet(f"color: {text_color};")
-        export_row.addWidget(self.label_export_size)
-        export_row.addStretch(1)
-
-        self.spin_dpi = QSpinBox()
-        self.spin_dpi.setRange(72, 1200)
-        self.spin_dpi.setSingleStep(25)
-        self.spin_dpi.setValue(int(self._export_dpi))
-        self.spin_dpi.setToolTip("Export resolution (dots per inch)")
-        export_row.addWidget(QLabel("DPI"))
-        export_row.addWidget(self.spin_dpi)
-
-        self.cb_export_transparent = QCheckBox("Transparent background")
-        self.cb_export_transparent.setChecked(False)
-        export_row.addWidget(self.cb_export_transparent)
-        self.btn_export = QPushButton("Export…")
-        export_row.addWidget(self.btn_export)
-        self.btn_save_project = QPushButton("Save to Project")
-        self.btn_save_project.setEnabled(self.dataset_id is not None and self.project is not None)
-        export_row.addWidget(self.btn_save_project)
-        left_layout.addLayout(export_row)
+        self.label_export_size.setStyleSheet(f"color: {text_color}; padding: 4px;")
+        self.label_export_size.setWordWrap(True)
+        left_layout.addWidget(self.label_export_size)
         root.addWidget(left, stretch=2)
 
         # Right: controls
@@ -420,6 +410,7 @@ class PureMplFigureComposer(QMainWindow):
         right.setFixedWidth(320)
         right_layout = QVBoxLayout(right)
         right_layout.setSpacing(10)
+        right_layout.addWidget(self._build_actions_group())
         right_layout.addWidget(self._build_trace_group())
         right_layout.addWidget(self._build_axes_group())
         right_layout.addWidget(self._build_range_group())
@@ -453,6 +444,41 @@ class PureMplFigureComposer(QMainWindow):
     # ------------------------------------------------------------------
     # Control builders
     # ------------------------------------------------------------------
+    def _build_actions_group(self) -> QGroupBox:
+        grp = QGroupBox("Actions")
+        layout = QVBoxLayout(grp)
+        layout.setSpacing(8)
+
+        # Export settings row
+        export_settings = QHBoxLayout()
+        export_settings.addWidget(QLabel("DPI:"))
+        self.spin_dpi = QSpinBox()
+        self.spin_dpi.setRange(72, 1200)
+        self.spin_dpi.setSingleStep(25)
+        self.spin_dpi.setValue(int(self._export_dpi))
+        self.spin_dpi.setToolTip("Export resolution (dots per inch)")
+        self.spin_dpi.setFixedWidth(80)
+        export_settings.addWidget(self.spin_dpi)
+        export_settings.addStretch()
+        layout.addLayout(export_settings)
+
+        self.cb_export_transparent = QCheckBox("Transparent background")
+        self.cb_export_transparent.setChecked(False)
+        layout.addWidget(self.cb_export_transparent)
+
+        # Export button
+        self.btn_export = QPushButton("Export Figure...")
+        self.btn_export.setMinimumHeight(32)
+        layout.addWidget(self.btn_export)
+
+        # Save to project button
+        self.btn_save_project = QPushButton("Save to Project")
+        self.btn_save_project.setMinimumHeight(32)
+        self.btn_save_project.setEnabled(self.dataset_id is not None and self.project is not None)
+        layout.addWidget(self.btn_save_project)
+
+        return grp
+
     def _build_trace_group(self) -> QGroupBox:
         grp = QGroupBox("Trace")
         layout = QVBoxLayout(grp)
@@ -591,27 +617,107 @@ class PureMplFigureComposer(QMainWindow):
 
     def _build_font_group(self) -> QGroupBox:
         grp = QGroupBox("Fonts")
-        form = QFormLayout(grp)
+        layout = QVBoxLayout(grp)
+        layout.setSpacing(6)
+
+        # Common font families
+        fonts = ["sans-serif", "serif", "monospace", "Arial", "Times New Roman", "Courier New"]
+
+        # --- Axis Titles Section ---
+        axis_section = QGroupBox("Axis Titles")
+        axis_form = QFormLayout(axis_section)
+
         self.spin_axis_fontsize = QDoubleSpinBox()
-        self.spin_axis_fontsize.setDecimals(2)
+        self.spin_axis_fontsize.setDecimals(1)
         self.spin_axis_fontsize.setRange(6.0, 24.0)
-        self.spin_axis_fontsize.setSingleStep(0.05)
+        self.spin_axis_fontsize.setSingleStep(1.0)
         self.spin_axis_fontsize.setValue(self._fig_spec.axes.xlabel_fontsize or 12.0)
+
+        self.combo_label_font = QComboBox()
+        self.combo_label_font.addItems(fonts)
+        self.combo_label_font.setCurrentText(self._fig_spec.axes.label_fontfamily)
+
+        axis_style_row = QHBoxLayout()
+        self.cb_axis_bold = QCheckBox("Bold")
+        self.cb_axis_bold.setChecked(self._fig_spec.axes.label_bold)
+        self.cb_axis_italic = QCheckBox("Italic")
+        self.cb_axis_italic.setChecked(self._fig_spec.axes.label_fontstyle == "italic")
+        axis_style_row.addWidget(self.cb_axis_bold)
+        axis_style_row.addWidget(self.cb_axis_italic)
+        axis_style_row.addStretch()
+
+        axis_form.addRow("Size (pt)", self.spin_axis_fontsize)
+        axis_form.addRow("Font", self.combo_label_font)
+        axis_form.addRow("Style", axis_style_row)
+
+        # --- Tick Labels Section ---
+        tick_section = QGroupBox("Tick Labels")
+        tick_form = QFormLayout(tick_section)
+
         self.spin_tick_fontsize = QDoubleSpinBox()
-        self.spin_tick_fontsize.setDecimals(2)
+        self.spin_tick_fontsize.setDecimals(1)
         self.spin_tick_fontsize.setRange(6.0, 20.0)
-        self.spin_tick_fontsize.setSingleStep(0.05)
+        self.spin_tick_fontsize.setSingleStep(1.0)
         self.spin_tick_fontsize.setValue(self._fig_spec.axes.tick_label_fontsize or 9.0)
-        self.cb_axis_bold = QCheckBox("Bold axis titles")
-        self.cb_axis_bold.setChecked(getattr(self._fig_spec.axes, "label_bold", True))
 
-        form.addRow("Axis titles (pt)", self.spin_axis_fontsize)
-        form.addRow("Tick labels (pt)", self.spin_tick_fontsize)
-        form.addRow("", self.cb_axis_bold)
+        self.combo_tick_font = QComboBox()
+        self.combo_tick_font.addItems(fonts)
+        self.combo_tick_font.setCurrentText(self._fig_spec.axes.tick_fontfamily)
 
+        self.cb_tick_italic = QCheckBox("Italic")
+        self.cb_tick_italic.setChecked(self._fig_spec.axes.tick_fontstyle == "italic")
+
+        tick_form.addRow("Size (pt)", self.spin_tick_fontsize)
+        tick_form.addRow("Font", self.combo_tick_font)
+        tick_form.addRow("Style", self.cb_tick_italic)
+
+        # --- Event Labels Section ---
+        event_section = QGroupBox("Event Labels")
+        event_form = QFormLayout(event_section)
+
+        self.spin_event_label_fontsize = QDoubleSpinBox()
+        self.spin_event_label_fontsize.setDecimals(1)
+        self.spin_event_label_fontsize.setRange(6.0, 20.0)
+        self.spin_event_label_fontsize.setSingleStep(1.0)
+        self.spin_event_label_fontsize.setValue(self._fig_spec.axes.event_label_fontsize or 9.0)
+
+        self.combo_event_label_font = QComboBox()
+        self.combo_event_label_font.addItems(fonts)
+        self.combo_event_label_font.setCurrentText(self._fig_spec.axes.event_label_fontfamily)
+
+        event_style_row = QHBoxLayout()
+        self.cb_event_label_bold = QCheckBox("Bold")
+        self.cb_event_label_bold.setChecked(self._fig_spec.axes.event_label_bold)
+        self.cb_event_label_italic = QCheckBox("Italic")
+        self.cb_event_label_italic.setChecked(self._fig_spec.axes.event_label_fontstyle == "italic")
+        event_style_row.addWidget(self.cb_event_label_bold)
+        event_style_row.addWidget(self.cb_event_label_italic)
+        event_style_row.addStretch()
+
+        event_form.addRow("Size (pt)", self.spin_event_label_fontsize)
+        event_form.addRow("Font", self.combo_event_label_font)
+        event_form.addRow("Style", event_style_row)
+
+        # Add sections to main layout
+        layout.addWidget(axis_section)
+        layout.addWidget(tick_section)
+        layout.addWidget(event_section)
+
+        # Connect signals
         self.spin_axis_fontsize.valueChanged.connect(self._on_font_changed)
-        self.spin_tick_fontsize.valueChanged.connect(self._on_font_changed)
+        self.combo_label_font.currentTextChanged.connect(self._on_font_changed)
         self.cb_axis_bold.toggled.connect(self._on_font_changed)
+        self.cb_axis_italic.toggled.connect(self._on_font_changed)
+
+        self.spin_tick_fontsize.valueChanged.connect(self._on_font_changed)
+        self.combo_tick_font.currentTextChanged.connect(self._on_font_changed)
+        self.cb_tick_italic.toggled.connect(self._on_font_changed)
+
+        self.spin_event_label_fontsize.valueChanged.connect(self._on_font_changed)
+        self.combo_event_label_font.currentTextChanged.connect(self._on_font_changed)
+        self.cb_event_label_bold.toggled.connect(self._on_font_changed)
+        self.cb_event_label_italic.toggled.connect(self._on_font_changed)
+
         return grp
 
     def _build_shape_group(self) -> QGroupBox:
@@ -710,13 +816,36 @@ class PureMplFigureComposer(QMainWindow):
             if spin is not None:
                 spin.setEnabled(not auto)
 
-        # Fonts
+        # Fonts - Axis titles
         if self.spin_axis_fontsize:
             self.spin_axis_fontsize.setValue(axes.xlabel_fontsize or 12.0)
+        if self.combo_label_font:
+            with signals_blocked(self.combo_label_font):
+                self.combo_label_font.setCurrentText(axes.label_fontfamily)
+        if self.cb_axis_bold:
+            self.cb_axis_bold.setChecked(axes.label_bold)
+        if self.cb_axis_italic:
+            self.cb_axis_italic.setChecked(axes.label_fontstyle == "italic")
+
+        # Fonts - Tick labels
         if self.spin_tick_fontsize:
             self.spin_tick_fontsize.setValue(axes.tick_label_fontsize or 9.0)
-        if self.cb_axis_bold:
-            self.cb_axis_bold.setChecked(getattr(axes, "label_bold", True))
+        if self.combo_tick_font:
+            with signals_blocked(self.combo_tick_font):
+                self.combo_tick_font.setCurrentText(axes.tick_fontfamily)
+        if self.cb_tick_italic:
+            self.cb_tick_italic.setChecked(axes.tick_fontstyle == "italic")
+
+        # Fonts - Event labels
+        if self.spin_event_label_fontsize:
+            self.spin_event_label_fontsize.setValue(axes.event_label_fontsize or 9.0)
+        if self.combo_event_label_font:
+            with signals_blocked(self.combo_event_label_font):
+                self.combo_event_label_font.setCurrentText(axes.event_label_fontfamily)
+        if self.cb_event_label_bold:
+            self.cb_event_label_bold.setChecked(axes.event_label_bold)
+        if self.cb_event_label_italic:
+            self.cb_event_label_italic.setChecked(axes.event_label_fontstyle == "italic")
 
         # Shape preset label - choose closest match
         if self.combo_shape:
@@ -971,14 +1100,37 @@ class PureMplFigureComposer(QMainWindow):
 
     def _on_font_changed(self) -> None:
         axes = self._fig_spec.axes
+
+        # Axis titles
         if self.spin_axis_fontsize:
             axes.xlabel_fontsize = float(self.spin_axis_fontsize.value())
             axes.ylabel_fontsize = float(self.spin_axis_fontsize.value())
-        if self.spin_tick_fontsize:
-            axes.tick_label_fontsize = float(self.spin_tick_fontsize.value())
+        if self.combo_label_font:
+            axes.label_fontfamily = self.combo_label_font.currentText()
         if self.cb_axis_bold:
             axes.label_bold = self.cb_axis_bold.isChecked()
-        self._refresh_preview()
+        if self.cb_axis_italic:
+            axes.label_fontstyle = "italic" if self.cb_axis_italic.isChecked() else "normal"
+
+        # Tick labels
+        if self.spin_tick_fontsize:
+            axes.tick_label_fontsize = float(self.spin_tick_fontsize.value())
+        if self.combo_tick_font:
+            axes.tick_fontfamily = self.combo_tick_font.currentText()
+        if self.cb_tick_italic:
+            axes.tick_fontstyle = "italic" if self.cb_tick_italic.isChecked() else "normal"
+
+        # Event labels
+        if self.spin_event_label_fontsize:
+            axes.event_label_fontsize = float(self.spin_event_label_fontsize.value())
+        if self.combo_event_label_font:
+            axes.event_label_fontfamily = self.combo_event_label_font.currentText()
+        if self.cb_event_label_bold:
+            axes.event_label_bold = self.cb_event_label_bold.isChecked()
+        if self.cb_event_label_italic:
+            axes.event_label_fontstyle = "italic" if self.cb_event_label_italic.isChecked() else "normal"
+
+        self._refresh_preview()  # Font changes don't affect canvas size
 
     def _on_shape_changed(self, label: str) -> None:
         page = self._fig_spec.page
@@ -1003,7 +1155,7 @@ class PureMplFigureComposer(QMainWindow):
             self.spin_width.setEnabled(False)
             self.spin_height.setEnabled(False)
         self._update_export_size_label()
-        self._refresh_preview()
+        self._refresh_preview(size_changed=True)  # Size changed
 
     def _on_custom_shape_changed(self) -> None:
         if not self.spin_width or not self.spin_height:
@@ -1016,7 +1168,7 @@ class PureMplFigureComposer(QMainWindow):
             with signals_blocked(self.combo_shape):
                 self.combo_shape.setCurrentText("Custom")
         self._update_export_size_label()
-        self._refresh_preview()
+        self._refresh_preview(size_changed=True)  # Size changed
 
     # ------------------------------------------------------------------
     # Preview helpers
@@ -1295,7 +1447,15 @@ class PureMplFigureComposer(QMainWindow):
             return "Custom"
         return best_label
 
-    def _refresh_preview(self) -> None:
+    def _refresh_preview(self, *, size_changed: bool = False) -> None:
+        """
+        Refresh the figure preview.
+
+        Args:
+            size_changed: Set to True if the figure dimensions (width/height) changed.
+                         This will trigger canvas resizing. For other changes (grid, colors, etc.),
+                         leave as False to prevent unnecessary canvas size updates.
+        """
         if not self._preview_initialized or self._figure is None or self._canvas is None:
             return
         self._enforce_page_bounds(update_controls=True)
@@ -1312,8 +1472,10 @@ class PureMplFigureComposer(QMainWindow):
                 self._create_box_selector(ax)
         else:
             self._destroy_box_selector()
-        self._update_canvas_size_to_fit()
-        self._canvas.draw()
+        # Only update canvas size if figure dimensions actually changed
+        if size_changed:
+            self._update_canvas_size_to_fit()
+        self._canvas.draw_idle()  # Use draw_idle instead of draw to batch redraws
         self._update_export_size_label()
         self._mark_dirty_and_schedule_persist()
 
