@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import logging
-from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING, Literal
 
 import numpy as np
 from matplotlib import patches as mpatches
@@ -48,10 +48,11 @@ class PageSpec:
     width_in: float
     height_in: float
     dpi: float
+    sizing_mode: Literal["axes_first", "figure_first"] = "axes_first"
     axes_first: bool = False
     axes_width_in: Optional[float] = None
     axes_height_in: Optional[float] = None
-    min_margin_in: float = 0.5
+    min_margin_in: float = 0.15
     export_background: str = "white"  # "white" or "transparent"
     # effective_* are computed by build_figure; callers should treat them as
     # readonly outputs (they are reset at the beginning of each build).
@@ -138,7 +139,11 @@ def build_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None
     """Entry point: choose figure-first or axes-first sizing."""
     page = spec.page
     _clamp_page_size(page)
-    if page.axes_first and page.axes_width_in and page.axes_height_in:
+    sizing_mode = getattr(page, "sizing_mode", "axes_first")
+    # Backwards compatibility for legacy flag
+    if sizing_mode not in ("axes_first", "figure_first"):
+        sizing_mode = "axes_first" if getattr(page, "axes_first", False) else "figure_first"
+    if sizing_mode == "axes_first":
         return _build_axes_first_figure(spec, ctx, fig=fig)
     return _build_figure_first(spec, ctx, fig=fig)
 
@@ -222,75 +227,40 @@ def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None
 
 
 def _build_axes_first_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None) -> Figure:
-    """Axes-first sizing using tightbbox measurement pass."""
+    """Axes-first sizing that keeps the data rectangle at the requested size."""
     page = spec.page
     dpi = page.dpi
-    axes_w = float(page.axes_width_in)
-    axes_h = float(page.axes_height_in)
-    margin = float(page.min_margin_in)
+    axes_w = float(page.width_in)
+    axes_h = float(page.height_in)
+    # Use min_margin_in as a floor for padding; never go below 0.15 in.
+    pad_in = max(0.15, float(getattr(page, "min_margin_in", 0.0) or 0.0))
+    initial_margin = max(pad_in, 0.5)
     page.effective_width_in = None
     page.effective_height_in = None
+    page.axes_width_in = axes_w
+    page.axes_height_in = axes_h
 
-    # Pass 1: temporary figure to measure content
-    tmp_fig = Figure(figsize=(axes_w + 2 * margin, axes_h + 2 * margin), dpi=dpi)
-    tmp_fig_w, tmp_fig_h = tmp_fig.get_figwidth(), tmp_fig.get_figheight()
-    ax_left = margin / tmp_fig_w
-    ax_bottom = margin / tmp_fig_h
-    ax_width = axes_w / tmp_fig_w
-    ax_height = axes_h / tmp_fig_h
-    tmp_ax = tmp_fig.add_axes([ax_left, ax_bottom, ax_width, ax_height])
-
-    _render_traces(tmp_ax, spec, ctx)
-    _apply_axes_styles(tmp_ax, spec.axes)
-    _render_events(tmp_ax, spec)
-    _render_annotations(tmp_fig, tmp_ax, spec.annotations)
-    if spec.legend_visible:
-        eff_legend_fs = spec.legend_fontsize or 9.0
-        leg = tmp_ax.legend(
-            fontsize=eff_legend_fs,
-            loc=spec.legend_loc,
-            framealpha=0.8,
-        )
-        if leg is not None:
-            frame = leg.get_frame()
-            if frame is not None:
-                frame.set_linewidth(0.8)
-
-    tmp_canvas = FigureCanvasAgg(tmp_fig)
-    tmp_canvas.draw()
-    renderer = tmp_canvas.get_renderer()
-    tight_bbox = tmp_ax.get_tightbbox(renderer)
-    tight_bbox_in = tight_bbox.transformed(tmp_fig.dpi_scale_trans.inverted())
-    content_w_in = tight_bbox_in.width
-    content_h_in = tight_bbox_in.height
-
-    left = margin
-    right = margin
-    bottom = margin
-    top = margin
-
-    fig_w = content_w_in + left + right
-    fig_h = content_h_in + bottom + top
-
-    # Pass 2: real figure
+    # Provisional figure that is slightly larger than the target axes box.
+    provisional_w = axes_w + 2 * initial_margin
+    provisional_h = axes_h + 2 * initial_margin
+    original_canvas = fig.canvas if fig is not None else None
     if fig is None:
-        fig = Figure(figsize=(fig_w, fig_h), dpi=dpi)
+        fig = Figure(figsize=(provisional_w, provisional_h), dpi=dpi)
     else:
         fig.clear()
-        # Use forward=False to prevent matplotlib from resizing the Qt canvas widget.
-        fig.set_size_inches(fig_w, fig_h, forward=False)
+        fig.set_size_inches(provisional_w, provisional_h, forward=False)
         fig.set_dpi(dpi)
 
-    # Store effective size for downstream consumers (preview/export UI).
-    page.effective_width_in = fig_w
-    page.effective_height_in = fig_h
-
-    ax_left = left / fig_w
-    ax_bottom = bottom / fig_h
-    ax_width = content_w_in / fig_w
-    ax_height = content_h_in / fig_h
+    ax_left = initial_margin / provisional_w
+    ax_bottom = initial_margin / provisional_h
+    ax_width = axes_w / provisional_w
+    ax_height = axes_h / provisional_h
     ax = fig.add_axes([ax_left, ax_bottom, ax_width, ax_height])
 
+    # Render all content onto the provisional axes.
+    fig.patch.set_facecolor("white")
+    fig.patch.set_alpha(1.0)
+    ax.set_facecolor("white")
     _render_traces(ax, spec, ctx)
     _apply_axes_styles(ax, spec.axes)
     _render_events(ax, spec)
@@ -306,6 +276,59 @@ def _build_axes_first_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure |
             frame = leg.get_frame()
             if frame is not None:
                 frame.set_linewidth(0.8)
+
+    agg_canvas = FigureCanvasAgg(fig)
+    agg_canvas.draw()
+    agg_renderer = agg_canvas.get_renderer()
+    required_artists = _collect_required_artists(ax, spec)
+    fig_trans = fig.dpi_scale_trans.inverted()
+    axes_bbox = ax.get_window_extent(renderer=agg_renderer).transformed(fig_trans)
+
+    min_x = axes_bbox.x0
+    max_x = axes_bbox.x1
+    min_y = axes_bbox.y0
+    max_y = axes_bbox.y1
+    for art in required_artists:
+        try:
+            bbox = art.get_window_extent(renderer=agg_renderer)
+            if bbox is None:
+                continue
+            bbox_in = bbox.transformed(fig_trans)
+            min_x = min(min_x, bbox_in.x0)
+            max_x = max(max_x, bbox_in.x1)
+            min_y = min(min_y, bbox_in.y0)
+            max_y = max(max_y, bbox_in.y1)
+        except Exception:
+            log.debug("Failed to measure artist bbox", exc_info=True)
+
+    left_margin = max(0.0, axes_bbox.x0 - min_x) + pad_in
+    right_margin = max(0.0, max_x - axes_bbox.x1) + pad_in
+    bottom_margin = max(0.0, axes_bbox.y0 - min_y) + pad_in
+    top_margin = max(0.0, max_y - axes_bbox.y1) + pad_in
+
+    fig_w = axes_w + left_margin + right_margin
+    fig_h = axes_h + top_margin + bottom_margin
+
+    fig.set_size_inches(fig_w, fig_h, forward=True)
+    ax.set_position(
+        [
+            left_margin / fig_w,
+            bottom_margin / fig_h,
+            axes_w / fig_w,
+            axes_h / fig_h,
+        ]
+    )
+
+    # Store effective figure size for downstream consumers.
+    page.effective_width_in = fig_w
+    page.effective_height_in = fig_h
+
+    try:
+        agg_canvas.draw()
+    except Exception:
+        log.debug("Final draw after resizing failed", exc_info=True)
+    if original_canvas is not None:
+        fig.set_canvas(original_canvas)
     return fig
 
 
@@ -450,18 +473,20 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
     tick_fs = axes_spec.tick_label_fontsize or default_tick_fs
     label_weight = "bold" if getattr(axes_spec, "label_bold", True) else "normal"
 
-    # Axis labels
+    # Axis labels (always black regardless of theme)
     ax.set_xlabel(
         axes_spec.xlabel,
         fontsize=xlabel_fs,
         fontweight=label_weight,
         labelpad=8,
+        color="black",
     )
     ax.set_ylabel(
         axes_spec.ylabel,
         fontsize=ylabel_fs,
         fontweight=label_weight,
         labelpad=10,
+        color="black",
     )
     try:
         ax.xaxis.label.set_clip_on(False)
@@ -470,7 +495,7 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
     except Exception:
         log.debug("Failed to disable label clipping", exc_info=True)
 
-    # Tick labels and tick appearance
+    # Tick labels and tick appearance (always black regardless of theme)
     ax.tick_params(
         axis="both",
         which="major",
@@ -478,17 +503,21 @@ def _apply_axes_styles(ax: "Axes", axes_spec: AxesSpec) -> None:
         direction="out",
         length=5,
         width=1.0,
+        colors="black",
+        labelcolor="black",
     )
     ax.tick_params(
         axis="both",
         which="minor",
         length=3,
         width=0.8,
+        colors="black",
     )
 
-    # Spines
+    # Spines (always black regardless of theme)
     for spine in ax.spines.values():
         spine.set_linewidth(1.0)
+        spine.set_edgecolor("black")
 
     # Grid
     if axes_spec.show_grid:

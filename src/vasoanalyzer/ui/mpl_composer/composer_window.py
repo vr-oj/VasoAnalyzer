@@ -49,6 +49,11 @@ from .renderer import (
 
 log = logging.getLogger(__name__)
 
+MIN_PREVIEW_W = 560  # Minimum usable preview width (px)
+MIN_PREVIEW_H = 360  # Minimum usable preview height (px)
+EXTRA_W_PAD = 48     # Window chrome/layout breathing room (px)
+EXTRA_H_PAD = 120    # Header/export rows + margins (px)
+
 
 @contextmanager
 def signals_blocked(widget):
@@ -149,6 +154,7 @@ class PureMplFigureComposer(QMainWindow):
         self._setup_ui()
         self._sync_controls_from_spec()
         self._refresh_preview()
+        QTimer.singleShot(0, self._apply_dynamic_minimum_size)
 
     # ------------------------------------------------------------------
     # Spec / context helpers
@@ -159,6 +165,7 @@ class PureMplFigureComposer(QMainWindow):
             width_in=self.DEFAULT_WIDTH_IN,
             height_in=self.DEFAULT_HEIGHT_IN,
             dpi=self.DEFAULT_DPI,
+            sizing_mode="axes_first",
             export_background="white",
         )
         axes = AxesSpec(
@@ -311,7 +318,7 @@ class PureMplFigureComposer(QMainWindow):
             canvas_frame = QWidget()
             self._canvas_container = canvas_frame
             canvas_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            canvas_frame.setMinimumSize(200, 200)
+            canvas_frame.setMinimumSize(MIN_PREVIEW_W, MIN_PREVIEW_H)
             canvas_layout = QVBoxLayout(canvas_frame)
             canvas_layout.setContentsMargins(0, 0, 0, 0)
             canvas_layout.addStretch(1)
@@ -553,9 +560,9 @@ class PureMplFigureComposer(QMainWindow):
         self.spin_height.setSingleStep(0.05)
         self.spin_height.setValue(self._fig_spec.page.height_in)
         self.spin_height.setEnabled(False)
-        dims_row.addWidget(QLabel("Width (in)"))
+        dims_row.addWidget(QLabel("Axes width (in)"))
         dims_row.addWidget(self.spin_width)
-        dims_row.addWidget(QLabel("Height (in)"))
+        dims_row.addWidget(QLabel("Axes height (in)"))
         dims_row.addWidget(self.spin_height)
 
         layout.addWidget(QLabel("Preset"))
@@ -679,10 +686,49 @@ class PureMplFigureComposer(QMainWindow):
     def showEvent(self, event: QShowEvent) -> None:
         """Ensure the first refresh happens after the dialog is visible."""
         super().showEvent(event)
+        QTimer.singleShot(0, self._apply_dynamic_minimum_size)
         if self._first_show_done:
             return
         self._first_show_done = True
         self._refresh_preview()
+
+    def apply_theme(self) -> None:
+        """Update theme-dependent colors when theme changes."""
+        # Update grid color in axes spec
+        if hasattr(self, '_fig_spec') and self._fig_spec.axes is not None:
+            self._fig_spec.axes.grid_color = CURRENT_THEME.get("grid_color", "#c0c0c0")
+
+        # Update export label color
+        if hasattr(self, 'label_export_size') and self.label_export_size is not None:
+            text_color = CURRENT_THEME.get("text", "#6c757d")
+            self.label_export_size.setStyleSheet(f"color: {text_color};")
+
+        # Update rectangle selector edge color if it exists
+        if hasattr(self, '_box_selector') and self._box_selector is not None:
+            try:
+                ax = self._box_selector.ax
+                self._box_selector.set_active(False)
+                self._box_selector = RectangleSelector(
+                    ax,
+                    self._on_box_selected,
+                    useblit=True,
+                    button=[1],
+                    interactive=False,
+                    drag_from_anywhere=True,
+                    props=dict(
+                        edgecolor=CURRENT_THEME.get("text", "#000000"),
+                        facecolor="none",
+                        linewidth=1.0,
+                        linestyle="--"
+                    ),
+                )
+                self._box_selector.connect_event("motion_notify_event", self._on_box_drag)
+            except Exception:
+                pass
+
+        # Refresh preview to show new colors
+        if hasattr(self, '_refresh_preview'):
+            self._refresh_preview()
 
     def _on_trace_selected(self, key: str) -> None:
         self._active_trace_key = key
@@ -845,16 +891,9 @@ class PureMplFigureComposer(QMainWindow):
 
         self._updating_canvas_size = True
         try:
-            central = self.centralWidget()
-            central_rect = central.contentsRect() if central is not None else None
-            total_w = central_rect.width() if central_rect is not None else self.width()
-            total_h = central_rect.height() if central_rect is not None else self.height()
-            right_w = 0
-            if self._right_panel is not None:
-                right_w = self._right_panel.width() or self._right_panel.sizeHint().width()
-            padding = 24
-            avail_w = max(1, total_w - right_w - padding)
-            avail_h = max(1, total_h - padding)
+            rect = self._canvas_container.contentsRect()
+            avail_w = max(1, rect.width())
+            avail_h = max(1, rect.height())
             base_w_px = int(self._figure.get_figwidth() * self._figure.get_dpi())
             base_h_px = int(self._figure.get_figheight() * self._figure.get_dpi())
             if base_w_px <= 0 or base_h_px <= 0:
@@ -1077,6 +1116,11 @@ class PureMplFigureComposer(QMainWindow):
         self._enforce_page_bounds(update_controls=True)
         ctx = self._render_context(is_preview=True)
         build_figure(self._fig_spec, ctx, fig=self._figure)
+        # Force preview to look like a white page regardless of app theme
+        self._figure.patch.set_facecolor("white")
+        self._figure.patch.set_alpha(1.0)
+        for ax in self._figure.get_axes():
+            ax.set_facecolor("white")
         ax = self._current_axes()
         if self.btn_box_select and self.btn_box_select.isChecked():
             if ax is not None:
@@ -1090,19 +1134,46 @@ class PureMplFigureComposer(QMainWindow):
     def resizeEvent(self, event) -> None:
         """Keep current view; do not reset state on resize."""
         super().resizeEvent(event)
-        self._update_canvas_size_to_fit()
+        QTimer.singleShot(0, self._update_canvas_size_to_fit)
         if self._canvas:
             self._canvas.draw_idle()
+
+    def _apply_dynamic_minimum_size(self) -> None:
+        """Derive a sane minimum window size from panel hints and preview needs."""
+        rp = self._right_panel
+        rp_w = 0
+        if rp is not None:
+            rp_w = rp.minimumSizeHint().width()
+            if rp_w <= 0:
+                rp_w = rp.sizeHint().width()
+            if rp_w <= 0:
+                rp_w = rp.width()
+
+        central = self.centralWidget()
+        layout = central.layout() if central is not None else None
+        spacing = layout.spacing() if layout is not None else 0
+
+        if layout is not None:
+            margins = layout.contentsMargins()
+            lm, tm, rm, bm = margins.left(), margins.top(), margins.right(), margins.bottom()
+        else:
+            lm = tm = rm = bm = 0
+
+        min_w = int(rp_w + MIN_PREVIEW_W + spacing + lm + rm + EXTRA_W_PAD)
+        min_h = int(MIN_PREVIEW_H + tm + bm + EXTRA_H_PAD)
+        self.setMinimumSize(min_w, min_h)
 
     def _update_export_size_label(self) -> None:
         if self.label_export_size is None:
             return
         page = self._fig_spec.page
-        w_in = page.effective_width_in or page.width_in
-        h_in = page.effective_height_in or page.height_in
+        axes_w_in = page.width_in
+        axes_h_in = page.height_in
+        fig_w_in = page.effective_width_in or axes_w_in
+        fig_h_in = page.effective_height_in or axes_h_in
         dpi = page.dpi
-        w_px = int(w_in * dpi)
-        h_px = int(h_in * dpi)
+        w_px = int(fig_w_in * dpi)
+        h_px = int(fig_h_in * dpi)
         clamp_note = ""
         if self._size_was_clamped:
             clamp_note = (
@@ -1110,7 +1181,8 @@ class PureMplFigureComposer(QMainWindow):
                 f"and {self.MIN_HEIGHT_IN:.1f}-{self.MAX_HEIGHT_IN:.1f} in height)"
             )
         self.label_export_size.setText(
-            f"{w_in:.2f} in × {h_in:.2f} in ({w_px} × {h_px} px @ {dpi:.0f} dpi){clamp_note}"
+            f"Axes: {axes_w_in:.2f} × {axes_h_in:.2f} in @ {dpi:.0f} dpi\n"
+            f"Resulting figure size: {fig_w_in:.2f} × {fig_h_in:.2f} in ({w_px} × {h_px} px){clamp_note}"
         )
 
     # ------------------------------------------------------------------

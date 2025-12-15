@@ -221,16 +221,16 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """Create PyQtGraph plot items for traces and events."""
         # Determine color and name based on mode
         if self._mode == "avg_pressure":
-            theme_color = "#1f77b4"  # Blue for avg pressure
+            theme_color = "#1f77b4"  # Blue for avg pressure (fixed)
             trace_name = "Avg Pressure"
         elif self._mode == "set_pressure":
-            theme_color = "#9467bd"  # Purple for set pressure
+            theme_color = "#9467bd"  # Purple for set pressure (fixed)
             trace_name = "Set Pressure"
         elif self._mode == "outer":
-            theme_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
+            theme_color = "#FF8C00"  # Orange for outer diameter (fixed)
             trace_name = "Outer Diameter"
         else:
-            theme_color = CURRENT_THEME.get("trace_color", "#000000")
+            theme_color = CURRENT_THEME.get("trace_color", "#000000")  # Changes with theme
             trace_name = "Inner Diameter"
 
         self.inner_curve = self._plot_item.plot(
@@ -247,7 +247,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         # Outer diameter trace (secondary, if dual mode)
         if self._mode == "dual":
-            outer_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
+            outer_color = "#FF8C00"  # Orange for outer diameter (fixed, doesn't change with theme)
             self.outer_curve = self._plot_item.plot(
                 pen=pg.mkPen(color=outer_color, width=1.2),
                 antialias=False,
@@ -278,15 +278,15 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._plot_item.showGrid(x=True, y=True, alpha=0.10)
 
         # Update trace line colors
-        if self.inner_curve is not None:
+        # Only update inner diameter trace color (changes with theme: black in light, white in dark)
+        # Other traces (outer, pressure, set_pressure) keep their fixed colors
+        if self.inner_curve is not None and self._mode in ("inner", "dual"):
             inner_color = CURRENT_THEME.get("trace_color", "#000000")
             pen = pg.mkPen(color=inner_color, width=1.5)
             self.inner_curve.setPen(pen)
 
-        if self.outer_curve is not None:
-            outer_color = CURRENT_THEME.get("trace_color_secondary", "#FF8C00")
-            pen = pg.mkPen(color=outer_color, width=1.2)
-            self.outer_curve.setPen(pen)
+        # Outer diameter trace always stays orange (doesn't change with theme)
+        # No need to update outer_curve color on theme change
 
         # Update event line colors
         event_color = CURRENT_THEME.get("event_line", "#8A8A8A")

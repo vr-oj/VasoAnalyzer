@@ -22,6 +22,66 @@ QSpinBox, QDoubleSpinBox, QComboBox {
   background-color: palette(base);
   color: palette(text);
 }
+
+/* Spinbox up/down buttons */
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+  subcontrol-origin: border;
+  subcontrol-position: top right;
+  width: 16px;
+  border-left: 1px solid palette(mid);
+  border-top-right-radius: 3px;
+  background-color: palette(button);
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+  subcontrol-origin: border;
+  subcontrol-position: bottom right;
+  width: 16px;
+  border-left: 1px solid palette(mid);
+  border-bottom-right-radius: 3px;
+  background-color: palette(button);
+}
+
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {
+  background-color: palette(light);
+}
+
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+  background-color: palette(light);
+}
+
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed {
+  background-color: palette(midlight);
+}
+
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+  background-color: palette(midlight);
+}
+
+/* Spinbox arrow icons - ensure they're always visible with strong contrast */
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 5px solid palette(buttonText);
+  margin: 0 auto;
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid palette(buttonText);
+  margin: 0 auto;
+}
+
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled,
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
+  border-top-color: palette(mid);
+  border-bottom-color: palette(mid);
+}
 QTabWidget::pane {
   border: none;
 }

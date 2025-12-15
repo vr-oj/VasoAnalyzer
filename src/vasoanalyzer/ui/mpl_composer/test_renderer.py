@@ -46,9 +46,7 @@ def _build_default_spec() -> FigureSpec:
         width_in=6.0,
         height_in=3.0,
         dpi=150.0,
-        axes_first=False,
-        axes_width_in=None,
-        axes_height_in=None,
+        sizing_mode="axes_first",
         min_margin_in=0.5,
     )
     axes = AxesSpec(

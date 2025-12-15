@@ -154,7 +154,7 @@ def get_fonts() -> dict[str, QFont]:
 def get_modern_table_stylesheet() -> str:
     """Generate modern table stylesheet with theme awareness."""
     colors = get_semantic_colors()
-    is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+    is_dark = theme.CURRENT_THEME.get("is_dark", False)
 
     if is_dark:
         # Dark mode colors
@@ -217,7 +217,7 @@ def get_modern_table_stylesheet() -> str:
 
 def get_modern_combobox_stylesheet() -> str:
     """Generate modern combobox stylesheet."""
-    is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+    is_dark = theme.CURRENT_THEME.get("is_dark", False)
 
     if is_dark:
         bg = "#1b212d"
@@ -270,7 +270,7 @@ def get_modern_combobox_stylesheet() -> str:
 
 def get_modern_button_stylesheet() -> str:
     """Generate modern button stylesheet with flat design."""
-    is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+    is_dark = theme.CURRENT_THEME.get("is_dark", False)
 
     if is_dark:
         primary_bg = "#3B82F6"
@@ -603,7 +603,7 @@ class TemplatePage(WizardPageBase):
         self.recent_templates_list.setUniformItemSizes(True)
         self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
         # Apply modern list styling
-        is_dark = theme.CURRENT_THEME.get("window_bg", "#FFFFFF").lower() != "#ffffff"
+        is_dark = theme.CURRENT_THEME.get("is_dark", False)
         if is_dark:
             list_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
             list_border = COLORS["border_dark"]

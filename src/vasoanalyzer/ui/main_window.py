@@ -7493,6 +7493,13 @@ class VasoAnalyzerApp(QMainWindow):
             with contextlib.suppress(Exception):
                 self._apply_primary_toolbar_theme()
 
+        # Update all open Figure Composer windows
+        if hasattr(self, "_matplotlib_composer_windows"):
+            for composer_window in self._matplotlib_composer_windows:
+                if hasattr(composer_window, "apply_theme"):
+                    with contextlib.suppress(Exception):
+                        composer_window.apply_theme()
+
         # Force complete repaint to ensure all widgets pick up new colors
         self.update()
         QApplication.processEvents()
@@ -14771,7 +14778,7 @@ QPushButton[isGhost="true"]:pressed {{
             "home_action": "Home.svg",
             "load_trace_action": "folder-open.svg",
             "load_snapshot_action": "empty-box.svg",
-            "excel_action": "chart-bar.svg",
+            "excel_action": "excel-mapper.svg",
             "review_events_action": None,
             "load_events_action": "folder-plus.svg",
             "save_session_action": "Save.svg",
