@@ -58,6 +58,7 @@ def _build_default_spec() -> FigureSpec:
         grid_linestyle="--",
         grid_color="#c0c0c0",
         grid_alpha=0.7,
+        show_event_markers=True,
         show_event_labels=False,
     )
     traces = [
@@ -78,6 +79,24 @@ def _build_default_spec() -> FigureSpec:
         legend_fontsize=8.0,
         legend_loc="upper right",
     )
+
+
+def test_event_labels_respect_toggle():
+    trace_model = create_dummy_trace_model()
+    spec = _build_default_spec()
+    ctx = RenderContext(is_preview=True, trace_model=trace_model)
+
+    spec.axes.show_event_labels = True
+    fig = build_figure(spec, ctx)
+    ax = fig.axes[0]
+    labels_on = [t for t in ax.texts if t.get_text() in {"Start", "End"}]
+    assert len(labels_on) == 2
+
+    spec.axes.show_event_labels = False
+    fig = build_figure(spec, ctx, fig=fig)
+    ax = fig.axes[0]
+    labels_off = [t for t in ax.texts if t.get_text() in {"Start", "End"}]
+    assert len(labels_off) == 0
 
 
 def test_build_and_save(tmp_path):

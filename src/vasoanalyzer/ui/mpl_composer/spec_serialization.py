@@ -12,6 +12,7 @@ SPEC_VERSION = 1
 def figure_spec_to_dict(spec: FigureSpec) -> dict[str, Any]:
     return {
         "spec_version": SPEC_VERSION,
+        "template_id": getattr(spec, "template_id", "single_column"),
         "page": {
             "width_in": spec.page.width_in,
             "height_in": spec.page.height_in,
@@ -21,6 +22,10 @@ def figure_spec_to_dict(spec: FigureSpec) -> dict[str, Any]:
             "axes_width_in": getattr(spec.page, "axes_width_in", None),
             "axes_height_in": getattr(spec.page, "axes_height_in", None),
             "min_margin_in": getattr(spec.page, "min_margin_in", None),
+            "left_margin_in": getattr(spec.page, "left_margin_in", None),
+            "right_margin_in": getattr(spec.page, "right_margin_in", None),
+            "top_margin_in": getattr(spec.page, "top_margin_in", None),
+            "bottom_margin_in": getattr(spec.page, "bottom_margin_in", None),
             "export_background": getattr(spec.page, "export_background", "white"),
         },
         "axes": {
@@ -32,6 +37,7 @@ def figure_spec_to_dict(spec: FigureSpec) -> dict[str, Any]:
             "grid_linestyle": spec.axes.grid_linestyle,
             "grid_color": spec.axes.grid_color,
             "grid_alpha": spec.axes.grid_alpha,
+            "show_event_markers": getattr(spec.axes, "show_event_markers", True),
             "show_event_labels": getattr(spec.axes, "show_event_labels", False),
             "xlabel_fontsize": getattr(spec.axes, "xlabel_fontsize", None),
             "ylabel_fontsize": getattr(spec.axes, "ylabel_fontsize", None),
@@ -90,6 +96,10 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
     traces_d = data.get("traces", []) or []
     events_d = data.get("events", []) or []
     annos_d = data.get("annotations", []) or []
+    default_show_event_markers = (
+        any(bool(e.get("visible", True)) for e in events_d) if events_d else True
+    )
+    template_id = data.get("template_id", "single_column")
 
     page = PageSpec(
         width_in=float(page_d.get("width_in", 6.0)),
@@ -100,6 +110,10 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         axes_width_in=page_d.get("axes_width_in"),
         axes_height_in=page_d.get("axes_height_in"),
         min_margin_in=page_d.get("min_margin_in", 0.15),
+        left_margin_in=page_d.get("left_margin_in"),
+        right_margin_in=page_d.get("right_margin_in"),
+        top_margin_in=page_d.get("top_margin_in"),
+        bottom_margin_in=page_d.get("bottom_margin_in"),
         export_background=page_d.get("export_background", "white"),
     )
 
@@ -112,6 +126,7 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         grid_linestyle=axes_d.get("grid_linestyle", "--"),
         grid_color=axes_d.get("grid_color", "#c0c0c0"),
         grid_alpha=float(axes_d.get("grid_alpha", 0.7)),
+        show_event_markers=bool(axes_d.get("show_event_markers", default_show_event_markers)),
         show_event_labels=bool(axes_d.get("show_event_labels", False)),
         xlabel_fontsize=axes_d.get("xlabel_fontsize"),
         ylabel_fontsize=axes_d.get("ylabel_fontsize"),
@@ -167,6 +182,7 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         traces=traces,
         events=events,
         annotations=annotations,
+        template_id=template_id,
         legend_visible=bool(data.get("legend_visible", True)),
         legend_fontsize=data.get("legend_fontsize", 9.0),
         legend_loc=data.get("legend_loc", "upper right"),

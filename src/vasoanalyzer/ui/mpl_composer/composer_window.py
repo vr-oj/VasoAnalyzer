@@ -49,6 +49,12 @@ from .renderer import (
     build_figure,
     export_figure,
 )
+from .specs import GraphSpec
+from .templates import (
+    DEFAULT_TEMPLATE_ID,
+    apply_template_preset,
+    get_template_preset,
+)
 from .spec_serialization import figure_spec_from_dict, figure_spec_to_dict
 
 log = logging.getLogger(__name__)
@@ -120,7 +126,10 @@ class PureMplFigureComposer(QMainWindow):
         self._default_trace_key = default_trace_key
         self._applied_default_view = False
         self._default_view_note: str | None = None
+        self._template_defaults_cache: dict[str, dict[str, Any]] = {"page": {}, "axes": {}, "figure": {}}
 
+        default_graph_spec = GraphSpec()
+        provided_fig = figure_spec is not None
         if figure_spec is not None:
             if isinstance(figure_spec, dict):
                 self._fig_spec = figure_spec_from_dict(figure_spec)
@@ -128,6 +137,28 @@ class PureMplFigureComposer(QMainWindow):
                 self._fig_spec = figure_spec
         else:
             self._fig_spec: FigureSpec = self._build_initial_fig_spec(trace_model)
+            self._template_defaults_cache = apply_template_preset(
+                self._fig_spec,
+                getattr(self._fig_spec, "template_id", DEFAULT_TEMPLATE_ID),
+                respect_overrides=False,
+            )
+        axes = getattr(self._fig_spec, "axes", None)
+        if axes is not None:
+            if not hasattr(axes, "show_event_markers"):
+                axes.show_event_markers = default_graph_spec.show_event_markers
+            if not hasattr(axes, "show_event_labels"):
+                axes.show_event_labels = default_graph_spec.show_event_labels
+        if not hasattr(self._fig_spec, "template_id"):
+            self._fig_spec.template_id = DEFAULT_TEMPLATE_ID
+        if provided_fig:
+            self._template_defaults_cache = self._snapshot_template_defaults_from_spec()
+        elif not any(self._template_defaults_cache.get(k) for k in ("page", "axes", "figure")):
+            preset = get_template_preset(self._fig_spec.template_id)
+            self._template_defaults_cache = {
+                "page": dict(preset.layout_defaults),
+                "axes": dict(preset.style_defaults.get("axes", {})),
+                "figure": dict(preset.style_defaults.get("figure", {})),
+            }
         self._active_trace_key = next(
             (trace.key for trace in self._fig_spec.traces if trace.visible),
             self._fig_spec.traces[0].key if self._fig_spec.traces else "inner",
@@ -149,7 +180,6 @@ class PureMplFigureComposer(QMainWindow):
         self._canvas = None
         self._preview_initialized = False
         self._first_show_done = False
-        self._event_visibility_cache: dict[int, bool] = {}
         self._box_selector: RectangleSelector | None = None
         self._box_dragging: bool = False
         self._last_container_size: tuple[int, int] | None = None  # Track canvas container size
@@ -179,6 +209,7 @@ class PureMplFigureComposer(QMainWindow):
         self.edit_xlabel: QLineEdit | None = None
         self.edit_ylabel: QLineEdit | None = None
         self.combo_shape: QComboBox | None = None
+        self.combo_template: QComboBox | None = None
         self.spin_width: QDoubleSpinBox | None = None
         self.spin_height: QDoubleSpinBox | None = None
         self.cb_legend: QCheckBox | None = None
@@ -200,6 +231,11 @@ class PureMplFigureComposer(QMainWindow):
         self._pending_dirty: bool = False
         self._signal_emit_timer: QTimer | None = None
         self._pending_signal_emit: bool = False
+        self._template_choices: list[tuple[str, str]] = [
+            ("Single column", "single_column"),
+            ("Double column", "double_column"),
+            ("Slide", "slide"),
+        ]
 
         self._enforce_page_bounds(update_controls=False)
         self._setup_ui()
@@ -212,12 +248,19 @@ class PureMplFigureComposer(QMainWindow):
     # ------------------------------------------------------------------
     def _build_initial_fig_spec(self, trace_model: Any | None) -> FigureSpec:
         """Create the initial FigureSpec based on available data/UI defaults."""
+        template_id = DEFAULT_TEMPLATE_ID
+        preset = get_template_preset(template_id)
+        layout_defaults = preset.layout_defaults
+        style_defaults = preset.style_defaults.get("axes", {})
+        figure_style_defaults = preset.style_defaults.get("figure", {})
+        graph_spec = GraphSpec()
         page = PageSpec(
-            width_in=self.DEFAULT_WIDTH_IN,
-            height_in=self.DEFAULT_HEIGHT_IN,
+            width_in=float(layout_defaults.get("width_in", self.DEFAULT_WIDTH_IN)),
+            height_in=float(layout_defaults.get("height_in", self.DEFAULT_HEIGHT_IN)),
             dpi=self.DEFAULT_DPI,
             sizing_mode="axes_first",
             export_background="white",
+            min_margin_in=float(layout_defaults.get("min_margin_in", 0.15)),
         )
         axes = AxesSpec(
             x_range=None,
@@ -228,10 +271,12 @@ class PureMplFigureComposer(QMainWindow):
             grid_linestyle="--",
             grid_color=CURRENT_THEME.get("grid_color", "#c0c0c0"),
             grid_alpha=0.7,
-            show_event_labels=False,
-            xlabel_fontsize=12.0,
-            ylabel_fontsize=12.0,
-            tick_label_fontsize=9.0,
+            show_event_markers=graph_spec.show_event_markers,
+            show_event_labels=graph_spec.show_event_labels,
+            xlabel_fontsize=float(style_defaults.get("xlabel_fontsize", 12.0)),
+            ylabel_fontsize=float(style_defaults.get("ylabel_fontsize", 12.0)),
+            tick_label_fontsize=float(style_defaults.get("tick_label_fontsize", 9.0)),
+            event_label_fontsize=float(style_defaults.get("event_label_fontsize", 9.0)),
             label_bold=True,
         )
 
@@ -290,11 +335,29 @@ class PureMplFigureComposer(QMainWindow):
             traces=traces,
             events=events,
             annotations=[],
+            template_id=template_id,
             legend_visible=False,
-            legend_fontsize=9.0,
+            legend_fontsize=float(figure_style_defaults.get("legend_fontsize", 9.0)),
             legend_loc="upper right",
             line_width_scale=1.0,
         )
+
+    def _snapshot_template_defaults_from_spec(self) -> dict[str, dict[str, Any]]:
+        page_defaults: dict[str, Any] = {}
+        axes_defaults: dict[str, Any] = {}
+        figure_defaults: dict[str, Any] = {}
+        if getattr(self._fig_spec, "page", None) is not None:
+            for field in ("width_in", "height_in", "min_margin_in"):
+                if hasattr(self._fig_spec.page, field):
+                    page_defaults[field] = getattr(self._fig_spec.page, field)
+        if getattr(self._fig_spec, "axes", None) is not None:
+            for field in ("xlabel_fontsize", "ylabel_fontsize", "tick_label_fontsize", "event_label_fontsize"):
+                if hasattr(self._fig_spec.axes, field):
+                    axes_defaults[field] = getattr(self._fig_spec.axes, field)
+        for field in ("legend_fontsize",):
+            if hasattr(self._fig_spec, field):
+                figure_defaults[field] = getattr(self._fig_spec, field)
+        return {"page": page_defaults, "axes": axes_defaults, "figure": figure_defaults}
 
     def _render_context(self, *, is_preview: bool) -> RenderContext:
         return RenderContext(
@@ -723,6 +786,13 @@ class PureMplFigureComposer(QMainWindow):
     def _build_shape_group(self) -> QGroupBox:
         grp = QGroupBox("Axis shape")
         layout = QVBoxLayout(grp)
+        self.combo_template = QComboBox()
+        for label, template_id in self._template_choices:
+            self.combo_template.addItem(label, template_id)
+        self.combo_template.currentTextChanged.connect(self._on_template_changed)
+        layout.addWidget(QLabel("Template"))
+        layout.addWidget(self.combo_template)
+
         self.combo_shape = QComboBox()
         for label in list(self.SHAPE_PRESETS.keys()) + ["Custom"]:
             self.combo_shape.addItem(label, label)
@@ -778,10 +848,14 @@ class PureMplFigureComposer(QMainWindow):
         if self.cb_events:
             has_events = bool(self._fig_spec.events)
             self.cb_events.setEnabled(has_events)
-            self.cb_events.setChecked(any(ev.visible for ev in self._fig_spec.events) if has_events else False)
+            markers_on = bool(getattr(axes, "show_event_markers", True)) if has_events else False
+            with signals_blocked(self.cb_events):
+                self.cb_events.setChecked(markers_on)
         if self.cb_event_labels:
-            self.cb_event_labels.setEnabled(self.cb_events.isChecked() if self.cb_events else False)
-            self.cb_event_labels.setChecked(axes.show_event_labels)
+            labels_enabled = bool(self.cb_events.isChecked()) if self.cb_events else False
+            self.cb_event_labels.setEnabled(labels_enabled)
+            with signals_blocked(self.cb_event_labels):
+                self.cb_event_labels.setChecked(axes.show_event_labels if labels_enabled else False)
         if self.cb_legend:
             self.cb_legend.setChecked(self._fig_spec.legend_visible)
         if self.edit_xlabel:
@@ -862,6 +936,13 @@ class PureMplFigureComposer(QMainWindow):
             else:
                 self.spin_width.setEnabled(False)
                 self.spin_height.setEnabled(False)
+        if self.combo_template:
+            current_template = getattr(self._fig_spec, "template_id", DEFAULT_TEMPLATE_ID)
+            for idx, (label, template_id) in enumerate(self._template_choices):
+                if template_id == current_template:
+                    with signals_blocked(self.combo_template):
+                        self.combo_template.setCurrentIndex(idx)
+                    break
 
         self._update_export_size_label()
         if self.cb_export_transparent is not None:
@@ -1077,10 +1158,18 @@ class PureMplFigureComposer(QMainWindow):
     def _on_event_labels_toggled(self, checked: bool) -> None:
         if not self.cb_event_labels:
             return
+        axes = self._fig_spec.axes
         if self.cb_events and not self.cb_events.isChecked():
-            self.cb_event_labels.setChecked(False)
+            with signals_blocked(self.cb_event_labels):
+                self.cb_event_labels.setChecked(False)
+            axes.show_event_labels = False
             return
-        self._fig_spec.axes.show_event_labels = checked
+        if not getattr(axes, "show_event_markers", True):
+            with signals_blocked(self.cb_event_labels):
+                self.cb_event_labels.setChecked(False)
+            axes.show_event_labels = False
+            return
+        axes.show_event_labels = checked
         self._refresh_preview()
 
     def _on_legend_toggled(self, checked: bool) -> None:
@@ -1169,6 +1258,23 @@ class PureMplFigureComposer(QMainWindow):
                 self.combo_shape.setCurrentText("Custom")
         self._update_export_size_label()
         self._refresh_preview(size_changed=True)  # Size changed
+
+    def _on_template_changed(self, _: str) -> None:
+        """Switch template presets while respecting user overrides."""
+        template_id = DEFAULT_TEMPLATE_ID
+        if self.combo_template:
+            template_id = self.combo_template.currentData() or DEFAULT_TEMPLATE_ID
+        self._fig_spec.template_id = template_id
+        self._template_defaults_cache = apply_template_preset(
+            self._fig_spec,
+            template_id,
+            previous_defaults=self._template_defaults_cache,
+            respect_overrides=True,
+        )
+        self._enforce_page_bounds(update_controls=True)
+        self._update_export_size_label()
+        self._sync_controls_from_spec()
+        self._refresh_preview(size_changed=True)
 
     # ------------------------------------------------------------------
     # Preview helpers
@@ -1376,6 +1482,7 @@ class PureMplFigureComposer(QMainWindow):
         return self._figure.axes[0] if self._figure.axes else None
 
     def _set_events_visible(self, visible: bool) -> None:
+        axes = self._fig_spec.axes
         has_events = bool(self._fig_spec.events)
         if not has_events:
             if self.cb_events:
@@ -1385,22 +1492,22 @@ class PureMplFigureComposer(QMainWindow):
                 with signals_blocked(self.cb_event_labels):
                     self.cb_event_labels.setChecked(False)
                 self.cb_event_labels.setEnabled(False)
+            axes.show_event_markers = False
+            axes.show_event_labels = False
             return
 
-        if visible:
-            for idx, ev in enumerate(self._fig_spec.events):
-                ev.visible = self._event_visibility_cache.get(idx, True)
-            if self.cb_event_labels:
-                self.cb_event_labels.setEnabled(True)
-        else:
-            for idx, ev in enumerate(self._fig_spec.events):
-                self._event_visibility_cache[idx] = ev.visible
-                ev.visible = False
+        axes.show_event_markers = bool(visible)
+        if not visible:
+            axes.show_event_labels = False
             if self.cb_event_labels:
                 with signals_blocked(self.cb_event_labels):
                     self.cb_event_labels.setChecked(False)
                 self.cb_event_labels.setEnabled(False)
-            self._fig_spec.axes.show_event_labels = False
+        else:
+            if self.cb_event_labels:
+                self.cb_event_labels.setEnabled(True)
+                with signals_blocked(self.cb_event_labels):
+                    self.cb_event_labels.setChecked(axes.show_event_labels)
 
         self._refresh_preview()
 

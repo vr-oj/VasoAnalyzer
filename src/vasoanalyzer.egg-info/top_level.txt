@@ -1,3 +1,2 @@
-icons
 utils
 vasoanalyzer

@@ -3,6 +3,11 @@
 This module owns the neutral FigureSpec model and the pure Matplotlib
 rendering pipeline used by both preview and export. It is intentionally
 independent of Qt so it can be reused for headless exports/tests.
+
+Preview render path: composer_window._refresh_preview -> build_figure(...) ->
+_build_axes_first/_build_figure_first -> _render_traces/_render_events/_apply_axes_styles.
+Export render path: composer_window.export_figure -> export_figure ->
+build_figure(...) -> same render stack, followed by export-specific savefig kwargs.
 """
 
 # NOTE:
@@ -53,6 +58,10 @@ class PageSpec:
     axes_width_in: Optional[float] = None
     axes_height_in: Optional[float] = None
     min_margin_in: float = 0.15
+    left_margin_in: Optional[float] = None
+    right_margin_in: Optional[float] = None
+    top_margin_in: Optional[float] = None
+    bottom_margin_in: Optional[float] = None
     export_background: str = "white"  # "white" or "transparent"
     # effective_* are computed by build_figure; callers should treat them as
     # readonly outputs (they are reset at the beginning of each build).
@@ -70,6 +79,7 @@ class AxesSpec:
     grid_linestyle: str = "--"
     grid_color: str = "#c0c0c0"
     grid_alpha: float = 0.7
+    show_event_markers: bool = True
     show_event_labels: bool = False
     # Font properties
     xlabel_fontsize: Optional[float] = None
@@ -129,6 +139,7 @@ class FigureSpec:
     traces: List[TraceSpec]
     events: List[EventSpec] = field(default_factory=list)
     annotations: List[AnnotationSpec] = field(default_factory=list)
+    template_id: str = "single_column"
     legend_visible: bool = True
     legend_fontsize: Optional[float] = 9.0
     legend_loc: str = "upper right"  # "best", "upper right", ...
@@ -235,6 +246,65 @@ def _build_axes_first_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure |
     """Axes-first sizing that keeps the data rectangle at the requested size."""
     page = spec.page
     dpi = page.dpi
+    explicit_margins = _has_explicit_margins(page)
+    if explicit_margins:
+        fig_w = float(page.width_in)
+        fig_h = float(page.height_in)
+        left_margin = float(page.left_margin_in or 0.0)
+        right_margin = float(page.right_margin_in or 0.0)
+        top_margin = float(page.top_margin_in or 0.0)
+        bottom_margin = float(page.bottom_margin_in or 0.0)
+        axes_w = max(fig_w - left_margin - right_margin, 0.1)
+        axes_h = max(fig_h - top_margin - bottom_margin, 0.1)
+        page.axes_width_in = axes_w
+        page.axes_height_in = axes_h
+        page.effective_width_in = None
+        page.effective_height_in = None
+        original_canvas = fig.canvas if fig is not None else None
+        if fig is None:
+            fig = Figure(figsize=(fig_w, fig_h), dpi=dpi)
+        else:
+            fig.clear()
+            fig.set_size_inches(fig_w, fig_h, forward=False)
+            fig.set_dpi(dpi)
+        ax_left = left_margin / fig_w
+        ax_bottom = bottom_margin / fig_h
+        ax_width = axes_w / fig_w
+        ax_height = axes_h / fig_h
+        ax = fig.add_axes([ax_left, ax_bottom, ax_width, ax_height])
+        fig.patch.set_facecolor("white")
+        fig.patch.set_alpha(1.0)
+        ax.set_facecolor("white")
+        _render_traces(ax, spec, ctx)
+        _apply_axes_styles(ax, spec.axes)
+        _render_events(ax, spec)
+        _render_annotations(fig, ax, spec.annotations)
+        if spec.legend_visible:
+            eff_legend_fs = spec.legend_fontsize or 9.0
+            leg = ax.legend(
+                fontsize=eff_legend_fs,
+                loc=spec.legend_loc,
+                framealpha=0.8,
+            )
+            if leg is not None:
+                frame = leg.get_frame()
+                if frame is not None:
+                    frame.set_linewidth(0.8)
+        # Apply manual ranges after layout so autoscale does not override them.
+        if spec.axes.x_range is not None:
+            ax.set_xlim(*spec.axes.x_range)
+        if spec.axes.y_range is not None:
+            ax.set_ylim(*spec.axes.y_range)
+        page.effective_width_in = fig_w
+        page.effective_height_in = fig_h
+        try:
+            fig.canvas.draw()
+        except Exception:
+            log.debug("Final draw after explicit-margin build failed", exc_info=True)
+        if original_canvas is not None:
+            fig.set_canvas(original_canvas)
+        return fig
+
     axes_w = float(page.width_in)
     axes_h = float(page.height_in)
     # Use min_margin_in as a floor for padding; never go below 0.15 in.
@@ -379,13 +449,15 @@ def export_figure(
             max_dim,
         )
 
+    explicit_margins = _has_explicit_margins(page)
     # Fallback tight layout for extreme tall/narrow exports to keep labels visible.
-    try:
-        aspect = h_in / max(w_in, 1e-6)
-        if aspect >= 1.6 or w_in <= 3.0:
-            fig.tight_layout(pad=0.02)
-    except Exception:
-        log.debug("tight_layout skipped", exc_info=True)
+    if not explicit_margins:
+        try:
+            aspect = h_in / max(w_in, 1e-6)
+            if aspect >= 1.6 or w_in <= 3.0:
+                fig.tight_layout(pad=0.02)
+        except Exception:
+            log.debug("tight_layout skipped", exc_info=True)
 
     # Ensure required elements remain visible; one corrective pass only.
     try:
@@ -592,11 +664,18 @@ def _resolve_sizing_mode(page: PageSpec) -> Literal["axes_first", "figure_first"
     return sizing_mode
 
 
+def _has_explicit_margins(page: PageSpec) -> bool:
+    return all(getattr(page, f"{side}_margin_in", None) is not None for side in ("left", "right", "top", "bottom"))
+
+
 def _render_events(ax: "Axes", spec: FigureSpec) -> None:
-    show_labels = getattr(spec.axes, "show_event_labels", False)
+    axes_spec = spec.axes
+    show_markers = getattr(axes_spec, "show_event_markers", True)
+    show_labels = getattr(axes_spec, "show_event_labels", False)
+    label_count = 0
 
     # Prefer the user-specified x-range when present; otherwise use current limits
-    manual_xrange = getattr(spec.axes, "x_range", None)
+    manual_xrange = getattr(axes_spec, "x_range", None)
     if (
         isinstance(manual_xrange, tuple)
         and len(manual_xrange) == 2
@@ -616,19 +695,21 @@ def _render_events(ax: "Axes", spec: FigureSpec) -> None:
         if not (x_min <= ev.time_s <= x_max):
             continue
 
-        ax.vlines(
-            x=ev.time_s,
-            ymin=0.0,
-            ymax=1.0,
-            transform=ax.get_xaxis_transform(),
-            color=ev.color,
-            linewidth=ev.linewidth,
-            linestyle=ev.linestyle,
-        )
+        if show_markers:
+            ax.vlines(
+                x=ev.time_s,
+                ymin=0.0,
+                ymax=1.0,
+                transform=ax.get_xaxis_transform(),
+                color=ev.color,
+                linewidth=ev.linewidth,
+                linestyle=ev.linestyle,
+                clip_on=True,
+            )
         if show_labels and ev.label:
-            y = 1.02 if ev.label_above else -0.02
-            event_label_fs = spec.axes.event_label_fontsize or 9.0
-            event_label_weight = "bold" if spec.axes.event_label_bold else "normal"
+            y = 0.98 if ev.label_above else 0.02
+            event_label_fs = axes_spec.event_label_fontsize or 9.0
+            event_label_weight = "bold" if axes_spec.event_label_bold else "normal"
             ax.text(
                 ev.time_s,
                 y,
@@ -637,12 +718,15 @@ def _render_events(ax: "Axes", spec: FigureSpec) -> None:
                 ha="center",
                 va="bottom" if ev.label_above else "top",
                 fontsize=event_label_fs,
-                fontfamily=spec.axes.event_label_fontfamily,
-                fontstyle=spec.axes.event_label_fontstyle,
+                fontfamily=axes_spec.event_label_fontfamily,
+                fontstyle=axes_spec.event_label_fontstyle,
                 fontweight=event_label_weight,
                 color="black",
+                clip_on=True,
+                zorder=10,
             )
-
+            label_count += 1
+    log.debug("Render events: markers=%s labels=%s label_count=%d", show_markers, show_labels, label_count)
 
 def _render_annotations(fig: Figure, ax: "Axes", annos: List[AnnotationSpec]) -> None:
     for a in annos:
@@ -768,17 +852,22 @@ def _ensure_required_visibility(fig: Figure, spec: FigureSpec) -> None:
     if not fig.axes:
         return
     ax = fig.axes[0]
+    explicit_margins = _has_explicit_margins(spec.page)
+    if explicit_margins:
+        return
+    tol = 10.0 if explicit_margins else 1.5
     artists = _collect_required_artists(ax, spec)
-    failures = _validate_artists(fig, artists)
+    failures = _validate_artists(fig, artists, tolerance=tol)
     if not failures:
         return
 
     # One corrective pass
-    try:
-        fig.tight_layout(pad=0.8)
-    except Exception:
-        log.debug("tight_layout corrective pass skipped", exc_info=True)
-    failures = _validate_artists(fig, artists)
+    if not explicit_margins:
+        try:
+            fig.tight_layout(pad=0.8)
+        except Exception:
+            log.debug("tight_layout corrective pass skipped", exc_info=True)
+    failures = _validate_artists(fig, artists, tolerance=tol)
     if failures:
         msg = "; ".join(failures)
         raise ValueError(
