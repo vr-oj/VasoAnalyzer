@@ -361,8 +361,6 @@ def autosave_project(project: Project, autosave_path: str | None = None) -> str 
 
     if project is None or not project.path:
         return None
-
-    _sync_events_from_ui_state(project)
     return cast(str | None, write_project_autosave(project, autosave_path))
 
 

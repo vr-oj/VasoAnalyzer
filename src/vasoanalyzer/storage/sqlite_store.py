@@ -33,10 +33,13 @@ from vasoanalyzer.storage.sqlite import assets as _assets
 from vasoanalyzer.storage.sqlite import events as _events
 from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite import traces as _traces
+from vasoanalyzer.storage import validation as _validation
+from vasoanalyzer.storage.sqlite.db_writer import DbWriter
 from vasoanalyzer.storage.sqlite.utils import open_db, transaction
 
 from .sqlite_utils import backup_to_delete_mode as _sqlite_backup_to_delete_mode
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
+from .sqlite_utils import delete_sidecars as _sqlite_delete_sidecars
 from .sqlite_utils import optimize as _sqlite_optimize
 from .timeout_wrapper import TimeoutError, timeout
 
@@ -60,6 +63,7 @@ __all__ = [
     "list_assets",
     "iter_datasets",
     "get_dataset_meta",
+    "refresh_dataset_signatures",
     "pack_bundle",
     "unpack_bundle",
     "write_autosave",
@@ -73,7 +77,7 @@ __all__ = [
     "rename_figure_recipe",
 ]
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
 
 
@@ -110,6 +114,7 @@ class ProjectStore:
     path: Path
     conn: sqlite3.Connection
     dirty: bool = False
+    writer: DbWriter | None = None
     # Cloud context (used to pick journal/sync mode and surface UI hints)
     is_cloud_path: bool = False
     cloud_service: str | None = None
@@ -119,7 +124,12 @@ class ProjectStore:
         self.dirty = True
 
     def commit(self) -> None:
-        self.conn.commit()
+        writer = getattr(self, "writer", None)
+        if writer:
+            with writer.write_lock():
+                self.conn.commit()
+        else:
+            self.conn.commit()
         self.dirty = False
 
     def close(self) -> None:
@@ -127,6 +137,11 @@ class ProjectStore:
             if self.dirty:
                 self.commit()
         finally:
+            if self.writer:
+                try:
+                    self.writer.close()
+                except Exception:
+                    log.debug("Failed to close DbWriter", exc_info=True)
             self.conn.close()
 
     def __enter__(self) -> ProjectStore:
@@ -134,6 +149,33 @@ class ProjectStore:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+
+# ---------------------------------------------------------------------------
+# Write serialization helpers
+
+
+def _write_conn(store: ProjectStore) -> contextlib.AbstractContextManager[sqlite3.Connection]:
+    """
+    Return a context manager that serializes write access when a DbWriter is present.
+    """
+
+    writer = getattr(store, "writer", None)
+    if writer:
+        lock = writer.write_lock()
+
+        @contextlib.contextmanager
+        def _locked_conn():
+            with lock:
+                yield store.conn
+
+        return _locked_conn()
+
+    @contextlib.contextmanager
+    def _noop_conn():
+        yield store.conn
+
+    return _noop_conn()
 
 
 # ---------------------------------------------------------------------------
@@ -161,10 +203,12 @@ def create_project(
         app_version=app_version,
         timezone=timezone,
     )
+    writer = DbWriter(project_path, connection=conn)
     return ProjectStore(
         path=project_path,
         conn=conn,
         dirty=False,
+        writer=writer,
         is_cloud_path=is_cloud,
         cloud_service=cloud_service,
         journal_mode=journal_mode,
@@ -192,12 +236,30 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
 
     if fmt in ("bundle-v1", "zip-bundle-v1"):
         # Open as bundle and return wrapped ProjectStore
-        unified_store = open_unified_project(project_path, readonly=False, auto_migrate=False)
+        unified_store = open_unified_project(project_path, readonly=False, auto_migrate=True)
+
+        # Run schema migrations on staging database if needed
+        current_version = _projects.get_user_version(unified_store.conn)
+        if current_version < SCHEMA_VERSION:
+            _projects.run_migrations(
+                unified_store.conn,
+                start=current_version,
+                target=SCHEMA_VERSION,
+                now=_utc_now(),
+            )
+            unified_store.conn.commit()
+
+        try:
+            _validation.quick_validate_project(unified_store.conn)
+        except Exception:
+            log.debug("Quick validation failed during bundle open", exc_info=True)
+        writer = DbWriter(project_path, connection=unified_store.conn)
         # Return the unified store (which is already a ProjectStore-compatible object)
         return ProjectStore(
             path=unified_store.path,
             conn=unified_store.conn,
             dirty=unified_store.dirty,
+            writer=writer,
             is_cloud_path=getattr(unified_store, "is_cloud_path", is_cloud),
             cloud_service=getattr(unified_store, "cloud_service", cloud_service),
             journal_mode=getattr(unified_store, "journal_mode", journal_mode),
@@ -247,10 +309,17 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
             f"Project schema version {version} is newer than supported {SCHEMA_VERSION}"
         )
 
+    try:
+        _validation.quick_validate_project(conn)
+    except Exception:
+        log.debug("Quick validation failed during open", exc_info=True)
+
+    writer = DbWriter(project_path, connection=conn)
     return ProjectStore(
         path=project_path,
         conn=conn,
         dirty=False,
+        writer=writer,
         is_cloud_path=is_cloud,
         cloud_service=cloud_service,
         journal_mode=journal_mode,
@@ -271,12 +340,17 @@ def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
         skip_optimize,
     )
 
+    writer = getattr(store, "writer", None)
+    if writer:
+        writer.barrier()
+
     now = _utc_now()
-    _projects.write_meta(store.conn, {"modified_utc": now, "modified_at": now})
-    log.info("SAVE: store.save_project checkpoint/commit start")
-    store.commit()
-    _sqlite_checkpoint_full(store.conn)
-    log.info("SAVE: store.save_project checkpoint/commit finished")
+    with _write_conn(store) as conn:
+        _projects.write_meta(conn, {"modified_utc": now, "modified_at": now})
+        log.info("SAVE: store.save_project checkpoint/commit start")
+        conn.commit()
+        _sqlite_checkpoint_full(conn)
+        log.info("SAVE: store.save_project checkpoint/commit finished")
 
     project_path = getattr(store, "path", None)
     if not project_path:
@@ -290,6 +364,7 @@ def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         store.conn.close()
+        _sqlite_delete_sidecars(project_path)
         os.replace(tmp_path, project_path)
         conn = open_db(project_path.as_posix(), apply_pragmas=False)
         pragma_fn = (
@@ -300,6 +375,9 @@ def save_project(store: ProjectStore, *, skip_optimize: bool = False) -> None:
         pragma_fn(conn)
         store.journal_mode = "DELETE" if getattr(store, "is_cloud_path", False) else "WAL"
         store.conn = conn
+        if store.writer:
+            store.writer.close()
+        store.writer = DbWriter(project_path, connection=conn)
         store.dirty = False
         if not skip_optimize:
             log.info("SAVE: store.save_project optimizing database path=%s", project_path)
@@ -322,6 +400,10 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     dest_path = Path(new_path)
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
+    writer = getattr(store, "writer", None)
+    if writer:
+        writer.barrier()
+
     fd, tmp_name = tempfile.mkstemp(suffix=dest_path.suffix or ".vaso", dir=dest_path.parent)
     os.close(fd)
     tmp_path = Path(tmp_name)
@@ -339,6 +421,9 @@ def save_project_as(store: ProjectStore, new_path: str | os.PathLike[str]) -> No
     is_cloud, cloud_service = _detect_cloud_storage(dest_path)
     pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud else _projects.apply_default_pragmas
     pragma_fn(conn)
+    if store.writer:
+        store.writer.close()
+    store.writer = DbWriter(dest_path, connection=conn)
     store.is_cloud_path = is_cloud
     store.cloud_service = cloud_service
     store.journal_mode = "DELETE" if is_cloud else "WAL"
@@ -404,122 +489,127 @@ def add_dataset(
             extra_json = None
 
     log.info("TRACE-SAVE: begin transaction for dataset name=%s", name)
-    with store.conn:
-        dataset_sql = (
-            "INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, "
-            "t0_seconds, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
-        )
-        cur = store.conn.execute(
-            dataset_sql,
-            (
-                name,
-                now,
-                metadata.get("notes"),
-                metadata.get("fps"),
-                metadata.get("pixel_size_um"),
-                metadata.get("t0_seconds", 0.0),
-                extra_json,
-            ),
-        )
-        dataset_rowid = cur.lastrowid
-        if dataset_rowid is None:
-            raise RuntimeError("Failed to insert dataset row")
-        dataset_id = int(dataset_rowid)
-
-        trace_prep_start = time.perf_counter()
-        trace_rows = list(_traces.prepare_trace_rows(dataset_id, trace_df))
-        log.info(
-            "TRACE-SAVE: prepare_trace_rows finished dataset_id=%s rows=%d duration=%.2fs",
-            dataset_id,
-            len(trace_rows),
-            time.perf_counter() - trace_prep_start,
-        )
-        if trace_rows:
-            log.info(
-                "TRACE-SAVE: inserting %d trace rows into DB for dataset_id=%s",
-                len(trace_rows),
-                dataset_id,
+    with _write_conn(store) as conn:
+        with conn:
+            dataset_sql = (
+                "INSERT INTO dataset(name, created_utc, notes, fps, pixel_size_um, "
+                "t0_seconds, extra_json) VALUES (?, ?, ?, ?, ?, ?, ?)"
             )
-            TRACE_INSERT_TIMEOUT = 180  # seconds; adjust if needed
+            cur = conn.execute(
+                dataset_sql,
+                (
+                    name,
+                    now,
+                    metadata.get("notes"),
+                    metadata.get("fps"),
+                    metadata.get("pixel_size_um"),
+                    metadata.get("t0_seconds", 0.0),
+                    extra_json,
+                ),
+            )
+            dataset_rowid = cur.lastrowid
+            if dataset_rowid is None:
+                raise RuntimeError("Failed to insert dataset row")
+            dataset_id = int(dataset_rowid)
 
-            try:
-                with timeout(TRACE_INSERT_TIMEOUT):
-                    store.conn.executemany(
-                        """
-                        INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        trace_rows,
-                    )
-            except TimeoutError:
-                log.error(
-                    "TRACE-SAVE: trace insert timed out for dataset_id=%s after %ss "
-                    "(rows=%d) - likely slow/locked storage backend",
-                    dataset_id,
-                    TRACE_INSERT_TIMEOUT,
+            trace_prep_start = time.perf_counter()
+            trace_rows = list(_traces.prepare_trace_rows(dataset_id, trace_df))
+            log.info(
+                "TRACE-SAVE: prepare_trace_rows finished dataset_id=%s rows=%d duration=%.2fs",
+                dataset_id,
+                len(trace_rows),
+                time.perf_counter() - trace_prep_start,
+            )
+            if trace_rows:
+                log.info(
+                    "TRACE-SAVE: inserting %d trace rows into DB for dataset_id=%s",
                     len(trace_rows),
-                    exc_info=True,
+                    dataset_id,
                 )
-                raise
+                TRACE_INSERT_TIMEOUT = 180  # seconds; adjust if needed
 
-            log.info(
-                "TRACE-SAVE: insert completed for dataset_id=%s (rows=%d)",
-                dataset_id,
-                len(trace_rows),
-            )
+                try:
+                    with timeout(TRACE_INSERT_TIMEOUT):
+                        conn.executemany(
+                            """
+                            INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            trace_rows,
+                        )
+                except TimeoutError:
+                    log.error(
+                        "TRACE-SAVE: trace insert timed out for dataset_id=%s after %ss "
+                        "(rows=%d) - likely slow/locked storage backend",
+                        dataset_id,
+                        TRACE_INSERT_TIMEOUT,
+                        len(trace_rows),
+                        exc_info=True,
+                    )
+                    raise
 
-        if events_df is not None and not events_df.empty:
-            event_rows = list(_events.prepare_event_rows(dataset_id, events_df))
-            log.debug("Prepared %d event rows for dataset_id=%s", len(event_rows), dataset_id)
-            if event_rows:
-                log.debug("Executing SQL INSERT for %d events", len(event_rows))
                 log.info(
-                    "TRACE-SAVE: inserting %d event rows into DB for dataset_id=%s",
-                    len(event_rows),
+                    "TRACE-SAVE: insert completed for dataset_id=%s (rows=%d)",
                     dataset_id,
-                )
-                store.conn.executemany(
-                    (
-                        "INSERT INTO event("
-                        "dataset_id, t_seconds, label, frame, p_avg, p1, p2, temp, extra_json"
-                        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    ),
-                    event_rows,
-                )
-                log.info(
-                    "TRACE-SAVE: event insert completed for dataset_id=%s rows=%d",
-                    dataset_id,
-                    len(event_rows),
-                )
-                log.debug("SQL INSERT completed for %d events", len(event_rows))
-
-                # DEBUG: Verify the data was written
-                cursor = store.conn.execute(
-                    "SELECT COUNT(*) FROM event WHERE dataset_id = ?", (dataset_id,)
-                )
-                count = cursor.fetchone()[0]
-                log.debug(
-                    "Verification: %d events now in database for dataset_id=%s",
-                    count,
-                    dataset_id,
+                    len(trace_rows),
                 )
 
-        if thumbnail_png:
-            store.conn.execute(
-                "INSERT OR REPLACE INTO thumbnail(dataset_id, png) VALUES(?, ?)",
-                (dataset_id, sqlite3.Binary(thumbnail_png)),
-            )
+            if events_df is not None and not events_df.empty:
+                event_rows = list(_events.prepare_event_rows(dataset_id, events_df))
+                log.debug("Prepared %d event rows for dataset_id=%s", len(event_rows), dataset_id)
+                if event_rows:
+                    log.debug("Executing SQL INSERT for %d events", len(event_rows))
+                    log.info(
+                        "TRACE-SAVE: inserting %d event rows into DB for dataset_id=%s",
+                        len(event_rows),
+                        dataset_id,
+                    )
+                    conn.executemany(
+                        (
+                            "INSERT INTO event("
+                            "dataset_id, t_seconds, t_us, label, frame, source_frame, source_row, source_time_str, "
+                            "p_avg, p1, p2, temp, extra_json"
+                            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                        ),
+                        event_rows,
+                    )
+                    log.info(
+                        "TRACE-SAVE: event insert completed for dataset_id=%s rows=%d",
+                        dataset_id,
+                        len(event_rows),
+                    )
+                    log.debug("SQL INSERT completed for %d events", len(event_rows))
 
-        if tiff_path:
-            add_or_update_asset(
-                store,
-                dataset_id,
-                role="tiff",
-                path_or_bytes=tiff_path,
-                embed=True,
-                chunk_size=chunk_size,
-                note="source-tiff",
-            )
+                    # DEBUG: Verify the data was written
+                    cursor = conn.execute(
+                        "SELECT COUNT(*) FROM event WHERE dataset_id = ?", (dataset_id,)
+                    )
+                    count = cursor.fetchone()[0]
+                    log.debug(
+                        "Verification: %d events now in database for dataset_id=%s",
+                        count,
+                        dataset_id,
+                    )
+
+            if thumbnail_png:
+                conn.execute(
+                    "INSERT OR REPLACE INTO thumbnail(dataset_id, png) VALUES(?, ?)",
+                    (dataset_id, sqlite3.Binary(thumbnail_png)),
+                )
+
+            if tiff_path:
+                add_or_update_asset(
+                    store,
+                    dataset_id,
+                    role="tiff",
+                    path_or_bytes=tiff_path,
+                    embed=True,
+                    chunk_size=chunk_size,
+                    note="source-tiff",
+                )
+
+        # Update integrity signatures after all writes succeed
+        _validation.update_dataset_signatures(conn, dataset_id)
 
     store.mark_dirty()
     log.info(
@@ -560,8 +650,17 @@ def update_dataset_meta(store: ProjectStore, dataset_id: int, **fields) -> None:
             params.append(extra)
 
     params.extend([dataset_id])
-    store.conn.execute(f"UPDATE dataset SET {assignments} WHERE id = ?", params)
+    with _write_conn(store) as conn:
+        conn.execute(f"UPDATE dataset SET {assignments} WHERE id = ?", params)
+        conn.commit()
     store.mark_dirty()
+
+
+def refresh_dataset_signatures(store: ProjectStore, dataset_id: int) -> None:
+    """Recompute and persist signatures for a dataset."""
+
+    with _write_conn(store) as conn:
+        _validation.update_dataset_signatures(conn, dataset_id)
 
 
 def add_or_update_asset(
@@ -606,50 +705,51 @@ def add_or_update_asset(
     previous_asset_id: int | None = None
 
     try:
-        with store.conn:
-            ref_row = _assets.get_ref_by_role(store.conn, dataset_id, role)
-            if ref_row:
-                previous_asset_id = ref_row[0]
+        with _write_conn(store) as conn:
+            with conn:
+                ref_row = _assets.get_ref_by_role(conn, dataset_id, role)
+                if ref_row:
+                    previous_asset_id = ref_row[0]
 
-            existing = _assets.find_asset_by_sha(store.conn, prepared.sha256)
-            if existing:
-                asset_id = existing[0]
-            else:
-                asset_id = _assets.register_asset(
-                    store.conn,
-                    kind=role,
-                    sha256=prepared.sha256,
-                    size_bytes=prepared.size_bytes,
-                    compressed=prepared.compressed,
-                    chunk_size=prepared.chunk_size,
-                    original_name=original_name_hint,
-                    mime=mime,
-                )
-                prepared.source.seek(0)
-                _assets.write_blob_chunks_from_stream(
-                    store.conn,
-                    asset_id,
-                    prepared.source,
-                    chunk_size=prepared.chunk_size,
-                )
+                existing = _assets.find_asset_by_sha(conn, prepared.sha256)
+                if existing:
+                    asset_id = existing[0]
+                else:
+                    asset_id = _assets.register_asset(
+                        conn,
+                        kind=role,
+                        sha256=prepared.sha256,
+                        size_bytes=prepared.size_bytes,
+                        compressed=prepared.compressed,
+                        chunk_size=prepared.chunk_size,
+                        original_name=original_name_hint,
+                        mime=mime,
+                    )
+                    prepared.source.seek(0)
+                    _assets.write_blob_chunks_from_stream(
+                        conn,
+                        asset_id,
+                        prepared.source,
+                        chunk_size=prepared.chunk_size,
+                    )
 
-            _assets.upsert_ref(
-                store.conn,
-                asset_id=asset_id,
-                dataset_id=dataset_id,
-                role=role,
-                note=note,
-            )
-
-            if previous_asset_id is not None and previous_asset_id != asset_id:
-                _assets.delete_ref(
-                    store.conn,
-                    asset_id=previous_asset_id,
+                _assets.upsert_ref(
+                    conn,
+                    asset_id=asset_id,
                     dataset_id=dataset_id,
                     role=role,
+                    note=note,
                 )
-                if _assets.count_refs(store.conn, previous_asset_id) == 0:
-                    _assets.delete_asset(store.conn, previous_asset_id)
+
+                if previous_asset_id is not None and previous_asset_id != asset_id:
+                    _assets.delete_ref(
+                        conn,
+                        asset_id=previous_asset_id,
+                        dataset_id=dataset_id,
+                        role=role,
+                    )
+                    if _assets.count_refs(conn, previous_asset_id) == 0:
+                        _assets.delete_asset(conn, previous_asset_id)
     finally:
         prepared.closer()
 
@@ -689,13 +789,15 @@ def add_result(
     """Insert a new result row for ``dataset_id``."""
 
     now = _utc_now()
-    cur = store.conn.execute(
-        """
-        INSERT INTO result(dataset_id, kind, version, created_utc, payload_json)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (dataset_id, kind, version, now, json.dumps(payload)),
-    )
+    with _write_conn(store) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO result(dataset_id, kind, version, created_utc, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (dataset_id, kind, version, now, json.dumps(payload)),
+        )
+        conn.commit()
     store.mark_dirty()
     result_rowid = cur.lastrowid
     if result_rowid is None:
@@ -1161,6 +1263,7 @@ def write_autosave(
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp_path, autosave)
+        _sqlite_delete_sidecars(autosave)
     finally:
         if tmp_path.exists():
             with contextlib.suppress(OSError):
@@ -1203,27 +1306,28 @@ def _ensure_figure_recipe_table(store: ProjectStore) -> None:
     except sqlite3.OperationalError:
         # Table doesn't exist - create it
         log.warning("figure_recipe table missing - creating it now (project may need migration)")
-        with transaction(store.conn):
-            store.conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS figure_recipe (
-                    recipe_id TEXT PRIMARY KEY,
-                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    spec_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    trace_key TEXT,
-                    x_min REAL,
-                    x_max REAL,
-                    y_min REAL,
-                    y_max REAL,
-                    export_background TEXT NOT NULL DEFAULT 'white'
-                );
-                CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
-                """
-            )
+        with _write_conn(store) as conn:
+            with transaction(conn):
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS figure_recipe (
+                        recipe_id TEXT PRIMARY KEY,
+                        dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        spec_json TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        trace_key TEXT,
+                        x_min REAL,
+                        x_max REAL,
+                        y_min REAL,
+                        y_max REAL,
+                        export_background TEXT NOT NULL DEFAULT 'white'
+                    );
+                    CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
+                    """
+                )
         store.mark_dirty()
         log.info("Created figure_recipe table successfully")
 

@@ -726,6 +726,10 @@ class VasoAnalyzerApp(QMainWindow):
         self._active_save_reason: str | None = None
         self._active_save_path: str | None = None
         self._active_save_mode: str | None = None
+        self._active_autosave_ctx: dict | None = None
+        self._project_state_rev: int = 0
+        self._autosave_in_progress: bool = False
+        self._pending_autosave_ctx: dict | None = None
         self._last_save_error: str | None = None
         self._event_highlight_color = DEFAULT_STYLE.get(
             "event_highlight_color", "#1D5CFF"
@@ -2062,6 +2066,7 @@ class VasoAnalyzerApp(QMainWindow):
         skip_optimize: bool,
         reason: str = "manual",
         mode: str = "manual",
+        ctx: dict | None = None,
     ) -> None:
         """Dispatch a background save job using the thread pool."""
 
@@ -2079,7 +2084,8 @@ class VasoAnalyzerApp(QMainWindow):
             self.statusBar().showMessage("Save already in progress…", 3000)
             return
 
-        self._prepare_project_for_save()
+        if mode != "autosave":
+            self._prepare_project_for_save()
         self._save_in_progress = True
         self._active_save_reason = reason
         self._active_save_path = target_path
@@ -2091,6 +2097,10 @@ class VasoAnalyzerApp(QMainWindow):
             "Autosaving project…" if mode == "autosave" else "Saving project…"
         )
         self._start_save_progress_bar(progress_label)
+
+        if mode == "autosave":
+            self._autosave_in_progress = True
+            self._active_autosave_ctx = ctx or {}
 
         project_snapshot = self._project_snapshot_for_save(project)
 
@@ -2110,6 +2120,13 @@ class VasoAnalyzerApp(QMainWindow):
             reason,
             mode,
         )
+        if mode == "autosave":
+            log.debug(
+                "Autosave scheduled ctx=%s current_sample_id=%s rev=%s",
+                self._active_autosave_ctx,
+                getattr(self.current_sample, "id", None),
+                self._project_state_rev,
+            )
 
     def _on_save_progress_changed(self, percent: int, message: str) -> None:
         self._update_save_progress_bar(percent, message)
@@ -2119,6 +2136,9 @@ class VasoAnalyzerApp(QMainWindow):
         mode = self._active_save_mode or "manual"
         prefix = "Autosave" if mode == "autosave" else "Save"
         log.error("Error during project %s: %s", mode, details)
+        if mode == "autosave":
+            self._autosave_in_progress = False
+            self._active_autosave_ctx = None
         self.statusBar().showMessage(f"{prefix} failed: {details}", 5000)
 
     def _on_save_finished(self, ok: bool, duration_sec: float, path: str) -> None:
@@ -2168,6 +2188,16 @@ class VasoAnalyzerApp(QMainWindow):
                 False, resolved_path, duration_sec, self._last_save_error
             )
 
+        if mode == "autosave":
+            log.debug(
+                "Autosave finished ok=%s ctx=%s live_sample_id=%s rev_now=%s",
+                ok,
+                self._active_autosave_ctx,
+                getattr(self.current_sample, "id", None),
+                self._project_state_rev,
+            )
+            self._autosave_in_progress = False
+            self._active_autosave_ctx = None
         self._active_save_reason = None
         self._active_save_path = None
         self._active_save_mode = None
@@ -2364,7 +2394,8 @@ class VasoAnalyzerApp(QMainWindow):
             getattr(self.current_project, "path", None),
         )
         if self.current_project and self.current_project.path:
-            self.auto_save_project(reason=reason)
+            ctx = self._pending_autosave_ctx or {}
+            self.auto_save_project(reason=reason, ctx=ctx)
 
     def request_deferred_autosave(
         self, delay_ms: int = 2000, *, reason: str = "deferred"
@@ -2376,14 +2407,24 @@ class VasoAnalyzerApp(QMainWindow):
             self._deferred_autosave_timer.stop()
             return
 
+        self._bump_project_state_rev(f"autosave scheduled ({reason})")
+        ctx = {
+            "rev": self._project_state_rev,
+            "sample_id": getattr(self.current_sample, "id", None),
+            "reason": reason,
+            "utc": datetime.utcnow().isoformat() + "Z",
+        }
+        self._pending_autosave_ctx = ctx
         self._pending_autosave_reason = reason
         self._deferred_autosave_timer.start(max(0, int(delay_ms)))
 
-    def auto_save_project(self, reason: str | None = None):
+    def auto_save_project(self, reason: str | None = None, ctx: dict | None = None):
         """Write an autosave snapshot when a project is available."""
 
         self._deferred_autosave_timer.stop()
         self._pending_autosave_reason = None
+        if ctx is None and self._pending_autosave_ctx:
+            ctx = self._pending_autosave_ctx
 
         if not self.current_project or not self.current_project.path:
             return
@@ -2406,6 +2447,7 @@ class VasoAnalyzerApp(QMainWindow):
             skip_optimize=True,
             reason=reason or "auto",
             mode="autosave",
+            ctx=ctx,
         )
 
     def _autosave_tick(self):
@@ -2413,7 +2455,26 @@ class VasoAnalyzerApp(QMainWindow):
             return
         if not self.session_dirty:
             return
-        self.auto_save_project(reason="timer")
+        ctx = {
+            "rev": self._project_state_rev,
+            "sample_id": getattr(self.current_sample, "id", None),
+            "reason": "timer",
+            "utc": datetime.utcnow().isoformat() + "Z",
+        }
+        self._pending_autosave_ctx = ctx
+        self.auto_save_project(reason="timer", ctx=ctx)
+
+    def _bump_project_state_rev(self, reason: str) -> None:
+        self._project_state_rev += 1
+        log.debug("Project state rev bumped to %s (%s)", self._project_state_rev, reason)
+
+    def _persist_sample_ui_state(self, sample: SampleN, state: dict) -> None:
+        """Persist UI state for a specific sample without relying on current selection."""
+
+        if sample is None:
+            return
+        sample.ui_state = state
+        self.project_state[id(sample)] = state
 
     def _get_sample_data_quality(self, sample: SampleN) -> str | None:
         """Read the stored data-quality flag from a sample's UI state."""
@@ -3117,8 +3178,14 @@ class VasoAnalyzerApp(QMainWindow):
         )
         if self.current_sample and self.current_sample is not sample:
             state = self.gather_sample_state()
-            self.current_sample.ui_state = state
-            self.project_state[id(self.current_sample)] = state
+            if self._autosave_in_progress:
+                log.debug(
+                    "Autosave in progress; deferring persistence of sample state id=%s",
+                    getattr(self.current_sample, "id", None),
+                )
+                self._cached_sample_state = state
+            else:
+                self._persist_sample_ui_state(self.current_sample, state)
         need_load = ensure_loaded or (self.current_sample is not sample)
         self.current_sample = sample
         self.current_experiment = experiment

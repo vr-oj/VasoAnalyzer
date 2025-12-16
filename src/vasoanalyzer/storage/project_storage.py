@@ -22,6 +22,7 @@ from .bundle_adapter import (
     save_project_handle,
 )
 from .migration import detect_project_format
+from .sqlite_store import SCHEMA_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -259,7 +260,7 @@ def create_unified_project(
 
         _projects.ensure_schema(
             conn,
-            schema_version=4,
+            schema_version=SCHEMA_VERSION,
             now=_utc_now(),
             app_version=app_version,
             timezone=timezone,

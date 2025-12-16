@@ -57,7 +57,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 5  # v5: Figure recipes table (composer)
+SCHEMA_VERSION = 6  # v6: integrity signatures + audit log
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
 

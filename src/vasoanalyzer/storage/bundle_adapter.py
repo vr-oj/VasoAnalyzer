@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .migration import auto_migrate_if_needed, detect_project_format
+from .sqlite_store import SCHEMA_VERSION
 from .snapshots import (
     BundleInfo,
     cleanup_staging_dbs,
@@ -327,7 +328,7 @@ def create_project_handle(
                     from ..storage.sqlite import projects as _projects
 
                     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    _projects.ensure_schema(staging_conn, schema_version=4, now=now)
+                    _projects.ensure_schema(staging_conn, schema_version=SCHEMA_VERSION, now=now)
                     staging_conn.commit()
 
                     journal_mode = staging_conn.execute("PRAGMA journal_mode").fetchone()[0]
@@ -369,7 +370,7 @@ def create_project_handle(
                 from ..storage.sqlite import projects as _projects
 
                 now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                _projects.ensure_schema(staging_conn, schema_version=4, now=now)
+                _projects.ensure_schema(staging_conn, schema_version=SCHEMA_VERSION, now=now)
                 staging_conn.commit()
 
                 journal_mode = staging_conn.execute("PRAGMA journal_mode").fetchone()[0]
@@ -408,7 +409,7 @@ def create_project_handle(
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
 
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        _projects.ensure_schema(conn, schema_version=4, now=now)
+        _projects.ensure_schema(conn, schema_version=SCHEMA_VERSION, now=now)
 
         handle = ProjectHandle(
             path=path,
@@ -493,7 +494,21 @@ def _open_bundle_handle(
             from ..storage.sqlite import projects as _projects
 
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            _projects.ensure_schema(staging_conn, schema_version=4, now=now)
+            _projects.ensure_schema(staging_conn, schema_version=SCHEMA_VERSION, now=now)
+
+        # Migrate staging schema if needed
+        from ..storage.sqlite import projects as _projects
+
+        version = _projects.get_user_version(staging_conn)
+        if version < SCHEMA_VERSION:
+            _projects.run_migrations(
+                staging_conn,
+                start=version,
+                target=SCHEMA_VERSION,
+                now=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            )
+            staging_conn.commit()
+            log.info("Staging database migrated to schema v%s", SCHEMA_VERSION)
 
         journal_mode_row = staging_conn.execute("PRAGMA journal_mode").fetchone()
         journal_mode = (

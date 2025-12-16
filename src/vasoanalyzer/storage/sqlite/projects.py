@@ -4,9 +4,12 @@ Project-level SQLite helpers migrated from the legacy sqlite_store module.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Mapping
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "apply_default_pragmas",
@@ -88,7 +91,16 @@ def ensure_schema(
             t0_seconds REAL DEFAULT 0,
             extra_json TEXT,
             trace_checksum TEXT,
-            events_checksum TEXT
+            events_checksum TEXT,
+            canonical_time_source TEXT NOT NULL DEFAULT 'unknown',
+            trace_source_fingerprint TEXT,
+            events_source_fingerprint TEXT,
+            trace_signature TEXT,
+            events_signature TEXT,
+            signature_version INTEGER NOT NULL DEFAULT 1,
+            last_validated_utc TEXT,
+            validation_status TEXT NOT NULL DEFAULT 'unknown',
+            validation_error TEXT
         );
 
         CREATE TABLE IF NOT EXISTS trace (
@@ -113,8 +125,12 @@ def ensure_schema(
             id INTEGER PRIMARY KEY,
             dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
             t_seconds REAL NOT NULL,
+            t_us INTEGER,
             label TEXT NOT NULL,
             frame INTEGER,
+            source_frame INTEGER,
+            source_row INTEGER,
+            source_time_str TEXT,
             p_avg REAL,
             p1 REAL,
             p2 REAL,
@@ -123,10 +139,26 @@ def ensure_schema(
             id_diam REAL,
             caliper REAL,
             od_ref_pct REAL,
-            extra_json TEXT
+            extra_json TEXT,
+            deleted_utc TEXT,
+            deleted_reason TEXT,
+            deleted_by TEXT
         );
 
         CREATE INDEX IF NOT EXISTS event_ds_t ON event(dataset_id, t_seconds);
+        CREATE INDEX IF NOT EXISTS event_ds_tus ON event(dataset_id, t_us);
+
+        CREATE TABLE IF NOT EXISTS event_audit (
+            id INTEGER PRIMARY KEY,
+            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+            event_id INTEGER,
+            action TEXT NOT NULL,
+            old_json TEXT,
+            new_json TEXT,
+            source TEXT NOT NULL,
+            utc_ts TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS event_audit_ds_ts ON event_audit(dataset_id, utc_ts);
 
         CREATE TABLE IF NOT EXISTS asset (
             id INTEGER PRIMARY KEY,
@@ -295,6 +327,61 @@ def run_migrations(
                 """
             )
             version = 5
+
+        elif version == 5:
+            # Migration from v5 to v6: integrity metadata + microsecond times
+            log.info("Migrating schema from v5 to v6 (signatures, audit, t_us)")
+            for stmt in (
+                "ALTER TABLE dataset ADD COLUMN canonical_time_source TEXT NOT NULL DEFAULT 'unknown'",
+                "ALTER TABLE dataset ADD COLUMN trace_source_fingerprint TEXT",
+                "ALTER TABLE dataset ADD COLUMN events_source_fingerprint TEXT",
+                "ALTER TABLE dataset ADD COLUMN trace_signature TEXT",
+                "ALTER TABLE dataset ADD COLUMN events_signature TEXT",
+                "ALTER TABLE dataset ADD COLUMN signature_version INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE dataset ADD COLUMN last_validated_utc TEXT",
+                "ALTER TABLE dataset ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'unknown'",
+                "ALTER TABLE dataset ADD COLUMN validation_error TEXT",
+                "ALTER TABLE event ADD COLUMN t_us INTEGER",
+                "ALTER TABLE event ADD COLUMN source_frame INTEGER",
+                "ALTER TABLE event ADD COLUMN source_row INTEGER",
+                "ALTER TABLE event ADD COLUMN source_time_str TEXT",
+                "ALTER TABLE event ADD COLUMN deleted_utc TEXT",
+                "ALTER TABLE event ADD COLUMN deleted_reason TEXT",
+                "ALTER TABLE event ADD COLUMN deleted_by TEXT",
+            ):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS event_audit (
+                    id INTEGER PRIMARY KEY,
+                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+                    event_id INTEGER,
+                    action TEXT NOT NULL,
+                    old_json TEXT,
+                    new_json TEXT,
+                    source TEXT NOT NULL,
+                    utc_ts TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS event_audit_ds_ts ON event_audit(dataset_id, utc_ts);
+                CREATE INDEX IF NOT EXISTS event_ds_tus ON event(dataset_id, t_us);
+                """
+            )
+
+            # Populate t_us using existing t_seconds and reset validation metadata
+            conn.execute(
+                "UPDATE event SET t_us = CAST(ROUND(t_seconds * 1000000.0) AS INTEGER) "
+                "WHERE t_seconds IS NOT NULL AND t_us IS NULL"
+            )
+            conn.execute(
+                "UPDATE dataset SET validation_status = 'unknown', signature_version = 1 "
+                "WHERE validation_status IS NULL OR validation_status = ''"
+            )
+            version = 6
 
         else:
             raise RuntimeError(

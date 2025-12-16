@@ -320,16 +320,18 @@ def next_snapshot_name(snapshots_dir: Path) -> Path:
     return snapshots_dir / f"{n:06d}.sqlite"
 
 
-def create_snapshot(bundle_path: Path, staging_db: Path) -> SnapshotInfo:
+def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> SnapshotInfo:
     """
     Create immutable snapshot from staging database.
 
-    Uses SQLite backup API to create consistent snapshot, then atomically
-    updates HEAD.json to point to it.
+    Uses SQLite backup API to create a consistent snapshot, then atomically
+    updates HEAD.json to point to it.  All pending writes must be flushed
+    via ``db_writer.barrier()`` before the backup begins.
 
     Args:
         bundle_path: Path to bundle directory
         staging_db: Path to staging database to snapshot
+        db_writer: Optional DbWriter to serialize pending writes
 
     Returns:
         SnapshotInfo for newly created snapshot
@@ -347,99 +349,36 @@ def create_snapshot(bundle_path: Path, staging_db: Path) -> SnapshotInfo:
     dest = Path(str(dest_tmp)[:-4])  # Remove .tmp
 
     try:
-        # CRITICAL FIX (Vulnerability #2): Enforce complete WAL checkpoint with retry and validation
-        # Before creating snapshot, we MUST flush all pending writes from WAL to main DB
-        log.debug("Checkpointing WAL before snapshot creation")
+        if db_writer is not None:
+            try:
+                db_writer.barrier()
+            except Exception:
+                log.debug("DbWriter barrier failed during snapshot preparation", exc_info=True)
 
-        # Import timeout wrapper for hang protection
-        from .timeout_wrapper import timeout, TimeoutError as TimeoutErr
-
-        max_retries = 3
-        checkpoint_complete = False
-        WAL_CHECKPOINT_TIMEOUT = 60  # 60 seconds max for checkpoint
+        log.debug("Opening source database for snapshot backup")
+        try:
+            src_conn = sqlite3.connect(
+                f"file:{staging_db}?mode=ro",
+                uri=True,
+                check_same_thread=False,
+                timeout=30.0,
+            )
+        except sqlite3.OperationalError:
+            # Fallback to normal mode if read-only opening is not supported
+            src_conn = sqlite3.connect(staging_db, check_same_thread=False, timeout=30.0)
 
         try:
-            with timeout(WAL_CHECKPOINT_TIMEOUT):
-                for attempt in range(max_retries):
-                    try:
-                        with sqlite3.connect(staging_db, timeout=30.0) as conn:
-                            # PRAGMA wal_checkpoint(TRUNCATE) returns: (result, log, checkpointed)
-                            # result: 0=success, 1=error
-                            # log: number of busy WAL frames (should be 0 for complete checkpoint)
-                            # checkpointed: number of frames written
-                            cursor = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                            result = cursor.fetchone()
+            with sqlite3.connect(dest_tmp) as dst:
+                src_conn.backup(dst)
+                check = dst.execute("PRAGMA integrity_check").fetchone()
+                if not check or str(check[0]).lower() != "ok":
+                    raise RuntimeError(f"Snapshot integrity check failed: {check}")
 
-                            if result is None:
-                                raise RuntimeError("WAL checkpoint returned no result")
-
-                            checkpoint_result, busy_count, frames_checkpointed = result
-
-                            # CRITICAL: Verify checkpoint was complete (no busy frames)
-                            if busy_count > 0:
-                                if attempt < max_retries - 1:
-                                    log.warning(
-                                        f"WAL checkpoint incomplete (attempt {attempt + 1}/{max_retries}): "
-                                        f"{busy_count} busy frames remaining. Retrying..."
-                                    )
-                                    time.sleep(0.2 * (attempt + 1))  # Exponential backoff
-                                    continue
-                                else:
-                                    raise RuntimeError(
-                                        f"WAL checkpoint failed after {max_retries} attempts: "
-                                        f"{busy_count} busy pages remaining. Database may be locked."
-                                    )
-
-                            conn.commit()
-                            log.debug(f"WAL checkpoint succeeded: {frames_checkpointed} frames written")
-                            checkpoint_complete = True
-                            break
-
-                    except sqlite3.OperationalError as e:
-                        if "database is locked" in str(e) and attempt < max_retries - 1:
-                            log.warning(
-                                f"Database locked during checkpoint (attempt {attempt + 1}/{max_retries}). "
-                                f"Retrying in {0.5 * (attempt + 1)}s..."
-                            )
-                            time.sleep(0.5 * (attempt + 1))
-                            continue
-                        raise RuntimeError(f"WAL checkpoint failed: {e}") from e
-
-                if not checkpoint_complete:
-                    raise RuntimeError("WAL checkpoint did not complete successfully")
-
-        except TimeoutErr as e:
-            raise RuntimeError(
-                f"WAL checkpoint timed out after {WAL_CHECKPOINT_TIMEOUT}s. "
-                f"This usually indicates the database is on slow/cloud storage. "
-                f"Please ensure the project is saved to a local disk (~/Documents)."
-            ) from e
-
-        # Verify WAL file is minimal after checkpoint (header only, < 4096 bytes)
-        wal_file = staging_db.with_suffix(".sqlite-wal")
-        shm_file = staging_db.with_suffix(".sqlite-shm")
-        if wal_file.exists():
-            wal_size = wal_file.stat().st_size
-            if wal_size > 4096:  # More than just header
-                raise RuntimeError(
-                    f"WAL file still contains data after checkpoint: {wal_size} bytes. "
-                    f"Snapshot creation aborted to prevent data loss."
-                )
-        if shm_file.exists():
-            log.debug(f"SHM file exists (normal for WAL mode): {shm_file}")
-
-        # Use simple file copy now that WAL has been checkpointed
-        # This avoids potential locking issues with SQLite backup API
-        log.debug("Copying staging database to snapshot")
-        shutil.copy2(staging_db, dest_tmp)
-
-        # Convert snapshot to non-WAL mode and optimize
-        log.debug("Converting snapshot to DELETE journal mode and optimizing")
-        with sqlite3.connect(dest_tmp) as dst:
-            # Disable WAL mode for snapshots (they're read-only anyway)
-            dst.execute("PRAGMA journal_mode=DELETE")
-            dst.execute("PRAGMA optimize")
-            dst.commit()
+                dst.execute("PRAGMA journal_mode=DELETE")
+                dst.execute("PRAGMA optimize")
+                dst.commit()
+        finally:
+            src_conn.close()
 
         # Fsync the snapshot file
         fsync_file(dest_tmp)

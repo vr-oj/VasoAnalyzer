@@ -117,7 +117,7 @@ def prepare_event_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
         for c in df_local.columns
         if c not in {"t_seconds", "label", "frame", "p_avg", "p1", "p2", "temp", "review_state"}
     ]
-    for _, row in df_local.iterrows():
+    for idx, row in df_local.iterrows():
         extra_json = None
         payload = {}
 
@@ -138,12 +138,18 @@ def prepare_event_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
         if payload:
             extra_json = json.dumps(payload, ensure_ascii=False)
 
+        t_us = int(round(float(row.get("t_seconds")) * 1_000_000))
+        source_frame = nullable_int(row.get("frame"))
         rows.append(
             (
                 dataset_id,
                 float(row.get("t_seconds")),
+                t_us,
                 row.get("label"),
                 nullable_int(row.get("frame")),
+                source_frame,
+                idx,
+                str(time_raw.get(idx)) if "t_seconds" in df_local.columns else None,
                 _traces.nullable_float(row.get("p_avg")),
                 _traces.nullable_float(row.get("p1")),
                 _traces.nullable_float(row.get("p2")),
@@ -163,9 +169,10 @@ def fetch_events_dataframe(
     """Return events for ``dataset_id`` optionally filtered to ``[t0, t1]``."""
 
     query = [
-        "SELECT t_seconds, label, frame, p_avg, p1, p2, temp, extra_json",
+        "SELECT t_seconds, t_us, label, frame, p_avg, p1, p2, temp, extra_json",
         "FROM event",
         "WHERE dataset_id = ?",
+        "AND deleted_utc IS NULL",
     ]
     params: list[object] = [dataset_id]
     if t0 is not None:
