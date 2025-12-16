@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import contextlib
+import logging
+import time
 from collections.abc import Iterable
 
 import pyqtgraph as pg
+from PyQt5.QtWidgets import QApplication
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
-from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
+
+log = logging.getLogger(__name__)
 
 
 class PyQtGraphEventStripTrack:
@@ -30,15 +35,23 @@ class PyQtGraphEventStripTrack:
         vb.setYRange(0.0, 1.0, padding=0.0)
         vb.disableAutoRange(axis=pg.ViewBox.XAxis)
         vb.disableAutoRange(axis=pg.ViewBox.YAxis)
+        vb.setMouseMode(pg.ViewBox.PanMode)
+        vb.setMouseEnabled(x=False, y=False)
+        # Ignore wheel/trackpad on the strip; main trace handles panning.
+        try:
+            vb.wheelEvent = lambda ev: ev.accept()
+        except Exception:
+            pass
         self._plot_item.hideButtons()
 
         self._plot_item.hideAxis("left")
         self._plot_item.hideAxis("bottom")
         self._plot_item.showGrid(x=False, y=False)
-        # Match app theme background
-        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Match app theme background - use plot_bg for white content area
+        bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
+        bg_rgb = hex_to_pyqtgraph_color(bg)
         with contextlib.suppress(Exception):
-            vb.setBackgroundColor(bg)
+            vb.setBackgroundColor(bg_rgb)
 
     @property
     def plot_item(self) -> pg.PlotItem:
@@ -58,77 +71,85 @@ class PyQtGraphEventStripTrack:
     def set_events(self, entries: Iterable[EventEntryV3], options: LayoutOptionsV3) -> None:
         """Rebuild markers and labels from the given events."""
 
-        entries_list = list(entries)
-        # Simple signature to avoid redundant rebuilds
-        signature = (
-            len(entries_list),
-            getattr(options, "font_family", None),
-            getattr(options, "font_size", None),
-            getattr(options, "font_bold", None),
-            getattr(options, "font_italic", None),
-            getattr(options, "font_color", None),
-            bool(getattr(options, "show_numbers_only", False)),
-            tuple(
-                (e.t, e.text, e.index, tuple(sorted((e.meta or {}).items()))) for e in entries_list
-            ),
-        )
-        if self._last_signature == signature:
-            return
-        self._last_signature = signature
-
-        self.clear()
-        self._options = options
-
-        theme_text = CURRENT_THEME.get("text", "#000000")
-        color_default = options.font_color or theme_text
-        if (
-            isinstance(color_default, str)
-            and color_default.strip().lower() == "#000000"
-            and theme_text.lower() != "#000000"
-        ):
-            color_default = theme_text
-        show_numbers_only = bool(getattr(options, "show_numbers_only", False))
-        font = None
+        t0 = time.perf_counter()
         try:
-            from PyQt5.QtGui import QFont
+            entries_list = list(entries)
+            # Simple signature to avoid redundant rebuilds
+            signature = (
+                len(entries_list),
+                getattr(options, "font_family", None),
+                getattr(options, "font_size", None),
+                getattr(options, "font_bold", None),
+                getattr(options, "font_italic", None),
+                getattr(options, "font_color", None),
+                bool(getattr(options, "show_numbers_only", False)),
+                tuple(
+                    (e.t, e.text, e.index, tuple(sorted((e.meta or {}).items())))
+                    for e in entries_list
+                ),
+            )
+            if self._last_signature == signature:
+                return
+            self._last_signature = signature
 
-            font_size = float(getattr(options, "font_size", 10.0) or 10.0)
-            font_family = getattr(options, "font_family", "Arial") or "Arial"
-            font = QFont(font_family)
-            font.setPointSizeF(font_size)
-            if getattr(options, "font_bold", False):
-                font.setBold(True)
-            if getattr(options, "font_italic", False):
-                font.setItalic(True)
-        except Exception:
+            self.clear()
+            self._options = options
+
+            theme_text = CURRENT_THEME.get("text", "#000000")
+            color_default = options.font_color or theme_text
+            if (
+                isinstance(color_default, str)
+                and color_default.strip().lower() == "#000000"
+                and theme_text.lower() != "#000000"
+            ):
+                color_default = theme_text
+            show_numbers_only = bool(getattr(options, "show_numbers_only", False))
             font = None
+            try:
+                from PyQt5.QtGui import QFont
 
-        for entry in entries_list:
-            x = float(entry.t)
-            meta_color = None
-            if isinstance(entry.meta, dict):
-                meta_color = entry.meta.get("color") or entry.meta.get("event_color")
-            color = meta_color or color_default
-            label_text = str(entry.index)
-            text_val = getattr(entry, "text", None)
-            if not show_numbers_only and text_val and str(text_val).strip():
-                label_text = str(text_val)
+                font_size = float(getattr(options, "font_size", 10.0) or 10.0)
+                font_family = getattr(options, "font_family", "Arial") or "Arial"
+                font = QFont(font_family)
+                font.setPointSizeF(font_size)
+                if getattr(options, "font_bold", False):
+                    font.setBold(True)
+                if getattr(options, "font_italic", False):
+                    font.setItalic(True)
+            except Exception:
+                font = None
 
-            # Short vertical tick (bottom to just below the label)
-            y_bottom = 0.0
-            y_top = 0.2
-            line = self._plot_item.plot([x, x], [y_bottom, y_top], pen=color)
-            line.setZValue(5)
-            self._lines.append(line)
+            for entry in entries_list:
+                x = float(entry.t)
+                meta_color = None
+                if isinstance(entry.meta, dict):
+                    meta_color = entry.meta.get("color") or entry.meta.get("event_color")
+                color = meta_color or color_default
+                label_text = str(entry.index)
+                text_val = getattr(entry, "text", None)
+                if not show_numbers_only and text_val and str(text_val).strip():
+                    label_text = str(text_val)
 
-            # Text centered vertically in strip
-            text_item = pg.TextItem(text=label_text, color=color, anchor=(0.5, 0.5))
-            if font is not None:
-                text_item.setFont(font)
-            text_item.setPos(x, 0.5)
-            text_item.setZValue(6)
-            self._plot_item.addItem(text_item)
-            self._labels.append(text_item)
+                # Short vertical tick (bottom to just below the label)
+                y_bottom = 0.0
+                y_top = 0.2
+                line = self._plot_item.plot([x, x], [y_bottom, y_top], pen=color)
+                line.setZValue(5)
+                self._lines.append(line)
+
+                # Text centered vertically in strip
+                text_item = pg.TextItem(text=label_text, color=color, anchor=(0.5, 0.5))
+                if font is not None:
+                    text_item.setFont(font)
+                text_item.setPos(x, 0.5)
+                text_item.setZValue(6)
+                self._plot_item.addItem(text_item)
+                self._labels.append(text_item)
+        finally:
+            log.debug(
+                "PyQtGraphEventStrip.set_events completed in %.3f s",
+                time.perf_counter() - t0,
+            )
 
     def apply_style(self, options: LayoutOptionsV3) -> None:
         """Reapply font/color to existing labels without rebuilding."""
@@ -170,9 +191,18 @@ class PyQtGraphEventStripTrack:
         """Refresh background and label colors from CURRENT_THEME."""
 
         vb = self._plot_item.getViewBox()
-        bg = CURRENT_THEME.get("window_bg", "#FFFFFF")
+        # Use plot_bg for white content area in light mode
+        bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
+        bg_rgb = hex_to_pyqtgraph_color(bg)
         with contextlib.suppress(Exception):
-            vb.setBackgroundColor(bg)
+            vb.setBackgroundColor(bg_rgb)
 
         if self._options is not None:
             self.apply_style(self._options)
+
+        # Force immediate visual update
+        try:
+            self._plot_item.update()
+            QApplication.processEvents()
+        except Exception:
+            pass

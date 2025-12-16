@@ -14,6 +14,13 @@ import tifffile
 
 log = logging.getLogger(__name__)
 
+# Snapshot image model:
+# - TIFF snapshots are fully materialised in memory (optionally subsampled to ``max_frames``) and returned as a list
+#   of np.ndarray frames (grayscale H×W or RGB H×W×3). Callers such as VasoAnalyzerApp/_SnapshotLoadJob stack these
+#   into ``(n_frames, H, W[,3])`` arrays for persistence/playback.
+# - Timing is not decoded here; downstream code reads FrameTime/Rec_intvl tags from the returned metadata to derive
+#   recording_interval and per-frame timestamps.
+
 
 def parse_description(desc: str) -> dict[str, object]:
     """Parse TIFF page descriptions which may contain JSON or OME-XML."""
@@ -57,20 +64,27 @@ def parse_description(desc: str) -> dict[str, object]:
     return {}
 
 
-def load_tiff(file_path, max_frames=300, metadata=True):
-    """Load a subset of frames from a TIFF file.
+def load_tiff(file_path, max_frames=None, metadata=True):
+    """Load frames from a TIFF file.
 
     Args:
         file_path (str or Path): Path to the TIFF stack.
-        max_frames (int, optional): Maximum number of frames to load. Frames are
-            sampled evenly across the stack if it contains more than this value.
-            Defaults to ``300``.
+        max_frames (int or None, optional): Maximum number of frames to load. If ``None``,
+            loads all frames. If an integer, frames are sampled evenly across the stack
+            if it contains more than this value. Defaults to ``None`` (load all frames).
         metadata (bool, optional): If ``True`` extract metadata for each frame.
             Disabling metadata speeds up loading for preview-only usage.
 
     Returns:
-        tuple[list[numpy.ndarray], list[dict]]: Extracted frames and metadata for
-            each sampled frame.
+        tuple[list[numpy.ndarray], list[dict], dict]: A tuple containing:
+            - Extracted frames (list of numpy arrays)
+            - Metadata for each sampled frame (list of dicts)
+            - Loading info dict with keys:
+                - 'total_frames': Total frames in original TIFF
+                - 'loaded_frames': Number of frames actually loaded
+                - 'frame_stride': Skip value (1 = no subsampling)
+                - 'frame_indices': List of original frame indices that were loaded
+                - 'is_subsampled': Boolean indicating if subsampling occurred
 
     Raises:
         OSError: If the file cannot be read as a TIFF.
@@ -83,20 +97,36 @@ def load_tiff(file_path, max_frames=300, metadata=True):
 
     with tifffile.TiffFile(file_path) as tif:
         total_frames = len(tif.pages)
-        skip = max(1, round(total_frames / max_frames))
+
+        # Determine sampling strategy
+        if max_frames is None or total_frames <= max_frames:
+            skip = 1
+            indices = list(range(total_frames))
+        else:
+            skip = max(1, int(np.ceil(total_frames / max_frames)))
+            indices = list(range(0, total_frames, skip))
+
+        # Build loading info
+        loading_info = {
+            'total_frames': total_frames,
+            'loaded_frames': len(indices),
+            'frame_stride': skip,
+            'frame_indices': indices,
+            'is_subsampled': skip > 1
+        }
 
         if not metadata:
-            indices = list(range(0, total_frames, skip))
             frames_array = tif.asarray(key=indices)
             if frames_array.ndim == 2:
                 frames.append(np.array(frames_array))
             else:
                 for frame in frames_array:
                     frames.append(np.array(frame))
-            log.info("Loaded %d preview frames", len(frames))
-            return frames, frames_metadata
+            log.info("Loaded %d frames (total: %d, stride: %d)",
+                    len(frames), total_frames, skip)
+            return frames, frames_metadata, loading_info
 
-        for i in range(0, total_frames, skip):
+        for i in indices:
             page = tif.pages[i]
             frame = page.asarray()
             frames.append(frame)
@@ -118,8 +148,8 @@ def load_tiff(file_path, max_frames=300, metadata=True):
 
             frames_metadata.append(frame_meta)
 
-    log.info("Loaded %d frames", len(frames))
-    return frames, frames_metadata
+    log.info("Loaded %d frames (total: %d, stride: %d)", len(frames), total_frames, skip)
+    return frames, frames_metadata, loading_info
 
 
 def load_tiff_preview(file_path, max_frames=300):

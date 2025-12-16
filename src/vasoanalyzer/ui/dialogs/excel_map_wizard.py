@@ -66,6 +66,287 @@ DEFAULT_QMODEL_INDEX = QModelIndex()
 SESSION_EVENT_MIME = "application/vnd.vaso.session-event"
 
 
+# UI Design Tokens
+# ---------------------------------------------------------------------------
+
+def get_semantic_colors() -> dict[str, str]:
+    """Get semantic colors from theme."""
+    return {
+        "success": theme.CURRENT_THEME.get("success_text", "#10B981"),
+        "success_bg": theme.CURRENT_THEME.get("success_bg", "#D1FAE5"),
+        "warning": theme.CURRENT_THEME.get("warning_text", "#F59E0B"),
+        "warning_bg": theme.CURRENT_THEME.get("warning_bg", "#FEF3C7"),
+        "error": theme.CURRENT_THEME.get("error_text", "#EF4444"),
+        "error_bg": theme.CURRENT_THEME.get("error_bg", "#FEE2E2"),
+        "info": theme.CURRENT_THEME.get("info_text", "#3B82F6"),
+        "info_bg": theme.CURRENT_THEME.get("info_bg", "#DBEAFE"),
+        "muted": theme.CURRENT_THEME.get("muted_text", "#9CA3AF"),
+        "muted_bg": theme.CURRENT_THEME.get("muted_bg", "#374151"),
+    }
+
+
+SPACING = {
+    "xs": 4,   # Between tightly related items
+    "sm": 8,   # Between form elements
+    "md": 16,  # Between subsections
+    "lg": 24,  # Between major sections
+    "xl": 32,  # Between page sections
+    "2xl": 48, # Between distinct areas
+}
+
+# Modern UI design tokens
+BORDER_RADIUS = {
+    "sm": 4,   # Form controls
+    "md": 6,   # Buttons
+    "lg": 8,   # Cards
+}
+
+BUTTON_HEIGHT = 36  # Consistent button height
+
+# Color constants for modern styling
+COLORS = {
+    "primary": "#0066cc",
+    "success": "#28a745",
+    "warning": "#ffc107",
+    "border_light": "#e0e0e0",
+    "border_dark": "#374151",
+    "hover_light": "#f0f7ff",
+    "hover_dark": "#172554",
+}
+
+
+def get_fonts() -> dict[str, QFont]:
+    """Get font styles for different text roles."""
+    # Use system font stack for modern typography
+    system_font = QFont()
+    system_font.setFamily("-apple-system")
+
+    fonts = {
+        "h1": QFont(system_font),      # Page titles
+        "h2": QFont(system_font),      # Section headers
+        "h3": QFont(system_font),      # Subsection headers
+        "body": QFont(system_font),    # Normal text
+        "small": QFont(system_font),   # Helper text
+        "mono": QFont("SF Mono"),      # Code/numbers
+    }
+
+    # Configure sizes and weights
+    fonts["h1"].setPointSize(16)
+    fonts["h1"].setWeight(QFont.Bold)
+
+    fonts["h2"].setPointSize(14)
+    fonts["h2"].setWeight(QFont.DemiBold)
+
+    fonts["h3"].setPointSize(12)
+    fonts["h3"].setWeight(QFont.DemiBold)
+
+    fonts["body"].setPointSize(14)  # Increased from 11
+    fonts["body"].setWeight(QFont.Normal)
+
+    fonts["small"].setPointSize(12)  # Increased from 10
+    fonts["small"].setWeight(QFont.Normal)
+
+    fonts["mono"].setPointSize(12)  # Increased from 10
+
+    return fonts
+
+
+def get_modern_table_stylesheet() -> str:
+    """Generate modern table stylesheet with theme awareness."""
+    colors = get_semantic_colors()
+    is_dark = theme.CURRENT_THEME.get("is_dark", False)
+
+    if is_dark:
+        # Dark mode colors
+        base_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+        alt_bg = theme.CURRENT_THEME.get("alternate_bg", "#0B1120")
+        border = COLORS["border_dark"]
+        hover = COLORS["hover_dark"]
+        text = theme.CURRENT_THEME.get("table_text", "#E5E7EB")
+        header_bg = theme.CURRENT_THEME.get("button_hover_bg", "#111827")
+    else:
+        # Light mode colors
+        base_bg = "#ffffff"
+        alt_bg = "#f9f9f9"
+        border = COLORS["border_light"]
+        hover = COLORS["hover_light"]
+        text = "#000000"
+        header_bg = "#f5f5f5"
+
+    return f"""
+        QTableWidget, QTableView {{
+            gridline-color: {border};
+            background: {base_bg};
+            alternate-background-color: {alt_bg};
+            color: {text};
+            border: 1px solid {border};
+            border-radius: {BORDER_RADIUS["sm"]}px;
+            selection-background-color: {theme.CURRENT_THEME.get("selection_bg", "#E6F0FF")};
+        }}
+
+        QTableWidget::item, QTableView::item {{
+            padding: 8px 12px;
+            border: none;
+        }}
+
+        QTableWidget::item:hover, QTableView::item:hover {{
+            background-color: {hover};
+        }}
+
+        QHeaderView::section {{
+            background: {header_bg};
+            color: {text};
+            font-weight: 600;
+            font-size: 12px;
+            padding: 8px 12px;
+            border: none;
+            border-right: 1px solid {border};
+            border-bottom: 1px solid {border};
+        }}
+
+        QHeaderView::section:first {{
+            border-top-left-radius: {BORDER_RADIUS["sm"]}px;
+        }}
+
+        QHeaderView::section:last {{
+            border-top-right-radius: {BORDER_RADIUS["sm"]}px;
+            border-right: none;
+        }}
+    """
+
+
+def get_modern_combobox_stylesheet() -> str:
+    """Generate modern combobox stylesheet."""
+    is_dark = theme.CURRENT_THEME.get("is_dark", False)
+
+    if is_dark:
+        bg = "#1b212d"
+        border = "#4a5368"
+        border_focus = "#3B82F6"
+        text = "#E5E7EB"
+        hover_bg = "#252b3a"
+    else:
+        bg = "#ffffff"
+        border = COLORS["border_light"]
+        border_focus = COLORS["primary"]
+        text = "#000000"
+        hover_bg = "#f5f5f5"
+
+    return f"""
+        QComboBox {{
+            background-color: {bg};
+            border: 1px solid {border};
+            border-radius: {BORDER_RADIUS["sm"]}px;
+            padding: 6px 8px;
+            min-height: 24px;
+            color: {text};
+            font-size: 14px;
+        }}
+
+        QComboBox:hover {{
+            background-color: {hover_bg};
+        }}
+
+        QComboBox:focus {{
+            border: 1px solid {border_focus};
+            outline: none;
+        }}
+
+        QComboBox::drop-down {{
+            border: none;
+            width: 20px;
+        }}
+
+        QComboBox::down-arrow {{
+            width: 12px;
+            height: 12px;
+        }}
+
+        QComboBox:editable {{
+            background-color: {bg};
+        }}
+    """
+
+
+def get_modern_button_stylesheet() -> str:
+    """Generate modern button stylesheet with flat design."""
+    is_dark = theme.CURRENT_THEME.get("is_dark", False)
+
+    if is_dark:
+        primary_bg = "#3B82F6"
+        primary_hover = "#2563EB"
+        primary_active = "#1D4ED8"
+        secondary_bg = "#1b212d"
+        secondary_hover = "#252b3a"
+        secondary_border = "#4a5368"
+        text_primary = "#FFFFFF"
+        text_secondary = "#E5E7EB"
+    else:
+        primary_bg = COLORS["primary"]
+        primary_hover = "#0052a3"
+        primary_active = "#003d7a"
+        secondary_bg = "#ffffff"
+        secondary_hover = "#f5f5f5"
+        secondary_border = COLORS["border_light"]
+        text_primary = "#ffffff"
+        text_secondary = "#000000"
+
+    return f"""
+        QPushButton {{
+            background-color: {secondary_bg};
+            color: {text_secondary};
+            border: 1px solid {secondary_border};
+            border-radius: {BORDER_RADIUS["md"]}px;
+            padding: 8px 16px;
+            min-height: {BUTTON_HEIGHT}px;
+            font-size: 14px;
+            font-weight: 500;
+        }}
+
+        QPushButton:hover {{
+            background-color: {secondary_hover};
+        }}
+
+        QPushButton:pressed {{
+            background-color: {primary_active};
+        }}
+
+        QPushButton:disabled {{
+            opacity: 0.5;
+        }}
+
+        QPushButton#PrimaryButton {{
+            background-color: {primary_bg};
+            color: {text_primary};
+            border: none;
+        }}
+
+        QPushButton#PrimaryButton:hover {{
+            background-color: {primary_hover};
+        }}
+
+        QPushButton#PrimaryButton:pressed {{
+            background-color: {primary_active};
+        }}
+
+        QToolButton {{
+            background-color: {secondary_bg};
+            color: {text_secondary};
+            border: 1px solid {secondary_border};
+            border-radius: {BORDER_RADIUS["md"]}px;
+            padding: 8px;
+            min-height: {BUTTON_HEIGHT}px;
+        }}
+
+        QToolButton:hover {{
+            background-color: {secondary_hover};
+        }}
+    """
+
+
+# Wizard Classes
+# ---------------------------------------------------------------------------
+
 class _WizardUnavailableError(RuntimeError):
     """Raised when a wizard page cannot resolve its hosting wizard."""
 
@@ -252,7 +533,6 @@ class TemplatePreviewTable(QTableWidget):
         alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
         text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
-        grid = theme.CURRENT_THEME.get("grid_color", "#374151")
 
         palette.setColor(self.backgroundRole(), QColor(table_bg))
         palette.setColor(self.foregroundRole(), QColor(text))
@@ -264,21 +544,8 @@ class TemplatePreviewTable(QTableWidget):
         palette.setColor(QPalette.HighlightedText, QColor(text))
 
         self.setPalette(palette)
-        self.setStyleSheet(
-            f"""
-            QTableView {{
-                gridline-color: {grid};
-                background: {table_bg};
-                alternate-background-color: {alt_bg};
-                color: {text};
-                selection-background-color: {highlight};
-            }}
-            QHeaderView::section {{
-                background: {table_bg};
-                color: {text};
-            }}
-        """
-        )
+        # Use the new modern table stylesheet
+        self.setStyleSheet(get_modern_table_stylesheet())
 
     def apply_theme(self) -> None:
         """Public hook to refresh palette after theme changes."""
@@ -298,6 +565,10 @@ class TemplatePage(WizardPageBase):
         super().__init__()
         self.setTitle("Step 1: Load Template & CSV")
         layout = QVBoxLayout(self)
+        layout.setSpacing(SPACING["md"])
+        layout.setContentsMargins(
+            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
+        )
 
         self._templatePath = ""
         self._csvPath = ""
@@ -305,10 +576,24 @@ class TemplatePage(WizardPageBase):
         self.registerField("csvPath*", self, "csvPath")
 
         self.btn_excel = QPushButton("Load Excel Template…")
+        self.btn_excel.setMinimumHeight(BUTTON_HEIGHT)
+        self.btn_excel.setStyleSheet(get_modern_button_stylesheet())
         self.lbl_excel = QLabel("No template loaded.")
+        fonts = get_fonts()
+        self.lbl_excel.setFont(fonts["body"])
         self.btn_excel.clicked.connect(self.load_template)
         layout.addWidget(self.btn_excel)
         layout.addWidget(self.lbl_excel)
+
+        # Sheet selector UI
+        self.lbl_sheet = QLabel("Select worksheet:")
+        self.combo_sheet = QComboBox()
+        self.combo_sheet.setStyleSheet(get_modern_combobox_stylesheet())
+        self.lbl_sheet.setVisible(False)
+        self.combo_sheet.setVisible(False)
+        self.combo_sheet.currentIndexChanged.connect(self._on_sheet_changed)
+        layout.addWidget(self.lbl_sheet)
+        layout.addWidget(self.combo_sheet)
 
         # Recent templates UI
         self.recent_templates_label = QLabel("Recent templates")
@@ -317,8 +602,43 @@ class TemplatePage(WizardPageBase):
         self.recent_templates_list.setAlternatingRowColors(True)
         self.recent_templates_list.setUniformItemSizes(True)
         self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
+        # Apply modern list styling
+        is_dark = theme.CURRENT_THEME.get("is_dark", False)
+        if is_dark:
+            list_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
+            list_border = COLORS["border_dark"]
+            list_hover = COLORS["hover_dark"]
+            list_text = theme.CURRENT_THEME.get("table_text", "#E5E7EB")
+        else:
+            list_bg = "#ffffff"
+            list_border = COLORS["border_light"]
+            list_hover = COLORS["hover_light"]
+            list_text = "#000000"
+        self.recent_templates_list.setStyleSheet(f"""
+            QListWidget {{
+                border: 1px solid {list_border};
+                border-radius: {BORDER_RADIUS["sm"]}px;
+                background-color: {list_bg};
+                padding: 4px;
+                color: {list_text};
+            }}
+            QListWidget::item {{
+                padding: 8px 12px;
+                border-radius: {BORDER_RADIUS["sm"]}px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {list_hover};
+            }}
+            QListWidget::item:selected {{
+                background-color: {theme.CURRENT_THEME.get("selection_bg", "#E6F0FF")};
+            }}
+        """)
         self.remove_recent_button = QPushButton("Remove selected")
+        self.remove_recent_button.setMinimumHeight(BUTTON_HEIGHT)
+        self.remove_recent_button.setStyleSheet(get_modern_button_stylesheet())
         self.clear_recent_button = QPushButton("Clear all")
+        self.clear_recent_button.setMinimumHeight(BUTTON_HEIGHT)
+        self.clear_recent_button.setStyleSheet(get_modern_button_stylesheet())
         self.remove_recent_button.clicked.connect(self._on_remove_selected_recent_template)
         self.clear_recent_button.clicked.connect(self._on_clear_recent_templates)
         self.recent_templates_label.setVisible(False)
@@ -328,13 +648,20 @@ class TemplatePage(WizardPageBase):
         layout.addWidget(self.recent_templates_label)
         layout.addWidget(self.recent_templates_list)
         recent_buttons_row = QHBoxLayout()
+        recent_buttons_row.setSpacing(SPACING["sm"])
         recent_buttons_row.addStretch()
         recent_buttons_row.addWidget(self.remove_recent_button)
         recent_buttons_row.addWidget(self.clear_recent_button)
         layout.addLayout(recent_buttons_row)
 
+        # Add extra spacing before CSV section
+        layout.addSpacing(SPACING["xl"])
+
         self.btn_csv = QPushButton("Load Events CSV…")
+        self.btn_csv.setMinimumHeight(BUTTON_HEIGHT)
+        self.btn_csv.setStyleSheet(get_modern_button_stylesheet())
         self.lbl_csv = QLabel("No events loaded.")
+        self.lbl_csv.setFont(fonts["body"])
         self.btn_csv.clicked.connect(self.load_csv)
         layout.addWidget(self.btn_csv)
         layout.addWidget(self.lbl_csv)
@@ -375,38 +702,47 @@ class TemplatePage(WizardPageBase):
             QMessageBox.critical(self, "Load Failed", str(exc))
             return
 
-        ws = wb.active
+        # Don't set ws yet - wait for sheet selection
         wiz = self._wizard()
         wiz.setField("templatePath", path)
         wiz.wb = wb
-        wiz.ws = ws
+        wiz.ws = None  # Will be set after sheet selection
+        wiz.selected_sheet_name = None
         wiz.reset_mapping_state()
 
-        # Check for VasoAnalyzer metadata
-        metadata_detected = has_vaso_metadata(wb)
-        if metadata_detected:
-            try:
-                metadata = read_template_metadata(path, wb)
-                if metadata:
-                    wiz.template_metadata = metadata
-                    status_msg = f"✓ Loaded: {Path(path).name} (metadata detected)"
-                    self.lbl_excel.setText(status_msg)
-                    self.lbl_excel.setStyleSheet("color: #3c763d;")  # Green
-                else:
-                    self.lbl_excel.setText(f"Loaded: {Path(path).name}")
-                    self.lbl_excel.setStyleSheet("")
-            except Exception as exc:
-                QMessageBox.warning(
-                    self,
-                    "Metadata Error",
-                    f"Template loaded but metadata is invalid:\n{exc}\n\n"
-                    "Will use manual configuration.",
-                )
-                self.lbl_excel.setText(f"Loaded: {Path(path).name} (metadata error)")
-                self.lbl_excel.setStyleSheet("color: #8a6d3b;")  # Orange
+        # Populate sheet selector
+        self._populate_sheet_selector(wb)
+
+        # Try to restore previous sheet preference
+        saved_sheet = self._load_sheet_preference(path)
+        if saved_sheet and saved_sheet in wb.sheetnames:
+            idx = self.combo_sheet.findText(saved_sheet)
+            if idx >= 0:
+                self.combo_sheet.setCurrentIndex(idx)
+                # _on_sheet_changed will be called automatically
+        elif self.combo_sheet.count() == 1:
+            # Auto-select if only one sheet
+            self.combo_sheet.setCurrentIndex(0)
+            # _on_sheet_changed will be called automatically
+        elif self.combo_sheet.count() > 1:
+            # Show selection required message
+            self.lbl_excel.setText(
+                f"Loaded: {Path(path).name} - Please select a worksheet to continue"
+            )
+            colors = get_semantic_colors()
+            self.lbl_excel.setStyleSheet(f"color: {colors['warning']};")
+
+            # Set placeholder text on combo box for clarity
+            self.combo_sheet.setPlaceholderText("Select a worksheet...")
+
+            # Ensure currentIndex is -1 (nothing selected)
+            if self.combo_sheet.currentIndex() == 0:
+                self.combo_sheet.setCurrentIndex(-1)
         else:
-            self.lbl_excel.setText(f"Loaded: {Path(path).name}")
-            self.lbl_excel.setStyleSheet("")
+            # No sheets available (shouldn't happen)
+            self.lbl_excel.setText(f"Loaded: {Path(path).name} - No worksheets found")
+            colors = get_semantic_colors()
+            self.lbl_excel.setStyleSheet(f"color: {colors['error']};")
 
         self._update_recent_templates(path)
         self.completeChanged.emit()
@@ -448,7 +784,8 @@ class TemplatePage(WizardPageBase):
     def isComplete(self) -> bool:
         wiz = self._wizard()
         has_events = bool(self.field("csvPath")) or getattr(wiz, "eventsDF", None) is not None
-        return bool(self.field("templatePath") and has_events)
+        has_sheet_selected = wiz.ws is not None  # Check sheet selection
+        return bool(self.field("templatePath") and has_events and has_sheet_selected)
 
     # ------------------------------------------------------
     def _update_events_status(self) -> None:
@@ -558,6 +895,115 @@ class TemplatePage(WizardPageBase):
     @staticmethod
     def _get_settings() -> QSettings:
         return QSettings("TykockiLab", "VasoAnalyzer")
+
+    # ------------------------------------------------------
+    def _load_sheet_preference(self, file_path: str) -> str | None:
+        """Load previously selected sheet for this file."""
+        settings = self._get_settings()
+        key = f"excel_sheet_selection/{file_path}"
+        return settings.value(key, None, type=str)
+
+    # ------------------------------------------------------
+    def _save_sheet_preference(self, file_path: str, sheet_name: str) -> None:
+        """Save sheet selection preference."""
+        settings = self._get_settings()
+        key = f"excel_sheet_selection/{file_path}"
+        settings.setValue(key, sheet_name)
+
+    # ------------------------------------------------------
+    def _populate_sheet_selector(self, wb) -> None:
+        """Populate sheet selector with workbook sheets."""
+        from openpyxl import Workbook
+
+        self.combo_sheet.blockSignals(True)
+        self.combo_sheet.clear()
+
+        for sheet_name in wb.sheetnames:
+            # Skip hidden metadata sheets
+            if sheet_name.startswith("VasoMetadata"):
+                continue
+            # Skip hidden sheets
+            sheet = wb[sheet_name]
+            if hasattr(sheet, 'sheet_state') and sheet.sheet_state == "hidden":
+                continue
+            self.combo_sheet.addItem(sheet_name)
+
+        self.combo_sheet.blockSignals(False)
+
+        # Clear auto-selection - force user to explicitly choose when multiple sheets
+        if self.combo_sheet.count() > 1:
+            self.combo_sheet.setCurrentIndex(-1)
+
+        # Show selector if sheets available
+        has_sheets = self.combo_sheet.count() > 0
+        self.lbl_sheet.setVisible(has_sheets)
+        self.combo_sheet.setVisible(has_sheets)
+
+    # ------------------------------------------------------
+    def _on_sheet_changed(self, index: int) -> None:
+        """Handle sheet selection change."""
+        if index < 0:
+            return
+
+        sheet_name = self.combo_sheet.currentText()
+        if not sheet_name:
+            return
+
+        wiz = self._wizard()
+        template_path = self.field("templatePath")
+
+        if not wiz.wb:
+            return
+
+        # Update wizard state
+        wiz.ws = wiz.wb[sheet_name]
+        wiz.selected_sheet_name = sheet_name
+        wiz.reset_mapping_state()
+
+        # Save preference
+        if template_path:
+            self._save_sheet_preference(template_path, sheet_name)
+
+        # Reload metadata for new sheet
+        self._reload_metadata_for_sheet(sheet_name)
+
+        # Update UI label
+        from pathlib import Path
+        self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name})")
+        self.lbl_excel.setStyleSheet("")
+
+        self.completeChanged.emit()
+
+    # ------------------------------------------------------
+    def _reload_metadata_for_sheet(self, sheet_name: str) -> None:
+        """Reload metadata for the selected sheet."""
+        from vasoanalyzer.excel.template_metadata import read_sheet_specific_metadata
+
+        wiz = self._wizard()
+        if not wiz.wb:
+            return
+
+        try:
+            metadata = read_sheet_specific_metadata(wiz.wb, sheet_name)
+            if metadata:
+                wiz.template_metadata = metadata
+                from pathlib import Path
+                template_path = self.field("templatePath")
+                status_msg = f"✓ Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata detected)"
+                self.lbl_excel.setText(status_msg)
+                colors = get_semantic_colors()
+                self.lbl_excel.setStyleSheet(f"color: {colors['success']};")
+        except Exception as exc:
+            from pathlib import Path
+            template_path = self.field("templatePath")
+            QMessageBox.warning(
+                self,
+                "Metadata Error",
+                f"Could not load metadata for sheet '{sheet_name}':\n{exc}"
+            )
+            self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata error)")
+            colors = get_semantic_colors()
+            self.lbl_excel.setStyleSheet(f"color: {colors['warning']};")
 
     # ------------------------------------------------------
     @staticmethod
@@ -673,26 +1119,41 @@ class RowMappingPage(WizardPageBase):
         self._initialised = False
 
         root = QVBoxLayout(self)
+        root.setSpacing(SPACING["md"])
+        root.setContentsMargins(
+            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
+        )
 
         self.info_label = QLabel()
         self.info_label.setWordWrap(True)
+        fonts = get_fonts()
+        self.info_label.setFont(fonts["body"])
         root.addWidget(self.info_label)
 
         control_row = QHBoxLayout()
+        control_row.setSpacing(SPACING["md"])
+        control_row.setContentsMargins(
+            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
+        )
         control_row.addWidget(QLabel("Measurement:"))
         self.measurement_combo = QComboBox()
+        self.measurement_combo.setStyleSheet(get_modern_combobox_stylesheet())
         control_row.addWidget(self.measurement_combo)
 
         self.pick_date_combo = QComboBox()
+        self.pick_date_combo.setStyleSheet(get_modern_combobox_stylesheet())
         self.pick_date_combo.setVisible(False)
         control_row.addWidget(self.pick_date_combo)
 
         self.redetect_btn = QToolButton()
         self.redetect_btn.setText("Re-detect")
+        self.redetect_btn.setStyleSheet(get_modern_button_stylesheet())
         control_row.addWidget(self.redetect_btn)
 
         self.select_unmapped_btn = QToolButton()
         self.select_unmapped_btn.setText("Select Unmapped…")
+        self.select_unmapped_btn.setObjectName("PrimaryButton")  # Make it primary
+        self.select_unmapped_btn.setStyleSheet(get_modern_button_stylesheet())
         self.select_unmapped_btn.setVisible(False)
         control_row.addWidget(self.select_unmapped_btn)
 
@@ -707,10 +1168,14 @@ class RowMappingPage(WizardPageBase):
         self.preview_table.setAlternatingRowColors(True)
         self.preview_table.horizontalHeader().setStretchLastSection(True)
         self.preview_table.verticalHeader().setVisible(False)
-        self.preview_table.verticalHeader().setDefaultSectionSize(24)
+        self.preview_table.verticalHeader().setDefaultSectionSize(36)
         self.preview_table.set_drop_context(self)
         self._apply_table_theme(self.preview_table)
         preview_container = QVBoxLayout()
+        preview_container.setSpacing(SPACING["sm"])
+        preview_container.setContentsMargins(
+            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
+        )
         preview_widget = QFrame()
         preview_widget.setLayout(preview_container)
         preview_container.addWidget(QLabel("Template Preview"))
@@ -723,7 +1188,7 @@ class RowMappingPage(WizardPageBase):
             ["Row", "Template Label", "Session Event", "Value to Write", "Status"]
         )
         self.mapping_table.verticalHeader().setVisible(False)
-        self.mapping_table.verticalHeader().setDefaultSectionSize(24)
+        self.mapping_table.verticalHeader().setDefaultSectionSize(36)
         self.mapping_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._apply_table_theme(self.mapping_table)
         self.mapping_table.setAlternatingRowColors(True)
@@ -736,8 +1201,12 @@ class RowMappingPage(WizardPageBase):
 
         self.session_values_table = SessionValuesTable()
         self.session_values_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.session_values_table.verticalHeader().setDefaultSectionSize(24)
+        self.session_values_table.verticalHeader().setDefaultSectionSize(36)
         session_container = QVBoxLayout()
+        session_container.setSpacing(SPACING["sm"])
+        session_container.setContentsMargins(
+            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
+        )
         session_widget = QFrame()
         session_widget.setLayout(session_container)
         session_container.addWidget(QLabel("Session Values"))
@@ -756,7 +1225,9 @@ class RowMappingPage(WizardPageBase):
         ]
         helper_text = QLabel("\n".join(helper_lines))
         helper_text.setWordWrap(True)
-        helper_text.setStyleSheet("color: #555;")
+        helper_text.setFont(fonts["small"])
+        colors = get_semantic_colors()
+        helper_text.setStyleSheet(f"color: {colors['muted']};")
         root.addWidget(helper_text)
 
         self.measurement_combo.currentTextChanged.connect(self._on_measurement_changed)
@@ -771,7 +1242,6 @@ class RowMappingPage(WizardPageBase):
         alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
         text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
-        grid = theme.CURRENT_THEME.get("grid_color", "#374151")
 
         palette.setColor(QPalette.Base, QColor(table_bg))
         palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
@@ -781,21 +1251,8 @@ class RowMappingPage(WizardPageBase):
         palette.setColor(QPalette.HighlightedText, QColor(text))
 
         table.setPalette(palette)
-        table.setStyleSheet(
-            f"""
-            QTableView {{
-                gridline-color: {grid};
-                background: {table_bg};
-                alternate-background-color: {alt_bg};
-                color: {text};
-                selection-background-color: {highlight};
-            }}
-            QHeaderView::section {{
-                background: {table_bg};
-                color: {text};
-            }}
-        """
-        )
+        # Use the new modern table stylesheet
+        table.setStyleSheet(get_modern_table_stylesheet())
 
     # --------------------------------------------------
     def initializePage(self) -> None:
@@ -923,6 +1380,7 @@ class RowMappingPage(WizardPageBase):
             combo.setEditable(True)
             combo.setInsertPolicy(QComboBox.NoInsert)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setStyleSheet(get_modern_combobox_stylesheet())
             combo.addItem("<leave unmapped>", None)
             for event in wiz.session_events:
                 combo.addItem(event.combo_text, event.index)
@@ -978,20 +1436,33 @@ class RowMappingPage(WizardPageBase):
         )
         duplicates = {idx for idx, count in assignments.items() if count > 1}
 
+        colors = get_semantic_colors()
         for row_index, item in self._status_items.items():
             assignment = wiz.row_assignments.get(row_index)
             if assignment is None:
                 item.setText("○")
                 item.setToolTip("No session event mapped")
-                item.setForeground(QBrush(QColor("#a94442")))
+                item.setForeground(QBrush(QColor(colors["error"])))
+                # Larger font for better visibility
+                font = item.font()
+                font.setPointSize(14)
+                item.setFont(font)
             elif assignment in duplicates:
-                item.setText("!")
+                item.setText("⚠")  # Warning triangle instead of !
                 item.setToolTip("Session event reused on multiple rows")
-                item.setForeground(QBrush(QColor("#8a6d3b")))
+                item.setForeground(QBrush(QColor(colors["warning"])))
+                font = item.font()
+                font.setPointSize(14)
+                item.setFont(font)
             else:
                 item.setText("✓")
                 item.setToolTip("Mapped")
-                item.setForeground(QBrush(QColor("#3c763d")))
+                item.setForeground(QBrush(QColor(COLORS["success"])))  # Use explicit green color
+                # Bold green checkmark
+                font = item.font()
+                font.setPointSize(16)
+                font.setBold(True)
+                item.setFont(font)
 
     # --------------------------------------------------
     def _refresh_preview(self) -> None:
@@ -1035,7 +1506,14 @@ class RowMappingPage(WizardPageBase):
             template_row_index = row.get("Row")
             for col_idx, key in enumerate(headers):
                 value = row.get(key)
-                item = QTableWidgetItem("" if value is None else str(value))
+                # Format numerical values to 2 decimal places
+                if value is None:
+                    display_text = ""
+                elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                    display_text = f"{value:.2f}"
+                else:
+                    display_text = str(value)
+                item = QTableWidgetItem(display_text)
                 item.setForeground(QBrush(QColor(table_text)))
                 bg_color = alt_bg if row_idx % 2 else table_bg
                 if key not in ("Row", "Label"):
@@ -1050,7 +1528,13 @@ class RowMappingPage(WizardPageBase):
                         and is_event
                         and template_row_index is not None
                     ):
-                        base_text = "" if value is None else str(value)
+                        # Format base value to 2 decimal places
+                        if value is None:
+                            base_text = ""
+                        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                            base_text = f"{value:.2f}"
+                        else:
+                            base_text = str(value)
                         self._preview_base_values[template_row_index] = base_text
                         assignment = wiz.row_assignments.get(template_row_index)
                         if assignment is not None:
@@ -1152,24 +1636,25 @@ class RowMappingPage(WizardPageBase):
     # --------------------------------------------------
     def _update_status_banner(self) -> None:
         wiz = self._wizard()
+        colors = get_semantic_colors()
         if getattr(wiz, "manual_date_selection_required", False):
             self.info_label.setText(
                 "Multiple date columns detected. Pick the active date column before continuing."
             )
-            self.info_label.setStyleSheet("color: #8a6d3b;")
+            self.info_label.setStyleSheet(f"color: {colors['warning']};")
             return
         unmapped = sum(1 for value in wiz.row_assignments.values() if value is None)
         if unmapped:
             self.info_label.setText(
                 f"{unmapped} event row(s) are still unmapped. Only mapped rows will be written."
             )
-            self.info_label.setStyleSheet("color: #8a6d3b;")
+            self.info_label.setStyleSheet(f"color: {colors['warning']};")
             self.select_unmapped_btn.setVisible(True)
         else:
             self.info_label.setText(
                 "Review the mappings below. You can override any row before saving."
             )
-            self.info_label.setStyleSheet("color: #333;")
+            self.info_label.setStyleSheet(f"color: {colors['muted']};")
             self.select_unmapped_btn.setVisible(False)
 
     # --------------------------------------------------
@@ -1186,8 +1671,9 @@ class RowMappingPage(WizardPageBase):
     def _on_redetect(self) -> None:
         wiz = self._wizard()
         if not wiz.prepare_layout(auto=True, force=True):
+            colors = get_semantic_colors()
             self.info_label.setText(wiz.layout_error or "Could not re-run detection.")
-            self.info_label.setStyleSheet("color: #a94442;")
+            self.info_label.setStyleSheet(f"color: {colors['error']};")
             return
         self._populate_date_options()
         self._rebuild_mapping_table()
@@ -1243,6 +1729,9 @@ class PreviewPage(WizardPageBase):
         layout = QVBoxLayout(self)
         self.preview_view = QTableView()
         self.btn_save = QPushButton("Update Template")
+        self.btn_save.setMinimumHeight(BUTTON_HEIGHT)
+        self.btn_save.setObjectName("PrimaryButton")  # Make it primary
+        self.btn_save.setStyleSheet(get_modern_button_stylesheet())
         self.btn_save.clicked.connect(self.save_file)
         layout.addWidget(self.preview_view, 1)
         layout.addWidget(self.btn_save)
@@ -1321,9 +1810,14 @@ class ExcelMapWizard(QWizard):
         self.setMinimumSize(1100, 720)
         self.resize(1200, 750)
 
+        # Apply modern dialog styling
+        combined_stylesheet = get_modern_button_stylesheet() + "\n" + get_modern_combobox_stylesheet()
+        self.setStyleSheet(combined_stylesheet)
+
         # Workbook/session state
         self.wb = None
         self.ws = None
+        self.selected_sheet_name: str | None = None
         self.eventsDF: pd.DataFrame | None = None
         self.events_source: str | None = None
 
@@ -1444,13 +1938,19 @@ class ExcelMapWizard(QWizard):
         if not defined:
             return None
         destinations = list(defined.destinations)
+
+        # First, try to find a range specifically for the selected sheet
         for sheet_name, coord in destinations:
             if sheet_name == self.ws.title:
                 return coord
+
+        # Fallback: if there's only one destination and it references a different sheet,
+        # use that range anyway (assumes same structure across sheets)
         if destinations and len(destinations) == 1:
             sheet_name, coord = destinations[0]
-            if sheet_name == self.ws.title:
-                return coord
+            # Use the same coordinate range on the selected sheet
+            return coord
+
         return None
 
     # --------------------------------------------------

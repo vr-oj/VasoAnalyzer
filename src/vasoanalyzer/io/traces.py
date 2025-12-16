@@ -95,7 +95,10 @@ def load_trace(file_path, *, cache: Any | None = None):
         return re.sub(r"[^a-z0-9]", "", col.lower())
 
     # Locate time and diameter columns using flexible matching for legacy files
-    time_col = None
+    # VasoTracker files have Time_s_exact (high precision) - prioritize it!
+    time_s_exact_col = None
+    time_s_col = None
+    time_col = None  # Generic fallback
     diam_col = None
     outer_col = None
     avg_pressure_col = None
@@ -108,7 +111,15 @@ def load_trace(file_path, *, cache: Any | None = None):
 
     for c in df.columns:
         norm = _normalize(c)
-        if time_col is None and ("time" in norm or "sec" in norm or norm in {"t", "ts"}):
+
+        # Priority 1: Look for Time_s_exact (VasoTracker high-precision time)
+        if norm == "timesexact":
+            time_s_exact_col = c
+        # Priority 2: Look for Time (s) or similar
+        elif norm in ("times", "timeseconds") or c == "Time (s)":
+            time_s_col = c
+        # Priority 3: Generic time column
+        elif time_col is None and ("time" in norm or "sec" in norm or norm in {"t", "ts"}):
             time_col = c
 
         if "inner" in norm and "diam" in norm:
@@ -141,11 +152,28 @@ def load_trace(file_path, *, cache: Any | None = None):
     if set_pressure_candidates:
         set_pressure_col = set_pressure_candidates[0]
 
-    if time_col is None or diam_col is None or time_col == diam_col:
+    # Use Time_s_exact if available (VasoTracker), fall back to Time (s), then generic
+    canonical_time_col = time_s_exact_col or time_s_col or time_col
+
+    if canonical_time_col is None or diam_col is None or canonical_time_col == diam_col:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")
 
-    # Rename to standardized column names
-    rename_map = {time_col: "Time (s)", diam_col: "Inner Diameter"}
+    # Log warning for legacy files missing Time_s_exact
+    if time_s_exact_col:
+        log.info(f"Using high-precision time column '{time_s_exact_col}' as canonical")
+    elif time_s_col or time_col:
+        log.warning(
+            f"Using legacy time column '{canonical_time_col}' (Time_s_exact not found). "
+            "Sub-millisecond precision may be lost."
+        )
+
+    # If using Time_s_exact, drop the old "Time (s)" column to avoid conflict
+    if time_s_exact_col and "Time (s)" in df.columns and time_s_exact_col != "Time (s)":
+        df = df.drop(columns=["Time (s)"])
+        log.info("Dropped rounded 'Time (s)' column in favor of high-precision 'Time_s_exact'")
+
+    # Rename to standardized column names (canonical_time_col → "Time (s)")
+    rename_map = {canonical_time_col: "Time (s)", diam_col: "Inner Diameter"}
     if outer_col:
         rename_map[outer_col] = "Outer Diameter"
     if avg_pressure_col:
@@ -154,6 +182,9 @@ def load_trace(file_path, *, cache: Any | None = None):
         rename_map[set_pressure_col] = "Set Pressure (mmHg)"
     df = df.rename(columns=rename_map)
     df = df.loc[:, ~df.columns.duplicated()]
+
+    # Store provenance: which column was used as canonical time
+    df.attrs["canonical_time_source"] = canonical_time_col
 
     # Ensure numeric types
     df["Time (s)"] = pd.to_numeric(df["Time (s)"], errors="coerce")

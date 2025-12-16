@@ -102,12 +102,11 @@ class PreferencesDialog(QDialog):
         appearance_layout.setSpacing(8)
 
         self.theme_mode_combo = QComboBox()
-        self.theme_mode_combo.addItem("Follow system", "system")
         self.theme_mode_combo.addItem("Light", "light")
         self.theme_mode_combo.addItem("Dark", "dark")
         self.theme_mode_combo.setEditable(False)
 
-        appearance_layout.addRow("Theme (requires restart):", self.theme_mode_combo)
+        appearance_layout.addRow("Color theme:", self.theme_mode_combo)
         layout.addWidget(appearance_group)
 
         # Startup Options
@@ -220,11 +219,16 @@ class PreferencesDialog(QDialog):
         snapshot_layout.setSpacing(8)
 
         self.snapshot_count_spin = QSpinBox()
-        self.snapshot_count_spin.setMinimum(5)
+        self.snapshot_count_spin.setMinimum(1)
         self.snapshot_count_spin.setMaximum(500)
-        self.snapshot_count_spin.setValue(10)
+        self.snapshot_count_spin.setValue(3)
         self.snapshot_count_spin.setSuffix(" snapshots")
         snapshot_layout.addRow("Keep last:", self.snapshot_count_spin)
+
+        self.embed_snapshots_checkbox = QCheckBox(
+            "Embed snapshot video into project (larger, fully portable)"
+        )
+        snapshot_layout.addRow("", self.embed_snapshots_checkbox)
 
         snapshot_help = QLabel(
             "<small>Projects keep multiple snapshots for recovery. Older snapshots are automatically "
@@ -384,11 +388,14 @@ class PreferencesDialog(QDialog):
         )
 
         # Appearance
-        mode = self.settings.value("appearance/themeMode", "system", type=str)
+        mode = self.settings.value("appearance/themeMode", "light", type=str)
+        # Map old system/auto to light for backwards compatibility
+        if mode in ("system", "auto"):
+            mode = "light"
         self._initial_theme_mode = mode
         index = self.theme_mode_combo.findData(mode)
         if index < 0:
-            index = 0
+            index = 0  # Default to light
         self.theme_mode_combo.setCurrentIndex(index)
 
         # Projects
@@ -411,7 +418,11 @@ class PreferencesDialog(QDialog):
         self.autosave_interval_combo.setCurrentIndex(interval_index)
 
         # Snapshots
-        self.snapshot_count_spin.setValue(self.settings.value("snapshots/keep_count", 10, type=int))
+        self.snapshot_count_spin.setValue(
+            self.settings.value("snapshots/keep_count", 3, type=int)
+        )
+        embed = self.settings.value("snapshots/embed_stacks", False, type=bool)
+        self.embed_snapshots_checkbox.setChecked(bool(embed))
 
         # Advanced
         self.auto_recovery_checkbox.setChecked(
@@ -450,6 +461,9 @@ class PreferencesDialog(QDialog):
 
         # Snapshots
         self.settings.setValue("snapshots/keep_count", self.snapshot_count_spin.value())
+        self.settings.setValue(
+            "snapshots/embed_stacks", self.embed_snapshots_checkbox.isChecked()
+        )
 
         # Advanced
         self.settings.setValue("recovery/enabled", self.auto_recovery_checkbox.isChecked())
@@ -465,15 +479,19 @@ class PreferencesDialog(QDialog):
 
         theme_changed = getattr(self, "_initial_theme_mode", None) != mode
         if theme_changed:
-            try:
-                from PyQt5.QtWidgets import QMessageBox
+            # Apply immediately when the parent window supports it
+            from vasoanalyzer.ui import theme as theme_module
 
-                QMessageBox.information(
-                    self,
-                    "Restart required",
-                    "Theme changes will take effect after you restart VasoAnalyzer.",
-                )
+            try:
+                theme_module.set_theme_mode(mode, persist=True)
             except Exception:
                 pass
+            parent = self.parent()
+            apply_theme = getattr(parent, "apply_theme", None)
+            if callable(apply_theme):
+                try:
+                    apply_theme(mode, persist=False)
+                except Exception:
+                    pass
 
         super().accept()

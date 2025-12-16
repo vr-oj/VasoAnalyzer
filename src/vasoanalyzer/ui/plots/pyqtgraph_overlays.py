@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import math
+import time
 from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QColor
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -115,7 +117,11 @@ class PyQtGraphEventHighlightOverlay:
         self._time: float | None = None
         self._color: str = "#1D5CFF"
         self._alpha: float = 0.2
+        self._base_alpha: float = 0.2  # Base alpha for pulsing
         self._width: float = 2.0  # Width in data units
+        self._animated: bool = False
+        self._pulse_timer: QTimer | None = None
+        self._pulse_start_time: float = 0.0
 
     def sync_tracks(self, plot_items: list[pg.PlotItem]) -> None:
         """Synchronize highlight across multiple tracks.
@@ -172,6 +178,12 @@ class PyQtGraphEventHighlightOverlay:
             with contextlib.suppress(RuntimeError):
                 region.setVisible(visible)
 
+        # Start/stop animation based on visibility
+        if visible and self._animated:
+            self._start_pulse_animation()
+        elif not visible:
+            self._stop_pulse_animation()
+
     def clear(self) -> None:
         """Clear highlight (hide and reset time)."""
         self._time = None
@@ -214,6 +226,55 @@ class PyQtGraphEventHighlightOverlay:
             Alpha transparency value (0-1)
         """
         return self._alpha
+
+    def set_animated(self, enabled: bool) -> None:
+        """Enable/disable pulsing animation.
+
+        Args:
+            enabled: Whether to animate the highlight
+        """
+        self._animated = enabled
+
+        if enabled and self._visible:
+            self._start_pulse_animation()
+        else:
+            self._stop_pulse_animation()
+
+    def _start_pulse_animation(self) -> None:
+        """Start the pulsing animation."""
+        if self._pulse_timer is not None:
+            return  # Already running
+
+        self._pulse_start_time = time.time()
+        self._pulse_timer = QTimer()
+        self._pulse_timer.timeout.connect(self._pulse_step)
+        self._pulse_timer.start(50)  # 20 FPS
+
+    def _stop_pulse_animation(self) -> None:
+        """Stop the pulsing animation."""
+        if self._pulse_timer is not None:
+            self._pulse_timer.stop()
+            self._pulse_timer = None
+
+        # Restore base alpha
+        self.set_style(alpha=self._base_alpha)
+
+    def _pulse_step(self) -> None:
+        """Execute one step of the pulse animation."""
+        if not self._animated or not self._visible:
+            self._stop_pulse_animation()
+            return
+
+        # Calculate pulsing alpha (0.3 → 0.5 → 0.3 over 2 seconds)
+        elapsed = time.time() - self._pulse_start_time
+        phase = (elapsed % 2.0) / 2.0  # 0 to 1 over 2 seconds
+
+        # Use sine wave for smooth pulsing
+        alpha = 0.3 + 0.2 * abs(math.sin(phase * math.pi))
+
+        # Update alpha without changing color or width
+        if alpha != self._alpha:
+            self.set_style(alpha=alpha)
 
     def apply_theme(self) -> None:
         """Reapply highlight styling from the current theme."""

@@ -26,7 +26,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QSettings, Qt
 from PyQt5.QtWidgets import (
     QAction,
     QDialog,
@@ -372,6 +372,10 @@ class ProjectMixin:
 
     def save_project_file(self):
         if self.current_project and self.current_project.path:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            embed = settings.value("snapshots/embed_stacks", False, type=bool)
+            self.current_project.embed_snapshots = bool(embed)
+
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -418,6 +422,9 @@ class ProjectMixin:
                     path_obj = path_obj.with_suffix(".vaso")
 
             path = str(path_obj.resolve(strict=False))
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            embed = settings.value("snapshots/embed_stacks", False, type=bool)
+            self.current_project.embed_snapshots = bool(embed)
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -479,7 +486,16 @@ class ProjectMixin:
             self.project_state[id(self.current_sample)] = state
 
         try:
-            export_project_bundle(self.current_project, path)
+            self.show_progress("Exporting bundle", maximum=100)
+
+            def progress_callback(percent: int, message: str):
+                self._progress_bar.setFormat(f"{message}... %p%")
+                self.update_progress(percent)
+                QApplication.processEvents()
+
+            export_project_bundle(
+                self.current_project, path, progress_callback=progress_callback
+            )
             self.statusBar().showMessage(f"\u2713 Bundle saved: {path}", 5000)
         except Exception as exc:
             QMessageBox.critical(
@@ -487,6 +503,8 @@ class ProjectMixin:
                 "Export Failed",
                 f"Could not export bundle:\n{exc}",
             )
+        finally:
+            self.hide_progress()
 
     def export_shareable_project(self):
         """Export a DELETE-mode single-file copy of the current project."""
@@ -526,20 +544,28 @@ class ProjectMixin:
         dest_path = dest_path.resolve(strict=False)
 
         try:
+            self.show_progress("Exporting shareable copy", maximum=100)
+
+            def progress_callback(percent: int, message: str):
+                self._progress_bar.setFormat(f"{message}... %p%")
+                self.update_progress(percent)
+                QApplication.processEvents()
+
             exported = export_project_single_file(
                 self.current_project,
                 destination=dest_path.as_posix(),
                 ensure_saved=False,
+                progress_callback=progress_callback,
             )
+            self.statusBar().showMessage(f"\u2713 Shareable project saved: {exported}", 5000)
         except Exception as exc:
             QMessageBox.critical(
                 self,
                 "Export Failed",
                 f"Could not export shareable project:\n{exc}",
             )
-            return
-
-        self.statusBar().showMessage(f"\u2713 Shareable project saved: {exported}", 5000)
+        finally:
+            self.hide_progress()
 
     # ===== Autosave Methods =====
 
@@ -570,6 +596,10 @@ class ProjectMixin:
             return
 
         try:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            embed = settings.value("snapshots/embed_stacks", False, type=bool)
+            self.current_project.embed_snapshots = bool(embed)
+
             self.current_project.ui_state = self.gather_ui_state()
             if self.current_sample:
                 state = self.gather_sample_state()
@@ -1144,24 +1174,36 @@ class ProjectMixin:
 
     def load_data_into_sample(self, sample: SampleN):
         log.info("Loading data into sample %s", sample.name)
-        trace_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Trace File", "", "CSV Files (*.csv)"
-        )
-        if not trace_path:
-            return
-
-        # Show progress during data load
-        self.show_progress(f"Loading data into {sample.name}", maximum=0)
+        self.show_progress(f"Loading data into {sample.name}", maximum=100)
         try:
+            self.update_progress(10)
+            self._progress_bar.setFormat("Selecting file... %p%")
+
+            trace_path, _ = QFileDialog.getOpenFileName(
+                self, "Select Trace File", "", "CSV Files (*.csv)"
+            )
+            if not trace_path:
+                return
+
+            self.update_progress(30)
+            self._progress_bar.setFormat("Reading CSV file... %p%")
+
             try:
                 df = self.load_trace_and_event_files(trace_path)
             except Exception:
                 self.hide_progress()
                 return
 
+            self.update_progress(60)
+            self._progress_bar.setFormat("Updating sample metadata... %p%")
+
             trace_obj = Path(trace_path).expanduser().resolve(strict=False)
             self._update_sample_link_metadata(sample, "trace", trace_obj)
             sample.trace_data = df
+
+            self.update_progress(70)
+            self._progress_bar.setFormat("Searching for event file... %p%")
+
             from vasoanalyzer.io.events import find_matching_event_file
 
             event_path = find_matching_event_file(trace_path)
@@ -1169,12 +1211,20 @@ class ProjectMixin:
                 event_obj = Path(event_path).expanduser().resolve(strict=False)
                 self._update_sample_link_metadata(sample, "events", event_obj)
 
+            self.update_progress(80)
+            self._progress_bar.setFormat("Refreshing project tree... %p%")
+
             self.refresh_project_tree()
 
             log.info("Sample %s updated with data", sample.name)
 
+            self.update_progress(90)
+            self._progress_bar.setFormat("Saving project... %p%")
+
             if self.current_project and self.current_project.path:
                 save_project(self.current_project, self.current_project.path)
+
+            self.update_progress(100)
         finally:
             self.hide_progress()
 

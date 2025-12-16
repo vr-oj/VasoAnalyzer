@@ -29,7 +29,11 @@ class _UpdateCheckJob(QRunnable):
             latest = check_for_new_version(self._current_version)
         except BaseException as exc:  # broad on purpose to avoid killing the thread
             error = exc
-        self.signals.finished.emit(self._silent, latest, error)
+        try:
+            self.signals.finished.emit(self._silent, latest, error)
+        except RuntimeError:
+            # Signals object may already be destroyed during app shutdown; ignore.
+            pass
 
 
 class UpdateChecker(QObject):

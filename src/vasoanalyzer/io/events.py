@@ -295,4 +295,79 @@ def find_matching_event_file(trace_file: str) -> str | None:
     return None
 
 
-__all__ = ["load_events", "find_matching_event_file"]
+def find_matching_tiff_file(trace_file: str) -> str | None:
+    """Return the path to a matching TIFF file if it exists.
+
+    VasoTracker typically saves TIFFs with patterns like:
+    - {base}_Result.tiff
+    - {base}_Result.tif
+    - {base}.tiff
+    - {base}_Raw.tiff
+
+    Args:
+        trace_file: Path to the trace CSV file
+
+    Returns:
+        Absolute path to the TIFF file, or None if not found
+    """
+    from pathlib import Path
+
+    trace_path = Path(trace_file)
+    base = trace_path.stem
+    folder = trace_path.parent
+
+    patterns = [
+        f"{base}_Result.tiff",
+        f"{base}_Result.tif",
+        f"{base}.tiff",
+        f"{base}.tif",
+        f"{base}_Raw.tiff",
+        f"{base}_Raw.tif",
+    ]
+
+    for pattern in patterns:
+        candidate = folder / pattern
+        if candidate.exists():
+            resolved = _resolve_existing_case(folder, candidate)
+            return str(resolved)
+    return None
+
+
+def find_matching_trace_file(reference_file: str) -> str | None:
+    """Find trace CSV when starting from event table or TIFF.
+
+    This enables reverse discovery: user can drop an event table or TIFF
+    and the app will find the corresponding trace CSV.
+
+    Args:
+        reference_file: Path to event table CSV or TIFF file
+
+    Returns:
+        Absolute path to the trace CSV, or None if not found
+    """
+    from pathlib import Path
+
+    ref_path = Path(reference_file)
+    base = ref_path.stem
+    folder = ref_path.parent
+
+    # Remove known suffixes to get base experiment name
+    # e.g., "20251202_Exp01_table" → "20251202_Exp01"
+    #       "20251202_Exp01_Result" → "20251202_Exp01"
+    for suffix in ["_table", "_Table", "_events", "_Events", "_Result", "_Raw"]:
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+
+    # Try common trace CSV patterns
+    patterns = [f"{base}.csv", f"{base}_trace.csv", f"{base}_Trace.csv"]
+
+    for pattern in patterns:
+        candidate = folder / pattern
+        if candidate.exists():
+            resolved = _resolve_existing_case(folder, candidate)
+            return str(resolved)
+    return None
+
+
+__all__ = ["load_events", "find_matching_event_file", "find_matching_tiff_file", "find_matching_trace_file"]

@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it using the metadata below."
 title: VasoAnalyzer
-version: "2.2.5"
+version: "2.3.0"
 authors:
   - family-names: Vega Rodríguez
     given-names: Osvaldo J.

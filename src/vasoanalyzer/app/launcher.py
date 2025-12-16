@@ -62,20 +62,26 @@ class VasoAnalyzerLauncher:
     # ------------------------------------------------------------------
     def _apply_theme(self) -> None:
         """
-        Apply the Qt + matplotlib theme before showing the main window.
+        Apply user's preferred theme (light or dark) from settings.
 
-        The theme choice comes from QSettings ("appearance/themeMode"):
-            - "light"     -> force light theme
-            - "dark"      -> force dark theme
-            - "system"    -> follow macOS/Windows preference (default)
+        Loads the theme preference and applies it. Defaults to light theme.
         """
         try:
-            effective = theme.apply_theme_from_settings()
-        except Exception:  # pragma: no cover - very defensive fallback
-            theme.apply_light_theme()
-            effective = "light"
+            # Load user's theme preference from settings
+            from PyQt5.QtCore import QSettings
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            mode = settings.value("appearance/themeMode", "light", type=str)
 
-        self.app.setStyle("Fusion")
+            # Apply the theme using our preset system
+            theme.set_theme_mode(mode, persist=False)
+        except Exception:  # pragma: no cover - very defensive fallback
+            # Fallback to light theme
+            theme.set_theme_mode("light", persist=False)
+
+        # Use native OS style for better platform integration
+        if sys.platform == "darwin":
+            self.app.setStyle("macintosh")
+        # Windows uses default style which is already native
 
     # ------------------------------------------------------------------
     def _show_splash(self) -> None:

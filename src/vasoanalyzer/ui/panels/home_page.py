@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from PyQt5.QtCore import Qt
 from PyQt5.QtSvg import QSvgWidget
 from PyQt5.QtWidgets import (
+    QApplication,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -275,8 +276,9 @@ class HomePage(QWidget):
         border_color: str = CURRENT_THEME["grid_color"]
         text_color: str = CURRENT_THEME["text"]
         window_bg: str = CURRENT_THEME["window_bg"]
-        hero_bg: str = CURRENT_THEME.get("button_bg", window_bg)
-        card_bg: str = CURRENT_THEME.get("table_bg", window_bg)
+        content_bg: str = CURRENT_THEME.get("table_bg", window_bg)
+        hero_bg: str = content_bg
+        card_bg: str = content_bg
 
         def rgba_from_hex(color: str, alpha: float) -> str:
             color = color.strip()
@@ -310,16 +312,20 @@ class HomePage(QWidget):
             hero_primary_bg = accent
             hero_primary_hover = accent_fill
         hero_primary_text = "#FFFFFF"
-        hero_secondary_bg = button_bg
+        hero_secondary_bg = content_bg
         hero_secondary_hover = button_hover_bg
         hero_secondary_text = text_color
         hero_secondary_border = border_color
 
+        # Clear stylesheet first to ensure fresh evaluation
+        self.setStyleSheet("")
+
+        # Apply new stylesheet with updated theme colors
         self.setStyleSheet(
             window._shared_button_css()
             + f"""
 QWidget#HomePage {{
-    background: {window_bg};
+    background: {content_bg};
 }}
 QFrame#HeroFrame {{
     background: {hero_bg};
@@ -421,3 +427,7 @@ QWidget#HomeRecentRow:hover {{
 }}
 """
         )
+
+        # Force widget refresh to pick up new colors
+        self.update()
+        QApplication.processEvents()

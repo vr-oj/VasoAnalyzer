@@ -1,4 +1,4 @@
-# VasoAnalyzer v2.2.5
+# VasoAnalyzer v2.3.0
 
 **Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
 
@@ -12,6 +12,21 @@ pressure myography experiments. It focuses on:
 
 Everything for an experiment lives in a single project file (`.vaso`) so you
 can send a whole analysis to a collaborator as one file.
+
+---
+
+## 🔬 VasoTracker Integration
+
+**Full support for VasoTracker experimental data with:**
+
+- **Microsecond-precision time tracking** — Uses `Time_s_exact` for 14 µs accuracy (vs 100 ms)
+- **Automatic file discovery** — Drop any file (trace CSV, event table, or TIFF) and VasoAnalyzer finds siblings
+- **Complete data preservation** — All VasoTracker columns saved (frame numbers, TIFF pages, temperature, markers, caliper)
+- **Smart event linking** — Frame-based synchronization for perfect TIFF alignment
+- **Provenance tracking** — Original filenames, timestamps, and data sources preserved
+- **External TIFF by default** — Small `.vaso` files; optional embedding for archival
+
+👉 See [**VasoTracker Import Guide**](docs/vasotracker_import.md) for complete documentation.
 
 ---
 

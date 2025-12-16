@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from vasoanalyzer.storage.sqlite_utils import (
@@ -103,6 +104,7 @@ def export_single_file(
     *,
     link_snapshot_tiffs: bool = True,
     extract_tiffs_dir: str | None = None,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> str:
     """Create a shareable `.vaso` copy with DELETE journal mode."""
 
@@ -111,15 +113,32 @@ def export_single_file(
         p = Path(db_path)
         out_path = str(p.with_name(p.stem + ".shareable" + p.suffix))
 
+    if progress_callback:
+        progress_callback(20, "Creating backup")
+
     backup_to_delete_mode(db_path, out_path)
 
     if link_snapshot_tiffs:
+        if progress_callback:
+            progress_callback(50, "Externalizing snapshots")
+
         with connect_rw(out_path) as conn:
             changed = externalize_snapshot_tiffs(conn, extract_tiffs_dir)
             if changed:
                 with contextlib.suppress(Exception):
                     conn.commit()
+
+            if progress_callback:
+                progress_callback(75, "Optimizing database")
+
             vacuum_optimize(conn)
 
+    if progress_callback:
+        progress_callback(90, "Cleaning up")
+
     delete_sidecars(out_path)
+
+    if progress_callback:
+        progress_callback(100, "Complete")
+
     return out_path

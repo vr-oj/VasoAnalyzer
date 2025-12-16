@@ -104,6 +104,10 @@ def setup_production_logging(
     trace_view_logger = logging.getLogger("vasoanalyzer.ui.trace_view")
     trace_view_logger.setLevel(logging.DEBUG)
 
+    # Enable DEBUG logs for the figure composer to verify canvas initialization and memory
+    composer_logger = logging.getLogger("vasoanalyzer.ui.mpl_composer.composer_window")
+    composer_logger.setLevel(logging.DEBUG)
+
     # Log startup message
     log = logging.getLogger(__name__)
     log.info("=" * 70)

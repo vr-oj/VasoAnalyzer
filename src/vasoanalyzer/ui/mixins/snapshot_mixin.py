@@ -163,7 +163,7 @@ class SnapshotMixin:
 
         if sample.snapshot_path and Path(sample.snapshot_path).exists():
             try:
-                frames, _ = load_tiff(sample.snapshot_path, metadata=False)
+                frames, _, _ = load_tiff(sample.snapshot_path, metadata=False)
                 if frames:
                     result = np.stack(frames)
                     sample.snapshots = result
@@ -255,7 +255,7 @@ class SnapshotMixin:
         """Load a snapshot TIFF from ``file_path`` and update the viewer."""
 
         try:
-            frames, frames_metadata = load_tiff(file_path)
+            frames, frames_metadata, _ = load_tiff(file_path)
             valid_frames = []
             valid_metadata = []
 

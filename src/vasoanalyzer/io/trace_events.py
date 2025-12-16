@@ -91,6 +91,9 @@ def load_trace_and_events(
         list(df.columns),
     )
 
+    from datetime import datetime, timezone
+    from pathlib import Path
+
     extras: dict[str, object] = {
         "event_file": None,
         "auto_detected": False,
@@ -99,6 +102,12 @@ def load_trace_and_events(
         "dropped_missing_time": 0,
         "ignored_out_of_range": 0,
         "time_source": None,
+        # Provenance metadata
+        "import_timestamp": datetime.now(timezone.utc).isoformat(),
+        "trace_original_filename": Path(trace_path).name,
+        "trace_original_directory": str(Path(trace_path).parent),
+        "canonical_time_source": df.attrs.get("canonical_time_source", "Time (s)"),
+        "schema_version": 3,
     }
 
     events_df: pd.DataFrame | None = None
@@ -121,6 +130,7 @@ def load_trace_and_events(
 
     if ev_path and os.path.exists(ev_path):
         extras["event_file"] = ev_path
+        extras["events_original_filename"] = Path(ev_path).name
         events_df = _read_event_dataframe(ev_path, cache=cache)
         log.info(
             "Import: Loaded events CSV %s with %d rows (columns=%s)",
@@ -145,6 +155,42 @@ def load_trace_and_events(
     diam: list[float] = []
     od_diam: list[float] = []
 
+    # trace["Time (s)"] is the canonical experiment clock (sourced from Time_s_exact
+    # if available, else Time (s) for legacy files). All other time views
+    # (event CSV strings, TIFF metadata) map back onto this column.
+    trace_time = df["Time (s)"].to_numpy(dtype=float)
+    frame_number_to_trace_idx: dict[int, int] = {}
+    tiff_page_to_trace_idx: dict[int, int] = {}
+    if "FrameNumber" in df.columns:
+        # FrameNumber values in the trace CSV align with the events CSV "Frame" column.
+        frame_numbers = pd.to_numeric(df["FrameNumber"], errors="coerce")
+        frame_number_to_trace_idx = {
+            int(fn): int(i)
+            for i, fn in enumerate(frame_numbers.to_numpy())
+            if pd.notna(fn)
+        }
+        log.info(
+            "Import: Prepared %d frame→trace index mappings from trace CSV",
+            len(frame_number_to_trace_idx),
+        )
+    if "TiffPage" in df.columns:
+        # TiffPage values come from the VasoTracker TIFF stack (0-based frame indices).
+        tiff_pages = pd.to_numeric(df["TiffPage"], errors="coerce")
+        tiff_page_to_trace_idx = {
+            int(tp): int(i)
+            for i, tp in enumerate(tiff_pages.to_numpy())
+            if pd.notna(tp)
+        }
+        log.info(
+            "Import: Prepared %d TIFF-page→trace index mappings from trace CSV",
+            len(tiff_page_to_trace_idx),
+        )
+
+    extras["frame_number_to_trace_idx"] = frame_number_to_trace_idx
+    extras["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
+    df.attrs["frame_number_to_trace_idx"] = frame_number_to_trace_idx
+    df.attrs["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
+
     def _coerce_time_values(series: pd.Series) -> pd.Series:
         """Return ``series`` converted to seconds where possible."""
 
@@ -156,7 +202,7 @@ def load_trace_and_events(
         return numeric.astype(float)
 
     def _map_frames_to_trace_time(frame_series: pd.Series) -> pd.Series:
-        """Map event frames to trace time using nearest-neighbour scaling."""
+        """Legacy: approximate mapping from frame order onto trace time."""
 
         numeric = pd.to_numeric(frame_series, errors="coerce")
         result = pd.Series(np.nan, index=frame_series.index, dtype=float)
@@ -169,25 +215,14 @@ def load_trace_and_events(
             return result
 
         values = numeric.loc[valid_mask].to_numpy(dtype=float)
-        zero_based = np.round(values).astype(int)
-        direct = False
-        if zero_based.min() >= 1 and zero_based.max() <= len(arr_t):
-            zero_based -= 1
-            direct = True
-        elif zero_based.min() >= 0 and zero_based.max() < len(arr_t):
-            direct = True
-
-        if direct:
-            idx = np.clip(zero_based, 0, len(arr_t) - 1)
+        v_min = values.min()
+        v_max = values.max()
+        if v_max == v_min:
+            idx = np.zeros_like(values, dtype=int)
         else:
-            v_min = values.min()
-            v_max = values.max()
-            if v_max == v_min:
-                idx = np.zeros_like(values, dtype=int)
-            else:
-                scaled = (values - v_min) / (v_max - v_min)
-                idx = np.round(scaled * (len(arr_t) - 1)).astype(int)
-            idx = np.clip(idx, 0, len(arr_t) - 1)
+            scaled = (values - v_min) / (v_max - v_min)
+            idx = np.round(scaled * (len(arr_t) - 1)).astype(int)
+        idx = np.clip(idx, 0, len(arr_t) - 1)
 
         mapped = arr_t[idx]
         result.loc[numeric.loc[valid_mask].index] = mapped
@@ -223,31 +258,45 @@ def load_trace_and_events(
     if frame_col:
         frame_series = pd.to_numeric(working_df[frame_col], errors="coerce")
 
-    if time_col:
-        time_series = _coerce_time_values(working_df[time_col])
+    time_series = (
+        _coerce_time_values(working_df[time_col])
+        if time_col
+        else pd.Series(np.nan, index=working_df.index, dtype=float)
+    )
+
+    approx_frame_times = None
+    if frame_series is not None and not frame_number_to_trace_idx:
+        approx_frame_times = _map_frames_to_trace_time(frame_series)
+        if approx_frame_times.notna().any():
+            extras["frame_fallback_used"] = True
+            extras["frame_fallback_rows"] = int(approx_frame_times.notna().sum())
+
+    resolved_times = pd.Series(np.nan, index=working_df.index, dtype=float)
+    if frame_series is not None and frame_number_to_trace_idx:
+        mapped_idx: list[int | None] = []
+        for val in frame_series.to_numpy():
+            idx = None
+            if pd.notna(val):
+                idx = frame_number_to_trace_idx.get(int(round(float(val))))
+            mapped_idx.append(idx)
+        mapped_idx_series = pd.Series(mapped_idx, index=working_df.index, dtype="Int64")
+        extras["frame_map_used"] = True
+        extras["frame_map_rows"] = int(mapped_idx_series.notna().sum())
+        extras["frame_map_missing"] = int(mapped_idx_series.isna().sum())
+        if trace_time.size:
+            mapped_times = []
+            for idx_val in mapped_idx_series.tolist():
+                if idx_val is None or idx_val < 0 or idx_val >= len(trace_time):
+                    mapped_times.append(np.nan)
+                else:
+                    mapped_times.append(float(trace_time[idx_val]))
+            resolved_times.loc[mapped_idx_series.notna()] = mapped_times
     else:
-        time_series = pd.Series(np.nan, index=working_df.index, dtype=float)
+        resolved_times = resolved_times.combine_first(time_series)
+        if approx_frame_times is not None:
+            resolved_times = resolved_times.combine_first(approx_frame_times)
 
-    fallback_times = None
-    if frame_series is not None:
-        fallback_times = _map_frames_to_trace_time(frame_series)
-
-    if time_series.notna().any():
-        missing_mask = time_series.isna()
-        if missing_mask.any() and fallback_times is not None:
-            replacements = fallback_times.loc[missing_mask]
-            if replacements.notna().any():
-                time_series.loc[missing_mask] = replacements
-                extras["frame_fallback_used"] = True
-                extras["frame_fallback_rows"] = int(replacements.notna().sum())
-    elif fallback_times is not None and fallback_times.notna().any():
-        time_series = fallback_times
-        extras["frame_fallback_used"] = True
-        extras["frame_fallback_rows"] = int(fallback_times.notna().sum())
-    else:
-        raise ValueError("Events table does not provide a usable Time column")
-
-    working_df = working_df.assign(_time_seconds=time_series)
+    working_df = working_df.assign(_time_seconds=resolved_times)
     valid_mask_series = working_df["_time_seconds"].notna()
     dropped_missing_time = int((~valid_mask_series).sum())
     if dropped_missing_time:

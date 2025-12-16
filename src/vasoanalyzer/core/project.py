@@ -57,7 +57,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 6  # v6: integrity signatures + audit log
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
 
 
@@ -199,6 +199,9 @@ class Attachment:
 @dataclass
 class SampleN:
     name: str
+    # NOTE: These paths are DEPRECATED for database-backed projects (v1.5+)
+    # All trace/event data is stored in SQLite (loaded via dataset_id)
+    # These fields are kept only for: legacy projects, import metadata, and exports
     trace_path: str | None = None
     events_path: str | None = None
     trace_relative: str | None = None
@@ -227,6 +230,19 @@ class SampleN:
     snapshot_format: str | None = None
     analysis_result_keys: list[str] | None = None
     edit_history: list[dict[str, Any]] | None = None
+    import_metadata: dict[str, Any] | None = None
+    """
+    VasoTracker import provenance metadata:
+    {
+        "trace_original_filename": "20251202_Exp01.csv",
+        "events_original_filename": "20251202_Exp01_table.csv",
+        "tiff_original_filename": "20251202_Exp01_Result.tiff",
+        "trace_original_directory": "/path/to/RawFiles",
+        "import_timestamp": "2025-12-04T10:30:00Z",
+        "canonical_time_source": "Time_s_exact",
+        "schema_version": 3,
+    }
+    """
     # Cache validation fields - track which dataset_id the cached data belongs to
     _trace_cache_dataset_id: int | None = field(default=None, repr=False)
     _events_cache_dataset_id: int | None = field(default=None, repr=False)
@@ -313,6 +329,11 @@ class Project:
     created_at: str | None = None
     updated_at: str | None = None
     attachments: list[Attachment] = field(default_factory=list)
+    # Whether to embed snapshot video stacks into the project database
+    embed_snapshots: bool = False
+    # Whether to embed TIFF snapshots (WARNING: can significantly increase .vaso file size)
+    # This is opt-in and requires explicit user confirmation
+    embed_tiff_snapshots: bool = False
 
     # Internal: current open store handle (for persistent connection)
     _store: Any = field(default=None, repr=False, compare=False, init=False)
@@ -1230,6 +1251,13 @@ def save_project(project: Project, path: str, *, skip_optimize: bool = False) ->
     """
     from ..storage.project_storage import get_project_format
 
+    log.info(
+        "SAVE: save_project entry path=%s skip_optimize=%s project_path=%s",
+        path,
+        skip_optimize,
+        getattr(project, "path", None),
+    )
+
     # Check if path is a bundle
     path_obj = Path(path)
     fmt = get_project_format(path_obj) if path_obj.exists() else "unknown"
@@ -1238,9 +1266,17 @@ def save_project(project: Project, path: str, *, skip_optimize: bool = False) ->
     if fmt in ("bundle-v1", "zip-bundle-v1") or (
         not path_obj.exists() and path.endswith((".vasopack", ".vaso"))
     ):
+        log.info("SAVE: routing to _save_project_bundle fmt=%s path=%s", fmt, path)
         _save_project_bundle(project, path, skip_optimize=skip_optimize)
     else:
+        log.info("SAVE: routing to _save_project_sqlite fmt=%s path=%s", fmt, path)
         _save_project_sqlite(project, path, skip_optimize=skip_optimize)
+
+    log.info(
+        "SAVE: save_project completed path=%s skip_optimize=%s",
+        path,
+        skip_optimize,
+    )
 
 
 def load_project(path: str) -> Project:
@@ -1413,7 +1449,14 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
         from vasoanalyzer.storage.sqlite_store import ProjectStore
 
         # Wrap the UnifiedProjectStore as a ProjectStore for compatibility
-        legacy_store = ProjectStore(path=store.path, conn=store.conn, dirty=store.dirty)
+        legacy_store = ProjectStore(
+            path=store.path,
+            conn=store.conn,
+            dirty=store.dirty,
+            is_cloud_path=getattr(store, "is_cloud_path", False),
+            cloud_service=getattr(store, "cloud_service", None),
+            journal_mode=getattr(store, "journal_mode", None),
+        )
 
         # Create repository wrapper
         repo = SQLiteProjectRepository(legacy_store)
@@ -1586,6 +1629,12 @@ def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = F
 
     start_time = time.time()
     log.info(f"Saving project to: {path}")
+    log.info(
+        "SAVE: _save_project_sqlite entry path=%s skip_optimize=%s project_name=%s",
+        path,
+        skip_optimize,
+        getattr(project, "name", None),
+    )
 
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1631,6 +1680,12 @@ def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = F
     log.info(
         f"Project saved successfully in {elapsed:.2f}s (optimized={not skip_optimize}): {path}"
     )
+    log.info(
+        "SAVE: _save_project_sqlite completed path=%s duration=%.2fs optimized=%s",
+        path,
+        elapsed,
+        not skip_optimize,
+    )
 
 
 def _write_sqlite_project(
@@ -1647,6 +1702,15 @@ def _write_sqlite_project(
 
     from vasoanalyzer.services.project_service import create_project_repository
 
+    t_start = time.perf_counter()
+    log.info(
+        "SAVE: _write_sqlite_project start dest=%s timezone=%s base_dir=%s skip_optimize=%s",
+        dest,
+        timezone_name,
+        base_dir,
+        skip_optimize,
+    )
+
     with tempfile.TemporaryDirectory(dir=dest.parent) as tmpdir:
         tmp_path = Path(tmpdir) / dest.name
         repo = create_project_repository(
@@ -1656,7 +1720,9 @@ def _write_sqlite_project(
         )
         try:
             _populate_store_from_project(project, repo, base_dir)
+            log.info("SAVE: repo.save start path=%s", tmp_path)
             repo.save(skip_optimize=skip_optimize)
+            log.info("SAVE: repo.save finished path=%s", tmp_path)
         finally:
             repo.close()
 
@@ -1676,17 +1742,32 @@ def _write_sqlite_project(
         except Exception:  # pragma: no cover - best effort sidecar export
             log.debug("Failed to export pkg.vaso sidecar", exc_info=True)
 
+    log.info(
+        "SAVE: _write_sqlite_project finished dest=%s duration=%.2fs skip_optimize=%s",
+        dest,
+        time.perf_counter() - t_start,
+        skip_optimize,
+    )
+
 
 def _populate_store_from_project(project: Project, repo: ProjectRepository, base_dir: Path) -> None:
     """Populate ``store`` with the contents of ``project``."""
 
     t_start = time.perf_counter()
     base_dir = base_dir.resolve()
+    embed_snapshots = getattr(project, "embed_snapshots", False)
+    embed_tiff_snapshots = getattr(project, "embed_tiff_snapshots", False)
 
     # DEBUG: _populate_store_from_project instrumentation start
     project_name = getattr(project, "name", None) or getattr(project, "path", None)
     total_samples = (
         sum(len(exp.samples) for exp in project.experiments) if project.experiments else 0
+    )
+    log.info(
+        "SAVE: _populate_store_from_project start project=%s samples=%d base_dir=%s",
+        project_name,
+        total_samples,
+        base_dir,
     )
     datasets_before = None
     try:
@@ -1793,6 +1874,8 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     sample=sample,
                     sample_index=sample_index,
                     source_repo=source_repo,
+                    embed_snapshots=embed_snapshots,
+                    embed_tiff_snapshots=embed_tiff_snapshots,
                 )
 
         if project.attachments:
@@ -1829,6 +1912,14 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
             datasets_after,
             mapping_summary,
         )
+        log.info(
+            "SAVE: _populate_store_from_project finished project=%s samples=%d datasets_before=%s datasets_after=%s duration=%.2fs",
+            project_name,
+            sample_count,
+            datasets_before,
+            datasets_after,
+            duration,
+        )
         # DEBUG: _populate_store_from_project final summary instrumentation end
         log.info(
             "Save: _populate_store_from_project path=%s samples=%d time=%.3fs",
@@ -1845,6 +1936,8 @@ def _save_sample_to_store(
     sample: SampleN,
     sample_index: int,
     source_repo: ProjectRepository | None = None,
+    embed_snapshots: bool = False,
+    embed_tiff_snapshots: bool = False,
 ) -> None:
     """Serialize an individual ``sample`` into ``store``."""
 
@@ -1908,6 +2001,8 @@ def _save_sample_to_store(
         sample,
         base_dir,
         source_repo=source_repo,
+        embed_snapshots=embed_snapshots,
+        embed_tiff_snapshots=embed_tiff_snapshots,
     )
     analysis_keys = _persist_sample_results(repo, dataset_id, sample)
 
@@ -2373,12 +2468,30 @@ def _persist_sample_attachments(
     return payload
 
 
+def get_file_size_mb(file_path: str) -> float:
+    """Get file size in megabytes.
+
+    Args:
+        file_path: Path to file
+
+    Returns:
+        File size in MB, or 0 if file doesn't exist
+    """
+    try:
+        size_bytes = os.path.getsize(file_path)
+        return size_bytes / (1024 * 1024)
+    except (OSError, FileNotFoundError):
+        return 0.0
+
+
 def _persist_sample_snapshots(
     repo: ProjectRepository,
     dataset_id: int,
     sample: SampleN,
     base_dir: Path,
     source_repo: ProjectRepository | None = None,
+    embed_snapshots: bool = False,
+    embed_tiff_snapshots: bool = False,
 ) -> dict[str, Any]:
     t_start = time.perf_counter()
     payload: dict[str, Any] = {}
@@ -2388,40 +2501,42 @@ def _persist_sample_snapshots(
     snapshot_format = (sample.snapshot_format or "").lower() or "npz"
     snapshot_mime = "application/x-npz"
 
-    if isinstance(sample.snapshots, np.ndarray):
-        buffer = io.BytesIO()
-        np.savez_compressed(buffer, stack=sample.snapshots)
-        snapshot_bytes = buffer.getvalue()
-        snapshot_format = "npz"
-        snapshot_mime = "application/x-npz"
-    elif source_repo is not None and sample.dataset_id is not None:
-        asset_roles = sample.asset_roles or {}
-        asset_id = asset_roles.get(snapshot_role)
-        if asset_id:
-            existing = None
-            get_asset_bytes = getattr(source_repo, "get_asset_bytes", None)
-            if callable(get_asset_bytes):
-                try:
-                    existing = cast(bytes, get_asset_bytes(asset_id))
-                except Exception:
-                    existing = None
-            if existing:
-                snapshot_bytes = existing
-                if existing.startswith(b"PK"):
-                    snapshot_format = "npz"
-                    snapshot_mime = "application/x-npz"
-                elif existing.startswith(b"\x93NUMPY"):
-                    snapshot_format = "npy"
-                    snapshot_mime = "application/x-npy"
-                else:
-                    snapshot_format = sample.snapshot_format or snapshot_format
-                    snapshot_mime = (
-                        f"application/x-{snapshot_format}"
-                        if snapshot_format in {"npz", "npy"}
-                        else "application/octet-stream"
-                    )
+    if embed_snapshots:
+        # Embedding is opt-in to keep saves lightweight by default
+        if isinstance(sample.snapshots, np.ndarray):
+            buffer = io.BytesIO()
+            np.savez_compressed(buffer, stack=sample.snapshots)
+            snapshot_bytes = buffer.getvalue()
+            snapshot_format = "npz"
+            snapshot_mime = "application/x-npz"
+        elif source_repo is not None and sample.dataset_id is not None:
+            asset_roles = sample.asset_roles or {}
+            asset_id = asset_roles.get(snapshot_role)
+            if asset_id:
+                existing = None
+                get_asset_bytes = getattr(source_repo, "get_asset_bytes", None)
+                if callable(get_asset_bytes):
+                    try:
+                        existing = cast(bytes, get_asset_bytes(asset_id))
+                    except Exception:
+                        existing = None
+                if existing:
+                    snapshot_bytes = existing
+                    if existing.startswith(b"PK"):
+                        snapshot_format = "npz"
+                        snapshot_mime = "application/x-npz"
+                    elif existing.startswith(b"\x93NUMPY"):
+                        snapshot_format = "npy"
+                        snapshot_mime = "application/x-npy"
+                    else:
+                        snapshot_format = sample.snapshot_format or snapshot_format
+                        snapshot_mime = (
+                            f"application/x-{snapshot_format}"
+                            if snapshot_format in {"npz", "npy"}
+                            else "application/octet-stream"
+                        )
 
-    if snapshot_bytes:
+    if snapshot_bytes is not None:
         repo.add_or_update_asset(
             dataset_id,
             snapshot_role,
@@ -2433,15 +2548,55 @@ def _persist_sample_snapshots(
         payload["snapshot_format"] = snapshot_format
         sample.snapshot_role = snapshot_role
         sample.snapshot_format = snapshot_format
+    else:
+        sample.snapshot_role = None
+        sample.snapshot_format = None
 
     snapshot_path = sample.snapshot_path
     if snapshot_path:
         abs_path = _absolute_path(snapshot_path, base_dir)
         rel_path = _relativize_path(abs_path.as_posix(), base_dir) if abs_path else snapshot_path
         payload["snapshot_path"] = rel_path
-        # Do NOT embed TIFF snapshots in the project to avoid ballooning .vaso size.
-        # They are used only for local playback; keeping the path is sufficient.
-        sample.snapshot_tiff_role = None
+
+        # Optional TIFF embedding (requires explicit opt-in via embed_tiff_snapshots flag)
+        if embed_tiff_snapshots and abs_path and abs_path.exists():
+            # Check if file is a TIFF
+            if abs_path.suffix.lower() in {".tiff", ".tif"}:
+                file_size_mb = get_file_size_mb(str(abs_path))
+                log.warning(
+                    "Embedding TIFF snapshot for sample=%s (size=%.1f MB). "
+                    "This will increase .vaso file size significantly.",
+                    sample.name,
+                    file_size_mb,
+                )
+                try:
+                    with open(abs_path, "rb") as f:
+                        tiff_bytes = f.read()
+
+                    tiff_role = "snapshot_tiff"
+                    repo.add_or_update_asset(
+                        dataset_id,
+                        tiff_role,
+                        tiff_bytes,
+                        embed=True,
+                        mime="image/tiff",
+                    )
+                    sample.snapshot_tiff_role = tiff_role
+                    payload["snapshot_tiff_role"] = tiff_role
+                    log.info(
+                        "Embedded TIFF snapshot for sample=%s (size=%.1f MB)",
+                        sample.name,
+                        file_size_mb,
+                    )
+                except Exception as e:
+                    log.error("Failed to embed TIFF snapshot: %s", e)
+                    sample.snapshot_tiff_role = None
+            else:
+                sample.snapshot_tiff_role = None
+        else:
+            # Default: Do NOT embed TIFF snapshots to avoid ballooning .vaso size.
+            # They are used only for local playback; keeping the path is sufficient.
+            sample.snapshot_tiff_role = None
     duration = time.perf_counter() - t_start
     log.info(
         "Save: snapshots sample=%s dataset_id=%s time=%.3fs",
@@ -2517,33 +2672,61 @@ def _is_cloud_storage_path(path: str) -> tuple[bool, str | None]:
     """
     Check if the path is in a cloud storage location.
 
+    Detects major cloud storage services across macOS, Windows, and Linux.
+    Enhanced to catch more path variations and ensure reliable detection.
+
     Args:
         path: Path to check
 
     Returns:
         Tuple of (is_cloud, cloud_service_name)
     """
+    from pathlib import Path
+
     path_lower = path.lower()
 
-    # macOS iCloud Drive
-    if "library/mobile documents/com~apple~cloudocs" in path_lower or "icloud" in path_lower:
+    # Normalize path for better matching
+    try:
+        path_normalized = Path(path).expanduser().resolve(strict=False).as_posix().lower()
+    except Exception:
+        # If path normalization fails, use original path
+        path_normalized = path_lower.replace("\\", "/")
+
+    # macOS iCloud Drive (multiple possible formats)
+    icloud_patterns = [
+        "library/mobile documents/com~apple~clouddocs",  # Fixed typo
+        "library/mobile documents/com~apple~",           # More general
+        "/icloud drive/",
+        "/icloud/",
+    ]
+    if any(pattern in path_normalized for pattern in icloud_patterns):
         return True, "iCloud Drive"
 
-    # Dropbox
+    # Dropbox (all platforms)
     if "dropbox" in path_lower:
         return True, "Dropbox"
 
-    # Google Drive
-    if "google drive" in path_lower or "googledrive" in path_lower:
+    # Google Drive (all platforms)
+    google_patterns = ["google drive", "googledrive", "google-drive-desktop"]
+    if any(pattern in path_lower for pattern in google_patterns):
         return True, "Google Drive"
 
-    # OneDrive
+    # OneDrive (Windows and macOS)
     if "onedrive" in path_lower:
         return True, "OneDrive"
 
-    # Box
-    if "box sync" in path_lower or "box.com" in path_lower:
+    # Box (Box Sync and Box Drive)
+    box_patterns = ["box sync", "box.com", "box drive", "box/"]
+    if any(pattern in path_lower for pattern in box_patterns):
         return True, "Box"
+
+    # Nextcloud/ownCloud (Linux/cross-platform)
+    if "nextcloud" in path_lower or "owncloud" in path_lower:
+        return True, "Nextcloud/ownCloud"
+
+    # Sync.com
+    if "sync.com" in path_lower or "/sync/" in path_normalized:
+        return True, "Sync.com"
 
     return False, None
 
@@ -2881,16 +3064,33 @@ def pack_project_bundle(
     bundle_path: str | Path,
     *,
     embed_threshold_mb: int = 64,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> str:
     """Persist ``project`` and create a shareable ``.vasopack`` bundle."""
 
     if not project.path:
         raise ValueError("Project must be saved before bundling")
 
+    if progress_callback:
+        progress_callback(20, "Saving project")
+
     save_project(project, project.path)
+
+    if progress_callback:
+        progress_callback(40, "Creating bundle")
+
     from vasoanalyzer.services.project_service import pack_sqlite_bundle
 
-    pack_sqlite_bundle(project.path, bundle_path, embed_threshold_mb=embed_threshold_mb)
+    pack_sqlite_bundle(
+        project.path,
+        bundle_path,
+        embed_threshold_mb=embed_threshold_mb,
+        progress_callback=progress_callback,
+    )
+
+    if progress_callback:
+        progress_callback(95, "Finalizing")
+
     return str(bundle_path)
 
 

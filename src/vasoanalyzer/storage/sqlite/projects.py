@@ -4,12 +4,16 @@ Project-level SQLite helpers migrated from the legacy sqlite_store module.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
+log = logging.getLogger(__name__)
+
 __all__ = [
     "apply_default_pragmas",
+    "apply_cloud_safe_pragmas",  # New: cloud-safe pragma configuration
     "ensure_schema",
     "run_migrations",
     "get_user_version",
@@ -20,14 +24,42 @@ __all__ = [
 
 
 def apply_default_pragmas(conn: sqlite3.Connection) -> None:
-    """Apply the default pragmas used across the project store."""
+    """
+    Apply default pragmas for LOCAL storage (fast, optimized).
 
+    Uses WAL mode with NORMAL synchronous for optimal performance on local disks.
+    NORMAL is safe with WAL mode because:
+    - WAL provides atomicity without fsync on every commit
+    - Checkpoint before snapshot ensures durability
+    - Only staging databases use this (snapshots are the durable artifact)
+    """
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = FULL;")
+    conn.execute("PRAGMA synchronous = NORMAL;")  # Changed from FULL - safe with WAL
     conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA mmap_size = 268435456;")
-    conn.execute("PRAGMA cache_size = -131072;")
+    conn.execute("PRAGMA mmap_size = 268435456;")  # 256MB memory mapping
+    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+
+
+def apply_cloud_safe_pragmas(conn: sqlite3.Connection) -> None:
+    """
+    Apply cloud-safe pragmas for CLOUD storage (reliable, slower).
+
+    Uses DELETE journal mode which is compatible with cloud sync services.
+    DELETE mode characteristics:
+    - Single-file database (no separate -wal or -shm files)
+    - Atomic rollback via journal file
+    - Cloud sync services can handle single-file changes reliably
+    - Slower than WAL but prevents hangs on cloud storage
+
+    Use this for: iCloud Drive, Dropbox, Google Drive, OneDrive, etc.
+    """
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = DELETE;")  # Cloud-safe mode
+    conn.execute("PRAGMA synchronous = FULL;")      # Ensure durability
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+    # NOTE: No mmap_size for cloud storage - can cause issues with sync
 
 
 def ensure_schema(
@@ -57,7 +89,18 @@ def ensure_schema(
             fps REAL,
             pixel_size_um REAL,
             t0_seconds REAL DEFAULT 0,
-            extra_json TEXT
+            extra_json TEXT,
+            trace_checksum TEXT,
+            events_checksum TEXT,
+            canonical_time_source TEXT NOT NULL DEFAULT 'unknown',
+            trace_source_fingerprint TEXT,
+            events_source_fingerprint TEXT,
+            trace_signature TEXT,
+            events_signature TEXT,
+            signature_version INTEGER NOT NULL DEFAULT 1,
+            last_validated_utc TEXT,
+            validation_status TEXT NOT NULL DEFAULT 'unknown',
+            validation_error TEXT
         );
 
         CREATE TABLE IF NOT EXISTS trace (
@@ -68,6 +111,11 @@ def ensure_schema(
             p_avg REAL,
             p1 REAL,
             p2 REAL,
+            frame_number INTEGER,
+            tiff_page INTEGER,
+            temp REAL,
+            table_marker INTEGER,
+            caliper_length REAL,
             PRIMARY KEY (dataset_id, t_seconds)
         ) WITHOUT ROWID;
 
@@ -77,16 +125,40 @@ def ensure_schema(
             id INTEGER PRIMARY KEY,
             dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
             t_seconds REAL NOT NULL,
+            t_us INTEGER,
             label TEXT NOT NULL,
             frame INTEGER,
+            source_frame INTEGER,
+            source_row INTEGER,
+            source_time_str TEXT,
             p_avg REAL,
             p1 REAL,
             p2 REAL,
             temp REAL,
-            extra_json TEXT
+            od REAL,
+            id_diam REAL,
+            caliper REAL,
+            od_ref_pct REAL,
+            extra_json TEXT,
+            deleted_utc TEXT,
+            deleted_reason TEXT,
+            deleted_by TEXT
         );
 
         CREATE INDEX IF NOT EXISTS event_ds_t ON event(dataset_id, t_seconds);
+        CREATE INDEX IF NOT EXISTS event_ds_tus ON event(dataset_id, t_us);
+
+        CREATE TABLE IF NOT EXISTS event_audit (
+            id INTEGER PRIMARY KEY,
+            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+            event_id INTEGER,
+            action TEXT NOT NULL,
+            old_json TEXT,
+            new_json TEXT,
+            source TEXT NOT NULL,
+            utc_ts TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS event_audit_ds_ts ON event_audit(dataset_id, utc_ts);
 
         CREATE TABLE IF NOT EXISTS asset (
             id INTEGER PRIMARY KEY,
@@ -129,6 +201,24 @@ def ensure_schema(
             dataset_id INTEGER PRIMARY KEY REFERENCES dataset(id) ON DELETE CASCADE,
             png BLOB NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS figure_recipe (
+            recipe_id TEXT PRIMARY KEY,
+            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            spec_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            trace_key TEXT,
+            x_min REAL,
+            x_max REAL,
+            y_min REAL,
+            y_max REAL,
+            export_background TEXT NOT NULL DEFAULT 'white'
+        );
+
+        CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
         """
     )
     set_user_version(conn, schema_version)
@@ -173,9 +263,129 @@ def run_migrations(
                 timezone=timezone,
             )
             version = target
+        elif version == 2:
+            # Migration from v2 to v3: Add VasoTracker full support columns
+            log.info("Migrating schema from v2 to v3 (VasoTracker full support)")
+
+            # Add new columns to trace table
+            conn.execute("ALTER TABLE trace ADD COLUMN frame_number INTEGER")
+            conn.execute("ALTER TABLE trace ADD COLUMN tiff_page INTEGER")
+            conn.execute("ALTER TABLE trace ADD COLUMN temp REAL")
+            conn.execute("ALTER TABLE trace ADD COLUMN table_marker INTEGER")
+            conn.execute("ALTER TABLE trace ADD COLUMN caliper_length REAL")
+
+            # Add new columns to event table
+            conn.execute("ALTER TABLE event ADD COLUMN od REAL")
+            conn.execute("ALTER TABLE event ADD COLUMN id_diam REAL")
+            conn.execute("ALTER TABLE event ADD COLUMN caliper REAL")
+            conn.execute("ALTER TABLE event ADD COLUMN od_ref_pct REAL")
+
+            version = 3
+
+        elif version == 3:
+            # Migration from v3 to v4: Add checksum columns for data integrity
+            log.info("Migrating schema from v3 to v4 (checksum validation)")
+
+            # Add checksum columns to dataset table
+            # These are optional and will be computed on next save if missing
+            try:
+                conn.execute("ALTER TABLE dataset ADD COLUMN trace_checksum TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+            try:
+                conn.execute("ALTER TABLE dataset ADD COLUMN events_checksum TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+            log.info("Schema migration to v4 complete (checksums added)")
+            version = 4
+
+        elif version == 4:
+            # Migration from v4 to v5: Add figure_recipe table
+            log.info("Migrating schema from v4 to v5 (figure recipes)")
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS figure_recipe (
+                    recipe_id TEXT PRIMARY KEY,
+                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    spec_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    trace_key TEXT,
+                    x_min REAL,
+                    x_max REAL,
+                    y_min REAL,
+                    y_max REAL,
+                    export_background TEXT NOT NULL DEFAULT 'white'
+                );
+                CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
+                """
+            )
+            version = 5
+
+        elif version == 5:
+            # Migration from v5 to v6: integrity metadata + microsecond times
+            log.info("Migrating schema from v5 to v6 (signatures, audit, t_us)")
+            for stmt in (
+                "ALTER TABLE dataset ADD COLUMN canonical_time_source TEXT NOT NULL DEFAULT 'unknown'",
+                "ALTER TABLE dataset ADD COLUMN trace_source_fingerprint TEXT",
+                "ALTER TABLE dataset ADD COLUMN events_source_fingerprint TEXT",
+                "ALTER TABLE dataset ADD COLUMN trace_signature TEXT",
+                "ALTER TABLE dataset ADD COLUMN events_signature TEXT",
+                "ALTER TABLE dataset ADD COLUMN signature_version INTEGER NOT NULL DEFAULT 1",
+                "ALTER TABLE dataset ADD COLUMN last_validated_utc TEXT",
+                "ALTER TABLE dataset ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'unknown'",
+                "ALTER TABLE dataset ADD COLUMN validation_error TEXT",
+                "ALTER TABLE event ADD COLUMN t_us INTEGER",
+                "ALTER TABLE event ADD COLUMN source_frame INTEGER",
+                "ALTER TABLE event ADD COLUMN source_row INTEGER",
+                "ALTER TABLE event ADD COLUMN source_time_str TEXT",
+                "ALTER TABLE event ADD COLUMN deleted_utc TEXT",
+                "ALTER TABLE event ADD COLUMN deleted_reason TEXT",
+                "ALTER TABLE event ADD COLUMN deleted_by TEXT",
+            ):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
+
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS event_audit (
+                    id INTEGER PRIMARY KEY,
+                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
+                    event_id INTEGER,
+                    action TEXT NOT NULL,
+                    old_json TEXT,
+                    new_json TEXT,
+                    source TEXT NOT NULL,
+                    utc_ts TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS event_audit_ds_ts ON event_audit(dataset_id, utc_ts);
+                CREATE INDEX IF NOT EXISTS event_ds_tus ON event(dataset_id, t_us);
+                """
+            )
+
+            # Populate t_us using existing t_seconds and reset validation metadata
+            conn.execute(
+                "UPDATE event SET t_us = CAST(ROUND(t_seconds * 1000000.0) AS INTEGER) "
+                "WHERE t_seconds IS NOT NULL AND t_us IS NULL"
+            )
+            conn.execute(
+                "UPDATE dataset SET validation_status = 'unknown', signature_version = 1 "
+                "WHERE validation_status IS NULL OR validation_status = ''"
+            )
+            version = 6
+
         else:
             raise RuntimeError(
-                "This project uses a legacy .vaso format that requires conversion to sqlite-v3."
+                f"Unknown schema version {version}. Cannot migrate."
             )
     set_user_version(conn, target)
     conn.commit()

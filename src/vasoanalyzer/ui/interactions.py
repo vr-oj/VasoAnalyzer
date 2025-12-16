@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from PyQt5.QtCore import Qt
 
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack
+from vasoanalyzer.ui.plots.interactions_base import (
+    ClickContext,
+    InteractionHost,
+    MoveContext,
+    ScrollContext,
+)
 from vasoanalyzer.ui.plots.plot_host import PlotHost
 
 _MODIFIER_MAP = {
@@ -15,6 +23,8 @@ _MODIFIER_MAP = {
     "cmd": "command",
     "option": "alt",
 }
+
+log = logging.getLogger(__name__)
 
 
 def _parse_modifiers(key: str | None) -> list[str]:
@@ -45,6 +55,7 @@ class InteractionController:
     def __init__(
         self,
         plot_host: PlotHost,
+        interaction_host: InteractionHost,
         *,
         toolbar=None,
         on_drag_state: Callable[[bool], None] | None = None,
@@ -52,6 +63,7 @@ class InteractionController:
         clear_cursors_callback: Callable[[], None] | None = None,
     ) -> None:
         self.plot_host = plot_host
+        self._interaction_host = interaction_host
         self.canvas = plot_host.canvas
         self.toolbar = toolbar
         self._on_drag_state = on_drag_state or (lambda active: None)
@@ -62,25 +74,39 @@ class InteractionController:
         self._drag_active = False
         self._hover_track: ChannelTrack | None = None
         self._hover_time: float | None = None
-        self._connection_ids: list[int] = []
+        self._canvas_connection_ids: list[int] = []
+        self._is_pyqtgraph = (
+            getattr(self.plot_host, "get_render_backend", lambda: None)() == "pyqtgraph"
+        )
 
-        self._connect_events()
+        self._bind_interactions()
+        self._bind_canvas_events()
 
     # ------------------------------------------------------------------ lifecycle
     def disconnect(self) -> None:
-        for cid in self._connection_ids:
-            self.canvas.mpl_disconnect(cid)
-        self._connection_ids.clear()
+        disconnect_host = getattr(self._interaction_host, "disconnect", None)
+        if callable(disconnect_host):
+            disconnect_host()
+        mpl_disconnect = getattr(self.canvas, "mpl_disconnect", None)
+        if mpl_disconnect is None:
+            self._canvas_connection_ids.clear()
+            return
+        for cid in self._canvas_connection_ids:
+            mpl_disconnect(cid)
+        self._canvas_connection_ids.clear()
 
     # ------------------------------------------------------------------ event wiring
-    def _connect_events(self) -> None:
-        mpl_connect = self.canvas.mpl_connect
-        self._connection_ids.extend(
+    def _bind_interactions(self) -> None:
+        self._interaction_host.on_scroll(self._on_scroll)
+        self._interaction_host.on_click(self._on_click)
+        self._interaction_host.on_move(self._on_motion)
+
+    def _bind_canvas_events(self) -> None:
+        mpl_connect = getattr(self.canvas, "mpl_connect", None)
+        if mpl_connect is None:
+            return
+        self._canvas_connection_ids.extend(
             [
-                mpl_connect("scroll_event", self._on_scroll),
-                mpl_connect("button_press_event", self._on_press),
-                mpl_connect("button_release_event", self._on_release),
-                mpl_connect("motion_notify_event", self._on_motion),
                 mpl_connect("figure_leave_event", self._on_leave),
                 mpl_connect("key_press_event", self._on_key_press),
             ]
@@ -94,23 +120,22 @@ class InteractionController:
     def _track_from_axes(self, axes) -> ChannelTrack | None:
         return self.plot_host.track_for_axes(axes)
 
-    def _track_from_event(self, event) -> ChannelTrack | None:
-        return self._track_from_axes(getattr(event, "inaxes", None))
+    def _track_from_ctx(self, track_id: str | None) -> ChannelTrack | None:
+        if track_id is None:
+            return None
+        track_lookup = getattr(self.plot_host, "track", None)
+        if callable(track_lookup):
+            try:
+                return track_lookup(track_id)
+            except Exception:
+                return None
+        return None
 
     def _set_drag_active(self, active: bool) -> None:
         if self._drag_active == active:
             return
         self._drag_active = active
         self._on_drag_state(active)
-
-    def _in_y_gutter(self, event, track: ChannelTrack, margin_px: float = 18.0) -> bool:
-        if event.inaxes is None:
-            return False
-        bbox = track.ax.get_window_extent()
-        x_coord = float(event.x)
-        left = float(bbox.x0)
-        right = float(bbox.x1)
-        return (x_coord < left + margin_px) or (x_coord > right - margin_px)
 
     def _scroll_factor(self, event) -> float:
         """Calculate zoom factor for scroll events.
@@ -125,6 +150,34 @@ class InteractionController:
             direction = 1 if getattr(event, "button", "") == "up" else -1
         return 0.9 if direction > 0 else 1.11
 
+    def _click_position(self, ctx: ClickContext) -> tuple[float, float]:
+        x_px = getattr(ctx, "x_px", float("nan"))
+        y_px = getattr(ctx, "y_px", float("nan"))
+        if not math.isfinite(x_px):
+            x_px = 0.0
+        if not math.isfinite(y_px):
+            y_px = 0.0
+        return (x_px, y_px)
+
+    def _pixel_delta(self, move_ctx: MoveContext, drag_ctx: _DragContext) -> tuple[float, float]:
+        x_px = getattr(move_ctx, "x_px", float("nan"))
+        y_px = getattr(move_ctx, "y_px", float("nan"))
+        dx = x_px - drag_ctx.press_xy[0]
+        dy = y_px - drag_ctx.press_xy[1]
+        if not math.isfinite(dx):
+            dx = 0.0
+        if not math.isfinite(dy):
+            dy = 0.0
+        return dx, dy
+
+    def _finite_or_none(self, value: float) -> float | None:
+        try:
+            if math.isfinite(value):
+                return float(value)
+        except Exception:
+            return None
+        return None
+
     def _active_track(self) -> ChannelTrack | None:
         if self._hover_track is not None:
             return self._hover_track
@@ -132,7 +185,7 @@ class InteractionController:
         return tracks[0] if tracks else None
 
     # ------------------------------------------------------------------ handlers
-    def _on_scroll(self, event) -> None:
+    def _on_scroll(self, ctx: ScrollContext) -> None:
         """Handle scroll events - horizontal panning only (like LabChart).
 
         Simple and reliable:
@@ -140,10 +193,6 @@ class InteractionController:
         - No modifiers, no complexity
         - Zoom via toolbar buttons instead
         """
-        import logging
-
-        log = logging.getLogger(__name__)
-
         if self._nav_active():
             return
 
@@ -153,11 +202,16 @@ class InteractionController:
             return
 
         # Get scroll direction
-        step = getattr(event, "step", None)
-        if step is not None:
-            direction = 1 if step > 0 else -1
-        else:
-            direction = 1 if getattr(event, "button", "") == "up" else -1
+        delta = ctx.delta_y
+        if delta == 0:
+            return
+        direction = -1 if delta > 0 else 1
+
+        log.debug(
+            "InteractionController._on_scroll: delta=%r window_before=%r",
+            delta,
+            window,
+        )
 
         # Pan amount: 10% of visible window
         window_span = window[1] - window[0]
@@ -166,18 +220,21 @@ class InteractionController:
         log.info(f"📜 Scroll pan: direction={direction}, amount={pan_amount:.2f}s")
         self.plot_host.scroll_by(pan_amount)
 
-    def _on_press(self, event) -> None:
+    def _on_click(self, ctx: ClickContext) -> None:
+        if not bool(getattr(ctx, "pressed", True)):
+            self._on_release()
+            return
         if self._nav_active():
             return
-        if getattr(event, "button", None) != 1:
+        if ctx.button not in {"left", 1, "1"}:
             return
 
-        track = self._track_from_event(event)
+        track = self._track_from_ctx(ctx.track_id)
         if track is None:
             return
 
-        modifiers = _parse_modifiers(getattr(event, "key", None))
-        if getattr(event, "dblclick", False):
+        modifiers = list(ctx.modifiers)
+        if ctx.double:
             full = self.plot_host.full_range()
             if full is None:
                 return
@@ -189,20 +246,23 @@ class InteractionController:
                 self.canvas.draw_idle()
             return
 
-        gutter_mode = self._in_y_gutter(event, track)
-        mode = "y-pan" if gutter_mode else "time-pan"
+        if self._is_pyqtgraph:
+            return
+
+        mode = "y-pan" if ctx.in_gutter else "time-pan"
+        press_xy = self._click_position(ctx)
         self._drag_ctx = _DragContext(
             mode=mode,
             track=track,
-            press_xy=(event.x, event.y),
+            press_xy=press_xy,
             start_window=self.plot_host.current_window(),
             start_ylim=track.ax.get_ylim(),
-            start_xdata=event.xdata,
-            start_ydata=event.ydata,
+            start_xdata=self._finite_or_none(ctx.x_data),
+            start_ydata=self._finite_or_none(ctx.y_data),
         )
         self._set_drag_active(False)
 
-    def _on_release(self, _event) -> None:
+    def _on_release(self) -> None:
         self._drag_ctx = None
         self._set_drag_active(False)
 
@@ -210,50 +270,52 @@ class InteractionController:
         self._hover_track = None
         self._hover_time = None
         if self._drag_ctx is not None:
-            self._drag_ctx = None
-            self._set_drag_active(False)
+            self._on_release()
 
-    def _on_motion(self, event) -> None:
-        track = self._track_from_event(event)
+    def _on_motion(self, ctx: MoveContext) -> None:
+        track = self._track_from_ctx(ctx.track_id)
         if track is not None:
             self._hover_track = track
-        if getattr(event, "xdata", None) is not None:
-            self._hover_time = float(event.xdata)
+        elif ctx.track_id is None:
+            self._hover_track = None
+        if math.isfinite(ctx.x_data):
+            self._hover_time = float(ctx.x_data)
+        elif track is None:
+            self._hover_time = None
 
-        ctx = self._drag_ctx
-        if ctx is None:
+        drag_ctx = self._drag_ctx
+        if drag_ctx is None:
             return
 
-        buttons = None
-        if hasattr(event, "guiEvent") and event.guiEvent is not None:
-            buttons = event.guiEvent.buttons()
+        buttons = getattr(ctx, "buttons", None)
         if buttons is not None and not (buttons & Qt.LeftButton):
-            self._on_release(event)
+            self._on_release()
             return
 
-        dx = event.x - ctx.press_xy[0]
-        dy = event.y - ctx.press_xy[1]
+        dx, dy = self._pixel_delta(ctx, drag_ctx)
         dist2 = dx * dx + dy * dy
         if not self._drag_active:
             if dist2 < self.DRAG_THRESHOLD_PX * self.DRAG_THRESHOLD_PX:
                 return
             self._set_drag_active(True)
 
-        if ctx.mode == "time-pan":
-            if ctx.start_window is None or ctx.start_xdata is None or event.xdata is None:
+        if drag_ctx.mode == "time-pan":
+            x_data = self._finite_or_none(ctx.x_data)
+            if drag_ctx.start_window is None or drag_ctx.start_xdata is None or x_data is None:
                 return
-            delta = event.xdata - ctx.start_xdata
+            delta = x_data - drag_ctx.start_xdata
             self.plot_host.set_time_window(
-                ctx.start_window[0] - delta,
-                ctx.start_window[1] - delta,
+                drag_ctx.start_window[0] - delta,
+                drag_ctx.start_window[1] - delta,
             )
-        elif ctx.mode == "y-pan":
-            if ctx.start_ylim is None or ctx.start_ydata is None or event.ydata is None:
+        elif drag_ctx.mode == "y-pan":
+            y_data = self._finite_or_none(ctx.y_data)
+            if drag_ctx.start_ylim is None or drag_ctx.start_ydata is None or y_data is None:
                 return
-            delta_y = event.ydata - ctx.start_ydata
-            ctx.track.set_ylim(
-                ctx.start_ylim[0] - delta_y,
-                ctx.start_ylim[1] - delta_y,
+            delta_y = y_data - drag_ctx.start_ydata
+            drag_ctx.track.set_ylim(
+                drag_ctx.start_ylim[0] - delta_y,
+                drag_ctx.start_ylim[1] - delta_y,
             )
             self.canvas.draw_idle()
 

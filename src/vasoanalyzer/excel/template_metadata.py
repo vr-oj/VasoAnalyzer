@@ -34,6 +34,8 @@ __all__ = [
     "DateColumnMetadata",
     "read_template_metadata",
     "has_vaso_metadata",
+    "read_sheet_specific_metadata",
+    "write_sheet_specific_metadata",
 ]
 
 logger = logging.getLogger(__name__)
@@ -104,17 +106,24 @@ class TemplateMetadata:
 # ---------------------------------------------------------------------------
 
 
-def has_vaso_metadata(wb: Workbook) -> bool:
+def has_vaso_metadata(wb: Workbook, sheet_name: str | None = None) -> bool:
     """
     Check if workbook contains VasoAnalyzer metadata.
 
     Args:
         wb: openpyxl Workbook instance
+        sheet_name: Optional sheet name to check for sheet-specific metadata
 
     Returns:
         True if metadata is present, False otherwise
     """
-    # Check for VasoMetadata sheet
+    # Check for sheet-specific metadata
+    if sheet_name:
+        metadata_sheet_name = f"VasoMetadata_{sheet_name}"
+        if metadata_sheet_name in wb.sheetnames:
+            return True
+
+    # Check for global VasoMetadata sheet
     if "VasoMetadata" in wb.sheetnames:
         return True
 
@@ -487,3 +496,117 @@ def invoke_export_metadata(path: str | Path) -> bool:
     except Exception as exc:
         logger.error(f"Failed to invoke VBA macro: {exc}")
         return False
+
+
+def read_sheet_specific_metadata(
+    wb: Workbook, sheet_name: str
+) -> TemplateMetadata | None:
+    """
+    Read metadata for a specific worksheet.
+
+    Tries:
+    1. Sheet-specific metadata: "VasoMetadata_{sheet_name}"
+    2. Global metadata: "VasoMetadata" (for backward compatibility)
+
+    Args:
+        wb: Workbook instance
+        sheet_name: Name of the target sheet
+
+    Returns:
+        TemplateMetadata if found, None otherwise
+    """
+    # Try sheet-specific metadata first
+    metadata_sheet_name = f"VasoMetadata_{sheet_name}"
+    if metadata_sheet_name in wb.sheetnames:
+        try:
+            metadata_sheet = wb[metadata_sheet_name]
+            # JSON is in cell A4 (see VBA code)
+            json_cell = metadata_sheet["A4"]
+            if json_cell.value:
+                data = json.loads(json_cell.value)
+
+                # Parse event rows
+                event_rows = [
+                    EventRowMetadata(
+                        row=row_data["row"],
+                        label=row_data["label"],
+                        is_header=row_data["is_header"],
+                    )
+                    for row_data in data.get("event_rows", [])
+                ]
+
+                # Parse date columns
+                date_columns = [
+                    DateColumnMetadata(
+                        column=col_data["column"],
+                        letter=col_data["letter"],
+                        value=col_data.get("value"),
+                        empty_slots=col_data.get("empty_slots", 0),
+                    )
+                    for col_data in data.get("date_columns", [])
+                ]
+
+                metadata = TemplateMetadata(
+                    version=data.get("version", "1.0"),
+                    template_name=data.get("template_name", ""),
+                    date_row=data["date_row"],
+                    label_column=data["label_column"],
+                    event_rows=event_rows,
+                    date_columns=date_columns,
+                )
+                metadata.source = "sheet_specific"
+                return metadata
+
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            logger.error(f"Failed to read sheet-specific metadata: {exc}")
+
+    # Fallback to global metadata for backward compatibility
+    if "VasoMetadata" in wb.sheetnames:
+        try:
+            ws = wb[sheet_name]
+            return _read_from_metadata_sheet(wb, ws)
+        except Exception as exc:
+            logger.error(f"Failed to read global metadata: {exc}")
+
+    return None
+
+
+def write_sheet_specific_metadata(
+    wb: Workbook, sheet_name: str, metadata: TemplateMetadata
+) -> None:
+    """
+    Write metadata for a specific worksheet.
+
+    Creates or updates "VasoMetadata_{sheet_name}" hidden sheet.
+
+    Args:
+        wb: Workbook instance
+        sheet_name: Name of the target sheet
+        metadata: Metadata to write
+    """
+    metadata_sheet_name = f"VasoMetadata_{sheet_name}"
+
+    # Create or get metadata sheet
+    if metadata_sheet_name in wb.sheetnames:
+        metadata_sheet = wb[metadata_sheet_name]
+    else:
+        metadata_sheet = wb.create_sheet(metadata_sheet_name)
+        metadata_sheet.sheet_state = "hidden"
+
+    # Convert metadata to dict
+    data = {
+        "version": metadata.version,
+        "template_name": metadata.template_name,
+        "date_row": metadata.date_row,
+        "label_column": metadata.label_column,
+        "event_rows": [row.to_dict() for row in metadata.event_rows],
+        "date_columns": [col.to_dict() for col in metadata.date_columns],
+    }
+
+    # Write metadata as JSON to cell A4
+    metadata_sheet["A1"] = "VasoAnalyzer Template Metadata"
+    metadata_sheet["A2"] = f"Sheet: {sheet_name}"
+    metadata_sheet["A3"] = f"Version: {metadata.version}"
+    metadata_sheet["A4"] = json.dumps(data)
+
+    logger.info(f"Wrote sheet-specific metadata for '{sheet_name}' to '{metadata_sheet_name}'")
