@@ -3064,16 +3064,33 @@ def pack_project_bundle(
     bundle_path: str | Path,
     *,
     embed_threshold_mb: int = 64,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> str:
     """Persist ``project`` and create a shareable ``.vasopack`` bundle."""
 
     if not project.path:
         raise ValueError("Project must be saved before bundling")
 
+    if progress_callback:
+        progress_callback(20, "Saving project")
+
     save_project(project, project.path)
+
+    if progress_callback:
+        progress_callback(40, "Creating bundle")
+
     from vasoanalyzer.services.project_service import pack_sqlite_bundle
 
-    pack_sqlite_bundle(project.path, bundle_path, embed_threshold_mb=embed_threshold_mb)
+    pack_sqlite_bundle(
+        project.path,
+        bundle_path,
+        embed_threshold_mb=embed_threshold_mb,
+        progress_callback=progress_callback,
+    )
+
+    if progress_callback:
+        progress_callback(95, "Finalizing")
+
     return str(bundle_path)
 
 

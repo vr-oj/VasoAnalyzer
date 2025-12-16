@@ -365,6 +365,7 @@ class _SampleLoadJob(QRunnable):
 
 
 class _SnapshotLoadSignals(QObject):
+    progressChanged = pyqtSignal(int, str)
     finished = pyqtSignal(object, object, object, object)
 
 
@@ -390,15 +391,22 @@ class _SnapshotLoadJob(QRunnable):
         self._snapshot_path = snapshot_path
         self._snapshot_format = snapshot_format or ""
 
+    def _emit_progress(self, percent: int, label: str) -> None:
+        """Safely emit progress updates."""
+        with contextlib.suppress(RuntimeError):
+            self.signals.progressChanged.emit(percent, label)
+
     def run(self) -> None:  # type: ignore[override]
         stack = None
         error: str | None = None
         try:
+            self._emit_progress(0, "Loading snapshot")
             stack = self._load_from_asset()
             if stack is None:
                 stack = self._load_from_path()
             if stack is None:
                 error = "Snapshots unavailable"
+            self._emit_progress(100, "Complete")
         except Exception as exc:  # pragma: no cover - defensive logging
             error = str(exc)
             stack = None
@@ -411,13 +419,16 @@ class _SnapshotLoadJob(QRunnable):
 
         ctx: ProjectContext | None = None
         try:
+            self._emit_progress(20, "Opening project context")
             ctx = open_project_ctx(self._project_path)
             repo = ctx.repo
             if repo is None:
                 return None
+            self._emit_progress(40, "Reading snapshot data")
             data = repo.get_asset_bytes(self._asset_id)
             if not data:
                 return None
+            self._emit_progress(70, "Decoding snapshot")
             return self._stack_from_bytes(data)
         finally:
             if ctx is not None:
@@ -429,8 +440,10 @@ class _SnapshotLoadJob(QRunnable):
         path = Path(self._snapshot_path).expanduser()
         if not path.exists():
             return None
+        self._emit_progress(40, "Reading TIFF file")
         frames, _, _ = load_tiff(path.as_posix(), metadata=False)
         if frames:
+            self._emit_progress(80, "Building image stack")
             return np.stack(frames)
         return None
 
@@ -792,23 +805,6 @@ class VasoAnalyzerApp(QMainWindow):
         self._progress_bar.setTextVisible(True)
         self._progress_bar.hide()  # Hidden by default
         self.statusBar().addPermanentWidget(self._progress_bar)
-        self._save_progress_bar = QProgressBar(self.statusBar())
-        self._save_progress_bar.setVisible(False)
-        self._save_progress_bar.setMinimumWidth(240)
-        self._save_progress_bar.setMaximumHeight(18)
-        self._save_progress_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._save_progress_bar.setTextVisible(False)
-        self._save_progress_label = QLabel("")
-        self._save_progress_label.setVisible(False)
-
-        self._save_progress_container = QWidget(self.statusBar())
-        _save_layout = QHBoxLayout(self._save_progress_container)
-        _save_layout.setContentsMargins(4, 0, 4, 0)
-        _save_layout.setSpacing(6)
-        _save_layout.addWidget(self._save_progress_label)
-        _save_layout.addWidget(self._save_progress_bar)
-        self._save_progress_container.setVisible(False)
-        self.statusBar().addPermanentWidget(self._save_progress_container, 0)
         self._storage_mode_label = QLabel("")
         self._storage_mode_label.setVisible(False)
         self._storage_mode_label.setContentsMargins(8, 0, 8, 0)
@@ -816,9 +812,6 @@ class VasoAnalyzerApp(QMainWindow):
         self._storage_mode_path: str | None = None
         self._storage_mode_is_cloud: bool | None = None
         self._storage_mode_cloud_service: str | None = None
-        self._save_progress_hide_timer = QTimer(self)
-        self._save_progress_hide_timer.setSingleShot(True)
-        self._save_progress_hide_timer.timeout.connect(self._hide_save_progress_bar)
         self._apply_status_bar_theme()
 
         self.current_project = None
@@ -1889,61 +1882,6 @@ class VasoAnalyzerApp(QMainWindow):
             if action is not None:
                 action.setEnabled(enabled)
 
-    def _start_save_progress_bar(self, message: str) -> None:
-        """Show save progress bar with initial message."""
-
-        self._save_progress_hide_timer.stop()
-        self._save_progress_bar.setRange(0, 100)
-        self._save_progress_bar.setValue(0)
-        self._save_progress_bar.setTextVisible(False)
-        self._save_progress_container.setVisible(True)
-        self._save_progress_bar.setVisible(True)
-        self._save_progress_label.setVisible(True)
-        self._save_progress_label.setText(message)
-        self.statusBar().showMessage(message)
-
-    def _update_save_progress_bar(
-        self, percent: int, message: str | None = None
-    ) -> None:
-        """Update save progress bar from worker signals."""
-
-        clamped = max(0, min(100, percent))
-        self._save_progress_bar.setRange(0, 100)
-        self._save_progress_bar.setValue(clamped)
-        if message:
-            self._save_progress_label.setText(message)
-            self.statusBar().showMessage(message)
-
-    def _finish_save_progress_bar(
-        self,
-        ok: bool,
-        path: str | None,
-        duration_sec: float | None = None,
-        details: str | None = None,
-    ) -> None:
-        """Finalize save progress bar display and schedule hide."""
-
-        base = "Project saved" if ok else "Save failed"
-        message = base
-        if path:
-            message = f"{base}: {Path(path).name}"
-        if not ok and details:
-            message = f"{message} — {details}"
-        if duration_sec is not None:
-            message = f"{message} ({duration_sec:.2f}s)"
-
-        timeout = 2500 if ok else 5000
-        self.statusBar().showMessage(message, timeout)
-        self._save_progress_hide_timer.start(timeout)
-
-    def _hide_save_progress_bar(self) -> None:
-        """Hide the save progress bar."""
-
-        self._save_progress_bar.hide()
-        self._save_progress_container.hide()
-        self._save_progress_label.hide()
-        self._save_progress_bar.setValue(0)
-
     def changeEvent(self, event):
         # Note: PaletteChange events are no longer handled since we don't follow OS theme.
         # Theme changes are controlled explicitly via View > Color Theme menu.
@@ -1994,10 +1932,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.statusBar().setStyleSheet(status_style)
         self._progress_bar.setStyleSheet(bar_style)
-        self._save_progress_bar.setStyleSheet(bar_style)
-        self._save_progress_label.setStyleSheet(
-            f"color: {colors['text']}; padding-right: 6px;"
-        )
         if hasattr(self, "_storage_mode_label"):
             self._storage_mode_label.setStyleSheet(
                 f"color: {colors['text']}; padding: 0 8px; font-weight: 600;"
@@ -2096,7 +2030,7 @@ class VasoAnalyzerApp(QMainWindow):
         progress_label = (
             "Autosaving project…" if mode == "autosave" else "Saving project…"
         )
-        self._start_save_progress_bar(progress_label)
+        self.show_progress(progress_label, maximum=100)
 
         if mode == "autosave":
             self._autosave_in_progress = True
@@ -2129,7 +2063,12 @@ class VasoAnalyzerApp(QMainWindow):
             )
 
     def _on_save_progress_changed(self, percent: int, message: str) -> None:
-        self._update_save_progress_bar(percent, message)
+        """Update main progress bar from save worker signals."""
+        if not self._progress_bar.isVisible():
+            self.show_progress("", maximum=100)
+        self._progress_bar.setValue(percent)
+        self._progress_bar.setFormat(f"{message}... %p%")
+        self.statusBar().showMessage(message)
 
     def _on_save_error(self, details: str) -> None:
         self._last_save_error = details
@@ -2163,12 +2102,14 @@ class VasoAnalyzerApp(QMainWindow):
             if mode == "autosave":
                 if resolved_path:
                     self.last_autosave_path = resolved_path
-                self._finish_save_progress_bar(True, resolved_path, duration_sec)
+                message = f"Project saved: {Path(resolved_path).name} ({duration_sec:.2f}s)" if resolved_path else "Project saved"
+                self.statusBar().showMessage(message, 2500)
             else:
                 if resolved_path:
                     self.update_recent_projects(resolved_path)
                     self._update_storage_mode_indicator(resolved_path)
-                self._finish_save_progress_bar(True, resolved_path, duration_sec)
+                message = f"Project saved: {Path(resolved_path).name} ({duration_sec:.2f}s)" if resolved_path else "Project saved"
+                self.statusBar().showMessage(message, 2500)
                 reset_reason = (
                     "manual save"
                     if reason in ("manual", "save_as")
@@ -2176,6 +2117,7 @@ class VasoAnalyzerApp(QMainWindow):
                 )
                 self._reset_session_dirty(reason=reset_reason)
                 self._update_window_title()
+            self.hide_progress()
         else:
             log.error(
                 "Background save failed path=%s reason=%s mode=%s duration=%.2fs",
@@ -2184,9 +2126,12 @@ class VasoAnalyzerApp(QMainWindow):
                 mode,
                 duration_sec,
             )
-            self._finish_save_progress_bar(
-                False, resolved_path, duration_sec, self._last_save_error
-            )
+            message = f"Save failed: {Path(resolved_path).name}" if resolved_path else "Save failed"
+            if self._last_save_error:
+                message = f"{message} — {self._last_save_error}"
+            message = f"{message} ({duration_sec:.2f}s)"
+            self.statusBar().showMessage(message, 5000)
+            self.hide_progress()
 
         if mode == "autosave":
             log.debug(
@@ -4190,6 +4135,7 @@ class VasoAnalyzerApp(QMainWindow):
             snapshot_path=sample.snapshot_path,
             snapshot_format=sample.snapshot_format,
         )
+        job.signals.progressChanged.connect(self._update_sample_load_progress)
         job.signals.finished.connect(self._on_snapshot_load_finished)
         self.statusBar().showMessage("Loading snapshots…", 0)
         self._thread_pool.start(job)

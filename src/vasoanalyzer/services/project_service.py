@@ -767,16 +767,34 @@ def convert_project_repository(path: str) -> SQLiteProjectRepository:
 
 
 def export_project_bundle(
-    project: Project, bundle_path: str, *, embed_threshold_mb: int = 64
+    project: Project,
+    bundle_path: str,
+    *,
+    embed_threshold_mb: int = 64,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> str:
     """Create a shareable bundle for ``project``."""
 
     if project is None:
         raise ValueError("Project is required")
-    return cast(
+
+    if progress_callback:
+        progress_callback(10, "Preparing export")
+
+    result = cast(
         str,
-        pack_project_bundle(project, bundle_path, embed_threshold_mb=embed_threshold_mb),
+        pack_project_bundle(
+            project,
+            bundle_path,
+            embed_threshold_mb=embed_threshold_mb,
+            progress_callback=progress_callback,
+        ),
     )
+
+    if progress_callback:
+        progress_callback(100, "Complete")
+
+    return result
 
 
 def import_project_bundle(bundle_path: str, dest_dir: str | None = None) -> Project:
@@ -791,6 +809,7 @@ def export_project_single_file(
     *,
     extract_tiffs_dir: str | None = None,
     ensure_saved: bool = True,
+    progress_callback: Callable[[int, str], None] | None = None,
 ) -> str:
     """Export ``project`` as a DELETE-mode single-file .vaso copy."""
 
@@ -809,12 +828,26 @@ def export_project_single_file(
             out_path=destination,
             link_snapshot_tiffs=True,
             extract_tiffs_dir=extract_tiffs_dir,
+            progress_callback=progress_callback,
         ),
     )
 
 
-def pack_sqlite_bundle(path: str, bundle_path: str | Path, *, embed_threshold_mb: int = 64) -> str:
+def pack_sqlite_bundle(
+    path: str,
+    bundle_path: str | Path,
+    *,
+    embed_threshold_mb: int = 64,
+    progress_callback: Callable[[int, str], None] | None = None,
+) -> str:
+    if progress_callback:
+        progress_callback(50, "Copying database")
+
     sqlite_store.pack_bundle(path, bundle_path, embed_threshold_mb=embed_threshold_mb)
+
+    if progress_callback:
+        progress_callback(90, "Processing assets")
+
     return str(bundle_path)
 
 
