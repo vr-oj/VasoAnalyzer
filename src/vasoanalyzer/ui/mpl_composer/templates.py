@@ -108,6 +108,7 @@ def apply_template_preset(
     """
     preset = get_template_preset(template_id)
     prev = previous_defaults or {"page": {}, "axes": {}, "figure": {}}
+    size_mode = getattr(fig_spec, "size_mode", "template")
 
     def _apply_section(obj: Any, defaults: Dict[str, Any], section: str) -> None:
         for field, new_val in defaults.items():
@@ -125,8 +126,24 @@ def apply_template_preset(
                     continue
 
     if hasattr(fig_spec, "page"):
-        _apply_section(fig_spec.page, preset.layout_defaults, "page")
+        layout_defaults = dict(preset.layout_defaults)
+        if size_mode in ("preset", "custom"):
+            layout_defaults.pop("width_in", None)
+            layout_defaults.pop("height_in", None)
+        _apply_section(fig_spec.page, layout_defaults, "page")
         page = fig_spec.page
+        if size_mode == "template":
+            try:
+                page.width_in = float(preset.layout_defaults.get("width_in", page.width_in))
+                page.height_in = float(preset.layout_defaults.get("height_in", page.height_in))
+                if hasattr(fig_spec, "figure_width_in"):
+                    fig_spec.figure_width_in = page.width_in
+                if hasattr(fig_spec, "figure_height_in"):
+                    fig_spec.figure_height_in = page.height_in
+                if hasattr(fig_spec, "size_mode"):
+                    fig_spec.size_mode = "template"
+            except Exception:
+                pass
         left = getattr(page, "left_margin_in", None)
         right = getattr(page, "right_margin_in", None)
         top = getattr(page, "top_margin_in", None)
@@ -143,6 +160,16 @@ def apply_template_preset(
                 "axes_height_in"
             ) == getattr(page, "axes_height_in", None):
                 page.axes_height_in = axes_h
+        if getattr(fig_spec, "figure_width_in", None) is None:
+            try:
+                fig_spec.figure_width_in = float(page.width_in)
+            except Exception:
+                pass
+        if getattr(fig_spec, "figure_height_in", None) is None:
+            try:
+                fig_spec.figure_height_in = float(page.height_in)
+            except Exception:
+                pass
     if hasattr(fig_spec, "axes"):
         axes_defaults = preset.style_defaults.get("axes", {})
         _apply_section(fig_spec.axes, axes_defaults, "axes")

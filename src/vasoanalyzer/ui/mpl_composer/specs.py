@@ -29,6 +29,10 @@ class GraphSpec:
     """Semantic graph definition (single-axes) used by the composer."""
 
     template_id: str = DEFAULT_TEMPLATE_ID
+    figure_width_in: float | None = None
+    figure_height_in: float | None = None
+    size_mode: str = "template"  # "template", "preset", "custom"
+    size_preset: str | None = None  # "wide", "tall", "square"
     show_event_markers: bool = True
     show_event_labels: bool = False
     event_marker_style: Optional[Dict[str, Any]] = None

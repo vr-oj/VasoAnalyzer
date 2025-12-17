@@ -140,6 +140,10 @@ class FigureSpec:
     events: List[EventSpec] = field(default_factory=list)
     annotations: List[AnnotationSpec] = field(default_factory=list)
     template_id: str = "single_column"
+    figure_width_in: Optional[float] = None
+    figure_height_in: Optional[float] = None
+    size_mode: str = "template"
+    size_preset: Optional[str] = None
     legend_visible: bool = True
     legend_fontsize: Optional[float] = 9.0
     legend_loc: str = "upper right"  # "best", "upper right", ...
@@ -157,6 +161,7 @@ class RenderContext:
 def build_figure(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None) -> Figure:
     """Entry point: choose figure-first or axes-first sizing."""
     page = spec.page
+    _apply_figure_size_override(spec)
     _clamp_page_size(page)
     sizing_mode = _resolve_sizing_mode(page)
     if sizing_mode == "axes_first":
@@ -168,6 +173,22 @@ def _clamp_page_size(page: PageSpec) -> None:
     """Enforce a minimum physical size to keep labels visible."""
     page.width_in = min(max(float(page.width_in), _MIN_PAGE_WIDTH_IN), _MAX_PAGE_WIDTH_IN)
     page.height_in = min(max(float(page.height_in), _MIN_PAGE_HEIGHT_IN), _MAX_PAGE_HEIGHT_IN)
+
+
+def _apply_figure_size_override(spec: FigureSpec) -> None:
+    """Mirror any figure-level size override onto the page before layout."""
+    page = spec.page
+    fig_w = getattr(spec, "figure_width_in", None)
+    fig_h = getattr(spec, "figure_height_in", None)
+    if fig_w is None:
+        fig_w = page.width_in
+    if fig_h is None:
+        fig_h = page.height_in
+    try:
+        page.width_in = float(fig_w)
+        page.height_in = float(fig_h)
+    except Exception:
+        pass
 
 
 def _build_figure_first(spec: FigureSpec, ctx: RenderContext, fig: Figure | None = None) -> Figure:

@@ -10,9 +10,19 @@ SPEC_VERSION = 1
 
 
 def figure_spec_to_dict(spec: FigureSpec) -> dict[str, Any]:
+    fig_w = getattr(spec, "figure_width_in", None)
+    fig_h = getattr(spec, "figure_height_in", None)
+    fig_w = spec.page.width_in if fig_w is None else fig_w
+    fig_h = spec.page.height_in if fig_h is None else fig_h
+    size_mode = getattr(spec, "size_mode", "template") or "template"
+    size_preset = getattr(spec, "size_preset", None)
     return {
         "spec_version": SPEC_VERSION,
         "template_id": getattr(spec, "template_id", "single_column"),
+        "figure_width_in": fig_w,
+        "figure_height_in": fig_h,
+        "size_mode": size_mode,
+        "size_preset": size_preset,
         "page": {
             "width_in": spec.page.width_in,
             "height_in": spec.page.height_in,
@@ -100,6 +110,10 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         any(bool(e.get("visible", True)) for e in events_d) if events_d else True
     )
     template_id = data.get("template_id", "single_column")
+    figure_width_in = data.get("figure_width_in")
+    figure_height_in = data.get("figure_height_in")
+    size_mode = data.get("size_mode") or "template"
+    size_preset = data.get("size_preset")
 
     page = PageSpec(
         width_in=float(page_d.get("width_in", 6.0)),
@@ -116,6 +130,10 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         bottom_margin_in=page_d.get("bottom_margin_in"),
         export_background=page_d.get("export_background", "white"),
     )
+    if figure_width_in is None:
+        figure_width_in = page.width_in
+    if figure_height_in is None:
+        figure_height_in = page.height_in
 
     axes = AxesSpec(
         x_range=tuple(axes_d["x_range"]) if axes_d.get("x_range") else None,
@@ -183,6 +201,10 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         events=events,
         annotations=annotations,
         template_id=template_id,
+        figure_width_in=figure_width_in,
+        figure_height_in=figure_height_in,
+        size_mode=size_mode,
+        size_preset=size_preset,
         legend_visible=bool(data.get("legend_visible", True)),
         legend_fontsize=data.get("legend_fontsize", 9.0),
         legend_loc=data.get("legend_loc", "upper right"),
