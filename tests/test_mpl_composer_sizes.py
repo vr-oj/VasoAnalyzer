@@ -12,7 +12,11 @@ from vasoanalyzer.ui.mpl_composer.spec_serialization import (
     figure_spec_from_dict,
     figure_spec_to_dict,
 )
-from vasoanalyzer.ui.mpl_composer.templates import apply_template_preset, get_template_preset
+from vasoanalyzer.ui.mpl_composer.templates import (
+    apply_template_preset,
+    get_template_preset,
+    preset_dimensions_from_base,
+)
 
 
 def _base_spec(template_id: str = "single_column") -> FigureSpec:
@@ -75,3 +79,23 @@ def test_renderer_respects_figure_size_override_and_serialization():
     assert restored.figure_width_in == pytest.approx(6.0)
     assert restored.figure_height_in == pytest.approx(2.5)
     assert restored.size_mode == "custom"
+
+
+def test_preset_aspect_preserves_area_and_direction():
+    preset = get_template_preset("single_column").layout_defaults
+    base_w = preset["width_in"]
+    base_h = preset["height_in"]
+
+    wide_w, wide_h = preset_dimensions_from_base(base_w, base_h, "wide")
+    tall_w, tall_h = preset_dimensions_from_base(base_w, base_h, "tall")
+    square_w, square_h = preset_dimensions_from_base(base_w, base_h, "square")
+
+    assert wide_w > base_w
+    assert wide_h < base_h
+    assert tall_w < base_w
+    assert tall_h > base_h
+    assert square_w == pytest.approx(square_h)
+    base_area = base_w * base_h
+    assert pytest.approx(base_area) == pytest.approx(wide_w * wide_h)
+    assert pytest.approx(base_area) == pytest.approx(tall_w * tall_h)
+    assert pytest.approx(base_area) == pytest.approx(square_w * square_h)

@@ -16,8 +16,8 @@ from typing import Any
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.widgets import RectangleSelector
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QCloseEvent
+from PyQt5.QtCore import QSettings, Qt, QTimer
+from PyQt5.QtGui import QCloseEvent, QImage, QShowEvent
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -57,6 +58,7 @@ from .templates import (
     DEFAULT_TEMPLATE_ID,
     apply_template_preset,
     get_template_preset,
+    preset_dimensions_from_base,
 )
 from .spec_serialization import figure_spec_from_dict, figure_spec_to_dict
 
@@ -254,6 +256,19 @@ class PureMplFigureComposer(QMainWindow):
         self._refresh_preview()
         QTimer.singleShot(0, self._apply_dynamic_minimum_size)
         QTimer.singleShot(0, self._init_splitter_sizes_once)
+        try:
+            left = self._main_splitter.widget(0) if self._main_splitter else None
+            right = self._main_splitter.widget(1) if self._main_splitter else None
+            sizes = self._main_splitter.sizes() if self._main_splitter else []
+            log.info(
+                "Composer init ready: splitter children=%s sizes=%s left_w=%s right_w=%s",
+                self._main_splitter.count() if self._main_splitter else None,
+                sizes,
+                left.width() if left else None,
+                right.width() if right else None,
+            )
+        except Exception:
+            log.debug("Failed to log composer init splitter state", exc_info=True)
 
     # ------------------------------------------------------------------
     # Spec / context helpers
@@ -472,16 +487,9 @@ class PureMplFigureComposer(QMainWindow):
             self._canvas_container = canvas_frame
             canvas_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             canvas_frame.setMinimumSize(max(MIN_PREVIEW_W, PREVIEW_MIN_W), MIN_PREVIEW_H)
-            canvas_layout = QVBoxLayout(canvas_frame)
+            canvas_layout = QGridLayout(canvas_frame)
             canvas_layout.setContentsMargins(0, 0, 0, 0)
-            canvas_layout.addStretch(1)
-            hrow = QHBoxLayout()
-            hrow.addStretch(1)
-            hrow.addWidget(self._preview_viewport, 0, Qt.AlignCenter)
-            hrow.addStretch(1)
-            canvas_layout.addLayout(hrow)
-            canvas_layout.addStretch(1)
-            canvas_layout.setAlignment(Qt.AlignCenter)
+            canvas_layout.addWidget(self._preview_viewport, 0, 0)
             # Scale indicator overlay
             self._preview_scale_label = QLabel(canvas_frame)
             self._preview_scale_label.setStyleSheet(
@@ -490,10 +498,7 @@ class PureMplFigureComposer(QMainWindow):
             )
             self._preview_scale_label.setVisible(False)
             self._preview_scale_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            scale_row = QHBoxLayout()
-            scale_row.addStretch(1)
-            scale_row.addWidget(self._preview_scale_label, 0, Qt.AlignRight | Qt.AlignBottom)
-            canvas_layout.addLayout(scale_row)
+            canvas_layout.addWidget(self._preview_scale_label, 0, 0, Qt.AlignBottom | Qt.AlignRight)
             left_layout.addWidget(canvas_frame, stretch=1)
 
         # Export size info label
@@ -538,12 +543,16 @@ class PureMplFigureComposer(QMainWindow):
         root.addWidget(splitter)
         self._right_panel = scroll
 
+        restored = self._restore_window_state()
+
         # Force an initial splitter layout before the first paint.
-        init_w = max(self.width(), WINDOW_MIN_W)
-        init_h = max(self.height(), 700)
-        self.resize(init_w, init_h)
-        if self._main_splitter:
-            self._main_splitter.setSizes([max(PREVIEW_MIN_W, init_w - CONTROL_MIN_W), CONTROL_MIN_W])
+        if not restored:
+            init_w = max(self.width(), WINDOW_MIN_W)
+            init_h = max(self.height(), 700)
+            self.resize(init_w, init_h)
+        if self._main_splitter and not self._splitter_initialized:
+            total_w = max(self.width(), WINDOW_MIN_W)
+            self._main_splitter.setSizes([max(PREVIEW_MIN_W, total_w - CONTROL_MIN_W), CONTROL_MIN_W])
             sizes = self._main_splitter.sizes()
             log.info("Composer splitter sizes initial: %s", sizes)
             if len(sizes) >= 2 and sizes[1] >= CONTROL_MIN_W and all(s > 0 for s in sizes):
@@ -573,6 +582,8 @@ class PureMplFigureComposer(QMainWindow):
         self._canvas.setMinimumSize(1, 1)
         self._canvas.setFocusPolicy(Qt.NoFocus)
         self._preview_viewport = PreviewViewport()
+        self._preview_viewport.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_viewport.setMinimumSize(PREVIEW_MIN_W, MIN_PREVIEW_H)
         self._preview_viewport.set_event_target(self._canvas)
         self._preview_viewport.set_scale_callback(self._update_scale_label_from_viewport)
         self._preview_initialized = True
@@ -1116,13 +1127,7 @@ class PureMplFigureComposer(QMainWindow):
         elif mode == "preset":
             preset = preset or "wide"
             if force_recompute or width is None or height is None:
-                if preset == "tall":
-                    width, height = base_w, base_h * 1.25
-                elif preset == "square":
-                    width = base_w
-                    height = width
-                else:
-                    width, height = base_w * 1.25, base_h
+                width, height = preset_dimensions_from_base(base_w, base_h, preset)
             self._fig_spec.size_preset = preset
         else:  # custom
             if width is None or height is None:
@@ -1191,14 +1196,20 @@ class PureMplFigureComposer(QMainWindow):
     # Event handlers
     # ------------------------------------------------------------------
     def showEvent(self, event: QShowEvent) -> None:
-        """Ensure the first refresh happens after the dialog is visible."""
+        """Ensure the first refresh happens after the dialog is visible and layout is sane."""
         super().showEvent(event)
         QTimer.singleShot(0, self._apply_dynamic_minimum_size)
-        if self._first_show_done:
-            return
-        self._first_show_done = True
-        self._apply_default_view_once()
-        self._refresh_preview()
+        needs_init = not self._splitter_initialized
+        if self._main_splitter is not None:
+            sizes = self._main_splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 0 and sizes[1] >= CONTROL_MIN_W:
+                needs_init = False
+        if needs_init:
+            QTimer.singleShot(0, lambda: self._init_splitter_sizes_once(force=True))
+        if not self._first_show_done:
+            self._first_show_done = True
+            self._apply_default_view_once()
+            self._refresh_preview()
 
     def apply_theme(self) -> None:
         """Update theme-dependent colors when theme changes."""
@@ -1305,22 +1316,13 @@ class PureMplFigureComposer(QMainWindow):
         self._update_export_size_label()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._save_window_state()
         # Persist any pending changes
         self._persist_recipe_snapshot()
         # Immediately emit signal on close (don't wait for debounce timer)
         if self._pending_signal_emit and self.dataset_id:
             self._emit_tree_update_signal()
         super().closeEvent(event)
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        needs_init = True
-        if self._main_splitter is not None:
-            sizes = self._main_splitter.sizes()
-            if len(sizes) >= 2 and sizes[0] > 0 and sizes[1] >= CONTROL_MIN_W:
-                needs_init = False
-        if needs_init:
-            QTimer.singleShot(0, lambda: self._init_splitter_sizes_once(force=True))
 
     def _on_events_toggled(self, checked: bool) -> None:
         self._set_events_visible(checked)
@@ -1444,7 +1446,7 @@ class PureMplFigureComposer(QMainWindow):
             respect_overrides=True,
         )
         self._apply_size_policy_from_spec(
-            force_recompute=getattr(self._fig_spec, "size_mode", "template") == "template",
+            force_recompute=getattr(self._fig_spec, "size_mode", "template") in ("template", "preset"),
             refresh=False,
             update_controls=False,
         )
@@ -1456,6 +1458,50 @@ class PureMplFigureComposer(QMainWindow):
     # ------------------------------------------------------------------
     # Preview helpers
     # ------------------------------------------------------------------
+    def _settings(self) -> QSettings:
+        return QSettings("TykockiLab", "VasoAnalyzer")
+
+    def _restore_window_state(self) -> bool:
+        """Restore saved window geometry and splitter sizes; return True if anything restored."""
+        restored_any = False
+        settings = self._settings()
+        try:
+            geom = settings.value("composer/windowGeometry")
+            if geom is not None:
+                self.restoreGeometry(geom)
+                restored_any = True
+        except Exception:
+            log.debug("Failed to restore composer window geometry", exc_info=True)
+        try:
+            sizes = settings.value("composer/splitterSizes")
+            if sizes:
+                sizes_list = [int(s) for s in sizes]
+                if (
+                    len(sizes_list) >= 2
+                    and sizes_list[1] >= CONTROL_MIN_W
+                    and all(s > 0 for s in sizes_list)
+                    and self._main_splitter is not None
+                ):
+                    self._main_splitter.setSizes(sizes_list)
+                    self._splitter_initialized = True
+                    restored_any = True
+        except Exception:
+            log.debug("Failed to restore composer splitter sizes", exc_info=True)
+        return restored_any
+
+    def _save_window_state(self) -> None:
+        """Persist window geometry and splitter sizes."""
+        settings = self._settings()
+        try:
+            settings.setValue("composer/windowGeometry", self.saveGeometry())
+        except Exception:
+            log.debug("Failed to persist composer geometry", exc_info=True)
+        try:
+            if self._main_splitter is not None:
+                settings.setValue("composer/splitterSizes", self._main_splitter.sizes())
+        except Exception:
+            log.debug("Failed to persist composer splitter sizes", exc_info=True)
+
     def _log_layout_state_once(self) -> None:
         """Temporary diagnostic log for layout wiring."""
         try:
@@ -1528,6 +1574,14 @@ class PureMplFigureComposer(QMainWindow):
             return
         if self._in_preview_capture:
             return
+        renderer_ready = bool(getattr(self._canvas, "renderer", None))
+        log.info(
+            "Preview capture begin: canvas=%sx%s renderer_ready=%s dpi=%.2f",
+            self._canvas.width(),
+            self._canvas.height(),
+            renderer_ready,
+            self._figure.get_dpi() if self._figure else -1,
+        )
         self._in_preview_capture = True
         try:
             self._canvas.draw()
@@ -1541,6 +1595,7 @@ class PureMplFigureComposer(QMainWindow):
                 h_px, w_px = buf.shape[:2]
             except Exception:
                 w_px, h_px = map(int, self._figure.bbox.size)
+            log.info("Preview buffer shape w=%s h=%s", w_px, h_px)
 
             if w_px <= 0 or h_px <= 0:
                 log.warning("Preview capture produced invalid size: w=%s h=%s", w_px, h_px)
@@ -1557,7 +1612,15 @@ class PureMplFigureComposer(QMainWindow):
             if qimg.isNull():
                 log.warning("Preview capture produced null QImage w=%s h=%s", w_px, h_px)
                 return
-
+            log.info(
+                "Preview capture ready: qimg=%sx%s dpr=%.2f isNull=%s viewport=%sx%s",
+                qimg.width(),
+                qimg.height(),
+                float(qimg.devicePixelRatio()),
+                qimg.isNull(),
+                self._preview_viewport.width(),
+                self._preview_viewport.height(),
+            )
             self._preview_viewport.set_image(qimg)
             self._preview_viewport.update()
         finally:
@@ -1765,6 +1828,14 @@ class PureMplFigureComposer(QMainWindow):
         """
         if not self._preview_initialized or self._figure is None or self._canvas is None:
             return
+        log.info(
+            "Preview refresh start size_changed=%s fig_px=%s canvas=%sx%s renderer=%s",
+            size_changed,
+            self._last_figure_size,
+            self._canvas.width(),
+            self._canvas.height(),
+            bool(getattr(self._canvas, "renderer", None)),
+        )
         self._enforce_page_bounds(update_controls=True)
         ctx = self._render_context(is_preview=True)
         build_figure(self._fig_spec, ctx, fig=self._figure)
@@ -1782,6 +1853,7 @@ class PureMplFigureComposer(QMainWindow):
         self._render_preview_image()
         self._update_export_size_label()
         self._mark_dirty_and_schedule_persist()
+        log.info("Preview refresh done")
 
     def _apply_dynamic_minimum_size(self) -> None:
         """Derive a sane minimum window size from panel hints and preview needs."""

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable
 
 from PyQt5.QtCore import QPointF, Qt
@@ -14,6 +15,8 @@ from PyQt5.QtGui import (
 )
 from PyQt5.QtWidgets import QApplication, QWidget
 
+log = logging.getLogger(__name__)
+
 
 class PreviewViewport(QWidget):
     """Preview widget that scales the rendered figure image to fit without clipping."""
@@ -26,10 +29,12 @@ class PreviewViewport(QWidget):
         self._last_scale: float | None = None
         self._last_offset_x: float = 0.0
         self._last_offset_y: float = 0.0
+        self._log_next_paint: bool = False
         self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
     def set_image(self, image: QImage | None) -> None:
         self._img = image
+        self._log_next_paint = True
         self.update()
 
     def set_scale_callback(self, cb: Callable[[float], None] | None) -> None:
@@ -43,6 +48,13 @@ class PreviewViewport(QWidget):
         painter.fillRect(self.rect(), self.palette().window())
         img = self._img
         if img is None or img.isNull():
+            if self._log_next_paint:
+                log.info(
+                    "Preview paint skipped: no image widget=%sx%s",
+                    self.width(),
+                    self.height(),
+                )
+                self._log_next_paint = False
             if self._scale_cb:
                 self._scale_cb(1.0)
             return
@@ -63,6 +75,20 @@ class PreviewViewport(QWidget):
         self._last_offset_y = y
         if self._scale_cb:
             self._scale_cb(scale)
+        if self._log_next_paint:
+            log.info(
+                "Preview paint: widget=%sx%s pane=%.1fx%.1f img=%sx%s scale=%.4f offsets=(%.1f, %.1f)",
+                self.width(),
+                self.height(),
+                pane_w,
+                pane_h,
+                img_w,
+                img_h,
+                scale,
+                x,
+                y,
+            )
+            self._log_next_paint = False
 
         pix = QPixmap.fromImage(img)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)

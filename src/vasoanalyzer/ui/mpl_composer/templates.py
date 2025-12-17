@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 DEFAULT_TEMPLATE_ID = "single_column"
+WIDE_MULTIPLIER = 1.25
+TALL_MULTIPLIER = 1.25
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,32 @@ _TEMPLATES: Dict[str, TemplatePreset] = {
 def get_template_preset(template_id: str) -> TemplatePreset:
     """Return the preset for template_id (fallback to default)."""
     return _TEMPLATES.get(template_id, _TEMPLATES[DEFAULT_TEMPLATE_ID])
+
+
+def preset_dimensions_from_base(base_w: float, base_h: float, preset: str) -> tuple[float, float]:
+    """
+    Derive preset width/height (inches) from a base template size.
+
+    Wide: width * k, height / k
+    Tall: width / k, height * k
+    Square: side = sqrt(base_w * base_h)
+    Area stays constant; aspect changes by k (wide) or 1/k (tall).
+    """
+    try:
+        base_w = float(base_w)
+        base_h = float(base_h)
+    except Exception:
+        return base_w, base_h
+    if base_w <= 0 or base_h <= 0:
+        return base_w, base_h
+    k = WIDE_MULTIPLIER
+    p = (preset or "wide").lower()
+    if p == "square":
+        side = (base_w * base_h) ** 0.5
+        return side, side
+    if p == "tall":
+        return base_w / k, base_h * k
+    return base_w * k, base_h / k
 
 
 def apply_template_preset(
