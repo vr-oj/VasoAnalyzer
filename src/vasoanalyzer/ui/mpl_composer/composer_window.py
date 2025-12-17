@@ -62,10 +62,13 @@ from .spec_serialization import figure_spec_from_dict, figure_spec_to_dict
 
 log = logging.getLogger(__name__)
 
-MIN_PREVIEW_W = 560  # Minimum usable preview width (px)
+MIN_PREVIEW_W = 520  # Minimum usable preview width (px)
 MIN_PREVIEW_H = 360  # Minimum usable preview height (px)
 EXTRA_W_PAD = 48     # Window chrome/layout breathing room (px)
 EXTRA_H_PAD = 140    # Header/export rows + margins (px)
+CONTROL_MIN_W = 380
+PREVIEW_MIN_W = 520
+WINDOW_MIN_W = CONTROL_MIN_W + PREVIEW_MIN_W + 80
 
 
 @contextmanager
@@ -228,9 +231,12 @@ class PureMplFigureComposer(QMainWindow):
         self._preview_viewport: PreviewViewport | None = None
         self._preview_scale_label: QLabel | None = None
         self._right_panel: QWidget | None = None
-        self._splitter: QSplitter | None = None
+        self._main_splitter: QSplitter | None = None
         self._last_figure_size: tuple[float, float] | None = None  # Track (width_px, height_px)
         self._export_dpi: float = float(self._fig_spec.page.dpi)
+        self._splitter_initialized: bool = False
+        self._splitter_retry_scheduled: bool = False
+        self._in_preview_capture: bool = False
         self._persist_timer: QTimer | None = None
         self._pending_dirty: bool = False
         self._signal_emit_timer: QTimer | None = None
@@ -247,7 +253,7 @@ class PureMplFigureComposer(QMainWindow):
         self._sync_controls_from_spec()
         self._refresh_preview()
         QTimer.singleShot(0, self._apply_dynamic_minimum_size)
-        QTimer.singleShot(0, self._apply_initial_splitter_sizes)
+        QTimer.singleShot(0, self._init_splitter_sizes_once)
 
     # ------------------------------------------------------------------
     # Spec / context helpers
@@ -444,7 +450,8 @@ class PureMplFigureComposer(QMainWindow):
     # UI setup
     # ------------------------------------------------------------------
     def _setup_ui(self) -> None:
-        self.resize(1300, 850)
+        self.resize(max(1300, WINDOW_MIN_W), 850)
+        self.setMinimumWidth(WINDOW_MIN_W)
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
@@ -464,7 +471,7 @@ class PureMplFigureComposer(QMainWindow):
             canvas_frame = QWidget()
             self._canvas_container = canvas_frame
             canvas_frame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            canvas_frame.setMinimumSize(MIN_PREVIEW_W, MIN_PREVIEW_H)
+            canvas_frame.setMinimumSize(max(MIN_PREVIEW_W, PREVIEW_MIN_W), MIN_PREVIEW_H)
             canvas_layout = QVBoxLayout(canvas_frame)
             canvas_layout.setContentsMargins(0, 0, 0, 0)
             canvas_layout.addStretch(1)
@@ -511,8 +518,8 @@ class PureMplFigureComposer(QMainWindow):
         scroll.setWidget(right_content)
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setMinimumWidth(380)
-        right_content.setMinimumWidth(380)
+        scroll.setMinimumWidth(CONTROL_MIN_W)
+        right_content.setMinimumWidth(CONTROL_MIN_W)
         scroll.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Expanding)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -526,10 +533,23 @@ class PureMplFigureComposer(QMainWindow):
             "QSplitter::handle { background: palette(mid); }"
             "QSplitter::handle:horizontal { width: 8px; }"
         )
-        self._splitter = splitter
+        self._main_splitter = splitter
 
         root.addWidget(splitter)
         self._right_panel = scroll
+
+        # Force an initial splitter layout before the first paint.
+        init_w = max(self.width(), WINDOW_MIN_W)
+        init_h = max(self.height(), 700)
+        self.resize(init_w, init_h)
+        if self._main_splitter:
+            self._main_splitter.setSizes([max(PREVIEW_MIN_W, init_w - CONTROL_MIN_W), CONTROL_MIN_W])
+            sizes = self._main_splitter.sizes()
+            log.info("Composer splitter sizes initial: %s", sizes)
+            if len(sizes) >= 2 and sizes[1] >= CONTROL_MIN_W and all(s > 0 for s in sizes):
+                self._splitter_initialized = True
+            self._main_splitter.update()
+            self._main_splitter.repaint()
 
         if self.btn_export is not None:
             self.btn_export.clicked.connect(self._export_dialog)
@@ -546,10 +566,12 @@ class PureMplFigureComposer(QMainWindow):
         self._figure = fig
         self._canvas = FigureCanvasQTAgg(fig)
         self._canvas.setParent(self)
+        self._canvas.setAttribute(Qt.WA_DontShowOnScreen, True)
+        self._canvas.setVisible(False)
+        self._canvas.hide()
         self._sync_canvas_size_to_figure()
         self._canvas.setMinimumSize(1, 1)
-        self._canvas.setFocusPolicy(Qt.ClickFocus)
-        self._canvas.mpl_connect("draw_event", lambda _: self._render_preview_image())
+        self._canvas.setFocusPolicy(Qt.NoFocus)
         self._preview_viewport = PreviewViewport()
         self._preview_viewport.set_event_target(self._canvas)
         self._preview_viewport.set_scale_callback(self._update_scale_label_from_viewport)
@@ -1290,6 +1312,16 @@ class PureMplFigureComposer(QMainWindow):
             self._emit_tree_update_signal()
         super().closeEvent(event)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        needs_init = True
+        if self._main_splitter is not None:
+            sizes = self._main_splitter.sizes()
+            if len(sizes) >= 2 and sizes[0] > 0 and sizes[1] >= CONTROL_MIN_W:
+                needs_init = False
+        if needs_init:
+            QTimer.singleShot(0, lambda: self._init_splitter_sizes_once(force=True))
+
     def _on_events_toggled(self, checked: bool) -> None:
         self._set_events_visible(checked)
 
@@ -1424,6 +1456,23 @@ class PureMplFigureComposer(QMainWindow):
     # ------------------------------------------------------------------
     # Preview helpers
     # ------------------------------------------------------------------
+    def _log_layout_state_once(self) -> None:
+        """Temporary diagnostic log for layout wiring."""
+        try:
+            main = self.centralWidget()
+            child = main.layout().itemAt(0).widget() if main and main.layout() else None
+            is_splitter = isinstance(child, QSplitter)
+            sizes = child.sizes() if is_splitter else []
+            log.info(
+                "Composer layout: main=%s splitter=%s children=%s sizes=%s",
+                type(main).__name__ if main else None,
+                type(child).__name__ if child else None,
+                child.count() if is_splitter else None,
+                sizes,
+            )
+        except Exception:
+            log.debug("Failed to log layout state", exc_info=True)
+
     def _set_manual_ranges(self, xmin: float, xmax: float, ymin: float, ymax: float, *, refresh: bool) -> None:
         """Update spec ranges and optionally rebuild; used by box select."""
         axes = self._fig_spec.axes
@@ -1477,13 +1526,42 @@ class PureMplFigureComposer(QMainWindow):
         """Render the current figure to a QImage and hand it to the viewport."""
         if self._canvas is None or self._preview_viewport is None:
             return
-        buf = self._canvas.buffer_rgba()
-        w_px, h_px = self._canvas.get_width_height()
-        try:
-            qimg = QImage(buf, w_px, h_px, QImage.Format_RGBA8888).copy()
-        except Exception:
+        if self._in_preview_capture:
             return
-        self._preview_viewport.set_image(qimg)
+        self._in_preview_capture = True
+        try:
+            self._canvas.draw()
+            try:
+                buf = self._canvas.buffer_rgba()
+            except Exception:
+                log.exception("Preview capture failed: canvas.buffer_rgba()")
+                return
+
+            try:
+                h_px, w_px = buf.shape[:2]
+            except Exception:
+                w_px, h_px = map(int, self._figure.bbox.size)
+
+            if w_px <= 0 or h_px <= 0:
+                log.warning("Preview capture produced invalid size: w=%s h=%s", w_px, h_px)
+                return
+
+            try:
+                data = buf.tobytes()
+                bytes_per_line = 4 * w_px
+                qimg = QImage(data, w_px, h_px, bytes_per_line, QImage.Format_RGBA8888).copy()
+            except Exception:
+                log.exception("Preview capture failed: QImage construction w=%s h=%s", w_px, h_px)
+                return
+
+            if qimg.isNull():
+                log.warning("Preview capture produced null QImage w=%s h=%s", w_px, h_px)
+                return
+
+            self._preview_viewport.set_image(qimg)
+            self._preview_viewport.update()
+        finally:
+            self._in_preview_capture = False
 
     def _update_scale_label_from_viewport(self, scale: float) -> None:
         if self._preview_scale_label is None:
@@ -1701,7 +1779,6 @@ class PureMplFigureComposer(QMainWindow):
                 self._create_box_selector(ax)
         else:
             self._destroy_box_selector()
-        self._canvas.draw()  # Draw immediately so preview QImage is current
         self._render_preview_image()
         self._update_export_size_label()
         self._mark_dirty_and_schedule_persist()
@@ -1728,34 +1805,41 @@ class PureMplFigureComposer(QMainWindow):
         else:
             lm = tm = rm = bm = 0
 
-        min_w = int(rp_w + MIN_PREVIEW_W + spacing + lm + rm + EXTRA_W_PAD)
+        min_w = max(
+            WINDOW_MIN_W,
+            int(rp_w + MIN_PREVIEW_W + spacing + lm + rm + EXTRA_W_PAD),
+        )
         min_h = int(MIN_PREVIEW_H + tm + bm + EXTRA_H_PAD)
         self.setMinimumSize(min_w, min_h)
 
-    def _log_layout_state_once(self) -> None:
-        """Temporary diagnostic log for layout wiring."""
-        try:
-            main = self.centralWidget()
-            child = main.layout().itemAt(0).widget() if main and main.layout() else None
-            is_splitter = isinstance(child, QSplitter)
-            sizes = child.sizes() if is_splitter else []
-            log.info(
-                "Composer layout: main=%s splitter=%s children=%s sizes=%s",
-                type(main).__name__ if main else None,
-                type(child).__name__ if child else None,
-                child.count() if is_splitter else None,
-                sizes,
-            )
-        except Exception:
-            log.debug("Failed to log layout state", exc_info=True)
-
-    def _apply_initial_splitter_sizes(self) -> None:
+    def _init_splitter_sizes_once(self, *, retry: bool = False, force: bool = False) -> None:
         """Give the preview most space while keeping the right panel visible."""
-        if self._splitter is None or self._right_panel is None:
+        if self._splitter_initialized and not force:
             return
-        panel_w = max(380, self._right_panel.minimumWidth())
-        total_w = max(self.width(), panel_w + 200)
-        self._splitter.setSizes([total_w - panel_w, panel_w])
+        if self._main_splitter is None or self._right_panel is None:
+            return
+        sizes_now = self._main_splitter.sizes()
+        if (
+            not force
+            and len(sizes_now) >= 2
+            and sizes_now[0] > 0
+            and sizes_now[1] >= CONTROL_MIN_W
+        ):
+            self._splitter_initialized = True
+            return
+        panel_w = max(CONTROL_MIN_W, self._right_panel.minimumWidth())
+        total_w = max(self.width(), WINDOW_MIN_W)
+        self._main_splitter.setCollapsible(1, False)
+        self._main_splitter.setHandleWidth(max(8, self._main_splitter.handleWidth()))
+        self._main_splitter.setSizes([max(PREVIEW_MIN_W, total_w - panel_w), panel_w])
+        sizes = self._main_splitter.sizes()
+        log.info("Composer splitter sizes after init%s: %s", " (retry)" if retry else "", sizes)
+        if len(sizes) >= 2 and sizes[1] >= CONTROL_MIN_W and all(s > 0 for s in sizes):
+            self._splitter_initialized = True
+            return
+        if not self._splitter_retry_scheduled:
+            self._splitter_retry_scheduled = True
+            QTimer.singleShot(50, lambda: self._init_splitter_sizes_once(retry=True, force=True))
 
     def _update_export_size_label(self) -> None:
         if self.label_export_size is None:
