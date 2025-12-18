@@ -7,6 +7,7 @@ from vasoanalyzer.ui.mpl_composer.renderer import (
     RenderContext,
     TraceSpec,
     build_figure,
+    validate_required_visibility,
 )
 from vasoanalyzer.ui.mpl_composer.spec_serialization import (
     figure_spec_from_dict,
@@ -43,20 +44,21 @@ def test_template_mode_tracks_template_size():
 
 
 def test_preset_size_survives_template_switch():
+    # Preset sizes recompute from the active template defaults; verify deterministic mapping.
     spec = _base_spec("single_column")
     apply_template_preset(spec, "single_column", respect_overrides=False)
-    base = get_template_preset("single_column").layout_defaults
     spec.size_mode = "preset"
     spec.size_preset = "wide"
-    spec.figure_width_in = base["width_in"] * 1.25
-    spec.figure_height_in = base["height_in"]
-    spec.page.width_in = spec.figure_width_in
-    spec.page.height_in = spec.figure_height_in
+    sc_w, sc_h = _apply_size_like_composer(spec)
 
+    spec.template_id = "double_column"
     apply_template_preset(spec, "double_column", respect_overrides=True)
+    base_dc = get_template_preset("double_column").layout_defaults
+    dc_w, dc_h = preset_dimensions_from_base(base_dc["width_in"], base_dc["height_in"], "wide")
+    _apply_size_like_composer(spec)
 
-    assert spec.page.width_in == pytest.approx(base["width_in"] * 1.25)
-    assert spec.page.height_in == pytest.approx(base["height_in"])
+    assert spec.page.width_in == pytest.approx(dc_w)
+    assert spec.page.height_in == pytest.approx(dc_h)
 
 
 def test_renderer_respects_figure_size_override_and_serialization():
@@ -66,6 +68,7 @@ def test_renderer_respects_figure_size_override_and_serialization():
     spec.page.width_in = 3.0
     spec.page.height_in = 1.5
     spec.size_mode = "custom"
+    spec.page.sizing_mode = "axes_first"
 
     ctx = RenderContext(is_preview=True, trace_model=None)
     fig = build_figure(spec, ctx)
@@ -99,3 +102,67 @@ def test_preset_aspect_preserves_area_and_direction():
     assert pytest.approx(base_area) == pytest.approx(wide_w * wide_h)
     assert pytest.approx(base_area) == pytest.approx(tall_w * tall_h)
     assert pytest.approx(base_area) == pytest.approx(square_w * square_h)
+
+
+def _apply_size_like_composer(spec: FigureSpec) -> tuple[float, float]:
+    base = get_template_preset(spec.template_id).layout_defaults
+    base_w, base_h = float(base["width_in"]), float(base["height_in"])
+    mode = getattr(spec, "size_mode", "template")
+    preset = getattr(spec, "size_preset", None) or "wide"
+    if mode == "template":
+        w, h = base_w, base_h
+    elif mode == "preset":
+        w, h = preset_dimensions_from_base(base_w, base_h, preset)
+    else:
+        w = getattr(spec, "figure_width_in", None) or base_w
+        h = getattr(spec, "figure_height_in", None) or base_h
+    if hasattr(spec.page, "sizing_mode"):
+        spec.page.sizing_mode = "figure_first"
+    if hasattr(spec.page, "axes_first"):
+        spec.page.axes_first = False
+    for attr in ("axes_width_in", "axes_height_in", "effective_width_in", "effective_height_in"):
+        if hasattr(spec.page, attr):
+            setattr(spec.page, attr, None)
+    spec.figure_width_in = w
+    spec.figure_height_in = h
+    spec.page.width_in = w
+    spec.page.height_in = h
+    return w, h
+
+
+def test_preset_cycle_deterministic():
+    spec = _base_spec("single_column")
+    apply_template_preset(spec, "single_column", respect_overrides=False)
+    spec.size_mode = "preset"
+    spec.size_preset = "wide"
+    w1, h1 = _apply_size_like_composer(spec)
+    assert getattr(spec.page, "sizing_mode", None) == "figure_first"
+
+    spec.size_preset = "square"
+    _apply_size_like_composer(spec)
+    spec.size_preset = "wide"
+    w2, h2 = _apply_size_like_composer(spec)
+
+    assert w2 == pytest.approx(w1)
+    assert h2 == pytest.approx(h1)
+
+
+def test_preset_template_cycle_deterministic():
+    spec = _base_spec("single_column")
+    apply_template_preset(spec, "single_column", respect_overrides=False)
+    spec.size_mode = "preset"
+    spec.size_preset = "wide"
+    w1, h1 = _apply_size_like_composer(spec)
+    assert getattr(spec.page, "sizing_mode", None) == "figure_first"
+
+
+def test_validate_skips_off_axis_tick_labels():
+    spec = _base_spec()
+    spec.axes.x_range = (0.0, 1.0)
+    ctx = RenderContext(is_preview=True, trace_model=None)
+    fig = build_figure(spec, ctx)
+    ax = fig.axes[0]
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xticks([0.0, 0.5, 1.0, 2.0])  # tick outside range
+    issues = validate_required_visibility(fig, spec, check_only=True)
+    assert not any("2" in msg for msg in issues)

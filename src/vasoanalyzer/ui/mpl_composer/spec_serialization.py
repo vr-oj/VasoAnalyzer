@@ -119,7 +119,7 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
         width_in=float(page_d.get("width_in", 6.0)),
         height_in=float(page_d.get("height_in", 3.0)),
         dpi=float(page_d.get("dpi", 300.0)),
-        sizing_mode=page_d.get("sizing_mode", "axes_first"),
+        sizing_mode=page_d.get("sizing_mode", "figure_first"),
         axes_first=bool(page_d.get("axes_first", False)),
         axes_width_in=page_d.get("axes_width_in"),
         axes_height_in=page_d.get("axes_height_in"),

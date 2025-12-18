@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Tuple, TYPE_CHECKING, Literal
 import numpy as np
 from matplotlib import patches as mpatches
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 if TYPE_CHECKING:
@@ -53,7 +54,7 @@ class PageSpec:
     width_in: float
     height_in: float
     dpi: float
-    sizing_mode: Literal["axes_first", "figure_first"] = "axes_first"
+    sizing_mode: Literal["axes_first", "figure_first"] = "figure_first"
     axes_first: bool = False
     axes_width_in: Optional[float] = None
     axes_height_in: Optional[float] = None
@@ -440,6 +441,8 @@ def export_figure(
     transparent: bool = False,
     ctx: RenderContext | None = None,
     export_background: str | None = None,
+    *,
+    skip_visibility_check: bool = False,
 ) -> None:
     """Export a FigureSpec to disk using only page size + DPI."""
     render_ctx = ctx or RenderContext(is_preview=False, trace_model=None)
@@ -481,11 +484,12 @@ def export_figure(
             log.debug("tight_layout skipped", exc_info=True)
 
     # Ensure required elements remain visible; one corrective pass only.
-    try:
-        _ensure_required_visibility(fig, spec)
-    except Exception as exc:
-        log.warning("Visibility validation failed: %s", exc)
-        raise
+    if not skip_visibility_check:
+        try:
+            _ensure_required_visibility(fig, spec)
+        except Exception as exc:
+            log.warning("Visibility validation failed: %s", exc)
+            raise
 
     # Determine export background behavior
     bg_mode = export_background or getattr(spec.page, "export_background", "white")
@@ -828,8 +832,42 @@ def _collect_required_artists(ax: "Axes", spec: FigureSpec) -> List[object]:
 
     # Tick labels
     try:
-        artists.extend([lbl for lbl in ax.get_xticklabels() if lbl.get_text()])
-        artists.extend([lbl for lbl in ax.get_yticklabels() if lbl.get_text()])
+        x_range_req = getattr(getattr(spec, "axes", None), "x_range", None)
+        y_range_req = getattr(getattr(spec, "axes", None), "y_range", None)
+        x_min, x_max = x_range_req if x_range_req is not None else ax.get_xlim()
+        y_min, y_max = y_range_req if y_range_req is not None else ax.get_ylim()
+        for lbl in ax.get_xticklabels():
+            if not lbl.get_text():
+                continue
+            try:
+                pos = lbl.get_position()[0]
+                if pos < x_min or pos > x_max:
+                    continue
+                try:
+                    txt_val = float(lbl.get_text())
+                    if txt_val < x_min or txt_val > x_max:
+                        continue
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            artists.append(lbl)
+        for lbl in ax.get_yticklabels():
+            if not lbl.get_text():
+                continue
+            try:
+                pos = lbl.get_position()[1]
+                if pos < y_min or pos > y_max:
+                    continue
+                try:
+                    txt_val = float(lbl.get_text())
+                    if txt_val < y_min or txt_val > y_max:
+                        continue
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            artists.append(lbl)
     except Exception:
         log.debug("Failed to collect tick labels", exc_info=True)
 
@@ -850,6 +888,22 @@ def _validate_artists(fig: Figure, artists: List[object], *, tolerance: float = 
         try:
             if hasattr(art, "get_visible") and not art.get_visible():
                 continue
+            if _is_off_axis_ticklabel(art):
+                continue
+            if isinstance(art, Text) and getattr(art, "axes", None) is not None:
+                try:
+                    txt_val = float(getattr(art, "get_text", lambda: "")())
+                    ax = art.axes
+                    if art in ax.get_xticklabels():
+                        xmin, xmax = ax.get_xlim()
+                        if txt_val < xmin or txt_val > xmax:
+                            continue
+                    if art in ax.get_yticklabels():
+                        ymin, ymax = ax.get_ylim()
+                        if txt_val < ymin or txt_val > ymax:
+                            continue
+                except Exception:
+                    pass
             bbox = art.get_window_extent(renderer=renderer)
             if bbox is None:
                 continue
@@ -868,19 +922,55 @@ def _validate_artists(fig: Figure, artists: List[object], *, tolerance: float = 
     return failures
 
 
-def _ensure_required_visibility(fig: Figure, spec: FigureSpec) -> None:
-    """Validate required artists; try one corrective layout pass before erroring."""
+def _is_off_axis_ticklabel(art: object) -> bool:
+    """Skip tick labels whose positions are outside the axis limits (e.g., locator overrun)."""
+    ax = getattr(art, "axes", None)
+    if ax is None:
+        return False
+    try:
+        if art in ax.get_xticklabels():
+            val = art.get_position()[0]
+            xmin, xmax = ax.get_xlim()
+            if val < xmin or val > xmax:
+                return True
+            try:
+                txt_val = float(getattr(art, "get_text", lambda: "")())
+                if txt_val < xmin or txt_val > xmax:
+                    return True
+            except Exception:
+                pass
+        if art in ax.get_yticklabels():
+            val = art.get_position()[1]
+            ymin, ymax = ax.get_ylim()
+            if val < ymin or val > ymax:
+                return True
+            try:
+                txt_val = float(getattr(art, "get_text", lambda: "")())
+                if txt_val < ymin or txt_val > ymax:
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        return False
+    return False
+
+
+def validate_required_visibility(
+    fig: Figure,
+    spec: FigureSpec,
+    *,
+    check_only: bool = False,
+) -> List[str]:
+    """Validate required artists; optionally avoid corrective layout passes."""
     if not fig.axes:
-        return
+        return []
     ax = fig.axes[0]
     explicit_margins = _has_explicit_margins(spec.page)
-    if explicit_margins:
-        return
     tol = 10.0 if explicit_margins else 1.5
     artists = _collect_required_artists(ax, spec)
     failures = _validate_artists(fig, artists, tolerance=tol)
-    if not failures:
-        return
+    if not failures or check_only or explicit_margins:
+        return failures
 
     # One corrective pass
     if not explicit_margins:
@@ -889,6 +979,12 @@ def _ensure_required_visibility(fig: Figure, spec: FigureSpec) -> None:
         except Exception:
             log.debug("tight_layout corrective pass skipped", exc_info=True)
     failures = _validate_artists(fig, artists, tolerance=tol)
+    return failures
+
+
+def _ensure_required_visibility(fig: Figure, spec: FigureSpec) -> None:
+    """Validate required artists; try one corrective layout pass before erroring."""
+    failures = validate_required_visibility(fig, spec, check_only=False)
     if failures:
         msg = "; ".join(failures)
         raise ValueError(

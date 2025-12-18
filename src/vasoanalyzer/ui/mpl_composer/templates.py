@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 DEFAULT_TEMPLATE_ID = "single_column"
-WIDE_MULTIPLIER = 1.25
-TALL_MULTIPLIER = 1.25
+WIDE_MULTIPLIER = 1.35
+TALL_MULTIPLIER = 1.35
 
 
 @dataclass(frozen=True)

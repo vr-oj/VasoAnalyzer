@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import json
 from copy import deepcopy
 from contextlib import contextmanager
@@ -52,6 +53,7 @@ from .renderer import (
     TraceSpec,
     build_figure,
     export_figure,
+    validate_required_visibility,
 )
 from .specs import GraphSpec
 from .templates import (
@@ -232,6 +234,8 @@ class PureMplFigureComposer(QMainWindow):
         self._canvas_container: QWidget | None = None
         self._preview_viewport: PreviewViewport | None = None
         self._preview_scale_label: QLabel | None = None
+        self._export_warning_label: QLabel | None = None
+        self._export_warning_details_btn: QPushButton | None = None
         self._right_panel: QWidget | None = None
         self._main_splitter: QSplitter | None = None
         self._last_figure_size: tuple[float, float] | None = None  # Track (width_px, height_px)
@@ -243,6 +247,8 @@ class PureMplFigureComposer(QMainWindow):
         self._pending_dirty: bool = False
         self._signal_emit_timer: QTimer | None = None
         self._pending_signal_emit: bool = False
+        self._preflight_timer: QTimer | None = None
+        self._preflight_issues: list[str] = []
         self._template_choices: list[tuple[str, str]] = [
             ("Single column", "single_column"),
             ("Double column", "double_column"),
@@ -566,12 +572,17 @@ class PureMplFigureComposer(QMainWindow):
             self.cb_export_transparent.toggled.connect(self._on_export_background_toggled)
         if self.spin_dpi is not None:
             self.spin_dpi.valueChanged.connect(self._on_export_dpi_changed)
+        if getattr(self, "btn_reset_layout", None) is not None:
+            self.btn_reset_layout.clicked.connect(self._reset_layout)
+        if self._export_warning_details_btn is not None:
+            self._export_warning_details_btn.clicked.connect(self._show_preflight_details)
         if self.btn_save_project is not None:
             self.btn_save_project.clicked.connect(self._save_to_project)
 
     def _create_preview(self) -> None:
         ctx = self._render_context(is_preview=True)
         fig = build_figure(self._fig_spec, ctx, fig=None)
+        self._update_export_size_label()
         self._figure = fig
         self._canvas = FigureCanvasQTAgg(fig)
         self._canvas.setParent(self)
@@ -617,6 +628,25 @@ class PureMplFigureComposer(QMainWindow):
         self.btn_export = QPushButton("Export Figure...")
         self.btn_export.setMinimumHeight(32)
         layout.addWidget(self.btn_export)
+
+        warn_row = QHBoxLayout()
+        self._export_warning_label = QLabel(
+            "Warning: Some labels may be clipped at export. Increase figure size or reduce font."
+        )
+        self._export_warning_label.setWordWrap(True)
+        self._export_warning_label.setStyleSheet("color: #b26b00;")
+        self._export_warning_label.setVisible(False)
+        warn_row.addWidget(self._export_warning_label, 1)
+        self._export_warning_details_btn = QPushButton("Details...")
+        self._export_warning_details_btn.setVisible(False)
+        self._export_warning_details_btn.setFixedHeight(24)
+        warn_row.addWidget(self._export_warning_details_btn, 0, Qt.AlignBottom)
+        layout.addLayout(warn_row)
+
+        # Reset layout button
+        self.btn_reset_layout = QPushButton("Reset layout")
+        self.btn_reset_layout.setMinimumHeight(28)
+        layout.addWidget(self.btn_reset_layout)
 
         # Save to project button
         self.btn_save_project = QPushButton("Save to Project")
@@ -1105,6 +1135,21 @@ class PureMplFigureComposer(QMainWindow):
         self._fig_spec.page.height_in = float(height_in)
         self._enforce_page_bounds(update_controls=update_controls)
 
+        # Ensure deterministic sizing semantics when cycling templates/presets.
+        # The composer UI interprets width/height as the overall figure size; keep the
+        # renderer in figure-first mode so we never silently switch into axes-first
+        # (auto-expanding) sizing.
+        try:
+            self._fig_spec.page.sizing_mode = "figure_first"
+            self._fig_spec.page.axes_first = False
+        except Exception:
+            pass
+
+        # Clear derived sizing outputs so labels cannot show stale sizes before the next render.
+        for _attr in ("axes_width_in", "axes_height_in", "effective_width_in", "effective_height_in"):
+            if hasattr(self._fig_spec.page, _attr):
+                setattr(self._fig_spec.page, _attr, None)
+
     def _apply_size_policy_from_spec(
         self, *, force_recompute: bool = False, refresh: bool = False, update_controls: bool = True
     ) -> None:
@@ -1126,8 +1171,7 @@ class PureMplFigureComposer(QMainWindow):
             self._fig_spec.size_preset = None
         elif mode == "preset":
             preset = preset or "wide"
-            if force_recompute or width is None or height is None:
-                width, height = preset_dimensions_from_base(base_w, base_h, preset)
+            width, height = preset_dimensions_from_base(base_w, base_h, preset)
             self._fig_spec.size_preset = preset
         else:  # custom
             if width is None or height is None:
@@ -1135,6 +1179,21 @@ class PureMplFigureComposer(QMainWindow):
             self._fig_spec.size_preset = None
 
         self._set_figure_size(width, height, update_controls=update_controls)
+        # Keep sizing deterministic: always render as figure-first in the composer.
+        try:
+            self._fig_spec.page.sizing_mode = "figure_first"
+            self._fig_spec.page.axes_first = False
+        except Exception:
+            pass
+        if os.environ.get("VASO_COMPOSER_DEBUG"):
+            log.debug(
+                "Applied size policy mode=%s preset=%s -> %.4fx%.4f in sizing_mode=%s",
+                mode,
+                getattr(self._fig_spec, "size_preset", None),
+                width,
+                height,
+                getattr(self._fig_spec.page, "sizing_mode", None),
+            )
         if refresh:
             self._refresh_preview(size_changed=True)
 
@@ -1462,45 +1521,80 @@ class PureMplFigureComposer(QMainWindow):
         return QSettings("TykockiLab", "VasoAnalyzer")
 
     def _restore_window_state(self) -> bool:
-        """Restore saved window geometry and splitter sizes; return True if anything restored."""
+        """Restore saved window geometry and splitter state; return True if anything restored."""
         restored_any = False
         settings = self._settings()
+        settings.beginGroup("mpl_composer/SingleFigureStudio")
         try:
-            geom = settings.value("composer/windowGeometry")
+            geom = settings.value("geometry")
             if geom is not None:
                 self.restoreGeometry(geom)
                 restored_any = True
         except Exception:
             log.debug("Failed to restore composer window geometry", exc_info=True)
         try:
-            sizes = settings.value("composer/splitterSizes")
-            if sizes:
-                sizes_list = [int(s) for s in sizes]
-                if (
-                    len(sizes_list) >= 2
-                    and sizes_list[1] >= CONTROL_MIN_W
-                    and all(s > 0 for s in sizes_list)
-                    and self._main_splitter is not None
-                ):
-                    self._main_splitter.setSizes(sizes_list)
+            state = settings.value("splitterState")
+            if state and self._main_splitter is not None:
+                if self._main_splitter.restoreState(state):
+                    sizes = self._main_splitter.sizes()
+                    min_right = max(CONTROL_MIN_W, self._right_panel.minimumWidth() if self._right_panel else CONTROL_MIN_W)
+                    if len(sizes) >= 2 and sizes[1] < min_right:
+                        total = sum(sizes)
+                        left = max(total - min_right, PREVIEW_MIN_W)
+                        self._main_splitter.setSizes([left, min_right])
                     self._splitter_initialized = True
                     restored_any = True
+            if not restored_any:
+                sizes = settings.value("splitterSizes")
+                if sizes and self._main_splitter is not None:
+                    sizes_list = [int(s) for s in sizes]
+                    if (
+                        len(sizes_list) >= 2
+                        and sizes_list[1] >= CONTROL_MIN_W
+                        and all(s > 0 for s in sizes_list)
+                    ):
+                        self._main_splitter.setSizes(sizes_list)
+                        self._splitter_initialized = True
+                        restored_any = True
         except Exception:
             log.debug("Failed to restore composer splitter sizes", exc_info=True)
+        settings.endGroup()
         return restored_any
 
     def _save_window_state(self) -> None:
         """Persist window geometry and splitter sizes."""
         settings = self._settings()
         try:
-            settings.setValue("composer/windowGeometry", self.saveGeometry())
+            settings.beginGroup("mpl_composer/SingleFigureStudio")
+            settings.setValue("geometry", self.saveGeometry())
         except Exception:
             log.debug("Failed to persist composer geometry", exc_info=True)
         try:
             if self._main_splitter is not None:
-                settings.setValue("composer/splitterSizes", self._main_splitter.sizes())
+                settings.setValue("splitterState", self._main_splitter.saveState())
+                settings.setValue("splitterSizes", self._main_splitter.sizes())
         except Exception:
             log.debug("Failed to persist composer splitter sizes", exc_info=True)
+        finally:
+            settings.endGroup()
+
+    def _reset_layout(self) -> None:
+        """Reset window/splitter to sensible defaults and scroll controls to top."""
+        default_w = max(1200, WINDOW_MIN_W)
+        default_h = max(800, MIN_PREVIEW_H + 300)
+        self.resize(default_w, default_h)
+        if self._main_splitter is not None:
+            right_w = max(CONTROL_MIN_W + 20, self._right_panel.minimumWidth() if self._right_panel else CONTROL_MIN_W)
+            self._main_splitter.setHandleWidth(max(8, self._main_splitter.handleWidth()))
+            self._main_splitter.setCollapsible(1, False)
+            self._main_splitter.setSizes([max(PREVIEW_MIN_W, default_w - right_w), right_w])
+            self._splitter_initialized = True
+        if self._right_panel is not None:
+            try:
+                self._right_panel.verticalScrollBar().setValue(0)
+            except Exception:
+                pass
+        self._save_window_state()
 
     def _log_layout_state_once(self) -> None:
         """Temporary diagnostic log for layout wiring."""
@@ -1575,13 +1669,14 @@ class PureMplFigureComposer(QMainWindow):
         if self._in_preview_capture:
             return
         renderer_ready = bool(getattr(self._canvas, "renderer", None))
-        log.info(
-            "Preview capture begin: canvas=%sx%s renderer_ready=%s dpi=%.2f",
-            self._canvas.width(),
-            self._canvas.height(),
-            renderer_ready,
-            self._figure.get_dpi() if self._figure else -1,
-        )
+        if os.environ.get("VASO_COMPOSER_DEBUG"):
+            log.info(
+                "Preview capture begin: canvas=%sx%s renderer_ready=%s dpi=%.2f",
+                self._canvas.width(),
+                self._canvas.height(),
+                renderer_ready,
+                self._figure.get_dpi() if self._figure else -1,
+            )
         self._in_preview_capture = True
         try:
             self._canvas.draw()
@@ -1595,7 +1690,8 @@ class PureMplFigureComposer(QMainWindow):
                 h_px, w_px = buf.shape[:2]
             except Exception:
                 w_px, h_px = map(int, self._figure.bbox.size)
-            log.info("Preview buffer shape w=%s h=%s", w_px, h_px)
+            if os.environ.get("VASO_COMPOSER_DEBUG"):
+                log.info("Preview buffer shape w=%s h=%s", w_px, h_px)
 
             if w_px <= 0 or h_px <= 0:
                 log.warning("Preview capture produced invalid size: w=%s h=%s", w_px, h_px)
@@ -1612,15 +1708,16 @@ class PureMplFigureComposer(QMainWindow):
             if qimg.isNull():
                 log.warning("Preview capture produced null QImage w=%s h=%s", w_px, h_px)
                 return
-            log.info(
-                "Preview capture ready: qimg=%sx%s dpr=%.2f isNull=%s viewport=%sx%s",
-                qimg.width(),
-                qimg.height(),
-                float(qimg.devicePixelRatio()),
-                qimg.isNull(),
-                self._preview_viewport.width(),
-                self._preview_viewport.height(),
-            )
+            if os.environ.get("VASO_COMPOSER_DEBUG"):
+                log.info(
+                    "Preview capture ready: qimg=%sx%s dpr=%.2f isNull=%s viewport=%sx%s",
+                    qimg.width(),
+                    qimg.height(),
+                    float(qimg.devicePixelRatio()),
+                    qimg.isNull(),
+                    self._preview_viewport.width(),
+                    self._preview_viewport.height(),
+                )
             self._preview_viewport.set_image(qimg)
             self._preview_viewport.update()
         finally:
@@ -1828,14 +1925,15 @@ class PureMplFigureComposer(QMainWindow):
         """
         if not self._preview_initialized or self._figure is None or self._canvas is None:
             return
-        log.info(
-            "Preview refresh start size_changed=%s fig_px=%s canvas=%sx%s renderer=%s",
-            size_changed,
-            self._last_figure_size,
-            self._canvas.width(),
-            self._canvas.height(),
-            bool(getattr(self._canvas, "renderer", None)),
-        )
+        if os.environ.get("VASO_COMPOSER_DEBUG"):
+            log.info(
+                "Preview refresh start size_changed=%s fig_px=%s canvas=%sx%s renderer=%s",
+                size_changed,
+                self._last_figure_size,
+                self._canvas.width(),
+                self._canvas.height(),
+                bool(getattr(self._canvas, "renderer", None)),
+            )
         self._enforce_page_bounds(update_controls=True)
         ctx = self._render_context(is_preview=True)
         build_figure(self._fig_spec, ctx, fig=self._figure)
@@ -1850,10 +1948,32 @@ class PureMplFigureComposer(QMainWindow):
                 self._create_box_selector(ax)
         else:
             self._destroy_box_selector()
+        # Mirror export layout tweaks so preview matches saved output.
+        page = getattr(self._fig_spec, "page", None)
+        explicit_margins = False
+        if page is not None:
+            explicit_margins = all(
+                getattr(page, attr, None) is not None for attr in ("left_margin_in", "right_margin_in", "top_margin_in", "bottom_margin_in")
+            )
+            if not explicit_margins:
+                try:
+                    aspect = page.height_in / max(page.width_in, 1e-6)
+                    if aspect >= 1.6 or page.width_in <= 3.0:
+                        self._figure.tight_layout(pad=0.02)
+                except Exception:
+                    log.debug("Preview tight_layout skip", exc_info=True)
+        try:
+            issues = validate_required_visibility(self._figure, self._fig_spec, check_only=False)
+            if issues and os.environ.get("VASO_COMPOSER_DEBUG"):
+                log.debug("Preview visibility issues: %s", issues)
+        except Exception:
+            log.debug("Preview visibility validation failed", exc_info=True)
         self._render_preview_image()
         self._update_export_size_label()
         self._mark_dirty_and_schedule_persist()
-        log.info("Preview refresh done")
+        self._schedule_preflight_check()
+        if os.environ.get("VASO_COMPOSER_DEBUG"):
+            log.info("Preview refresh done")
 
     def _apply_dynamic_minimum_size(self) -> None:
         """Derive a sane minimum window size from panel hints and preview needs."""
@@ -1912,6 +2032,44 @@ class PureMplFigureComposer(QMainWindow):
         if not self._splitter_retry_scheduled:
             self._splitter_retry_scheduled = True
             QTimer.singleShot(50, lambda: self._init_splitter_sizes_once(retry=True, force=True))
+
+    def _schedule_preflight_check(self, delay_ms: int = 350) -> None:
+        """Debounce validation to avoid UI lag."""
+        if self._preflight_timer is None:
+            self._preflight_timer = QTimer(self)
+            self._preflight_timer.setSingleShot(True)
+            self._preflight_timer.timeout.connect(self._run_preflight_check)
+        self._preflight_timer.stop()
+        self._preflight_timer.start(delay_ms)
+
+    def _run_preflight_check(self) -> None:
+        """Run a non-mutating visibility validation and surface warnings."""
+        issues: list[str] = []
+        try:
+            if self._figure is not None and self._fig_spec is not None:
+                issues = validate_required_visibility(self._figure, self._fig_spec, check_only=True)
+        except Exception:
+            log.debug("Preflight validation failed", exc_info=True)
+        self._preflight_issues = issues
+        self._update_preflight_warning_ui()
+
+    def _update_preflight_warning_ui(self) -> None:
+        has_issues = bool(self._preflight_issues)
+        if self._export_warning_label is not None:
+            self._export_warning_label.setVisible(has_issues)
+        if self._export_warning_details_btn is not None:
+            self._export_warning_details_btn.setVisible(has_issues)
+
+    def _show_preflight_details(self) -> None:
+        if not self._preflight_issues:
+            QMessageBox.information(self, "Export check", "No clipping issues detected.")
+            return
+        text = "\n".join(f"- {msg}" for msg in self._preflight_issues)
+        QMessageBox.warning(
+            self,
+            "Export may clip elements",
+            "Some elements may be clipped at export:\n\n" + text + "\n\nIncrease figure size or reduce font.",
+        )
 
     def _update_export_size_label(self) -> None:
         if self.label_export_size is None:
@@ -2126,6 +2284,30 @@ class PureMplFigureComposer(QMainWindow):
             bg = "transparent" if self._export_transparent else "white"
             if hasattr(self._fig_spec.page, "export_background"):
                 self._fig_spec.page.export_background = bg
+            skip_visibility = False
+            try:
+                # Force an up-to-date preflight before exporting.
+                self._run_preflight_check()
+            except Exception:
+                log.debug("Preflight check before export failed", exc_info=True)
+            if self._preflight_issues:
+                detail_text = "\n".join(f"- {msg}" for msg in self._preflight_issues)
+                msg_box = QMessageBox(
+                    QMessageBox.Warning,
+                    "Export may clip elements",
+                    "Some elements may be clipped at export.\n\n"
+                    f"{detail_text}\n\nIncrease figure size or reduce font.",
+                    QMessageBox.NoButton,
+                    self,
+                )
+                export_btn = msg_box.addButton("Export anyway (skip check)", QMessageBox.YesRole)
+                cancel_btn = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+                msg_box.setDefaultButton(cancel_btn)
+                msg_box.exec_()
+                if msg_box.clickedButton() is not export_btn:
+                    log.info("Export cancelled due to preflight warnings")
+                    return
+                skip_visibility = True
             self._persist_recipe_snapshot()
             ctx = self._render_context(is_preview=False)
             spec_for_export = (
@@ -2139,6 +2321,7 @@ class PureMplFigureComposer(QMainWindow):
                 transparent=self._export_transparent,
                 ctx=ctx,
                 export_background=bg,
+                skip_visibility_check=skip_visibility,
             )
             log.info("Export successful: %s", out_path)
         except Exception:
