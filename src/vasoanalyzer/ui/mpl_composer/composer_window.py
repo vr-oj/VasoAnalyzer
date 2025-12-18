@@ -21,6 +21,7 @@ from PyQt5.QtCore import QSettings, Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QImage, QShowEvent
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
 from PyQt5.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -574,6 +575,8 @@ class PureMplFigureComposer(QMainWindow):
             self.spin_dpi.valueChanged.connect(self._on_export_dpi_changed)
         if getattr(self, "btn_reset_layout", None) is not None:
             self.btn_reset_layout.clicked.connect(self._reset_layout)
+        if getattr(self, "btn_copy_data", None) is not None:
+            self.btn_copy_data.clicked.connect(self._copy_display_data_to_clipboard)
         if self._export_warning_details_btn is not None:
             self._export_warning_details_btn.clicked.connect(self._show_preflight_details)
         if self.btn_save_project is not None:
@@ -628,6 +631,11 @@ class PureMplFigureComposer(QMainWindow):
         self.btn_export = QPushButton("Export Figure...")
         self.btn_export.setMinimumHeight(32)
         layout.addWidget(self.btn_export)
+
+        # Copy data button
+        self.btn_copy_data = QPushButton("Copy data to clipboard")
+        self.btn_copy_data.setMinimumHeight(28)
+        layout.addWidget(self.btn_copy_data)
 
         warn_row = QHBoxLayout()
         self._export_warning_label = QLabel(
@@ -1135,21 +1143,6 @@ class PureMplFigureComposer(QMainWindow):
         self._fig_spec.page.height_in = float(height_in)
         self._enforce_page_bounds(update_controls=update_controls)
 
-        # Ensure deterministic sizing semantics when cycling templates/presets.
-        # The composer UI interprets width/height as the overall figure size; keep the
-        # renderer in figure-first mode so we never silently switch into axes-first
-        # (auto-expanding) sizing.
-        try:
-            self._fig_spec.page.sizing_mode = "figure_first"
-            self._fig_spec.page.axes_first = False
-        except Exception:
-            pass
-
-        # Clear derived sizing outputs so labels cannot show stale sizes before the next render.
-        for _attr in ("axes_width_in", "axes_height_in", "effective_width_in", "effective_height_in"):
-            if hasattr(self._fig_spec.page, _attr):
-                setattr(self._fig_spec.page, _attr, None)
-
     def _apply_size_policy_from_spec(
         self, *, force_recompute: bool = False, refresh: bool = False, update_controls: bool = True
     ) -> None:
@@ -1179,12 +1172,7 @@ class PureMplFigureComposer(QMainWindow):
             self._fig_spec.size_preset = None
 
         self._set_figure_size(width, height, update_controls=update_controls)
-        # Keep sizing deterministic: always render as figure-first in the composer.
-        try:
-            self._fig_spec.page.sizing_mode = "figure_first"
-            self._fig_spec.page.axes_first = False
-        except Exception:
-            pass
+        self._force_figure_first_mode()
         if os.environ.get("VASO_COMPOSER_DEBUG"):
             log.debug(
                 "Applied size policy mode=%s preset=%s -> %.4fx%.4f in sizing_mode=%s",
@@ -1197,14 +1185,28 @@ class PureMplFigureComposer(QMainWindow):
         if refresh:
             self._refresh_preview(size_changed=True)
 
+    def _force_figure_first_mode(self) -> None:
+        """Ensure renderer stays in figure-first sizing and clear derived sizes."""
+        page = getattr(self._fig_spec, "page", None)
+        if page is None:
+            return
+        try:
+            page.sizing_mode = "figure_first"
+            page.axes_first = False
+        except Exception:
+            pass
+        for attr in ("axes_width_in", "axes_height_in", "effective_width_in", "effective_height_in"):
+            if hasattr(page, attr):
+                setattr(page, attr, None)
+
     def _format_default_view_note(self) -> str | None:
         if self._default_xlim is None and self._default_ylim is None:
             return None
         parts: list[str] = []
         if self._default_xlim is not None:
-            parts.append(f"X={self._default_xlim[0]:.3g}–{self._default_xlim[1]:.3g}")
+            parts.append(f"X={self._default_xlim[0]:.2f}–{self._default_xlim[1]:.2f}")
         if self._default_ylim is not None:
-            parts.append(f"Y={self._default_ylim[0]:.3g}–{self._default_ylim[1]:.3g}")
+            parts.append(f"Y={self._default_ylim[0]:.2f}–{self._default_ylim[1]:.2f}")
         if not parts:
             return None
         return f"Initialized from main window view: {'; '.join(parts)}"
@@ -1498,11 +1500,12 @@ class PureMplFigureComposer(QMainWindow):
         if self.combo_template:
             template_id = self.combo_template.currentData() or DEFAULT_TEMPLATE_ID
         self._fig_spec.template_id = template_id
+        # Apply fresh template defaults each time to avoid drift when cycling.
         self._template_defaults_cache = apply_template_preset(
             self._fig_spec,
             template_id,
-            previous_defaults=self._template_defaults_cache,
-            respect_overrides=True,
+            previous_defaults=None,
+            respect_overrides=False,
         )
         self._apply_size_policy_from_spec(
             force_recompute=getattr(self._fig_spec, "size_mode", "template") in ("template", "preset"),
@@ -1857,6 +1860,86 @@ class PureMplFigureComposer(QMainWindow):
             return None
         return self._figure.axes[0] if self._figure.axes else None
 
+    def _copy_display_data_to_clipboard(self) -> None:
+        """Copy visible trace data and events to clipboard for Prism/Excel."""
+        key = self._active_trace_key
+        if not key:
+            QMessageBox.warning(self, "Copy data", "No active trace to copy.")
+            return
+        time_arr = None
+        data_arr = None
+        if self._series_map_override and key in self._series_map_override:
+            time_arr, data_arr = self._series_map_override[key]
+        else:
+            tm = self.trace_model
+            if tm is not None:
+                time_arr = getattr(tm, "time_full", None)
+                data_arr = getattr(tm, f"{key}_full", None)
+        if time_arr is None or data_arr is None:
+            QMessageBox.warning(self, "Copy data", "No data available for the active trace.")
+            return
+        try:
+            t = np.asarray(time_arr, dtype=float)
+            y = np.asarray(data_arr, dtype=float)
+        except Exception:
+            QMessageBox.warning(self, "Copy data", "Failed to access trace data.")
+            return
+        if t.size == 0 or y.size == 0:
+            QMessageBox.warning(self, "Copy data", "Trace data is empty.")
+            return
+
+        x_min, x_max = None, None
+        ax = self._current_axes()
+        if ax is not None:
+            try:
+                x_min, x_max = ax.get_xlim()
+            except Exception:
+                pass
+        if x_min is None or x_max is None:
+            xr = getattr(getattr(self._fig_spec, "axes", None), "x_range", None)
+            if xr is not None and len(xr) == 2:
+                x_min, x_max = float(xr[0]), float(xr[1])
+        if x_min is None or x_max is None:
+            x_min, x_max = np.nanmin(t), np.nanmax(t)
+
+        mask = (t >= x_min) & (t <= x_max) & np.isfinite(t) & np.isfinite(y)
+        if not np.any(mask):
+            QMessageBox.warning(self, "Copy data", "No data points in the current view.")
+            return
+        t_sel = t[mask]
+        y_sel = y[mask]
+
+        events: list[tuple[float, str, str]] = []
+        show_markers = getattr(self._fig_spec.axes, "show_event_markers", True) if getattr(self._fig_spec, "axes", None) else True
+        if show_markers and getattr(self._fig_spec, "events", None):
+            for ev in self._fig_spec.events:
+                if not getattr(ev, "visible", True):
+                    continue
+                ts = float(getattr(ev, "time_s", 0.0) or 0.0)
+                if ts < x_min or ts > x_max:
+                    continue
+                events.append((ts, getattr(ev, "label", "") or "", getattr(ev, "color", "")))
+
+        lines = ["Time\tValue"]
+        for tt, yy in zip(t_sel, y_sel):
+            lines.append(f"{tt:.2f}\t{yy:.2f}")
+        if events:
+            lines.append("")
+            lines.append("Events")
+            lines.append("Time\tLabel\tColor")
+            for ts, label, color in events:
+                lines.append(f"{ts:.2f}\t{label}\t{color}")
+
+        payload = "\n".join(lines)
+        QApplication.clipboard().setText(payload)
+        QMessageBox.information(
+            self,
+            "Copy data",
+            f"Copied {len(t_sel)} points"
+            + (f" and {len(events)} events" if events else "")
+            + " to clipboard.\nPaste into Prism/Excel as tab-delimited.",
+        )
+
     def _set_events_visible(self, visible: bool) -> None:
         axes = self._fig_spec.axes
         has_events = bool(self._fig_spec.events)
@@ -1950,6 +2033,7 @@ class PureMplFigureComposer(QMainWindow):
             self._destroy_box_selector()
         # Mirror export layout tweaks so preview matches saved output.
         page = getattr(self._fig_spec, "page", None)
+        self._force_figure_first_mode()
         explicit_margins = False
         if page is not None:
             explicit_margins = all(
@@ -2285,6 +2369,7 @@ class PureMplFigureComposer(QMainWindow):
             if hasattr(self._fig_spec.page, "export_background"):
                 self._fig_spec.page.export_background = bg
             skip_visibility = False
+            self._force_figure_first_mode()
             try:
                 # Force an up-to-date preflight before exporting.
                 self._run_preflight_check()
