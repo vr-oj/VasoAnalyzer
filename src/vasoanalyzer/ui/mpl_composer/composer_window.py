@@ -1909,7 +1909,7 @@ class PureMplFigureComposer(QMainWindow):
         t_sel = t[mask]
         y_sel = y[mask]
 
-        events: list[tuple[float, str, str]] = []
+        events: list[float] = []
         show_markers = getattr(self._fig_spec.axes, "show_event_markers", True) if getattr(self._fig_spec, "axes", None) else True
         if show_markers and getattr(self._fig_spec, "events", None):
             for ev in self._fig_spec.events:
@@ -1918,17 +1918,20 @@ class PureMplFigureComposer(QMainWindow):
                 ts = float(getattr(ev, "time_s", 0.0) or 0.0)
                 if ts < x_min or ts > x_max:
                     continue
-                events.append((ts, getattr(ev, "label", "") or "", getattr(ev, "color", "")))
+                events.append(ts)
 
-        lines = ["Time\tValue"]
-        for tt, yy in zip(t_sel, y_sel):
-            lines.append(f"{tt:.2f}\t{yy:.2f}")
+        event_by_index: dict[int, bool] = {}
+        event_marker_value = 120.0
         if events:
-            lines.append("")
-            lines.append("Events")
-            lines.append("Time\tLabel\tColor")
-            for ts, label, color in events:
-                lines.append(f"{ts:.2f}\t{label}\t{color}")
+            t_sel_arr = np.asarray(t_sel, dtype=float)
+            for ts in events:
+                idx = int(np.argmin(np.abs(t_sel_arr - ts)))
+                event_by_index[idx] = True
+
+        lines = ["Time\tValue\tEvent"]
+        for idx, (tt, yy) in enumerate(zip(t_sel, y_sel)):
+            event_cell = f"{event_marker_value:g}" if event_by_index.get(idx) else ""
+            lines.append(f"{tt:.2f}\t{yy:.2f}\t{event_cell}")
 
         payload = "\n".join(lines)
         QApplication.clipboard().setText(payload)
