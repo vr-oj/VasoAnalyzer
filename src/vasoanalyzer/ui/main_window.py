@@ -5636,23 +5636,6 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_tools_menu(self, menubar):
         tools_menu = menubar.addMenu("&Tools")
 
-        # Analysis tools
-        analysis_menu = tools_menu.addMenu("Analysis")
-
-        self.action_calculate_statistics = QAction("Calculate Statistics…", self)
-        self.action_calculate_statistics.triggered.connect(self.show_statistics_dialog)
-        analysis_menu.addAction(self.action_calculate_statistics)
-
-        self.action_batch_analysis = QAction("Batch Analysis…", self)
-        self.action_batch_analysis.triggered.connect(self.show_batch_analysis_dialog)
-        analysis_menu.addAction(self.action_batch_analysis)
-
-        self.action_validate_data = QAction("Data Validation…", self)
-        self.action_validate_data.triggered.connect(self.show_data_validation_dialog)
-        analysis_menu.addAction(self.action_validate_data)
-
-        tools_menu.addSeparator()
-
         # Visualization tools
         self.action_plot_settings = QAction("Plot Settings…", self)
         self.action_plot_settings.triggered.connect(self.open_plot_settings_dialog)
@@ -13467,6 +13450,8 @@ QPushButton[isGhost="true"]:pressed {{
     def update_scroll_slider(self):
         if self.trace_data is None:
             return
+        if self.scroll_slider is None:
+            return
 
         primary_ax = (
             self.plot_host.primary_axis() if hasattr(self, "plot_host") else None
@@ -13492,9 +13477,6 @@ QPushButton[isGhost="true"]:pressed {{
             self.scroll_slider.show()
         else:
             self.scroll_slider.hide()
-
-        # User preference: keep scroll slider hidden
-        self.scroll_slider.hide()
 
     def open_subplot_layout_dialog(self, fig=None):
         """Open dialog to adjust subplot paddings and spacing.

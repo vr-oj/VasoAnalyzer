@@ -65,6 +65,7 @@ qt_plugins_dir = QLibraryInfo.location(QLibraryInfo.PluginsPath)
 qt_plugin_datas = [(os.path.join(qt_plugins_dir, 'platforms'), 'PyQt5/Qt/plugins/platforms')]
 
 datas = [
+    (os.path.join(project_dir, 'style.qss'), '.'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerSplashScreen.png'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
