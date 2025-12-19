@@ -6356,6 +6356,7 @@ class VasoAnalyzerApp(QMainWindow):
                     for line in lines:
                         line.set_visible(vis)
         self.canvas.draw_idle()
+        self._on_view_state_changed(reason="annotation toggle")
 
     def _refresh_event_annotation_artists(self) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -7432,7 +7433,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self._rebuild_channel_layout(inner_on, outer_on)
         self._refresh_zoom_window()
-        self._invalidate_sample_state_cache()
+        self._on_view_state_changed(reason="channel toggle")
 
     def toggle_inner_diameter(self, checked: bool):
         self._apply_channel_toggle("inner", checked)
@@ -7488,7 +7489,7 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "canvas"):
             with contextlib.suppress(Exception):
                 self.canvas.draw_idle()
-        self._invalidate_sample_state_cache()
+        self._on_view_state_changed(reason="channel toggle")
 
     def toggle_fullscreen(self, checked: bool = False):
         """Toggle fullscreen mode.
@@ -9455,6 +9456,7 @@ QPushButton[isGhost="true"]:pressed {{
         else:
             self._toggle_event_lines_legacy(self._event_lines_visible)
         self._sync_event_controls()
+        self._on_view_state_changed(reason="event lines toggled")
 
     def _on_event_label_mode_auto(self, checked: bool) -> None:
         if checked:
@@ -9501,6 +9503,7 @@ QPushButton[isGhost="true"]:pressed {{
         if plot_host is None:
             self.canvas.draw_idle()
             self._sync_event_controls()
+            self._on_view_state_changed(reason="event label mode")
             return
 
         # Using the new helper: ensure per-track lines are *disabled* (helper draws its own)
@@ -9511,6 +9514,7 @@ QPushButton[isGhost="true"]:pressed {{
         self._refresh_event_annotation_artists()
         self.canvas.draw_idle()
         self._sync_event_controls()
+        self._on_view_state_changed(reason="event label mode")
 
     def _sync_event_controls(self) -> None:
         is_pyqtgraph = self._plot_host_is_pyqtgraph()
@@ -10984,6 +10988,7 @@ QPushButton[isGhost="true"]:pressed {{
                 self._propagate_time_to_snapshot_pg(resolved_time)
             elif frame_idx is not None:
                 self.set_current_frame(frame_idx, from_jump=True)
+        self._on_view_state_changed(reason="time cursor moved")
 
     def apply_style(self, style):
         self._apply_time_window(style.get("xlim", self.ax.get_xlim()))
@@ -11553,11 +11558,13 @@ QPushButton[isGhost="true"]:pressed {{
         markers = getattr(self, "slider_markers", None)
         if not markers:
             self.slider_markers = {}
+            self._on_view_state_changed(reason="time cursor cleared")
             return
         for line in list(markers.values()):
             with contextlib.suppress(Exception):
                 line.remove()
         markers.clear()
+        self._on_view_state_changed(reason="time cursor cleared")
 
     def _clear_pins(self) -> None:
         """Remove all pinned point markers/labels from the axes."""
@@ -11605,6 +11612,7 @@ QPushButton[isGhost="true"]:pressed {{
                     self._time_cursor_time,
                     visible=self._time_cursor_visible,
                 )
+                self._on_view_state_changed(reason="time cursor moved")
                 return
             except Exception:
                 log.debug(
@@ -11630,6 +11638,7 @@ QPushButton[isGhost="true"]:pressed {{
             else:
                 line.set_xdata([t_current, t_current])
         self.canvas.draw_idle()
+        self._on_view_state_changed(reason="time cursor moved")
 
     def populate_event_table_from_df(self, df):
         rows = []
@@ -12687,6 +12696,7 @@ QPushButton[isGhost="true"]:pressed {{
                 self.set_current_frame(frame_idx, from_jump=True)
         else:
             self._clear_event_highlight()
+        self._on_view_state_changed(reason="event focus")
 
     def _highlight_selected_event(self, event_time: float) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -12711,6 +12721,7 @@ QPushButton[isGhost="true"]:pressed {{
             self._event_highlight_timer.setInterval(interval)
             self._event_highlight_timer.start()
         self._propagate_time_to_snapshot_pg(event_time)
+        self._on_view_state_changed(reason="event highlight")
 
     def _clear_event_highlight(self) -> None:
         timer = getattr(self, "_event_highlight_timer", None)
@@ -15764,6 +15775,16 @@ QPushButton[isGhost="true"]:pressed {{
         self._snapshot_style_dirty = True
         self._cached_snapshot_style = None
 
+    def _on_view_state_changed(self, reason: str = "") -> None:
+        """Mark UI view state as changed (invalidate cache + dirty)."""
+        if getattr(self, "_restoring_sample_state", False):
+            return
+        self._invalidate_sample_state_cache()
+        if reason:
+            self.mark_session_dirty(reason=reason)
+        else:
+            self.mark_session_dirty()
+
     def _sync_sample_events_dataframe(self, sample_state: dict) -> None:
         """Ensure the current sample's events_data mirrors the table rows in sample_state."""
         sample = getattr(self, "current_sample", None)
@@ -15792,58 +15813,74 @@ QPushButton[isGhost="true"]:pressed {{
         # preserve any previously saved style_settings
         prev = base_state.get("style_settings", {}) or {}
         x_axis = self._x_axis_for_style()
+        focused_row = None
+        event_table = getattr(self, "event_table", None)
+        if event_table is not None:
+            with contextlib.suppress(Exception):
+                idx = event_table.currentIndex()
+                if idx.isValid():
+                    focused_row = int(idx.row())
         state = {**base_state}
         state.update(
             {
-            "table_fontsize": self.event_table.font().pointSize(),
-            "event_table_data": list(self.event_table_data),
-            "event_label_meta": copy.deepcopy(self.event_label_meta),
-            "event_table_path": (
-                str(self._event_table_path) if self._event_table_path else None
-            ),
-            "pins": [
-                coords
-                for marker, _ in self.pinned_points
-                if (coords := self._pin_coords(marker))
-            ],
-            "plot_style": self.get_current_plot_style(),
-            "grid_visible": self.grid_visible,
-            "inner_trace_visible": (
-                self.id_toggle_act.isChecked()
-                if self.id_toggle_act is not None
-                else True
-            ),
-            "outer_trace_visible": (
-                self.od_toggle_act.isChecked()
-                if self.od_toggle_act is not None
-                else False
-            ),
-            "avg_pressure_visible": (
-                self.avg_pressure_toggle_act.isChecked()
-                if self.avg_pressure_toggle_act is not None
-                else (
-                    getattr(self.plot_host, "is_channel_visible", lambda *_: True)(
-                        "avg_pressure"
-                    )
-                    if hasattr(self, "plot_host")
+                "table_fontsize": self.event_table.font().pointSize(),
+                "event_table_data": list(self.event_table_data),
+                "event_label_meta": copy.deepcopy(self.event_label_meta),
+                "event_table_path": (
+                    str(self._event_table_path) if self._event_table_path else None
+                ),
+                "pins": [
+                    coords
+                    for marker, _ in self.pinned_points
+                    if (coords := self._pin_coords(marker))
+                ],
+                "plot_style": self.get_current_plot_style(),
+                "grid_visible": self.grid_visible,
+                "inner_trace_visible": (
+                    self.id_toggle_act.isChecked()
+                    if self.id_toggle_act is not None
                     else True
-                )
-            ),
-            "set_pressure_visible": (
-                self.set_pressure_toggle_act.isChecked()
-                if self.set_pressure_toggle_act is not None
-                else (
-                    getattr(self.plot_host, "is_channel_visible", lambda *_: False)(
-                        "set_pressure"
+                ),
+                "outer_trace_visible": (
+                    self.od_toggle_act.isChecked()
+                    if self.od_toggle_act is not None
+                    else False
+                ),
+                "avg_pressure_visible": (
+                    self.avg_pressure_toggle_act.isChecked()
+                    if self.avg_pressure_toggle_act is not None
+                    else (
+                        getattr(self.plot_host, "is_channel_visible", lambda *_: True)(
+                            "avg_pressure"
+                        )
+                        if hasattr(self, "plot_host")
+                        else True
                     )
-                    if hasattr(self, "plot_host")
-                    else False  # Default: hide Set Pressure track
-                )
-            ),
-            "axis_settings": {
-                "x": {"label": x_axis.get_xlabel() if x_axis else ""},
-                "y": {"label": self.ax.get_ylabel()},
-            },
+                ),
+                "set_pressure_visible": (
+                    self.set_pressure_toggle_act.isChecked()
+                    if self.set_pressure_toggle_act is not None
+                    else (
+                        getattr(self.plot_host, "is_channel_visible", lambda *_: False)(
+                            "set_pressure"
+                        )
+                        if hasattr(self, "plot_host")
+                        else False  # Default: hide Set Pressure track
+                    )
+                ),
+                "axis_settings": {
+                    "x": {"label": x_axis.get_xlabel() if x_axis else ""},
+                    "y": {"label": self.ax.get_ylabel()},
+                },
+                "time_cursor": {
+                    "t": float(self._time_cursor_time)
+                    if self._time_cursor_time is not None
+                    else None,
+                    "visible": bool(self._time_cursor_visible),
+                },
+                "focused_event_row": focused_row,
+                "event_lines_visible": bool(self._event_lines_visible),
+                "event_label_mode": str(self._event_label_mode or "vertical"),
             }
         )
         if isinstance(self.legend_settings, dict):
@@ -15941,6 +15978,7 @@ QPushButton[isGhost="true"]:pressed {{
 
     def apply_sample_state(self, state):
         t0 = time.perf_counter()
+        self._restoring_sample_state = True
         try:
             if not state:
                 return
@@ -15971,6 +16009,18 @@ QPushButton[isGhost="true"]:pressed {{
                             for _ in self.event_table_data
                         ]
                     self.populate_table()
+                event_lines_visible = state.get("event_lines_visible")
+                if event_lines_visible is not None:
+                    self._event_lines_visible = bool(event_lines_visible)
+                    plot_host = getattr(self, "plot_host", None)
+                    if plot_host is not None:
+                        plot_host.set_event_lines_visible(self._event_lines_visible)
+                    else:
+                        self._toggle_event_lines_legacy(self._event_lines_visible)
+                event_label_mode = state.get("event_label_mode")
+                if event_label_mode:
+                    self._set_event_label_mode(str(event_label_mode))
+                self._sync_event_controls()
                 # Restore inner/outer toggles
                 for key, act_name, channel in (
                     ("inner_trace_visible", "id_toggle_act", "inner"),
@@ -15995,6 +16045,52 @@ QPushButton[isGhost="true"]:pressed {{
                             act.setChecked(bool(state[key]))
                             act.blockSignals(False)
                             self._apply_channel_toggle(channel, bool(state[key]))
+                if "axis_xlim" in state:
+                    self._apply_time_window(state["axis_xlim"])
+                cursor_payload = state.get("time_cursor")
+                if isinstance(cursor_payload, Mapping):
+                    cursor_time = cursor_payload.get("t")
+                    cursor_visible = cursor_payload.get("visible", True)
+                else:
+                    cursor_time = None
+                    cursor_visible = True
+                try:
+                    cursor_time = (
+                        float(cursor_time) if cursor_time is not None else None
+                    )
+                except (TypeError, ValueError):
+                    cursor_time = None
+                self._time_cursor_visible = bool(cursor_visible)
+                focused_row = state.get("focused_event_row")
+                applied_focus = False
+                if focused_row is not None and self.event_table_data:
+                    try:
+                        row = int(focused_row)
+                    except (TypeError, ValueError):
+                        row = None
+                    if row is not None:
+                        row = max(0, min(row, len(self.event_table_data) - 1))
+                        event_table = getattr(self, "event_table", None)
+                        if event_table is not None:
+                            event_table.blockSignals(True)
+                        try:
+                            self._focus_event_row(row, source="restore")
+                            applied_focus = True
+                        finally:
+                            if event_table is not None:
+                                event_table.blockSignals(False)
+                if not applied_focus:
+                    self._time_cursor_time = cursor_time
+                    plot_host = getattr(self, "plot_host", None)
+                    if plot_host is not None and hasattr(plot_host, "set_time_cursor"):
+                        with contextlib.suppress(Exception):
+                            if cursor_time is None:
+                                plot_host.set_time_cursor(None, visible=False)
+                            else:
+                                plot_host.set_time_cursor(
+                                    cursor_time,
+                                    visible=self._time_cursor_visible,
+                                )
                 # Apply only style if present; skip layout/axes/pins/grid restores.
                 style = state.get("style_settings") or state.get("plot_style")
                 if style:
@@ -16062,6 +16158,60 @@ QPushButton[isGhost="true"]:pressed {{
 
                 self.populate_table()
                 self._maybe_prompt_event_review()
+            event_lines_visible = state.get("event_lines_visible")
+            if event_lines_visible is not None:
+                self._event_lines_visible = bool(event_lines_visible)
+                plot_host = getattr(self, "plot_host", None)
+                if plot_host is not None:
+                    plot_host.set_event_lines_visible(self._event_lines_visible)
+                else:
+                    self._toggle_event_lines_legacy(self._event_lines_visible)
+            event_label_mode = state.get("event_label_mode")
+            if event_label_mode:
+                self._set_event_label_mode(str(event_label_mode))
+            self._sync_event_controls()
+            cursor_payload = state.get("time_cursor")
+            if isinstance(cursor_payload, Mapping):
+                cursor_time = cursor_payload.get("t")
+                cursor_visible = cursor_payload.get("visible", True)
+            else:
+                cursor_time = None
+                cursor_visible = True
+            try:
+                cursor_time = float(cursor_time) if cursor_time is not None else None
+            except (TypeError, ValueError):
+                cursor_time = None
+            self._time_cursor_visible = bool(cursor_visible)
+            focused_row = state.get("focused_event_row")
+            applied_focus = False
+            if focused_row is not None and self.event_table_data:
+                try:
+                    row = int(focused_row)
+                except (TypeError, ValueError):
+                    row = None
+                if row is not None:
+                    row = max(0, min(row, len(self.event_table_data) - 1))
+                    event_table = getattr(self, "event_table", None)
+                    if event_table is not None:
+                        event_table.blockSignals(True)
+                    try:
+                        self._focus_event_row(row, source="restore")
+                        applied_focus = True
+                    finally:
+                        if event_table is not None:
+                            event_table.blockSignals(False)
+            if not applied_focus:
+                self._time_cursor_time = cursor_time
+                plot_host = getattr(self, "plot_host", None)
+                if plot_host is not None and hasattr(plot_host, "set_time_cursor"):
+                    with contextlib.suppress(Exception):
+                        if cursor_time is None:
+                            plot_host.set_time_cursor(None, visible=False)
+                        else:
+                            plot_host.set_time_cursor(
+                                cursor_time,
+                                visible=self._time_cursor_visible,
+                            )
             t_axes = time.perf_counter()
             is_pg = self._plot_host_is_pyqtgraph()
             if "axis_xlim" in state:
@@ -16210,6 +16360,7 @@ QPushButton[isGhost="true"]:pressed {{
             )
 
         finally:
+            self._restoring_sample_state = False
             log.debug("apply_sample_state completed in %.3f s", time.perf_counter() - t0)
 
     def restore_last_selection(self) -> bool:

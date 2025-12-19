@@ -161,6 +161,8 @@ def toggle_grid(self):
         else:
             axis.grid(False)
     self.canvas.draw_idle()
+    if hasattr(self, "_on_view_state_changed"):
+        self._on_view_state_changed(reason="grid toggle")
 
 
 def _to_float_list(values):
