@@ -1857,6 +1857,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                 source_repo = None
 
     try:
+        dataset_id_map: dict[int, int] = {}
         for _exp_index, exp in enumerate(project.experiments):
             for sample_index, sample in enumerate(exp.samples):
                 # DEBUG: _populate_store_from_project per-sample instrumentation start
@@ -1867,6 +1868,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     getattr(sample, "dataset_id", None),
                 )
                 # DEBUG: _populate_store_from_project per-sample instrumentation end
+                old_dataset_id = getattr(sample, "dataset_id", None)
                 _save_sample_to_store(
                     repo=repo,
                     base_dir=base_dir,
@@ -1876,6 +1878,81 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     source_repo=source_repo,
                     embed_snapshots=embed_snapshots,
                     embed_tiff_snapshots=embed_tiff_snapshots,
+                )
+                new_dataset_id = getattr(sample, "dataset_id", None)
+                if old_dataset_id is not None and new_dataset_id is not None:
+                    try:
+                        dataset_id_map[int(old_dataset_id)] = int(new_dataset_id)
+                    except (TypeError, ValueError):
+                        pass
+
+        if source_repo is not None and dataset_id_map:
+            try:
+                copied = 0
+                for old_id, new_id in dataset_id_map.items():
+                    try:
+                        recipes = source_repo.list_figure_recipes(int(old_id))
+                    except Exception:
+                        log.debug(
+                            "Failed to list figure recipes for dataset_id=%s",
+                            old_id,
+                            exc_info=True,
+                        )
+                        continue
+                    for recipe in recipes or []:
+                        recipe_id = recipe.get("recipe_id")
+                        if not recipe_id:
+                            continue
+                        try:
+                            payload = source_repo.get_figure_recipe(recipe_id)
+                        except Exception:
+                            log.debug(
+                                "Failed to load figure recipe %s",
+                                recipe_id,
+                                exc_info=True,
+                            )
+                            continue
+                        if not payload:
+                            continue
+                        spec_json = payload.get("spec_json")
+                        if not spec_json:
+                            continue
+                        name = (
+                            payload.get("name")
+                            or recipe.get("name")
+                            or "Figure Recipe"
+                        )
+                        try:
+                            repo.add_figure_recipe(
+                                int(new_id),
+                                name,
+                                spec_json,
+                                source=payload.get("source") or "current_view",
+                                trace_key=payload.get("trace_key"),
+                                x_min=payload.get("x_min"),
+                                x_max=payload.get("x_max"),
+                                y_min=payload.get("y_min"),
+                                y_max=payload.get("y_max"),
+                                export_background=payload.get("export_background") or "white",
+                                recipe_id=recipe_id,
+                            )
+                            copied += 1
+                        except Exception:
+                            log.debug(
+                                "Failed to copy figure recipe %s to dataset_id=%s",
+                                recipe_id,
+                                new_id,
+                                exc_info=True,
+                            )
+                if copied:
+                    log.info(
+                        "SAVE: copied %d figure recipe(s) into saved project",
+                        copied,
+                    )
+            except Exception:
+                log.warning(
+                    "Failed to copy figure recipes into saved project",
+                    exc_info=True,
                 )
 
         if project.attachments:

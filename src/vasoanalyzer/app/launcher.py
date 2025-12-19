@@ -124,7 +124,7 @@ class VasoAnalyzerLauncher:
             font.setBold(True)
             painter.setFont(font)
 
-            text = f"v{APP_VERSION}"
+            text = APP_VERSION
             metrics = painter.fontMetrics()
             text_width, text_height = metrics.horizontalAdvance(text), metrics.height()
 

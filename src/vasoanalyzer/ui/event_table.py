@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+import logging
 
 import pandas as pd
 from PyQt5.QtCore import (
@@ -28,6 +29,8 @@ from PyQt5.QtWidgets import (
 )
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 # EventRow: (label, time, inner_diameter, outer_diameter | None, avg_pressure | None, set_pressure | None, frame | None)
 EventRow = tuple[str, float, float, float | None, float | None, float | None, int | None]
@@ -573,7 +576,7 @@ class EventTableWidget(QTableView):
         self.clicked.connect(self._emit_cell_clicked)
 
     def apply_theme(self) -> None:
-        print(f"[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)={id(self)}")
+        log.debug("[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)=%s", id(self))
         palette = self.palette()
         header_bg = CURRENT_THEME.get("button_active_bg", CURRENT_THEME["button_bg"])
         header_text = CURRENT_THEME["text"]
@@ -626,8 +629,10 @@ class EventTableWidget(QTableView):
             f"QTableView::item:selected{{background-color: {selection}; color: {header_text};}}"
         )
         self.setStyleSheet(body_style)
-        print(
-            f"[THEME-DEBUG] EventTableWidget header_style length={len(header_style)} body_style length={len(body_style)}"
+        log.debug(
+            "[THEME-DEBUG] EventTableWidget header_style length=%s body_style length=%s",
+            len(header_style),
+            len(body_style),
         )
 
         model = self.model()

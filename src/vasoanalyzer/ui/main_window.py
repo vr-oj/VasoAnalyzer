@@ -2681,15 +2681,19 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _update_sample_tree_figures(self, dataset_id: int) -> None:
         """Update the figures node for a specific sample without rebuilding the entire tree."""
-        print(f"\n[TREE UPDATE] Called _update_sample_tree_figures(dataset_id={dataset_id})")
+        log.debug("[TREE UPDATE] Called _update_sample_tree_figures(dataset_id=%s)", dataset_id)
         try:
             if not self.project_tree or not self.current_project:
-                print(f"[TREE UPDATE] ✗ Missing tree or project: tree={self.project_tree is not None}, project={self.current_project is not None}")
+                log.debug(
+                    "[TREE UPDATE] ✗ Missing tree or project: tree=%s, project=%s",
+                    self.project_tree is not None,
+                    self.current_project is not None,
+                )
                 log.warning(f"Cannot update tree: project_tree={self.project_tree is not None}, current_project={self.current_project is not None}")
                 return
 
             # Find the sample with this dataset_id
-            print(f"[TREE UPDATE] Searching for sample with dataset_id={dataset_id}...")
+            log.debug("[TREE UPDATE] Searching for sample with dataset_id=%s...", dataset_id)
             target_sample = None
             target_experiment = None
             for exp in self.current_project.experiments:
@@ -2702,15 +2706,18 @@ class VasoAnalyzerApp(QMainWindow):
                     break
 
             if not target_sample:
-                print(f"[TREE UPDATE] ✗ Could not find sample with dataset_id={dataset_id}")
+                log.debug("[TREE UPDATE] ✗ Could not find sample with dataset_id=%s", dataset_id)
                 log.warning(f"Could not find sample with dataset_id={dataset_id}")
                 return
 
-            print(f"[TREE UPDATE] ✓ Found sample: '{target_sample.name}'")
+            log.debug("[TREE UPDATE] ✓ Found sample: %r", target_sample.name)
             log.info(f"Updating figures for sample '{target_sample.name}' (dataset_id={dataset_id})")
 
             # Find the tree item for this sample
-            print(f"[TREE UPDATE] Searching for tree item for sample '{target_sample.name}'...")
+            log.debug(
+                "[TREE UPDATE] Searching for tree item for sample %r...",
+                target_sample.name,
+            )
             sample_item = None
             root = self.project_tree.topLevelItem(0)
             if root:
@@ -2728,52 +2735,68 @@ class VasoAnalyzerApp(QMainWindow):
                         break
 
             if not sample_item:
-                print(f"[TREE UPDATE] ✗ Could not find tree item for sample '{target_sample.name}'")
+                log.debug(
+                    "[TREE UPDATE] ✗ Could not find tree item for sample %r",
+                    target_sample.name,
+                )
                 log.warning(f"Could not find tree item for sample '{target_sample.name}'")
                 return
 
-            print(f"[TREE UPDATE] ✓ Found tree item for sample")
+            log.debug("[TREE UPDATE] ✓ Found tree item for sample")
 
             # Remove existing figures node if present
-            print(f"[TREE UPDATE] Removing existing figures node if present...")
+            log.debug("[TREE UPDATE] Removing existing figures node if present...")
             for idx in range(sample_item.childCount()):
                 child = sample_item.child(idx)
                 child_data = child.data(0, Qt.UserRole)
                 if isinstance(child_data, dict) and child_data.get("type") == "figure_folder":
                     sample_item.removeChild(child)
-                    print(f"[TREE UPDATE] ✓ Removed old figures node")
+                    log.debug("[TREE UPDATE] ✓ Removed old figures node")
                     break
 
             # Query recipes for this sample
-            print(f"[TREE UPDATE] Querying database for recipes...")
+            log.debug("[TREE UPDATE] Querying database for recipes...")
             recipes: list[dict] = []
             repo = self._project_repo()
             if repo:
                 try:
                     recipes = list(repo.list_figure_recipes(int(dataset_id)))
-                    print(f"[TREE UPDATE] ✓ Found {len(recipes)} recipe(s) in database")
+                    log.debug(
+                        "[TREE UPDATE] ✓ Found %s recipe(s) in database",
+                        len(recipes),
+                    )
                     log.info(f"Found {len(recipes)} recipe(s) for dataset {dataset_id}")
                     if recipes:
                         for i, r in enumerate(recipes, 1):
-                            print(f"[TREE UPDATE]   Recipe {i}: '{r.get('name')}' (id={r.get('recipe_id')})")
+                            log.debug(
+                                "[TREE UPDATE]   Recipe %s: %r (id=%s)",
+                                i,
+                                r.get("name"),
+                                r.get("recipe_id"),
+                            )
                         log.info(f"  Recipe names: {[r.get('name') for r in recipes]}")
                 except Exception as e:
-                    print(f"[TREE UPDATE] ✗ Failed to query recipes: {e}")
+                    log.debug("[TREE UPDATE] ✗ Failed to query recipes: %s", e)
                     log.error(f"Failed to load recipes for dataset {dataset_id}: {e}", exc_info=True)
                     recipes = []
             else:
-                print(f"[TREE UPDATE] ✗ No repository available for querying")
+                log.debug("[TREE UPDATE] ✗ No repository available for querying")
 
             # Check for legacy figures
             has_new_figures = target_sample.figure_configs and len(target_sample.figure_configs) > 0
             slides = self._get_sample_figure_slides(target_sample, create=False)
             has_old_figures = slides and len(slides) > 0
 
-            print(f"[TREE UPDATE] Figure counts: new={len(target_sample.figure_configs) if has_new_figures else 0}, old={len(slides) if has_old_figures else 0}, recipes={len(recipes)}")
+            log.debug(
+                "[TREE UPDATE] Figure counts: new=%s, old=%s, recipes=%s",
+                len(target_sample.figure_configs) if has_new_figures else 0,
+                len(slides) if has_old_figures else 0,
+                len(recipes),
+            )
 
             # Only add figures node if there are any figures/recipes
             if has_new_figures or has_old_figures or recipes:
-                print(f"[TREE UPDATE] Creating figures node...")
+                log.debug("[TREE UPDATE] Creating figures node...")
                 figures_root = QTreeWidgetItem(["📊 Figures"])
                 figures_root.setData(
                     0,
@@ -2782,7 +2805,7 @@ class VasoAnalyzerApp(QMainWindow):
                 )
                 figures_root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
                 sample_item.addChild(figures_root)
-                print(f"[TREE UPDATE] ✓ Added figures node to tree")
+                log.debug("[TREE UPDATE] ✓ Added figures node to tree")
 
                 # Add NEW figure composer figures
                 if has_new_figures:
@@ -2819,10 +2842,13 @@ class VasoAnalyzerApp(QMainWindow):
                         figures_root.addChild(slide_item)
 
                 # Add figure recipes
-                print(f"[TREE UPDATE] Adding {len(recipes)} recipe item(s) to tree...")
+                log.debug(
+                    "[TREE UPDATE] Adding %s recipe item(s) to tree...",
+                    len(recipes),
+                )
                 for rec in recipes:
                     rec_name = rec.get("name") or "Figure"
-                    print(f"[TREE UPDATE]   Adding recipe: '{rec_name}'")
+                    log.debug("[TREE UPDATE]   Adding recipe: %r", rec_name)
                     rec_item = QTreeWidgetItem([rec_name])
                     rec_item.setData(
                         0,
@@ -2838,18 +2864,23 @@ class VasoAnalyzerApp(QMainWindow):
                     rec_item.setFlags(rec_item.flags() & ~Qt.ItemIsEditable)
                     rec_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
                     figures_root.addChild(rec_item)
-                    print(f"[TREE UPDATE]   ✓ Recipe item added to tree")
+                    log.debug("[TREE UPDATE]   ✓ Recipe item added to tree")
 
                 # Expand the figures node to show the new recipe
                 sample_item.setExpanded(True)
                 figures_root.setExpanded(True)
-                print(f"[TREE UPDATE] ✓ Tree update complete - {len(recipes)} recipe(s) added")
+                log.debug(
+                    "[TREE UPDATE] ✓ Tree update complete - %s recipe(s) added",
+                    len(recipes),
+                )
                 log.info(f"Successfully updated tree with {len(recipes)} recipe(s) for sample '{target_sample.name}'")
             else:
-                print(f"[TREE UPDATE] No figures to display (no recipes, new figures, or old figures)")
+                log.debug(
+                    "[TREE UPDATE] No figures to display (no recipes, new figures, or old figures)"
+                )
 
         except Exception as e:
-            print(f"[TREE UPDATE] ✗ Exception during tree update: {e}")
+            log.debug("[TREE UPDATE] ✗ Exception during tree update: %s", e)
             log.error(f"Failed to update sample tree figures for dataset_id={dataset_id}: {e}", exc_info=True)
 
     def _set_samples_data_quality(
@@ -6071,7 +6102,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         if not silent:
             self.statusBar().showMessage("Checking for updates…", 3000)
-        started = self._update_checker.start(f"v{APP_VERSION}", silent=silent)
+        started = self._update_checker.start(APP_VERSION, silent=silent)
         if started:
             self._update_check_in_progress = True
 
@@ -6129,7 +6160,7 @@ class VasoAnalyzerApp(QMainWindow):
             from .dialogs.update_dialog import UpdateDialog
 
             # Show custom update dialog with remind later and don't show options
-            dlg = UpdateDialog(f"v{APP_VERSION}", latest_str, self)
+            dlg = UpdateDialog(APP_VERSION, latest_str, self)
             user_choice = dlg.exec_()
 
             if user_choice == UpdateDialog.DONT_SHOW:
@@ -6150,7 +6181,7 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.information(
                 self,
                 "Up to Date",
-                f"You are running the latest release (v{APP_VERSION}).",
+                f"You are running the latest release ({APP_VERSION}).",
             )
             self.statusBar().showMessage("Up to date", 3000)
 
@@ -6356,6 +6387,7 @@ class VasoAnalyzerApp(QMainWindow):
                     for line in lines:
                         line.set_visible(vis)
         self.canvas.draw_idle()
+        self._on_view_state_changed(reason="annotation toggle")
 
     def _refresh_event_annotation_artists(self) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -7432,7 +7464,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self._rebuild_channel_layout(inner_on, outer_on)
         self._refresh_zoom_window()
-        self._invalidate_sample_state_cache()
+        self._on_view_state_changed(reason="channel toggle")
 
     def toggle_inner_diameter(self, checked: bool):
         self._apply_channel_toggle("inner", checked)
@@ -7488,7 +7520,7 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "canvas"):
             with contextlib.suppress(Exception):
                 self.canvas.draw_idle()
-        self._invalidate_sample_state_cache()
+        self._on_view_state_changed(reason="channel toggle")
 
     def toggle_fullscreen(self, checked: bool = False):
         """Toggle fullscreen mode.
@@ -7808,8 +7840,11 @@ class VasoAnalyzerApp(QMainWindow):
 
     def apply_theme(self, mode: str, *, persist: bool = True) -> None:
         """Apply light or dark theme at runtime and refresh all UI widgets."""
-        print(
-            f"[THEME-DEBUG] App.apply_theme called with mode={mode!r}, persist={persist}, id(self)={id(self)}"
+        log.debug(
+            "[THEME-DEBUG] App.apply_theme called with mode=%r, persist=%s, id(self)=%s",
+            mode,
+            persist,
+            id(self),
         )
 
         scheme = (mode or "light").lower()
@@ -7827,7 +7862,7 @@ class VasoAnalyzerApp(QMainWindow):
             if isinstance(CURRENT_THEME, dict)
             else CURRENT_THEME
         )
-        print(f"[THEME-DEBUG] After set_theme_mode, CURRENT_THEME={current_name!r}")
+        log.debug("[THEME-DEBUG] After set_theme_mode, CURRENT_THEME=%r", current_name)
 
         self._update_theme_action_checks(self._active_theme_mode)
         self._update_action_icons()
@@ -7900,7 +7935,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Force complete repaint to ensure all widgets pick up new colors
         self.update()
         QApplication.processEvents()
-        print(f"[THEME-DEBUG] Forced repaint after theme change")
+        log.debug("[THEME-DEBUG] Forced repaint after theme change")
 
     # View Menu Actions
     def set_color_scheme(self, scheme: str):
@@ -9455,6 +9490,7 @@ QPushButton[isGhost="true"]:pressed {{
         else:
             self._toggle_event_lines_legacy(self._event_lines_visible)
         self._sync_event_controls()
+        self._on_view_state_changed(reason="event lines toggled")
 
     def _on_event_label_mode_auto(self, checked: bool) -> None:
         if checked:
@@ -9501,6 +9537,7 @@ QPushButton[isGhost="true"]:pressed {{
         if plot_host is None:
             self.canvas.draw_idle()
             self._sync_event_controls()
+            self._on_view_state_changed(reason="event label mode")
             return
 
         # Using the new helper: ensure per-track lines are *disabled* (helper draws its own)
@@ -9511,6 +9548,7 @@ QPushButton[isGhost="true"]:pressed {{
         self._refresh_event_annotation_artists()
         self.canvas.draw_idle()
         self._sync_event_controls()
+        self._on_view_state_changed(reason="event label mode")
 
     def _sync_event_controls(self) -> None:
         is_pyqtgraph = self._plot_host_is_pyqtgraph()
@@ -10984,6 +11022,7 @@ QPushButton[isGhost="true"]:pressed {{
                 self._propagate_time_to_snapshot_pg(resolved_time)
             elif frame_idx is not None:
                 self.set_current_frame(frame_idx, from_jump=True)
+        self._on_view_state_changed(reason="time cursor moved")
 
     def apply_style(self, style):
         self._apply_time_window(style.get("xlim", self.ax.get_xlim()))
@@ -11553,11 +11592,13 @@ QPushButton[isGhost="true"]:pressed {{
         markers = getattr(self, "slider_markers", None)
         if not markers:
             self.slider_markers = {}
+            self._on_view_state_changed(reason="time cursor cleared")
             return
         for line in list(markers.values()):
             with contextlib.suppress(Exception):
                 line.remove()
         markers.clear()
+        self._on_view_state_changed(reason="time cursor cleared")
 
     def _clear_pins(self) -> None:
         """Remove all pinned point markers/labels from the axes."""
@@ -11605,6 +11646,7 @@ QPushButton[isGhost="true"]:pressed {{
                     self._time_cursor_time,
                     visible=self._time_cursor_visible,
                 )
+                self._on_view_state_changed(reason="time cursor moved")
                 return
             except Exception:
                 log.debug(
@@ -11630,6 +11672,7 @@ QPushButton[isGhost="true"]:pressed {{
             else:
                 line.set_xdata([t_current, t_current])
         self.canvas.draw_idle()
+        self._on_view_state_changed(reason="time cursor moved")
 
     def populate_event_table_from_df(self, df):
         rows = []
@@ -12687,6 +12730,7 @@ QPushButton[isGhost="true"]:pressed {{
                 self.set_current_frame(frame_idx, from_jump=True)
         else:
             self._clear_event_highlight()
+        self._on_view_state_changed(reason="event focus")
 
     def _highlight_selected_event(self, event_time: float) -> None:
         plot_host = getattr(self, "plot_host", None)
@@ -12711,6 +12755,7 @@ QPushButton[isGhost="true"]:pressed {{
             self._event_highlight_timer.setInterval(interval)
             self._event_highlight_timer.start()
         self._propagate_time_to_snapshot_pg(event_time)
+        self._on_view_state_changed(reason="event highlight")
 
     def _clear_event_highlight(self) -> None:
         timer = getattr(self, "_event_highlight_timer", None)
@@ -13852,11 +13897,11 @@ QPushButton[isGhost="true"]:pressed {{
         dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
         recipe_id = None
 
-        print(f"\n{'='*60}")
-        print(f"[COMPOSER DEBUG] Starting 'Compose Current View'")
-        print(f"[COMPOSER DEBUG] repo available: {repo is not None}")
-        print(f"[COMPOSER DEBUG] dataset_id: {dataset_id}")
-        print(f"{'='*60}\n")
+        log.debug("%s", "=" * 60)
+        log.debug("[COMPOSER DEBUG] Starting 'Compose Current View'")
+        log.debug("[COMPOSER DEBUG] repo available: %s", repo is not None)
+        log.debug("[COMPOSER DEBUG] dataset_id: %s", dataset_id)
+        log.debug("%s", "=" * 60)
 
         if repo is not None and dataset_id is not None:
             name = (
@@ -13865,7 +13910,7 @@ QPushButton[isGhost="true"]:pressed {{
                 else "Figure Recipe"
             )
             try:
-                print(f"[COMPOSER DEBUG] About to create recipe with name: '{name}'")
+                log.debug("[COMPOSER DEBUG] About to create recipe with name: %r", name)
                 recipe_id = repo.add_figure_recipe(
                     int(dataset_id),
                     name,
@@ -13878,16 +13923,19 @@ QPushButton[isGhost="true"]:pressed {{
                     y_max=ylim[1] if ylim else None,
                     export_background=spec.page.export_background,
                 )
-                print(f"[COMPOSER DEBUG] ✓ Recipe created successfully!")
-                print(f"[COMPOSER DEBUG]   recipe_id: {recipe_id}")
-                print(f"[COMPOSER DEBUG]   dataset_id: {dataset_id}")
+                log.debug("[COMPOSER DEBUG] ✓ Recipe created successfully!")
+                log.debug("[COMPOSER DEBUG]   recipe_id: %s", recipe_id)
+                log.debug("[COMPOSER DEBUG]   dataset_id: %s", dataset_id)
                 log.info(f"Created figure recipe {recipe_id} for dataset {dataset_id}")
 
                 # Immediately update the tree (don't wait for signal/query cycle)
                 # This avoids transaction isolation issues
-                print(f"[COMPOSER DEBUG] About to update tree for dataset {dataset_id}...")
+                log.debug(
+                    "[COMPOSER DEBUG] About to update tree for dataset %s...",
+                    dataset_id,
+                )
                 self._update_sample_tree_figures(int(dataset_id))
-                print(f"[COMPOSER DEBUG] ✓ Tree update completed")
+                log.debug("[COMPOSER DEBUG] ✓ Tree update completed")
                 log.info(f"Updated tree for dataset {dataset_id} after recipe creation")
             except Exception as e:
                 log.error(f"Failed to create figure recipe: {e}", exc_info=True)
@@ -15362,8 +15410,9 @@ QPushButton[isGhost="true"]:pressed {{
 
     def _apply_event_table_card_theme(self) -> None:
         """Apply theme styling to the event table container card."""
-        print(
-            f"[THEME-DEBUG] _apply_event_table_card_theme called, card_exists={hasattr(self, 'event_table_card') and self.event_table_card is not None}"
+        log.debug(
+            "[THEME-DEBUG] _apply_event_table_card_theme called, card_exists=%s",
+            hasattr(self, "event_table_card") and self.event_table_card is not None,
         )
 
         card = getattr(self, "event_table_card", None)
@@ -15386,7 +15435,7 @@ QPushButton[isGhost="true"]:pressed {{
         """
         )
         style = card.styleSheet() if card is not None else ""
-        print(f"[THEME-DEBUG] EventTableCard styleSheet length={len(style)}")
+        log.debug("[THEME-DEBUG] EventTableCard styleSheet length=%s", len(style))
 
     def _apply_snapshot_theme(self) -> None:
         """Apply theme styling to the snapshot card and controls."""
@@ -15764,6 +15813,16 @@ QPushButton[isGhost="true"]:pressed {{
         self._snapshot_style_dirty = True
         self._cached_snapshot_style = None
 
+    def _on_view_state_changed(self, reason: str = "") -> None:
+        """Mark UI view state as changed (invalidate cache + dirty)."""
+        if getattr(self, "_restoring_sample_state", False):
+            return
+        self._invalidate_sample_state_cache()
+        if reason:
+            self.mark_session_dirty(reason=reason)
+        else:
+            self.mark_session_dirty()
+
     def _sync_sample_events_dataframe(self, sample_state: dict) -> None:
         """Ensure the current sample's events_data mirrors the table rows in sample_state."""
         sample = getattr(self, "current_sample", None)
@@ -15792,58 +15851,74 @@ QPushButton[isGhost="true"]:pressed {{
         # preserve any previously saved style_settings
         prev = base_state.get("style_settings", {}) or {}
         x_axis = self._x_axis_for_style()
+        focused_row = None
+        event_table = getattr(self, "event_table", None)
+        if event_table is not None:
+            with contextlib.suppress(Exception):
+                idx = event_table.currentIndex()
+                if idx.isValid():
+                    focused_row = int(idx.row())
         state = {**base_state}
         state.update(
             {
-            "table_fontsize": self.event_table.font().pointSize(),
-            "event_table_data": list(self.event_table_data),
-            "event_label_meta": copy.deepcopy(self.event_label_meta),
-            "event_table_path": (
-                str(self._event_table_path) if self._event_table_path else None
-            ),
-            "pins": [
-                coords
-                for marker, _ in self.pinned_points
-                if (coords := self._pin_coords(marker))
-            ],
-            "plot_style": self.get_current_plot_style(),
-            "grid_visible": self.grid_visible,
-            "inner_trace_visible": (
-                self.id_toggle_act.isChecked()
-                if self.id_toggle_act is not None
-                else True
-            ),
-            "outer_trace_visible": (
-                self.od_toggle_act.isChecked()
-                if self.od_toggle_act is not None
-                else False
-            ),
-            "avg_pressure_visible": (
-                self.avg_pressure_toggle_act.isChecked()
-                if self.avg_pressure_toggle_act is not None
-                else (
-                    getattr(self.plot_host, "is_channel_visible", lambda *_: True)(
-                        "avg_pressure"
-                    )
-                    if hasattr(self, "plot_host")
+                "table_fontsize": self.event_table.font().pointSize(),
+                "event_table_data": list(self.event_table_data),
+                "event_label_meta": copy.deepcopy(self.event_label_meta),
+                "event_table_path": (
+                    str(self._event_table_path) if self._event_table_path else None
+                ),
+                "pins": [
+                    coords
+                    for marker, _ in self.pinned_points
+                    if (coords := self._pin_coords(marker))
+                ],
+                "plot_style": self.get_current_plot_style(),
+                "grid_visible": self.grid_visible,
+                "inner_trace_visible": (
+                    self.id_toggle_act.isChecked()
+                    if self.id_toggle_act is not None
                     else True
-                )
-            ),
-            "set_pressure_visible": (
-                self.set_pressure_toggle_act.isChecked()
-                if self.set_pressure_toggle_act is not None
-                else (
-                    getattr(self.plot_host, "is_channel_visible", lambda *_: False)(
-                        "set_pressure"
+                ),
+                "outer_trace_visible": (
+                    self.od_toggle_act.isChecked()
+                    if self.od_toggle_act is not None
+                    else False
+                ),
+                "avg_pressure_visible": (
+                    self.avg_pressure_toggle_act.isChecked()
+                    if self.avg_pressure_toggle_act is not None
+                    else (
+                        getattr(self.plot_host, "is_channel_visible", lambda *_: True)(
+                            "avg_pressure"
+                        )
+                        if hasattr(self, "plot_host")
+                        else True
                     )
-                    if hasattr(self, "plot_host")
-                    else False  # Default: hide Set Pressure track
-                )
-            ),
-            "axis_settings": {
-                "x": {"label": x_axis.get_xlabel() if x_axis else ""},
-                "y": {"label": self.ax.get_ylabel()},
-            },
+                ),
+                "set_pressure_visible": (
+                    self.set_pressure_toggle_act.isChecked()
+                    if self.set_pressure_toggle_act is not None
+                    else (
+                        getattr(self.plot_host, "is_channel_visible", lambda *_: False)(
+                            "set_pressure"
+                        )
+                        if hasattr(self, "plot_host")
+                        else False  # Default: hide Set Pressure track
+                    )
+                ),
+                "axis_settings": {
+                    "x": {"label": x_axis.get_xlabel() if x_axis else ""},
+                    "y": {"label": self.ax.get_ylabel()},
+                },
+                "time_cursor": {
+                    "t": float(self._time_cursor_time)
+                    if self._time_cursor_time is not None
+                    else None,
+                    "visible": bool(self._time_cursor_visible),
+                },
+                "focused_event_row": focused_row,
+                "event_lines_visible": bool(self._event_lines_visible),
+                "event_label_mode": str(self._event_label_mode or "vertical"),
             }
         )
         if isinstance(self.legend_settings, dict):
@@ -15941,6 +16016,7 @@ QPushButton[isGhost="true"]:pressed {{
 
     def apply_sample_state(self, state):
         t0 = time.perf_counter()
+        self._restoring_sample_state = True
         try:
             if not state:
                 return
@@ -15971,6 +16047,18 @@ QPushButton[isGhost="true"]:pressed {{
                             for _ in self.event_table_data
                         ]
                     self.populate_table()
+                event_lines_visible = state.get("event_lines_visible")
+                if event_lines_visible is not None:
+                    self._event_lines_visible = bool(event_lines_visible)
+                    plot_host = getattr(self, "plot_host", None)
+                    if plot_host is not None:
+                        plot_host.set_event_lines_visible(self._event_lines_visible)
+                    else:
+                        self._toggle_event_lines_legacy(self._event_lines_visible)
+                event_label_mode = state.get("event_label_mode")
+                if event_label_mode:
+                    self._set_event_label_mode(str(event_label_mode))
+                self._sync_event_controls()
                 # Restore inner/outer toggles
                 for key, act_name, channel in (
                     ("inner_trace_visible", "id_toggle_act", "inner"),
@@ -15995,6 +16083,52 @@ QPushButton[isGhost="true"]:pressed {{
                             act.setChecked(bool(state[key]))
                             act.blockSignals(False)
                             self._apply_channel_toggle(channel, bool(state[key]))
+                if "axis_xlim" in state:
+                    self._apply_time_window(state["axis_xlim"])
+                cursor_payload = state.get("time_cursor")
+                if isinstance(cursor_payload, Mapping):
+                    cursor_time = cursor_payload.get("t")
+                    cursor_visible = cursor_payload.get("visible", True)
+                else:
+                    cursor_time = None
+                    cursor_visible = True
+                try:
+                    cursor_time = (
+                        float(cursor_time) if cursor_time is not None else None
+                    )
+                except (TypeError, ValueError):
+                    cursor_time = None
+                self._time_cursor_visible = bool(cursor_visible)
+                focused_row = state.get("focused_event_row")
+                applied_focus = False
+                if focused_row is not None and self.event_table_data:
+                    try:
+                        row = int(focused_row)
+                    except (TypeError, ValueError):
+                        row = None
+                    if row is not None:
+                        row = max(0, min(row, len(self.event_table_data) - 1))
+                        event_table = getattr(self, "event_table", None)
+                        if event_table is not None:
+                            event_table.blockSignals(True)
+                        try:
+                            self._focus_event_row(row, source="restore")
+                            applied_focus = True
+                        finally:
+                            if event_table is not None:
+                                event_table.blockSignals(False)
+                if not applied_focus:
+                    self._time_cursor_time = cursor_time
+                    plot_host = getattr(self, "plot_host", None)
+                    if plot_host is not None and hasattr(plot_host, "set_time_cursor"):
+                        with contextlib.suppress(Exception):
+                            if cursor_time is None:
+                                plot_host.set_time_cursor(None, visible=False)
+                            else:
+                                plot_host.set_time_cursor(
+                                    cursor_time,
+                                    visible=self._time_cursor_visible,
+                                )
                 # Apply only style if present; skip layout/axes/pins/grid restores.
                 style = state.get("style_settings") or state.get("plot_style")
                 if style:
@@ -16062,6 +16196,60 @@ QPushButton[isGhost="true"]:pressed {{
 
                 self.populate_table()
                 self._maybe_prompt_event_review()
+            event_lines_visible = state.get("event_lines_visible")
+            if event_lines_visible is not None:
+                self._event_lines_visible = bool(event_lines_visible)
+                plot_host = getattr(self, "plot_host", None)
+                if plot_host is not None:
+                    plot_host.set_event_lines_visible(self._event_lines_visible)
+                else:
+                    self._toggle_event_lines_legacy(self._event_lines_visible)
+            event_label_mode = state.get("event_label_mode")
+            if event_label_mode:
+                self._set_event_label_mode(str(event_label_mode))
+            self._sync_event_controls()
+            cursor_payload = state.get("time_cursor")
+            if isinstance(cursor_payload, Mapping):
+                cursor_time = cursor_payload.get("t")
+                cursor_visible = cursor_payload.get("visible", True)
+            else:
+                cursor_time = None
+                cursor_visible = True
+            try:
+                cursor_time = float(cursor_time) if cursor_time is not None else None
+            except (TypeError, ValueError):
+                cursor_time = None
+            self._time_cursor_visible = bool(cursor_visible)
+            focused_row = state.get("focused_event_row")
+            applied_focus = False
+            if focused_row is not None and self.event_table_data:
+                try:
+                    row = int(focused_row)
+                except (TypeError, ValueError):
+                    row = None
+                if row is not None:
+                    row = max(0, min(row, len(self.event_table_data) - 1))
+                    event_table = getattr(self, "event_table", None)
+                    if event_table is not None:
+                        event_table.blockSignals(True)
+                    try:
+                        self._focus_event_row(row, source="restore")
+                        applied_focus = True
+                    finally:
+                        if event_table is not None:
+                            event_table.blockSignals(False)
+            if not applied_focus:
+                self._time_cursor_time = cursor_time
+                plot_host = getattr(self, "plot_host", None)
+                if plot_host is not None and hasattr(plot_host, "set_time_cursor"):
+                    with contextlib.suppress(Exception):
+                        if cursor_time is None:
+                            plot_host.set_time_cursor(None, visible=False)
+                        else:
+                            plot_host.set_time_cursor(
+                                cursor_time,
+                                visible=self._time_cursor_visible,
+                            )
             t_axes = time.perf_counter()
             is_pg = self._plot_host_is_pyqtgraph()
             if "axis_xlim" in state:
@@ -16210,6 +16398,7 @@ QPushButton[isGhost="true"]:pressed {{
             )
 
         finally:
+            self._restoring_sample_state = False
             log.debug("apply_sample_state completed in %.3f s", time.perf_counter() - t0)
 
     def restore_last_selection(self) -> bool:

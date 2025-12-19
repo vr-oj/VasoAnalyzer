@@ -158,7 +158,10 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def apply_theme(self) -> None:
         """Refresh plot host colors from the active theme."""
-        print(f"[THEME-DEBUG] PyQtGraphPlotHost.apply_theme called, id(self)={id(self)}")
+        log.debug(
+            "[THEME-DEBUG] PyQtGraphPlotHost.apply_theme called, id(self)=%s",
+            id(self),
+        )
 
         # Use plot_bg for white content area in light mode (not window_bg which is gray toolbar)
         bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
@@ -198,8 +201,9 @@ class PyQtGraphPlotHost(InteractionHost):
                 with contextlib.suppress(Exception):
                     apply_method()
         style = self._widget.styleSheet() if hasattr(self, "_widget") else ""
-        print(
-            f"[THEME-DEBUG] PyQtGraphPlotHost styleSheet length={len(style) if style is not None else 0}"
+        log.debug(
+            "[THEME-DEBUG] PyQtGraphPlotHost styleSheet length=%s",
+            len(style) if style is not None else 0,
         )
 
         # Refresh axis fonts and labels after theme change
