@@ -31,7 +31,10 @@ try:
 except Exception:
     APP_VERSION = "0.0.0"
 
-APP_NAME = f"VasoAnalyzer v{APP_VERSION}"
+version_label = APP_VERSION
+if not version_label.lower().startswith("v"):
+    version_label = f"v{version_label}"
+APP_NAME = f"VasoAnalyzer {version_label}"
 
 # generate version-stamped icons at build time
 # decide platform‐specific icon (base icon only; no version overlay)
