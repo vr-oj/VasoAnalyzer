@@ -100,7 +100,7 @@ def atomic_write_text(path: Path, text: str) -> None:
         tmp.write_text(text, encoding="utf-8")
 
         # CRITICAL FIX: Fsync the temp file
-        fd = os.open(tmp, os.O_RDONLY)
+        fd = os.open(tmp, os.O_RDWR)
         try:
             os.fsync(fd)
         finally:
@@ -108,22 +108,14 @@ def atomic_write_text(path: Path, text: str) -> None:
 
         # CRITICAL FIX: Fsync parent directory before rename
         # This ensures the directory state is persisted
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
+        _fsync_dir(path.parent)
 
         # Atomic replace (rename is atomic on POSIX systems)
         os.replace(tmp, path)
 
         # CRITICAL FIX: Fsync parent directory after rename
         # This ensures the new directory entry is persisted
-        parent_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(parent_fd)
-        finally:
-            os.close(parent_fd)
+        _fsync_dir(path.parent)
 
     except Exception:
         # Clean up temp file on error
@@ -134,9 +126,25 @@ def atomic_write_text(path: Path, text: str) -> None:
 
 def fsync_file(path: Path) -> None:
     """Force file data to disk."""
-    fd = os.open(path, os.O_RDONLY)
+    fd = os.open(path, os.O_RDWR)
     try:
         os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(path: Path) -> None:
+    """Best-effort directory fsync (no-op on Windows)."""
+    if os.name == "nt":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
     finally:
         os.close(fd)
 
@@ -368,7 +376,8 @@ def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> Snap
             src_conn = sqlite3.connect(staging_db, check_same_thread=False, timeout=30.0)
 
         try:
-            with sqlite3.connect(dest_tmp) as dst:
+            dst = sqlite3.connect(dest_tmp)
+            try:
                 src_conn.backup(dst)
                 check = dst.execute("PRAGMA integrity_check").fetchone()
                 if not check or str(check[0]).lower() != "ok":
@@ -377,6 +386,8 @@ def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> Snap
                 dst.execute("PRAGMA journal_mode=DELETE")
                 dst.execute("PRAGMA optimize")
                 dst.commit()
+            finally:
+                dst.close()
         finally:
             src_conn.close()
 

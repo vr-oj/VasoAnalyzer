@@ -1254,11 +1254,18 @@ class PyQtGraphPlotHost(InteractionHost):
         tick_font = QFont(self._axis_font_family, tick_size)
 
         left_axis = plot_item.getAxis("left")
+        with contextlib.suppress(AttributeError):
+            left_axis.enableAutoSIPrefix(False)
         left_axis.label.setFont(ylabel_font)
         with contextlib.suppress(AttributeError):
             left_axis.setTickFont(tick_font)
             left_axis.setTickLength(5, 0)
         self._recenter_axis_label(left_axis, height_px)
+
+        right_axis = plot_item.getAxis("right")
+        if right_axis is not None:
+            with contextlib.suppress(AttributeError):
+                right_axis.enableAutoSIPrefix(False)
 
         # Use cached bottom track ID (single source of truth)
         bottom_visible_id = self._bottom_visible_track_id or track.id

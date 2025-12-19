@@ -31,7 +31,10 @@ try:
 except Exception:
     APP_VERSION = "0.0.0"
 
-APP_NAME = f"VasoAnalyzer v{APP_VERSION}"
+version_label = APP_VERSION
+if not version_label.lower().startswith("v"):
+    version_label = f"v{version_label}"
+APP_NAME = f"VasoAnalyzer {version_label}"
 
 # generate version-stamped icons at build time
 # decide platform‐specific icon (base icon only; no version overlay)
@@ -65,6 +68,7 @@ qt_plugins_dir = QLibraryInfo.location(QLibraryInfo.PluginsPath)
 qt_plugin_datas = [(os.path.join(qt_plugins_dir, 'platforms'), 'PyQt5/Qt/plugins/platforms')]
 
 datas = [
+    (os.path.join(project_dir, 'style.qss'), '.'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerSplashScreen.png'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
