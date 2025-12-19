@@ -6,3 +6,5 @@
 *.pyc
 .DS_Store
 /SampleData
+/build
+/dist
