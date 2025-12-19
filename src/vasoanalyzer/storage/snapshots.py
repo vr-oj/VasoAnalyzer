@@ -376,7 +376,8 @@ def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> Snap
             src_conn = sqlite3.connect(staging_db, check_same_thread=False, timeout=30.0)
 
         try:
-            with sqlite3.connect(dest_tmp) as dst:
+            dst = sqlite3.connect(dest_tmp)
+            try:
                 src_conn.backup(dst)
                 check = dst.execute("PRAGMA integrity_check").fetchone()
                 if not check or str(check[0]).lower() != "ok":
@@ -385,6 +386,8 @@ def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> Snap
                 dst.execute("PRAGMA journal_mode=DELETE")
                 dst.execute("PRAGMA optimize")
                 dst.commit()
+            finally:
+                dst.close()
         finally:
             src_conn.close()
 
