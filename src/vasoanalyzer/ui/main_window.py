@@ -2681,15 +2681,19 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _update_sample_tree_figures(self, dataset_id: int) -> None:
         """Update the figures node for a specific sample without rebuilding the entire tree."""
-        print(f"\n[TREE UPDATE] Called _update_sample_tree_figures(dataset_id={dataset_id})")
+        log.debug("[TREE UPDATE] Called _update_sample_tree_figures(dataset_id=%s)", dataset_id)
         try:
             if not self.project_tree or not self.current_project:
-                print(f"[TREE UPDATE] ✗ Missing tree or project: tree={self.project_tree is not None}, project={self.current_project is not None}")
+                log.debug(
+                    "[TREE UPDATE] ✗ Missing tree or project: tree=%s, project=%s",
+                    self.project_tree is not None,
+                    self.current_project is not None,
+                )
                 log.warning(f"Cannot update tree: project_tree={self.project_tree is not None}, current_project={self.current_project is not None}")
                 return
 
             # Find the sample with this dataset_id
-            print(f"[TREE UPDATE] Searching for sample with dataset_id={dataset_id}...")
+            log.debug("[TREE UPDATE] Searching for sample with dataset_id=%s...", dataset_id)
             target_sample = None
             target_experiment = None
             for exp in self.current_project.experiments:
@@ -2702,15 +2706,18 @@ class VasoAnalyzerApp(QMainWindow):
                     break
 
             if not target_sample:
-                print(f"[TREE UPDATE] ✗ Could not find sample with dataset_id={dataset_id}")
+                log.debug("[TREE UPDATE] ✗ Could not find sample with dataset_id=%s", dataset_id)
                 log.warning(f"Could not find sample with dataset_id={dataset_id}")
                 return
 
-            print(f"[TREE UPDATE] ✓ Found sample: '{target_sample.name}'")
+            log.debug("[TREE UPDATE] ✓ Found sample: %r", target_sample.name)
             log.info(f"Updating figures for sample '{target_sample.name}' (dataset_id={dataset_id})")
 
             # Find the tree item for this sample
-            print(f"[TREE UPDATE] Searching for tree item for sample '{target_sample.name}'...")
+            log.debug(
+                "[TREE UPDATE] Searching for tree item for sample %r...",
+                target_sample.name,
+            )
             sample_item = None
             root = self.project_tree.topLevelItem(0)
             if root:
@@ -2728,52 +2735,68 @@ class VasoAnalyzerApp(QMainWindow):
                         break
 
             if not sample_item:
-                print(f"[TREE UPDATE] ✗ Could not find tree item for sample '{target_sample.name}'")
+                log.debug(
+                    "[TREE UPDATE] ✗ Could not find tree item for sample %r",
+                    target_sample.name,
+                )
                 log.warning(f"Could not find tree item for sample '{target_sample.name}'")
                 return
 
-            print(f"[TREE UPDATE] ✓ Found tree item for sample")
+            log.debug("[TREE UPDATE] ✓ Found tree item for sample")
 
             # Remove existing figures node if present
-            print(f"[TREE UPDATE] Removing existing figures node if present...")
+            log.debug("[TREE UPDATE] Removing existing figures node if present...")
             for idx in range(sample_item.childCount()):
                 child = sample_item.child(idx)
                 child_data = child.data(0, Qt.UserRole)
                 if isinstance(child_data, dict) and child_data.get("type") == "figure_folder":
                     sample_item.removeChild(child)
-                    print(f"[TREE UPDATE] ✓ Removed old figures node")
+                    log.debug("[TREE UPDATE] ✓ Removed old figures node")
                     break
 
             # Query recipes for this sample
-            print(f"[TREE UPDATE] Querying database for recipes...")
+            log.debug("[TREE UPDATE] Querying database for recipes...")
             recipes: list[dict] = []
             repo = self._project_repo()
             if repo:
                 try:
                     recipes = list(repo.list_figure_recipes(int(dataset_id)))
-                    print(f"[TREE UPDATE] ✓ Found {len(recipes)} recipe(s) in database")
+                    log.debug(
+                        "[TREE UPDATE] ✓ Found %s recipe(s) in database",
+                        len(recipes),
+                    )
                     log.info(f"Found {len(recipes)} recipe(s) for dataset {dataset_id}")
                     if recipes:
                         for i, r in enumerate(recipes, 1):
-                            print(f"[TREE UPDATE]   Recipe {i}: '{r.get('name')}' (id={r.get('recipe_id')})")
+                            log.debug(
+                                "[TREE UPDATE]   Recipe %s: %r (id=%s)",
+                                i,
+                                r.get("name"),
+                                r.get("recipe_id"),
+                            )
                         log.info(f"  Recipe names: {[r.get('name') for r in recipes]}")
                 except Exception as e:
-                    print(f"[TREE UPDATE] ✗ Failed to query recipes: {e}")
+                    log.debug("[TREE UPDATE] ✗ Failed to query recipes: %s", e)
                     log.error(f"Failed to load recipes for dataset {dataset_id}: {e}", exc_info=True)
                     recipes = []
             else:
-                print(f"[TREE UPDATE] ✗ No repository available for querying")
+                log.debug("[TREE UPDATE] ✗ No repository available for querying")
 
             # Check for legacy figures
             has_new_figures = target_sample.figure_configs and len(target_sample.figure_configs) > 0
             slides = self._get_sample_figure_slides(target_sample, create=False)
             has_old_figures = slides and len(slides) > 0
 
-            print(f"[TREE UPDATE] Figure counts: new={len(target_sample.figure_configs) if has_new_figures else 0}, old={len(slides) if has_old_figures else 0}, recipes={len(recipes)}")
+            log.debug(
+                "[TREE UPDATE] Figure counts: new=%s, old=%s, recipes=%s",
+                len(target_sample.figure_configs) if has_new_figures else 0,
+                len(slides) if has_old_figures else 0,
+                len(recipes),
+            )
 
             # Only add figures node if there are any figures/recipes
             if has_new_figures or has_old_figures or recipes:
-                print(f"[TREE UPDATE] Creating figures node...")
+                log.debug("[TREE UPDATE] Creating figures node...")
                 figures_root = QTreeWidgetItem(["📊 Figures"])
                 figures_root.setData(
                     0,
@@ -2782,7 +2805,7 @@ class VasoAnalyzerApp(QMainWindow):
                 )
                 figures_root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
                 sample_item.addChild(figures_root)
-                print(f"[TREE UPDATE] ✓ Added figures node to tree")
+                log.debug("[TREE UPDATE] ✓ Added figures node to tree")
 
                 # Add NEW figure composer figures
                 if has_new_figures:
@@ -2819,10 +2842,13 @@ class VasoAnalyzerApp(QMainWindow):
                         figures_root.addChild(slide_item)
 
                 # Add figure recipes
-                print(f"[TREE UPDATE] Adding {len(recipes)} recipe item(s) to tree...")
+                log.debug(
+                    "[TREE UPDATE] Adding %s recipe item(s) to tree...",
+                    len(recipes),
+                )
                 for rec in recipes:
                     rec_name = rec.get("name") or "Figure"
-                    print(f"[TREE UPDATE]   Adding recipe: '{rec_name}'")
+                    log.debug("[TREE UPDATE]   Adding recipe: %r", rec_name)
                     rec_item = QTreeWidgetItem([rec_name])
                     rec_item.setData(
                         0,
@@ -2838,18 +2864,23 @@ class VasoAnalyzerApp(QMainWindow):
                     rec_item.setFlags(rec_item.flags() & ~Qt.ItemIsEditable)
                     rec_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
                     figures_root.addChild(rec_item)
-                    print(f"[TREE UPDATE]   ✓ Recipe item added to tree")
+                    log.debug("[TREE UPDATE]   ✓ Recipe item added to tree")
 
                 # Expand the figures node to show the new recipe
                 sample_item.setExpanded(True)
                 figures_root.setExpanded(True)
-                print(f"[TREE UPDATE] ✓ Tree update complete - {len(recipes)} recipe(s) added")
+                log.debug(
+                    "[TREE UPDATE] ✓ Tree update complete - %s recipe(s) added",
+                    len(recipes),
+                )
                 log.info(f"Successfully updated tree with {len(recipes)} recipe(s) for sample '{target_sample.name}'")
             else:
-                print(f"[TREE UPDATE] No figures to display (no recipes, new figures, or old figures)")
+                log.debug(
+                    "[TREE UPDATE] No figures to display (no recipes, new figures, or old figures)"
+                )
 
         except Exception as e:
-            print(f"[TREE UPDATE] ✗ Exception during tree update: {e}")
+            log.debug("[TREE UPDATE] ✗ Exception during tree update: %s", e)
             log.error(f"Failed to update sample tree figures for dataset_id={dataset_id}: {e}", exc_info=True)
 
     def _set_samples_data_quality(
@@ -6071,7 +6102,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         if not silent:
             self.statusBar().showMessage("Checking for updates…", 3000)
-        started = self._update_checker.start(f"v{APP_VERSION}", silent=silent)
+        started = self._update_checker.start(APP_VERSION, silent=silent)
         if started:
             self._update_check_in_progress = True
 
@@ -6129,7 +6160,7 @@ class VasoAnalyzerApp(QMainWindow):
             from .dialogs.update_dialog import UpdateDialog
 
             # Show custom update dialog with remind later and don't show options
-            dlg = UpdateDialog(f"v{APP_VERSION}", latest_str, self)
+            dlg = UpdateDialog(APP_VERSION, latest_str, self)
             user_choice = dlg.exec_()
 
             if user_choice == UpdateDialog.DONT_SHOW:
@@ -6150,7 +6181,7 @@ class VasoAnalyzerApp(QMainWindow):
             QMessageBox.information(
                 self,
                 "Up to Date",
-                f"You are running the latest release (v{APP_VERSION}).",
+                f"You are running the latest release ({APP_VERSION}).",
             )
             self.statusBar().showMessage("Up to date", 3000)
 
@@ -7809,8 +7840,11 @@ class VasoAnalyzerApp(QMainWindow):
 
     def apply_theme(self, mode: str, *, persist: bool = True) -> None:
         """Apply light or dark theme at runtime and refresh all UI widgets."""
-        print(
-            f"[THEME-DEBUG] App.apply_theme called with mode={mode!r}, persist={persist}, id(self)={id(self)}"
+        log.debug(
+            "[THEME-DEBUG] App.apply_theme called with mode=%r, persist=%s, id(self)=%s",
+            mode,
+            persist,
+            id(self),
         )
 
         scheme = (mode or "light").lower()
@@ -7828,7 +7862,7 @@ class VasoAnalyzerApp(QMainWindow):
             if isinstance(CURRENT_THEME, dict)
             else CURRENT_THEME
         )
-        print(f"[THEME-DEBUG] After set_theme_mode, CURRENT_THEME={current_name!r}")
+        log.debug("[THEME-DEBUG] After set_theme_mode, CURRENT_THEME=%r", current_name)
 
         self._update_theme_action_checks(self._active_theme_mode)
         self._update_action_icons()
@@ -7901,7 +7935,7 @@ class VasoAnalyzerApp(QMainWindow):
         # Force complete repaint to ensure all widgets pick up new colors
         self.update()
         QApplication.processEvents()
-        print(f"[THEME-DEBUG] Forced repaint after theme change")
+        log.debug("[THEME-DEBUG] Forced repaint after theme change")
 
     # View Menu Actions
     def set_color_scheme(self, scheme: str):
@@ -13863,11 +13897,11 @@ QPushButton[isGhost="true"]:pressed {{
         dataset_id = getattr(getattr(self, "current_sample", None), "dataset_id", None)
         recipe_id = None
 
-        print(f"\n{'='*60}")
-        print(f"[COMPOSER DEBUG] Starting 'Compose Current View'")
-        print(f"[COMPOSER DEBUG] repo available: {repo is not None}")
-        print(f"[COMPOSER DEBUG] dataset_id: {dataset_id}")
-        print(f"{'='*60}\n")
+        log.debug("%s", "=" * 60)
+        log.debug("[COMPOSER DEBUG] Starting 'Compose Current View'")
+        log.debug("[COMPOSER DEBUG] repo available: %s", repo is not None)
+        log.debug("[COMPOSER DEBUG] dataset_id: %s", dataset_id)
+        log.debug("%s", "=" * 60)
 
         if repo is not None and dataset_id is not None:
             name = (
@@ -13876,7 +13910,7 @@ QPushButton[isGhost="true"]:pressed {{
                 else "Figure Recipe"
             )
             try:
-                print(f"[COMPOSER DEBUG] About to create recipe with name: '{name}'")
+                log.debug("[COMPOSER DEBUG] About to create recipe with name: %r", name)
                 recipe_id = repo.add_figure_recipe(
                     int(dataset_id),
                     name,
@@ -13889,16 +13923,19 @@ QPushButton[isGhost="true"]:pressed {{
                     y_max=ylim[1] if ylim else None,
                     export_background=spec.page.export_background,
                 )
-                print(f"[COMPOSER DEBUG] ✓ Recipe created successfully!")
-                print(f"[COMPOSER DEBUG]   recipe_id: {recipe_id}")
-                print(f"[COMPOSER DEBUG]   dataset_id: {dataset_id}")
+                log.debug("[COMPOSER DEBUG] ✓ Recipe created successfully!")
+                log.debug("[COMPOSER DEBUG]   recipe_id: %s", recipe_id)
+                log.debug("[COMPOSER DEBUG]   dataset_id: %s", dataset_id)
                 log.info(f"Created figure recipe {recipe_id} for dataset {dataset_id}")
 
                 # Immediately update the tree (don't wait for signal/query cycle)
                 # This avoids transaction isolation issues
-                print(f"[COMPOSER DEBUG] About to update tree for dataset {dataset_id}...")
+                log.debug(
+                    "[COMPOSER DEBUG] About to update tree for dataset %s...",
+                    dataset_id,
+                )
                 self._update_sample_tree_figures(int(dataset_id))
-                print(f"[COMPOSER DEBUG] ✓ Tree update completed")
+                log.debug("[COMPOSER DEBUG] ✓ Tree update completed")
                 log.info(f"Updated tree for dataset {dataset_id} after recipe creation")
             except Exception as e:
                 log.error(f"Failed to create figure recipe: {e}", exc_info=True)
@@ -15373,8 +15410,9 @@ QPushButton[isGhost="true"]:pressed {{
 
     def _apply_event_table_card_theme(self) -> None:
         """Apply theme styling to the event table container card."""
-        print(
-            f"[THEME-DEBUG] _apply_event_table_card_theme called, card_exists={hasattr(self, 'event_table_card') and self.event_table_card is not None}"
+        log.debug(
+            "[THEME-DEBUG] _apply_event_table_card_theme called, card_exists=%s",
+            hasattr(self, "event_table_card") and self.event_table_card is not None,
         )
 
         card = getattr(self, "event_table_card", None)
@@ -15397,7 +15435,7 @@ QPushButton[isGhost="true"]:pressed {{
         """
         )
         style = card.styleSheet() if card is not None else ""
-        print(f"[THEME-DEBUG] EventTableCard styleSheet length={len(style)}")
+        log.debug("[THEME-DEBUG] EventTableCard styleSheet length=%s", len(style))
 
     def _apply_snapshot_theme(self) -> None:
         """Apply theme styling to the snapshot card and controls."""

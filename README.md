@@ -63,7 +63,7 @@ can send a whole analysis to a collaborator as one file.
 
 - **Cross-platform**
   - Runs on recent Windows and macOS versions.
-  - Pure Python + Qt + PyQtGraph, no cloud dependencies.
+  - Pure Python + Qt + PyQtGraph + Matplotlib, no cloud dependencies.
 
 ---
 
@@ -186,8 +186,13 @@ project to regenerate views.
   - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, Figure Composer
   - `core/` — project model, trace/event handling, audit, logging
   - `storage/` — SQLite / project I/O
-  - `resources/` — icons, QSS styles, etc.
+- `docs/` — user guide, welcome tour, and import documentation
+- `icons/`, `resources/`, `style.qss` — application assets and styling
+- `schemas/` — data/schema definitions and validation helpers
+- `scripts/` — maintenance and developer utilities
+- `tests/` — test suite
 - `packaging/` — PyInstaller / macOS bundle configs (if present)
+- `VasoAnalyzer.spec` — PyInstaller spec for Windows packaging
 - `README.md` — this file
 - `LICENSE`, `CITATION.cff` — licensing and citation info
 
@@ -203,14 +208,13 @@ project to regenerate views.
 
    ```bash
    pip install -r requirements.txt
-````
+   pip install -e .
+   ```
 
 4. Run the app:
 
    ```bash
    python -m src.main
-   # or, depending on layout:
-   python src/main.py
    ```
 
 On first run you may see debug logging in the console; packaged builds typically

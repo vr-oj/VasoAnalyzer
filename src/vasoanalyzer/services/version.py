@@ -22,7 +22,7 @@ _HEADERS: Final[dict[str, str]] = {
 }
 
 
-def check_for_new_version(current_version: str = f"v{APP_VERSION}") -> str | None:
+def check_for_new_version(current_version: str = APP_VERSION) -> str | None:
     """
     Return the latest release tag if it differs from ``current_version``.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from typing import TYPE_CHECKING, Any
 
 from PyQt5.QtCore import QSize, Qt
@@ -12,6 +13,8 @@ from vasoanalyzer.ui.widgets import CustomToolbar
 
 if TYPE_CHECKING:  # pragma: no cover
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
+
+log = logging.getLogger(__name__)
 
 
 def build_canvas_toolbar(window: VasoAnalyzerApp, canvas: Any):
@@ -60,7 +63,7 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
     window._update_trace_controls_state()
 
     def apply_theme() -> None:
-        print(f"[THEME-DEBUG] PlotToolbar.apply_theme called, id(self)={id(toolbar)}")
+        log.debug("[THEME-DEBUG] PlotToolbar.apply_theme called, id(self)=%s", id(toolbar))
         _apply_toolbar_styles(toolbar)
         _reassign_toolbar_icons(toolbar, window)
         try:
@@ -71,7 +74,7 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
                 if isinstance(theme_module.CURRENT_THEME, dict)
                 else None
             )
-            print(f"[THEME-DEBUG] PlotToolbar theme toolbar_bg={toolbar_bg!r}")
+            log.debug("[THEME-DEBUG] PlotToolbar theme toolbar_bg=%r", toolbar_bg)
         except Exception:
             pass
 
