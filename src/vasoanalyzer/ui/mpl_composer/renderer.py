@@ -131,6 +131,17 @@ class AnnotationSpec:
     fontsize: float = 8.0
     color: str = "black"
     linewidth: float = 1.0
+    linestyle: str = "-"
+    fontfamily: str = "sans-serif"
+    fontstyle: str = "normal"
+    fontweight: str = "normal"
+    text_color: Optional[str] = None
+    ha: str = "center"
+    va: str = "center"
+    box_facecolor: Optional[str] = None
+    box_alpha: float = 0.2
+    arrowstyle: str = "->"
+    arrow_head_scale: float = 12.0
 
 
 @dataclass
@@ -761,17 +772,25 @@ def _render_annotations(fig: Figure, ax: "Axes", annos: List[AnnotationSpec]) ->
             trans = ax.transAxes
 
         if a.kind == "text":
+            text_color = a.text_color or a.color
             ax.text(
                 a.x,
                 a.y,
                 a.text,
                 transform=trans,
                 fontsize=a.fontsize,
-                color=a.color,
+                color=text_color,
+                fontfamily=a.fontfamily,
+                fontstyle=a.fontstyle,
+                fontweight=a.fontweight,
+                ha=a.ha,
+                va=a.va,
+                clip_on=True,
             )
         elif a.kind == "box":
             if a.x2 is None or a.y2 is None:
                 continue
+            facecolor = a.box_facecolor if a.box_facecolor else "none"
             rect = mpatches.Rectangle(
                 (a.x, a.y),
                 a.x2 - a.x,
@@ -779,9 +798,27 @@ def _render_annotations(fig: Figure, ax: "Axes", annos: List[AnnotationSpec]) ->
                 transform=trans,
                 linewidth=a.linewidth,
                 edgecolor=a.color,
-                facecolor="none",
+                linestyle=a.linestyle,
+                facecolor=facecolor,
+                alpha=a.box_alpha if facecolor != "none" else 1.0,
             )
             ax.add_patch(rect)
+            if a.text:
+                text_color = a.text_color or a.color
+                ax.text(
+                    a.x + (a.x2 - a.x) * 0.5,
+                    a.y + (a.y2 - a.y) * 0.5,
+                    a.text,
+                    transform=trans,
+                    fontsize=a.fontsize,
+                    color=text_color,
+                    fontfamily=a.fontfamily,
+                    fontstyle=a.fontstyle,
+                    fontweight=a.fontweight,
+                    ha=a.ha,
+                    va=a.va,
+                    clip_on=True,
+                )
         elif a.kind == "line":
             if a.x2 is None or a.y2 is None:
                 continue
@@ -791,6 +828,7 @@ def _render_annotations(fig: Figure, ax: "Axes", annos: List[AnnotationSpec]) ->
                 transform=trans,
                 color=a.color,
                 linewidth=a.linewidth,
+                linestyle=a.linestyle,
             )
         elif a.kind == "arrow":
             if a.x2 is None or a.y2 is None:
@@ -801,8 +839,9 @@ def _render_annotations(fig: Figure, ax: "Axes", annos: List[AnnotationSpec]) ->
                 transform=trans,
                 linewidth=a.linewidth,
                 color=a.color,
-                mutation_scale=max(a.linewidth * 6.0, 6.0),
-                arrowstyle="->",
+                linestyle=a.linestyle,
+                mutation_scale=max(float(a.arrow_head_scale), 1.0),
+                arrowstyle=a.arrowstyle,
             )
             ax.add_patch(arrow)
 

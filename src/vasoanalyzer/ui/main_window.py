@@ -4093,6 +4093,7 @@ class VasoAnalyzerApp(QMainWindow):
 
                 self._sync_autoscale_y_action_from_host()
                 self._update_snapshot_viewer_state(sample)
+                self._update_gif_animator_state()
                 self._update_home_resume_button()
                 self._update_metadata_panel(sample)
                 self._maybe_launch_pending_figure()
@@ -4207,6 +4208,8 @@ class VasoAnalyzerApp(QMainWindow):
                         log.error("Failed to initialise snapshot viewer", exc_info=True)
                         self.snapshot_frames = []
                         self.toggle_snapshot_viewer(False)
+                # Update GIF Animator state after snapshots are loaded
+                self._update_gif_animator_state()
         else:
             self._snapshot_viewer_pending_open = False
             message = error or "Snapshot load failed"
@@ -5654,6 +5657,13 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_figure_composer.setShortcut("Ctrl+Shift+P")
         self.action_figure_composer.triggered.connect(self.open_matplotlib_composer_from_current_view)
         tools_menu.addAction(self.action_figure_composer)
+
+        # GIF Animator
+        self.action_gif_animator = QAction("GIF Animator…", self)
+        self.action_gif_animator.setToolTip("Create animated GIFs from traces and snapshots")
+        self.action_gif_animator.triggered.connect(self.show_gif_animator)
+        self.action_gif_animator.setEnabled(False)
+        tools_menu.addAction(self.action_gif_animator)
 
         tools_menu.addSeparator()
 
@@ -10425,6 +10435,9 @@ QPushButton[isGhost="true"]:pressed {{
             if status_note:
                 self.statusBar().showMessage(status_note, 6000)
 
+            # Update GIF Animator state after snapshots are loaded
+            self._update_gif_animator_state()
+
             return True
 
         except Exception as e:
@@ -13993,6 +14006,93 @@ QPushButton[isGhost="true"]:pressed {{
         window.activateWindow()
 
         log.info("Pure Matplotlib Figure Composer launched")
+
+    def _update_gif_animator_state(self) -> None:
+        """Enable GIF Animator menu action when sample has required data."""
+        if not self.current_sample:
+            self.action_gif_animator.setEnabled(False)
+            return
+
+        sample = self.current_sample
+
+        # Check for required data
+        has_trace = sample.trace_data is not None or sample.dataset_id is not None
+        has_snapshots = (
+            isinstance(sample.snapshots, np.ndarray) and sample.snapshots.size > 0
+        )
+        has_events = sample.events_data is not None and len(sample.events_data) >= 2
+
+        # Enable only if all requirements are met
+        should_enable = has_trace and has_snapshots and has_events
+        self.action_gif_animator.setEnabled(should_enable)
+
+    def show_gif_animator(self, checked: bool = False) -> None:
+        """Launch GIF Animator window.
+
+        Args:
+            checked: Unused boolean from Qt signal (ignored)
+        """
+        if not self.current_sample:
+            return
+
+        # Validate requirements
+        has_snapshots = (
+            isinstance(self.current_sample.snapshots, np.ndarray)
+            and self.current_sample.snapshots.size > 0
+        )
+        has_events = (
+            self.current_sample.events_data is not None
+            and len(self.current_sample.events_data) >= 2
+        )
+
+        if not has_snapshots:
+            QMessageBox.warning(
+                self,
+                "No Snapshots",
+                "Current sample does not have snapshot frames loaded.\n\n"
+                "Please load a sample with TIFF stack data to use the GIF Animator.",
+            )
+            return
+
+        if not has_events:
+            QMessageBox.warning(
+                self,
+                "Need Events",
+                "Please define at least 2 events to mark the animation start and end points.\n\n"
+                "Events can be added in the Events tab.",
+            )
+            return
+
+        # Get trace model (use existing or build)
+        if self.trace_model is None:
+            try:
+                trace_model = self._get_trace_model_for_sample(self.current_sample)
+            except Exception:
+                trace_model = None
+        else:
+            trace_model = self.trace_model
+
+        if trace_model is None:
+            QMessageBox.warning(
+                self,
+                "No Trace Data",
+                "Current sample does not have trace data available.",
+            )
+            return
+
+        # Launch animator window
+        from vasoanalyzer.ui.gif_animator import GifAnimatorWindow
+
+        animator = GifAnimatorWindow(
+            parent=self,
+            project_ctx=self.project_ctx,
+            sample=self.current_sample,
+            trace_model=trace_model,
+            events_df=self.current_sample.events_data,
+        )
+        animator.show()
+
+        log.info("GIF Animator launched")
 
     def open_matplotlib_composer_from_recipe(
         self, recipe_id: str | None, *, dataset_id: int | None = None

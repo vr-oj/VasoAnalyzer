@@ -3326,6 +3326,10 @@ def _format_trace_df(
         columns[p1_label] = df["p1"]
     if "p2" in df.columns:
         columns[p2_label] = df["p2"]
+    if "frame_number" in df.columns:
+        columns["FrameNumber"] = df["frame_number"]
+    if "tiff_page" in df.columns:
+        columns["TiffPage"] = df["tiff_page"]
 
     formatted = pd.DataFrame(columns)
     log.info(

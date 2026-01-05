@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.widgets import RectangleSelector
+import matplotlib.patches as mpatches
 from PyQt5.QtCore import QSettings, Qt, QTimer
 from PyQt5.QtGui import QCloseEvent, QImage, QShowEvent
 from PyQt5.QtWidgets import QColorDialog, QMessageBox
@@ -32,6 +33,8 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
     QSizePolicy,
@@ -46,6 +49,7 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 
 from .preview_viewport import PreviewViewport
 from .renderer import (
+    AnnotationSpec,
     AxesSpec,
     EventSpec,
     FigureSpec,
@@ -237,6 +241,31 @@ class PureMplFigureComposer(QMainWindow):
         self._preview_scale_label: QLabel | None = None
         self._export_warning_label: QLabel | None = None
         self._export_warning_details_btn: QPushButton | None = None
+        self.annotation_tool: QComboBox | None = None
+        self.annotation_anchor: QComboBox | None = None
+        self.annotation_context_label: QLabel | None = None
+        self.annotation_list: QListWidget | None = None
+        self.btn_annotation_delete: QPushButton | None = None
+        self.btn_annotation_text_color: QPushButton | None = None
+        self.btn_annotation_stroke_color: QPushButton | None = None
+        self.btn_annotation_fill_color: QPushButton | None = None
+        self.edit_annotation_text: QLineEdit | None = None
+        self.spin_annotation_fontsize: QDoubleSpinBox | None = None
+        self.combo_annotation_font: QComboBox | None = None
+        self.cb_annotation_bold: QCheckBox | None = None
+        self.cb_annotation_italic: QCheckBox | None = None
+        self.combo_annotation_halign: QComboBox | None = None
+        self.combo_annotation_valign: QComboBox | None = None
+        self.spin_annotation_linewidth: QDoubleSpinBox | None = None
+        self.combo_annotation_linestyle: QComboBox | None = None
+        self.cb_annotation_fill: QCheckBox | None = None
+        self.spin_annotation_fill_alpha: QDoubleSpinBox | None = None
+        self.spin_annotation_x: QDoubleSpinBox | None = None
+        self.spin_annotation_y: QDoubleSpinBox | None = None
+        self.spin_annotation_x2: QDoubleSpinBox | None = None
+        self.spin_annotation_y2: QDoubleSpinBox | None = None
+        self.combo_annotation_arrowstyle: QComboBox | None = None
+        self.spin_annotation_arrow_scale: QDoubleSpinBox | None = None
         self._right_panel: QWidget | None = None
         self._main_splitter: QSplitter | None = None
         self._last_figure_size: tuple[float, float] | None = None  # Track (width_px, height_px)
@@ -250,16 +279,45 @@ class PureMplFigureComposer(QMainWindow):
         self._pending_signal_emit: bool = False
         self._preflight_timer: QTimer | None = None
         self._preflight_issues: list[str] = []
+        self._annotation_mode: str = "select"
+        self._annotation_default_space: str = "data"
+        self._annotation_active_index: int | None = None
+        self._annotation_drag_start: tuple[float, float] | None = None
+        self._annotation_drag_space: str | None = None
+        self._annotation_drag_kind: str | None = None
+        self._annotation_drag_preview: Any = None
+        self._annotation_controls_busy: bool = False
+        self._mpl_cid_press: int | None = None
+        self._mpl_cid_motion: int | None = None
+        self._mpl_cid_release: int | None = None
+        self._annotation_style_defaults: dict[str, Any] = {}
         self._template_choices: list[tuple[str, str]] = [
             ("Single column", "single_column"),
             ("Double column", "double_column"),
             ("Slide", "slide"),
         ]
+        self._annotation_style_defaults = {
+            "fontsize": 9.0,
+            "fontfamily": getattr(self._fig_spec.axes, "label_fontfamily", "sans-serif"),
+            "fontstyle": getattr(self._fig_spec.axes, "label_fontstyle", "normal"),
+            "fontweight": "normal",
+            "text_color": CURRENT_THEME.get("text", "#000000"),
+            "color": CURRENT_THEME.get("text", "#000000"),
+            "linewidth": 1.0,
+            "linestyle": "-",
+            "ha": "center",
+            "va": "center",
+            "box_facecolor": None,
+            "box_alpha": 0.2,
+            "arrowstyle": "->",
+            "arrow_head_scale": 12.0,
+        }
 
         self._enforce_page_bounds(update_controls=False)
         self._setup_ui()
         self._log_layout_state_once()
         self._sync_controls_from_spec()
+        self._refresh_annotation_list(keep_selection=False)
         self._refresh_preview()
         QTimer.singleShot(0, self._apply_dynamic_minimum_size)
         QTimer.singleShot(0, self._init_splitter_sizes_once)
@@ -523,6 +581,7 @@ class PureMplFigureComposer(QMainWindow):
         right_layout.addWidget(self._build_axes_group())
         right_layout.addWidget(self._build_range_group())
         right_layout.addWidget(self._build_font_group())
+        # Annotations are intentionally hidden from the suite; use external tools (e.g., GraphPad).
         right_layout.addWidget(self._build_shape_group())
         right_layout.addStretch(1)
 
@@ -601,6 +660,7 @@ class PureMplFigureComposer(QMainWindow):
         self._preview_viewport.set_event_target(self._canvas)
         self._preview_viewport.set_scale_callback(self._update_scale_label_from_viewport)
         self._preview_initialized = True
+        self._connect_mpl_events()
 
     # ------------------------------------------------------------------
     # Control builders
@@ -913,6 +973,214 @@ class PureMplFigureComposer(QMainWindow):
 
         return grp
 
+    def _build_annotation_group(self) -> QGroupBox:
+        grp = QGroupBox("Annotations")
+        layout = QVBoxLayout(grp)
+        layout.setSpacing(6)
+
+        tool_row = QHBoxLayout()
+        tool_row.addWidget(QLabel("Tool"))
+        self.annotation_tool = QComboBox()
+        self.annotation_tool.addItem("Select", "select")
+        self.annotation_tool.addItem("Text", "text")
+        self.annotation_tool.addItem("Line", "line")
+        self.annotation_tool.addItem("Arrow", "arrow")
+        self.annotation_tool.addItem("Box", "box")
+        self.annotation_tool.setMinimumContentsLength(10)
+        self.annotation_tool.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        tool_row.addWidget(self.annotation_tool, 1)
+        layout.addLayout(tool_row)
+
+        anchor_row = QHBoxLayout()
+        anchor_row.addWidget(QLabel("Anchor"))
+        self.annotation_anchor = QComboBox()
+        self.annotation_anchor.addItem("Data", "data")
+        self.annotation_anchor.addItem("Axes (0-1)", "axes")
+        self.annotation_anchor.setMinimumContentsLength(10)
+        self.annotation_anchor.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        anchor_row.addWidget(self.annotation_anchor, 1)
+        layout.addLayout(anchor_row)
+
+        self.annotation_context_label = QLabel("Editing: Defaults for new annotations")
+        self.annotation_context_label.setStyleSheet("color: #555;")
+        layout.addWidget(self.annotation_context_label)
+
+        self.annotation_list = QListWidget()
+        self.annotation_list.setMinimumHeight(120)
+        layout.addWidget(self.annotation_list)
+
+        btn_row = QHBoxLayout()
+        self.btn_annotation_delete = QPushButton("Delete")
+        self.btn_annotation_delete.setMinimumHeight(26)
+        btn_row.addWidget(self.btn_annotation_delete)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        pos_group = QGroupBox("Position")
+        pos_form = QFormLayout(pos_group)
+        self.spin_annotation_x = QDoubleSpinBox()
+        self.spin_annotation_x.setDecimals(4)
+        self.spin_annotation_x.setRange(-1e6, 1e6)
+        self.spin_annotation_x.setSingleStep(0.05)
+        self.spin_annotation_y = QDoubleSpinBox()
+        self.spin_annotation_y.setDecimals(4)
+        self.spin_annotation_y.setRange(-1e6, 1e6)
+        self.spin_annotation_y.setSingleStep(0.05)
+        self.spin_annotation_x2 = QDoubleSpinBox()
+        self.spin_annotation_x2.setDecimals(4)
+        self.spin_annotation_x2.setRange(-1e6, 1e6)
+        self.spin_annotation_x2.setSingleStep(0.05)
+        self.spin_annotation_y2 = QDoubleSpinBox()
+        self.spin_annotation_y2.setDecimals(4)
+        self.spin_annotation_y2.setRange(-1e6, 1e6)
+        self.spin_annotation_y2.setSingleStep(0.05)
+        pos_form.addRow("X", self.spin_annotation_x)
+        pos_form.addRow("Y", self.spin_annotation_y)
+        pos_form.addRow("X2", self.spin_annotation_x2)
+        pos_form.addRow("Y2", self.spin_annotation_y2)
+        layout.addWidget(pos_group)
+
+        text_group = QGroupBox("Text")
+        text_form = QFormLayout(text_group)
+        self.edit_annotation_text = QLineEdit()
+        text_form.addRow("Content", self.edit_annotation_text)
+
+        fonts = ["sans-serif", "serif", "monospace", "Arial", "Times New Roman", "Courier New"]
+        self.spin_annotation_fontsize = QDoubleSpinBox()
+        self.spin_annotation_fontsize.setDecimals(1)
+        self.spin_annotation_fontsize.setRange(6.0, 36.0)
+        self.spin_annotation_fontsize.setSingleStep(0.5)
+        text_form.addRow("Size (pt)", self.spin_annotation_fontsize)
+        self.combo_annotation_font = QComboBox()
+        self.combo_annotation_font.addItems(fonts)
+        self.combo_annotation_font.setMinimumContentsLength(12)
+        self.combo_annotation_font.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        text_form.addRow("Font", self.combo_annotation_font)
+
+        text_style_row = QHBoxLayout()
+        self.cb_annotation_bold = QCheckBox("Bold")
+        self.cb_annotation_italic = QCheckBox("Italic")
+        text_style_row.addWidget(self.cb_annotation_bold)
+        text_style_row.addWidget(self.cb_annotation_italic)
+        text_style_row.addStretch(1)
+        text_form.addRow("Style", text_style_row)
+
+        self.btn_annotation_text_color = QPushButton()
+        self.btn_annotation_text_color.setFixedWidth(60)
+        text_form.addRow("Text color", self.btn_annotation_text_color)
+
+        align_row = QHBoxLayout()
+        self.combo_annotation_halign = QComboBox()
+        self.combo_annotation_halign.addItem("Left", "left")
+        self.combo_annotation_halign.addItem("Center", "center")
+        self.combo_annotation_halign.addItem("Right", "right")
+        self.combo_annotation_valign = QComboBox()
+        self.combo_annotation_valign.addItem("Bottom", "bottom")
+        self.combo_annotation_valign.addItem("Center", "center")
+        self.combo_annotation_valign.addItem("Top", "top")
+        align_row.addWidget(self.combo_annotation_halign)
+        align_row.addWidget(self.combo_annotation_valign)
+        text_form.addRow("Align", align_row)
+        layout.addWidget(text_group)
+
+        stroke_group = QGroupBox("Stroke")
+        stroke_form = QFormLayout(stroke_group)
+        self.btn_annotation_stroke_color = QPushButton()
+        self.btn_annotation_stroke_color.setFixedWidth(60)
+        stroke_form.addRow("Color", self.btn_annotation_stroke_color)
+        self.spin_annotation_linewidth = QDoubleSpinBox()
+        self.spin_annotation_linewidth.setDecimals(2)
+        self.spin_annotation_linewidth.setRange(0.1, 10.0)
+        self.spin_annotation_linewidth.setSingleStep(0.1)
+        stroke_form.addRow("Width", self.spin_annotation_linewidth)
+        self.combo_annotation_linestyle = QComboBox()
+        self.combo_annotation_linestyle.addItem("Solid", "-")
+        self.combo_annotation_linestyle.addItem("Dashed", "--")
+        self.combo_annotation_linestyle.addItem("Dotted", ":")
+        self.combo_annotation_linestyle.addItem("Dash-dot", "-.")
+        stroke_form.addRow("Line style", self.combo_annotation_linestyle)
+        layout.addWidget(stroke_group)
+
+        fill_group = QGroupBox("Box fill")
+        fill_form = QFormLayout(fill_group)
+        self.cb_annotation_fill = QCheckBox("Enable fill")
+        fill_form.addRow(self.cb_annotation_fill)
+        self.btn_annotation_fill_color = QPushButton()
+        self.btn_annotation_fill_color.setFixedWidth(60)
+        fill_form.addRow("Fill color", self.btn_annotation_fill_color)
+        self.spin_annotation_fill_alpha = QDoubleSpinBox()
+        self.spin_annotation_fill_alpha.setDecimals(2)
+        self.spin_annotation_fill_alpha.setRange(0.0, 1.0)
+        self.spin_annotation_fill_alpha.setSingleStep(0.05)
+        fill_form.addRow("Fill alpha", self.spin_annotation_fill_alpha)
+        layout.addWidget(fill_group)
+
+        arrow_group = QGroupBox("Arrow")
+        arrow_form = QFormLayout(arrow_group)
+        self.combo_annotation_arrowstyle = QComboBox()
+        self.combo_annotation_arrowstyle.addItem("Arrow", "->")
+        self.combo_annotation_arrowstyle.addItem("Double", "<->")
+        self.combo_annotation_arrowstyle.addItem("Bar", "-|>")
+        self.combo_annotation_arrowstyle.addItem("Double bar", "<|-|>")
+        arrow_form.addRow("Style", self.combo_annotation_arrowstyle)
+        self.spin_annotation_arrow_scale = QDoubleSpinBox()
+        self.spin_annotation_arrow_scale.setDecimals(1)
+        self.spin_annotation_arrow_scale.setRange(4.0, 30.0)
+        self.spin_annotation_arrow_scale.setSingleStep(1.0)
+        arrow_form.addRow("Head size", self.spin_annotation_arrow_scale)
+        layout.addWidget(arrow_group)
+
+        if self.annotation_tool is not None:
+            self.annotation_tool.currentIndexChanged.connect(self._on_annotation_tool_changed)
+        if self.annotation_anchor is not None:
+            self.annotation_anchor.currentIndexChanged.connect(self._on_annotation_anchor_changed)
+        if self.annotation_list is not None:
+            self.annotation_list.currentRowChanged.connect(self._on_annotation_selected)
+        if self.btn_annotation_delete is not None:
+            self.btn_annotation_delete.clicked.connect(self._delete_selected_annotation)
+        if self.edit_annotation_text is not None:
+            self.edit_annotation_text.editingFinished.connect(self._on_annotation_style_changed)
+        if self.spin_annotation_fontsize is not None:
+            self.spin_annotation_fontsize.valueChanged.connect(self._on_annotation_style_changed)
+        if self.combo_annotation_font is not None:
+            self.combo_annotation_font.currentTextChanged.connect(self._on_annotation_style_changed)
+        if self.cb_annotation_bold is not None:
+            self.cb_annotation_bold.toggled.connect(self._on_annotation_style_changed)
+        if self.cb_annotation_italic is not None:
+            self.cb_annotation_italic.toggled.connect(self._on_annotation_style_changed)
+        if self.btn_annotation_text_color is not None:
+            self.btn_annotation_text_color.clicked.connect(self._on_annotation_text_color_clicked)
+        if self.combo_annotation_halign is not None:
+            self.combo_annotation_halign.currentIndexChanged.connect(self._on_annotation_style_changed)
+        if self.combo_annotation_valign is not None:
+            self.combo_annotation_valign.currentIndexChanged.connect(self._on_annotation_style_changed)
+        if self.btn_annotation_stroke_color is not None:
+            self.btn_annotation_stroke_color.clicked.connect(self._on_annotation_stroke_color_clicked)
+        if self.spin_annotation_linewidth is not None:
+            self.spin_annotation_linewidth.valueChanged.connect(self._on_annotation_style_changed)
+        if self.combo_annotation_linestyle is not None:
+            self.combo_annotation_linestyle.currentIndexChanged.connect(self._on_annotation_style_changed)
+        if self.cb_annotation_fill is not None:
+            self.cb_annotation_fill.toggled.connect(self._on_annotation_fill_toggled)
+        if self.btn_annotation_fill_color is not None:
+            self.btn_annotation_fill_color.clicked.connect(self._on_annotation_fill_color_clicked)
+        if self.spin_annotation_fill_alpha is not None:
+            self.spin_annotation_fill_alpha.valueChanged.connect(self._on_annotation_style_changed)
+        if self.spin_annotation_x is not None:
+            self.spin_annotation_x.valueChanged.connect(self._on_annotation_style_changed)
+        if self.spin_annotation_y is not None:
+            self.spin_annotation_y.valueChanged.connect(self._on_annotation_style_changed)
+        if self.spin_annotation_x2 is not None:
+            self.spin_annotation_x2.valueChanged.connect(self._on_annotation_style_changed)
+        if self.spin_annotation_y2 is not None:
+            self.spin_annotation_y2.valueChanged.connect(self._on_annotation_style_changed)
+        if self.combo_annotation_arrowstyle is not None:
+            self.combo_annotation_arrowstyle.currentIndexChanged.connect(self._on_annotation_style_changed)
+        if self.spin_annotation_arrow_scale is not None:
+            self.spin_annotation_arrow_scale.valueChanged.connect(self._on_annotation_style_changed)
+
+        return grp
+
     def _build_shape_group(self) -> QGroupBox:
         grp = QGroupBox("Axis shape")
         layout = QVBoxLayout(grp)
@@ -1096,6 +1364,362 @@ class PureMplFigureComposer(QMainWindow):
         if self.cb_export_transparent is not None:
             with signals_blocked(self.cb_export_transparent):
                 self.cb_export_transparent.setChecked(bool(self._export_transparent))
+
+    # ------------------------------------------------------------------
+    # Annotation helpers
+    # ------------------------------------------------------------------
+    def _connect_mpl_events(self) -> None:
+        if self._canvas is None:
+            return
+        for cid in (self._mpl_cid_press, self._mpl_cid_motion, self._mpl_cid_release):
+            if cid is not None:
+                try:
+                    self._canvas.mpl_disconnect(cid)
+                except Exception:
+                    pass
+        self._mpl_cid_press = self._canvas.mpl_connect("button_press_event", self._on_mpl_press)
+        self._mpl_cid_motion = self._canvas.mpl_connect("motion_notify_event", self._on_mpl_motion)
+        self._mpl_cid_release = self._canvas.mpl_connect("button_release_event", self._on_mpl_release)
+
+    def _annotation_selected_index(self) -> int | None:
+        if self.annotation_list is None:
+            return None
+        row = self.annotation_list.currentRow()
+        if row < 0:
+            return None
+        return row
+
+    def _active_annotation(self):
+        idx = self._annotation_selected_index()
+        if idx is None:
+            return None
+        if idx < 0 or idx >= len(self._fig_spec.annotations):
+            return None
+        return self._fig_spec.annotations[idx]
+
+    def _annotation_display_label(self, idx: int, anno: AnnotationSpec) -> str:
+        kind = anno.kind.capitalize()
+        snippet = ""
+        if anno.text:
+            text = " ".join(anno.text.strip().split())
+            if text:
+                snippet = text[:24] + ("..." if len(text) > 24 else "")
+        label = f"{idx + 1}. {kind}"
+        if snippet and anno.kind in ("text", "box"):
+            label = f"{label}: {snippet}"
+        if anno.coord_space == "axes":
+            label = f"{label} [axes]"
+        return label
+
+    def _refresh_annotation_list(self, *, keep_selection: bool = True) -> None:
+        if self.annotation_list is None:
+            return
+        prev_idx = self._annotation_active_index if keep_selection else None
+        self.annotation_list.clear()
+        for idx, anno in enumerate(self._fig_spec.annotations):
+            item = QListWidgetItem(self._annotation_display_label(idx, anno))
+            self.annotation_list.addItem(item)
+        if prev_idx is not None and 0 <= prev_idx < self.annotation_list.count():
+            self.annotation_list.setCurrentRow(prev_idx)
+        elif self.annotation_list.count() > 0:
+            self.annotation_list.setCurrentRow(0)
+        else:
+            self._annotation_active_index = None
+        self._sync_annotation_controls(self._active_annotation())
+
+    def _sync_annotation_controls(self, anno: AnnotationSpec | None) -> None:
+        self._annotation_controls_busy = True
+        try:
+            if anno is None:
+                defaults = self._annotation_style_defaults
+                text = ""
+                fontsize = defaults.get("fontsize", 9.0)
+                fontfamily = defaults.get("fontfamily", "sans-serif")
+                fontstyle = defaults.get("fontstyle", "normal")
+                fontweight = defaults.get("fontweight", "normal")
+                text_color = defaults.get("text_color", "#000000")
+                stroke_color = defaults.get("color", "#000000")
+                linewidth = defaults.get("linewidth", 1.0)
+                linestyle = defaults.get("linestyle", "-")
+                ha = defaults.get("ha", "center")
+                va = defaults.get("va", "center")
+                box_facecolor = defaults.get("box_facecolor", None)
+                box_alpha = defaults.get("box_alpha", 0.2)
+                arrowstyle = defaults.get("arrowstyle", "->")
+                arrow_head_scale = defaults.get("arrow_head_scale", 12.0)
+                coord_space = self._annotation_default_space
+            else:
+                text = anno.text or ""
+                fontsize = anno.fontsize
+                fontfamily = getattr(anno, "fontfamily", "sans-serif")
+                fontstyle = getattr(anno, "fontstyle", "normal")
+                fontweight = getattr(anno, "fontweight", "normal")
+                text_color = getattr(anno, "text_color", None) or anno.color
+                stroke_color = anno.color
+                linewidth = anno.linewidth
+                linestyle = getattr(anno, "linestyle", "-")
+                ha = getattr(anno, "ha", "center")
+                va = getattr(anno, "va", "center")
+                box_facecolor = getattr(anno, "box_facecolor", None)
+                box_alpha = getattr(anno, "box_alpha", 0.2)
+                arrowstyle = getattr(anno, "arrowstyle", "->")
+                arrow_head_scale = getattr(anno, "arrow_head_scale", 12.0)
+                coord_space = anno.coord_space
+
+            if self.annotation_context_label is not None:
+                if anno is None:
+                    self.annotation_context_label.setText("Editing: Defaults for new annotations")
+                else:
+                    self.annotation_context_label.setText(
+                        f"Editing: {anno.kind.capitalize()} #{self._annotation_selected_index() + 1}"
+                    )
+
+            if self.annotation_anchor is not None:
+                idx = self.annotation_anchor.findData(coord_space)
+                with signals_blocked(self.annotation_anchor):
+                    self.annotation_anchor.setCurrentIndex(idx if idx >= 0 else 0)
+
+            if self.edit_annotation_text is not None:
+                with signals_blocked(self.edit_annotation_text):
+                    self.edit_annotation_text.setText(text)
+            if self.spin_annotation_fontsize is not None:
+                with signals_blocked(self.spin_annotation_fontsize):
+                    self.spin_annotation_fontsize.setValue(float(fontsize))
+            if self.combo_annotation_font is not None:
+                idx = self.combo_annotation_font.findText(fontfamily)
+                with signals_blocked(self.combo_annotation_font):
+                    self.combo_annotation_font.setCurrentIndex(idx if idx >= 0 else 0)
+            if self.cb_annotation_bold is not None:
+                with signals_blocked(self.cb_annotation_bold):
+                    self.cb_annotation_bold.setChecked(fontweight == "bold")
+            if self.cb_annotation_italic is not None:
+                with signals_blocked(self.cb_annotation_italic):
+                    self.cb_annotation_italic.setChecked(fontstyle == "italic")
+            if self.btn_annotation_text_color is not None:
+                self._set_color_button(self.btn_annotation_text_color, text_color)
+            if self.combo_annotation_halign is not None:
+                idx = self.combo_annotation_halign.findData(ha)
+                with signals_blocked(self.combo_annotation_halign):
+                    self.combo_annotation_halign.setCurrentIndex(idx if idx >= 0 else 1)
+            if self.combo_annotation_valign is not None:
+                idx = self.combo_annotation_valign.findData(va)
+                with signals_blocked(self.combo_annotation_valign):
+                    self.combo_annotation_valign.setCurrentIndex(idx if idx >= 0 else 1)
+            if self.btn_annotation_stroke_color is not None:
+                self._set_color_button(self.btn_annotation_stroke_color, stroke_color)
+            if self.spin_annotation_linewidth is not None:
+                with signals_blocked(self.spin_annotation_linewidth):
+                    self.spin_annotation_linewidth.setValue(float(linewidth))
+            if self.combo_annotation_linestyle is not None:
+                idx = self.combo_annotation_linestyle.findData(linestyle)
+                with signals_blocked(self.combo_annotation_linestyle):
+                    self.combo_annotation_linestyle.setCurrentIndex(idx if idx >= 0 else 0)
+            if self.cb_annotation_fill is not None:
+                with signals_blocked(self.cb_annotation_fill):
+                    self.cb_annotation_fill.setChecked(bool(box_facecolor))
+                fill_enabled = self.cb_annotation_fill.isChecked()
+                if self.btn_annotation_fill_color is not None:
+                    self.btn_annotation_fill_color.setEnabled(fill_enabled)
+                if self.spin_annotation_fill_alpha is not None:
+                    self.spin_annotation_fill_alpha.setEnabled(fill_enabled)
+            if self.btn_annotation_fill_color is not None:
+                fill_color = box_facecolor or "#ffffff"
+                self._set_color_button(self.btn_annotation_fill_color, fill_color)
+            if self.spin_annotation_fill_alpha is not None:
+                with signals_blocked(self.spin_annotation_fill_alpha):
+                    self.spin_annotation_fill_alpha.setValue(float(box_alpha))
+            if self.combo_annotation_arrowstyle is not None:
+                idx = self.combo_annotation_arrowstyle.findData(arrowstyle)
+                with signals_blocked(self.combo_annotation_arrowstyle):
+                    self.combo_annotation_arrowstyle.setCurrentIndex(idx if idx >= 0 else 0)
+            if self.spin_annotation_arrow_scale is not None:
+                with signals_blocked(self.spin_annotation_arrow_scale):
+                    self.spin_annotation_arrow_scale.setValue(float(arrow_head_scale))
+
+            if anno is not None:
+                if self.spin_annotation_x is not None:
+                    with signals_blocked(self.spin_annotation_x):
+                        self.spin_annotation_x.setValue(float(anno.x))
+                if self.spin_annotation_y is not None:
+                    with signals_blocked(self.spin_annotation_y):
+                        self.spin_annotation_y.setValue(float(anno.y))
+                if self.spin_annotation_x2 is not None:
+                    with signals_blocked(self.spin_annotation_x2):
+                        self.spin_annotation_x2.setValue(float(anno.x2) if anno.x2 is not None else 0.0)
+                if self.spin_annotation_y2 is not None:
+                    with signals_blocked(self.spin_annotation_y2):
+                        self.spin_annotation_y2.setValue(float(anno.y2) if anno.y2 is not None else 0.0)
+
+            has_selection = anno is not None
+            enable_text = (anno is None) or (anno.kind in ("text", "box"))
+            enable_stroke = (anno is None) or (anno.kind in ("line", "arrow", "box"))
+            enable_fill = (anno is None) or (anno.kind == "box")
+            enable_arrow = (anno is None) or (anno.kind == "arrow")
+            enable_position = has_selection
+            enable_secondary = has_selection and (anno is None or anno.kind != "text")
+
+            if self.spin_annotation_x is not None:
+                self.spin_annotation_x.setEnabled(enable_position)
+            if self.spin_annotation_y is not None:
+                self.spin_annotation_y.setEnabled(enable_position)
+            if self.spin_annotation_x2 is not None:
+                self.spin_annotation_x2.setEnabled(enable_secondary)
+            if self.spin_annotation_y2 is not None:
+                self.spin_annotation_y2.setEnabled(enable_secondary)
+            for widget in (
+                self.edit_annotation_text,
+                self.spin_annotation_fontsize,
+                self.combo_annotation_font,
+                self.cb_annotation_bold,
+                self.cb_annotation_italic,
+                self.btn_annotation_text_color,
+                self.combo_annotation_halign,
+                self.combo_annotation_valign,
+            ):
+                if widget is not None:
+                    widget.setEnabled(enable_text)
+            for widget in (
+                self.btn_annotation_stroke_color,
+                self.spin_annotation_linewidth,
+                self.combo_annotation_linestyle,
+            ):
+                if widget is not None:
+                    widget.setEnabled(enable_stroke)
+            if self.cb_annotation_fill is not None:
+                self.cb_annotation_fill.setEnabled(enable_fill)
+            if self.btn_annotation_fill_color is not None:
+                self.btn_annotation_fill_color.setEnabled(enable_fill and self.cb_annotation_fill and self.cb_annotation_fill.isChecked())
+            if self.spin_annotation_fill_alpha is not None:
+                self.spin_annotation_fill_alpha.setEnabled(enable_fill and self.cb_annotation_fill and self.cb_annotation_fill.isChecked())
+            for widget in (
+                self.combo_annotation_arrowstyle,
+                self.spin_annotation_arrow_scale,
+            ):
+                if widget is not None:
+                    widget.setEnabled(enable_arrow)
+        finally:
+            self._annotation_controls_busy = False
+
+    def _set_color_button(self, button: QPushButton, color: str) -> None:
+        if button is None:
+            return
+        safe = color or "#ffffff"
+        button.setStyleSheet(f"background-color: {safe};")
+        button.setProperty("color", safe)
+
+    def _annotation_defaults_from_controls(self) -> dict[str, Any]:
+        text_color = self._annotation_style_defaults.get("text_color", "#000000")
+        stroke_color = self._annotation_style_defaults.get("color", "#000000")
+        fill_color = self._annotation_style_defaults.get("box_facecolor", None)
+        if self.btn_annotation_text_color is not None:
+            text_color = self.btn_annotation_text_color.property("color") or text_color
+        if self.btn_annotation_stroke_color is not None:
+            stroke_color = self.btn_annotation_stroke_color.property("color") or stroke_color
+        if self.btn_annotation_fill_color is not None:
+            fill_color = self.btn_annotation_fill_color.property("color") or fill_color
+        return {
+            "text": self.edit_annotation_text.text() if self.edit_annotation_text else "",
+            "fontsize": float(self.spin_annotation_fontsize.value()) if self.spin_annotation_fontsize else 9.0,
+            "fontfamily": self.combo_annotation_font.currentText() if self.combo_annotation_font else "sans-serif",
+            "fontstyle": "italic" if self.cb_annotation_italic and self.cb_annotation_italic.isChecked() else "normal",
+            "fontweight": "bold" if self.cb_annotation_bold and self.cb_annotation_bold.isChecked() else "normal",
+            "text_color": text_color,
+            "color": stroke_color,
+            "linewidth": float(self.spin_annotation_linewidth.value()) if self.spin_annotation_linewidth else 1.0,
+            "linestyle": self.combo_annotation_linestyle.currentData()
+            if self.combo_annotation_linestyle
+            else "-",
+            "ha": self.combo_annotation_halign.currentData() if self.combo_annotation_halign else "center",
+            "va": self.combo_annotation_valign.currentData() if self.combo_annotation_valign else "center",
+            "box_facecolor": fill_color if (self.cb_annotation_fill and self.cb_annotation_fill.isChecked()) else None,
+            "box_alpha": float(self.spin_annotation_fill_alpha.value())
+            if self.spin_annotation_fill_alpha
+            else 0.2,
+            "arrowstyle": self.combo_annotation_arrowstyle.currentData()
+            if self.combo_annotation_arrowstyle
+            else "->",
+            "arrow_head_scale": float(self.spin_annotation_arrow_scale.value())
+            if self.spin_annotation_arrow_scale
+            else 12.0,
+        }
+
+    def _apply_annotation_style(self, anno: AnnotationSpec, values: dict[str, Any]) -> None:
+        anno.text = values.get("text", anno.text)
+        anno.fontsize = float(values.get("fontsize", anno.fontsize))
+        anno.fontfamily = values.get("fontfamily", getattr(anno, "fontfamily", "sans-serif"))
+        anno.fontstyle = values.get("fontstyle", getattr(anno, "fontstyle", "normal"))
+        anno.fontweight = values.get("fontweight", getattr(anno, "fontweight", "normal"))
+        anno.text_color = values.get("text_color", getattr(anno, "text_color", None))
+        anno.color = values.get("color", anno.color)
+        anno.linewidth = float(values.get("linewidth", anno.linewidth))
+        anno.linestyle = values.get("linestyle", getattr(anno, "linestyle", "-"))
+        anno.ha = values.get("ha", getattr(anno, "ha", "center"))
+        anno.va = values.get("va", getattr(anno, "va", "center"))
+        anno.box_facecolor = values.get("box_facecolor", getattr(anno, "box_facecolor", None))
+        anno.box_alpha = float(values.get("box_alpha", getattr(anno, "box_alpha", 0.2)))
+        anno.arrowstyle = values.get("arrowstyle", getattr(anno, "arrowstyle", "->"))
+        anno.arrow_head_scale = float(values.get("arrow_head_scale", getattr(anno, "arrow_head_scale", 12.0)))
+
+        if self.spin_annotation_x is not None:
+            anno.x = float(self.spin_annotation_x.value())
+        if self.spin_annotation_y is not None:
+            anno.y = float(self.spin_annotation_y.value())
+        if self.spin_annotation_x2 is not None and self.spin_annotation_x2.isEnabled():
+            anno.x2 = float(self.spin_annotation_x2.value())
+        if self.spin_annotation_y2 is not None and self.spin_annotation_y2.isEnabled():
+            anno.y2 = float(self.spin_annotation_y2.value())
+
+    def _default_annotation_text(self, kind: str) -> str:
+        current = self.edit_annotation_text.text().strip() if self.edit_annotation_text else ""
+        if current:
+            return current
+        if kind == "box":
+            return "Label"
+        if kind == "text":
+            return "Text"
+        return ""
+
+    def _event_to_coords(self, event, coord_space: str) -> tuple[float, float] | None:
+        if event is None:
+            return None
+        ax = event.inaxes or self._current_axes()
+        if ax is None:
+            return None
+        if coord_space == "axes":
+            try:
+                x_ax, y_ax = ax.transAxes.inverted().transform((event.x, event.y))
+                return float(x_ax), float(y_ax)
+            except Exception:
+                return None
+        if event.xdata is not None and event.ydata is not None:
+            return float(event.xdata), float(event.ydata)
+        try:
+            x_data, y_data = ax.transData.inverted().transform((event.x, event.y))
+            return float(x_data), float(y_data)
+        except Exception:
+            return None
+
+    def _drag_too_small(self, start: tuple[float, float], end: tuple[float, float], coord_space: str) -> bool:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        if coord_space == "axes":
+            return (dx * dx + dy * dy) < 1e-6
+        ax = self._current_axes()
+        if ax is None:
+            return (dx * dx + dy * dy) < 1e-12
+        try:
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+        except Exception:
+            return (dx * dx + dy * dy) < 1e-12
+        tol = 0.002 * max(abs(x1 - x0), abs(y1 - y0), 1.0)
+        return (dx * dx + dy * dy) < tol * tol
+
+    def _add_annotation(self, anno: AnnotationSpec) -> None:
+        self._fig_spec.annotations.append(anno)
+        self._annotation_active_index = len(self._fig_spec.annotations) - 1
+        self._refresh_annotation_list(keep_selection=True)
+        self._refresh_preview()
 
     def _enforce_page_bounds(self, update_controls: bool = True) -> None:
         """Clamp page size to min/max bounds to prevent label clipping or runaway sizes."""
@@ -1309,6 +1933,280 @@ class PureMplFigureComposer(QMainWindow):
         # Refresh preview to show new colors
         if hasattr(self, '_refresh_preview'):
             self._refresh_preview()
+
+    def _on_annotation_tool_changed(self, _: int) -> None:
+        if self.annotation_tool is None:
+            return
+        mode = self.annotation_tool.currentData() or "select"
+        self._annotation_mode = mode
+        if mode != "select":
+            self._disable_box_select_mode()
+
+    def _on_annotation_anchor_changed(self, _: int) -> None:
+        if self.annotation_anchor is None:
+            return
+        space = self.annotation_anchor.currentData() or "data"
+        anno = self._active_annotation()
+        if anno is None:
+            self._annotation_default_space = space
+            return
+        anno.coord_space = space
+        self._refresh_preview()
+        self._refresh_annotation_list(keep_selection=True)
+
+    def _on_annotation_selected(self, row: int) -> None:
+        self._annotation_active_index = row if row >= 0 else None
+        self._sync_annotation_controls(self._active_annotation())
+
+    def _delete_selected_annotation(self) -> None:
+        idx = self._annotation_selected_index()
+        if idx is None:
+            return
+        if 0 <= idx < len(self._fig_spec.annotations):
+            del self._fig_spec.annotations[idx]
+        self._annotation_active_index = None
+        self._refresh_annotation_list(keep_selection=False)
+        self._refresh_preview()
+
+    def _on_annotation_text_color_clicked(self) -> None:
+        if self.btn_annotation_text_color is None:
+            return
+        color = QColorDialog.getColor()
+        if not color.isValid():
+            return
+        self._set_color_button(self.btn_annotation_text_color, color.name())
+        self._on_annotation_style_changed()
+
+    def _on_annotation_stroke_color_clicked(self) -> None:
+        if self.btn_annotation_stroke_color is None:
+            return
+        color = QColorDialog.getColor()
+        if not color.isValid():
+            return
+        self._set_color_button(self.btn_annotation_stroke_color, color.name())
+        self._on_annotation_style_changed()
+
+    def _on_annotation_fill_color_clicked(self) -> None:
+        if self.btn_annotation_fill_color is None:
+            return
+        color = QColorDialog.getColor()
+        if not color.isValid():
+            return
+        self._set_color_button(self.btn_annotation_fill_color, color.name())
+        self._on_annotation_style_changed()
+
+    def _on_annotation_fill_toggled(self, checked: bool) -> None:
+        if self.btn_annotation_fill_color is not None:
+            self.btn_annotation_fill_color.setEnabled(bool(checked))
+        if self.spin_annotation_fill_alpha is not None:
+            self.spin_annotation_fill_alpha.setEnabled(bool(checked))
+        self._on_annotation_style_changed()
+
+    def _on_annotation_style_changed(self) -> None:
+        if self._annotation_controls_busy:
+            return
+        values = self._annotation_defaults_from_controls()
+        self._annotation_style_defaults.update(values)
+        anno = self._active_annotation()
+        if anno is None:
+            return
+        self._apply_annotation_style(anno, values)
+        self._refresh_annotation_list(keep_selection=True)
+        self._refresh_preview()
+
+    def _on_mpl_press(self, event) -> None:
+        # Clear any existing preview from previous drag
+        self._clear_annotation_preview()
+
+        if self._annotation_mode == "select":
+            return
+        if event is None or event.button != 1:
+            return
+        if event.inaxes is None:
+            return
+        if self.btn_box_select and self.btn_box_select.isChecked():
+            return
+        space = self._annotation_default_space
+        if self.annotation_anchor is not None:
+            space = self.annotation_anchor.currentData() or space
+        coords = self._event_to_coords(event, space)
+        if coords is None:
+            return
+        kind = self._annotation_mode
+        values = self._annotation_defaults_from_controls()
+        self._annotation_style_defaults.update(values)
+        if kind == "text":
+            text = self._default_annotation_text(kind)
+            anno = AnnotationSpec(
+                kind="text",
+                text=text,
+                x=coords[0],
+                y=coords[1],
+                coord_space=space,
+                fontsize=values.get("fontsize", 9.0),
+                color=values.get("color", "#000000"),
+                linewidth=values.get("linewidth", 1.0),
+                linestyle=values.get("linestyle", "-"),
+                fontfamily=values.get("fontfamily", "sans-serif"),
+                fontstyle=values.get("fontstyle", "normal"),
+                fontweight=values.get("fontweight", "normal"),
+                text_color=values.get("text_color"),
+                ha=values.get("ha", "center"),
+                va=values.get("va", "center"),
+                box_facecolor=values.get("box_facecolor"),
+                box_alpha=values.get("box_alpha", 0.2),
+                arrowstyle=values.get("arrowstyle", "->"),
+                arrow_head_scale=values.get("arrow_head_scale", 12.0),
+            )
+            self._add_annotation(anno)
+            return
+        self._annotation_drag_start = coords
+        self._annotation_drag_space = space
+        self._annotation_drag_kind = kind
+
+    def _clear_annotation_preview(self) -> None:
+        """Clear any temporary annotation preview."""
+        if self._annotation_drag_preview is not None:
+            try:
+                self._annotation_drag_preview.remove()
+            except Exception:
+                pass
+            self._annotation_drag_preview = None
+            if self._canvas:
+                self._canvas.draw_idle()
+
+    def _on_mpl_motion(self, event) -> None:
+        if self._annotation_drag_start is None:
+            return
+        if event is None or event.inaxes is None:
+            return
+
+        # Get current coordinates
+        space = self._annotation_drag_space or "data"
+        coords = self._event_to_coords(event, space)
+        if coords is None:
+            return
+
+        # Clear previous preview
+        self._clear_annotation_preview()
+
+        # Get the current axes
+        ax = self._current_axes()
+        if ax is None:
+            return
+
+        # Determine transform
+        trans = ax.transData if space == "data" else ax.transAxes
+
+        # Get start coordinates
+        start = self._annotation_drag_start
+        kind = self._annotation_drag_kind
+
+        # Get current style settings
+        values = self._annotation_defaults_from_controls()
+        color = values.get("color", "#000000")
+        linewidth = values.get("linewidth", 1.0)
+        linestyle = values.get("linestyle", "-")
+
+        # Draw preview based on annotation type
+        try:
+            if kind == "line":
+                line, = ax.plot(
+                    [start[0], coords[0]],
+                    [start[1], coords[1]],
+                    transform=trans,
+                    color=color,
+                    linewidth=linewidth,
+                    linestyle=linestyle,
+                    alpha=0.5,
+                )
+                self._annotation_drag_preview = line
+            elif kind == "arrow":
+                arrowstyle = values.get("arrowstyle", "->")
+                arrow_head_scale = values.get("arrow_head_scale", 12.0)
+                arrow = mpatches.FancyArrowPatch(
+                    (start[0], start[1]),
+                    (coords[0], coords[1]),
+                    transform=trans,
+                    linewidth=linewidth,
+                    color=color,
+                    linestyle=linestyle,
+                    mutation_scale=max(float(arrow_head_scale), 1.0),
+                    arrowstyle=arrowstyle,
+                    alpha=0.5,
+                )
+                ax.add_patch(arrow)
+                self._annotation_drag_preview = arrow
+            elif kind == "box":
+                facecolor = values.get("box_facecolor", "none")
+                box_alpha = values.get("box_alpha", 0.2)
+                rect = mpatches.Rectangle(
+                    (start[0], start[1]),
+                    coords[0] - start[0],
+                    coords[1] - start[1],
+                    transform=trans,
+                    linewidth=linewidth,
+                    edgecolor=color,
+                    linestyle=linestyle,
+                    facecolor=facecolor if facecolor else "none",
+                    alpha=box_alpha * 0.5 if facecolor and facecolor != "none" else 0.5,
+                )
+                ax.add_patch(rect)
+                self._annotation_drag_preview = rect
+
+            # Refresh canvas to show preview
+            if self._canvas:
+                self._canvas.draw_idle()
+        except Exception:
+            pass
+
+    def _on_mpl_release(self, event) -> None:
+        if self._annotation_drag_start is None or self._annotation_drag_kind is None:
+            return
+        if event is None or event.button != 1:
+            return
+
+        # Clear the preview
+        self._clear_annotation_preview()
+
+        space = self._annotation_drag_space or "data"
+        coords = self._event_to_coords(event, space)
+        start = self._annotation_drag_start
+        kind = self._annotation_drag_kind
+        self._annotation_drag_start = None
+        self._annotation_drag_space = None
+        self._annotation_drag_kind = None
+        if coords is None:
+            return
+        if self._drag_too_small(start, coords, space):
+            return
+        values = self._annotation_defaults_from_controls()
+        self._annotation_style_defaults.update(values)
+        text = self._default_annotation_text(kind) if kind == "box" else ""
+        anno = AnnotationSpec(
+            kind=kind,
+            text=text,
+            x=start[0],
+            y=start[1],
+            x2=coords[0],
+            y2=coords[1],
+            coord_space=space,
+            fontsize=values.get("fontsize", 9.0),
+            color=values.get("color", "#000000"),
+            linewidth=values.get("linewidth", 1.0),
+            linestyle=values.get("linestyle", "-"),
+            fontfamily=values.get("fontfamily", "sans-serif"),
+            fontstyle=values.get("fontstyle", "normal"),
+            fontweight=values.get("fontweight", "normal"),
+            text_color=values.get("text_color"),
+            ha=values.get("ha", "center"),
+            va=values.get("va", "center"),
+            box_facecolor=values.get("box_facecolor"),
+            box_alpha=values.get("box_alpha", 0.2),
+            arrowstyle=values.get("arrowstyle", "->"),
+            arrow_head_scale=values.get("arrow_head_scale", 12.0),
+        )
+        self._add_annotation(anno)
 
     def _on_trace_selected(self, key: str) -> None:
         self._active_trace_key = key
@@ -1740,6 +2638,10 @@ class PureMplFigureComposer(QMainWindow):
         if not checked:
             self._destroy_box_selector()
             return
+        if self.annotation_tool is not None and self.annotation_tool.currentData() != "select":
+            with signals_blocked(self.annotation_tool):
+                self.annotation_tool.setCurrentIndex(0)
+            self._annotation_mode = "select"
         ax = self._current_axes()
         if ax is None:
             self._disable_box_select_mode()

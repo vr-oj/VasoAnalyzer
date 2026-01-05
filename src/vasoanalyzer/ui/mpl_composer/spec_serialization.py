@@ -6,7 +6,7 @@ from typing import Any
 
 from .renderer import AnnotationSpec, AxesSpec, EventSpec, FigureSpec, PageSpec, TraceSpec
 
-SPEC_VERSION = 1
+SPEC_VERSION = 2
 
 
 def figure_spec_to_dict(spec: FigureSpec) -> dict[str, Any]:
@@ -90,6 +90,17 @@ def figure_spec_to_dict(spec: FigureSpec) -> dict[str, Any]:
                 "fontsize": a.fontsize,
                 "color": a.color,
                 "linewidth": a.linewidth,
+                "linestyle": getattr(a, "linestyle", "-"),
+                "fontfamily": getattr(a, "fontfamily", "sans-serif"),
+                "fontstyle": getattr(a, "fontstyle", "normal"),
+                "fontweight": getattr(a, "fontweight", "normal"),
+                "text_color": getattr(a, "text_color", None),
+                "ha": getattr(a, "ha", "center"),
+                "va": getattr(a, "va", "center"),
+                "box_facecolor": getattr(a, "box_facecolor", None),
+                "box_alpha": getattr(a, "box_alpha", 0.2),
+                "arrowstyle": getattr(a, "arrowstyle", "->"),
+                "arrow_head_scale": getattr(a, "arrow_head_scale", 12.0),
             }
             for a in spec.annotations
         ],
@@ -190,6 +201,17 @@ def figure_spec_from_dict(data: dict[str, Any]) -> FigureSpec:
             fontsize=float(a.get("fontsize", 8.0)),
             color=a.get("color", "black"),
             linewidth=float(a.get("linewidth", 1.0)),
+            linestyle=a.get("linestyle", "-"),
+            fontfamily=a.get("fontfamily", "sans-serif"),
+            fontstyle=a.get("fontstyle", "normal"),
+            fontweight=a.get("fontweight", "normal"),
+            text_color=a.get("text_color"),
+            ha=a.get("ha", "center"),
+            va=a.get("va", "center"),
+            box_facecolor=a.get("box_facecolor"),
+            box_alpha=float(a.get("box_alpha", 0.2)),
+            arrowstyle=a.get("arrowstyle", "->"),
+            arrow_head_scale=float(a.get("arrow_head_scale", 12.0)),
         )
         for a in annos_d
     ]

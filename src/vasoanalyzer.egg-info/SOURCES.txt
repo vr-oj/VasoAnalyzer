@@ -87,7 +87,6 @@ src/vasoanalyzer/ui/constants.py
 src/vasoanalyzer/ui/event_label_editor.py
 src/vasoanalyzer/ui/event_labels.py
 src/vasoanalyzer/ui/event_labels_v3.py
-src/vasoanalyzer/ui/event_labels_v3_backup.py
 src/vasoanalyzer/ui/event_table.py
 src/vasoanalyzer/ui/event_table_controller.py
 src/vasoanalyzer/ui/interactions.py

@@ -5,6 +5,7 @@ pandas>=1.0
 tifffile>=2020.7
 imagecodecs>=2021.3
 h5py>=3.14.0
+Pillow>=9.0
 
 # GUI
 PyQt5>=5.15

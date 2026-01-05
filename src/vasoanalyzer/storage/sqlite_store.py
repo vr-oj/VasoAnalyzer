@@ -532,8 +532,21 @@ def add_dataset(
                     with timeout(TRACE_INSERT_TIMEOUT):
                         conn.executemany(
                             """
-                            INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO trace(
+                                dataset_id,
+                                t_seconds,
+                                inner_diam,
+                                outer_diam,
+                                p_avg,
+                                p1,
+                                p2,
+                                frame_number,
+                                tiff_page,
+                                temp,
+                                table_marker,
+                                caliper_length
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             trace_rows,
                         )
@@ -1061,10 +1074,11 @@ def _copy_legacy_tables(src_conn: sqlite3.Connection, dst_conn: sqlite3.Connecti
             [tuple(row) for row in dataset_rows],
         )
 
-    with contextlib.suppress(sqlite3.OperationalError):
+    try:
         trace_rows = src_conn.execute(
             """
-            SELECT dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2
+            SELECT dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2,
+                   frame_number, tiff_page, temp, table_marker, caliper_length
               FROM trace
             ORDER BY dataset_id, t_seconds
             """
@@ -1072,11 +1086,41 @@ def _copy_legacy_tables(src_conn: sqlite3.Connection, dst_conn: sqlite3.Connecti
         if trace_rows:
             dst_conn.executemany(
                 """
-                INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO trace(
+                    dataset_id,
+                    t_seconds,
+                    inner_diam,
+                    outer_diam,
+                    p_avg,
+                    p1,
+                    p2,
+                    frame_number,
+                    tiff_page,
+                    temp,
+                    table_marker,
+                    caliper_length
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [tuple(row) for row in trace_rows],
             )
+    except sqlite3.OperationalError:
+        with contextlib.suppress(sqlite3.OperationalError):
+            trace_rows = src_conn.execute(
+                """
+                SELECT dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2
+                  FROM trace
+                ORDER BY dataset_id, t_seconds
+                """
+            ).fetchall()
+            if trace_rows:
+                dst_conn.executemany(
+                    """
+                    INSERT INTO trace(dataset_id, t_seconds, inner_diam, outer_diam, p_avg, p1, p2)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [tuple(row) for row in trace_rows],
+                )
 
     with contextlib.suppress(sqlite3.OperationalError):
         event_rows = src_conn.execute(
