@@ -7,6 +7,12 @@ sampling rates.
 
 from dataclasses import dataclass
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Epsilon tolerance for float comparisons (1 nanosecond)
+EPSILON = 1e-9
 
 
 @dataclass
@@ -66,6 +72,14 @@ class FrameSynchronizer:
         # Find valid frame range for the animation window
         self._compute_valid_frame_range()
 
+        logger.debug("FrameSynchronizer created", extra={
+            "n_frames": len(frame_times),
+            "animation_start": animation_start,
+            "animation_end": animation_end,
+            "duration": self.duration,
+            "valid_frames": len(self.valid_frame_indices)
+        })
+
     def _compute_valid_frame_range(self):
         """Compute the range of TIFF frames that fall within animation window."""
         # Find frames within the animation time range
@@ -83,7 +97,10 @@ class FrameSynchronizer:
             self.valid_frame_indices = np.arange(idx_start, idx_end)
 
     def get_frame_for_time(self, t: float) -> FrameTimingInfo:
-        """Return the best TIFF frame for given animation time.
+        """Return the best TIFF frame for given animation time with deterministic tie-breaking.
+
+        Uses epsilon tolerance for float comparisons to ensure deterministic behavior.
+        When two frames are equidistant (within epsilon), consistently prefers the earlier frame.
 
         Args:
             t: Time in seconds (in animation coordinate system)
@@ -101,10 +118,21 @@ class FrameSynchronizer:
         idx = np.clip(idx, 0, len(self.frame_times) - 1)
 
         # Check if previous frame is closer (nearest neighbor)
+        # Use epsilon tolerance for deterministic tie-breaking
         if idx > 0:
             dist_curr = abs(self.frame_times[idx] - absolute_time)
             dist_prev = abs(self.frame_times[idx - 1] - absolute_time)
-            if dist_prev < dist_curr:
+
+            # Deterministic tie-breaking: prefer earlier frame if within epsilon
+            if abs(dist_prev - dist_curr) < EPSILON:
+                idx = idx - 1  # Tie: use earlier frame
+                logger.debug("Frame selection tie (within epsilon)", extra={
+                    "absolute_time": absolute_time,
+                    "prev_frame": idx,
+                    "curr_frame": idx + 1,
+                    "dist_diff": abs(dist_prev - dist_curr)
+                })
+            elif dist_prev < dist_curr:
                 idx = idx - 1
 
         return FrameTimingInfo(
@@ -168,10 +196,11 @@ class FrameSynchronizer:
         if speed <= 0:
             speed = 1.0
 
-        sample_count = max(1, int(np.ceil(frame_indices.size / speed)))
-        if sample_count >= frame_indices.size:
-            sampled = frame_indices
+        if speed < 1.0:
+            repeat = max(1, int(round(1.0 / speed)))
+            sampled = np.repeat(frame_indices, repeat)
         else:
+            sample_count = max(1, int(np.ceil(frame_indices.size / speed)))
             positions = np.linspace(0, frame_indices.size - 1, sample_count)
             sampled = frame_indices[np.round(positions).astype(int)]
 

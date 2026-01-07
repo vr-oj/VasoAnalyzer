@@ -8,6 +8,28 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class FrameTimeExtractionResult:
+    """Result of frame time extraction with metadata for auditability.
+
+    This dataclass captures not just the extracted frame times, but also
+    important metadata about how they were derived, enabling better debugging
+    and reproducibility.
+
+    Attributes:
+        frame_times: List of timestamps for each TIFF frame in seconds
+        source: Data source used ("tiff_page", "ui_state", "estimation")
+        confidence: Confidence level in the data ("high", "medium", "low")
+        warnings: List of issues encountered during extraction
+        mapping_coverage: Fraction of frames with actual data (vs estimated) in range [0.0, 1.0]
+    """
+    frame_times: list[float]
+    source: str
+    confidence: str
+    warnings: list[str]
+    mapping_coverage: float
+
+
+@dataclass
 class TracePanelSpec:
     """Configuration for trace visualization in animation."""
 
@@ -22,18 +44,19 @@ class TracePanelSpec:
     outer_color: str = "#000000"
     avg_pressure_color: str = "#000000"
     set_pressure_color: str = "#000000"
-    line_width: float = 2.0
+    line_width: float = 3.5
 
     # Time indicator (moving vertical line showing current time)
     show_time_indicator: bool = True
-    indicator_color: str = "#FFD700"
-    indicator_width: float = 2.0
+    indicator_color: str = "#FF6B00"
+    indicator_width: float = 3.0
     indicator_style: str = "solid"  # "solid", "dashed", "dotted"
 
     # Event markers
     show_events: bool = True
     show_event_labels: bool = False
     fast_render: bool = False
+    shape: str = "balanced"  # "balanced" or "wide"
 
     # Display settings
     show_grid: bool = True
@@ -46,9 +69,9 @@ class TracePanelSpec:
     y_range: tuple[float, float] | None = None
 
     # Font sizes
-    label_fontsize: float = 10.0
-    tick_fontsize: float = 8.0
-    event_label_fontsize: float = 8.0
+    label_fontsize: float = 14.0
+    tick_fontsize: float = 12.0
+    event_label_fontsize: float = 10.0
 
 
 @dataclass
@@ -69,6 +92,7 @@ class AnimationSpec:
     # Layout configuration
     layout_mode: str = "side_by_side"  # "side_by_side" or "stacked"
     vessel_position: str = "left"  # "left" or "right" (for side_by_side)
+    auto_vessel_width: bool = True
 
     # Frame sampling
     use_tiff_frames: bool = False
@@ -86,7 +110,7 @@ class AnimationSpec:
     vessel_timestamp_color: str = "#FFFFFF"
     vessel_timestamp_fontsize: float = 10.0
     vessel_bg_color: str = "#FFFFFF"
-    vessel_fit: str = "cover"  # "cover" or "contain"
+    vessel_fit: str = "contain"  # "cover" or "contain"
     vessel_crop_rect: tuple[int, int, int, int] | None = None
 
     # Trace panel settings

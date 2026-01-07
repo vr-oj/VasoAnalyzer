@@ -11,10 +11,17 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
+from matplotlib.ticker import MaxNLocator
 import pandas as pd
 
 from .specs import AnimationSpec, TracePanelSpec
 from .frame_synchronizer import FrameTimingInfo
+
+ACTIVE_LINE_SCALE = 1.25
+INACTIVE_LINE_SCALE = 0.85
+INACTIVE_LINE_ALPHA = 0.6
+ACTIVE_MARKER_SIZE = 110
+ACTIVE_MARKER_RADIUS_PX = 7
 
 
 @dataclass
@@ -69,11 +76,19 @@ class AnimationRenderer:
 
         # Composite based on layout mode
         if self.spec.layout_mode == "side_by_side":
+            if vessel_img.shape[0] != trace_img.shape[0]:
+                target_h = max(vessel_img.shape[0], trace_img.shape[0])
+                vessel_img = self._pad_to_height(vessel_img, target_h)
+                trace_img = self._pad_to_height(trace_img, target_h)
             if self.spec.vessel_position == "left":
                 composite = np.hstack([vessel_img, trace_img])
             else:
                 composite = np.hstack([trace_img, vessel_img])
         else:  # stacked
+            if vessel_img.shape[1] != trace_img.shape[1]:
+                target_w = max(vessel_img.shape[1], trace_img.shape[1])
+                vessel_img = self._pad_to_width(vessel_img, target_w)
+                trace_img = self._pad_to_width(trace_img, target_w)
             composite = np.vstack([vessel_img, trace_img])
 
         return composite
@@ -103,6 +118,8 @@ class AnimationRenderer:
             x2 = min(vessel_frame.shape[1], x + w)
             if y2 > y and x2 > x:
                 vessel_frame = vessel_frame[y:y2, x:x2]
+        if self.spec.layout_mode == "stacked":
+            vessel_frame = np.rot90(vessel_frame, k=1)
 
         # Convert to RGB if grayscale
         if vessel_frame.ndim == 2:
@@ -133,11 +150,15 @@ class AnimationRenderer:
         src_w, src_h = pil_img.size
         target_w = self.spec.vessel_width_px
         target_h = self.spec.vessel_height_px
+        content_h = target_h
+        if self.spec.layout_mode == "side_by_side" and self.spec.trace_spec.shape == "wide":
+            ratio = self._wide_trace_height_ratio()
+            content_h = max(1, int(round(target_h * ratio)))
         fit_mode = getattr(self.spec, "vessel_fit", "cover")
         if fit_mode == "contain":
-            scale = min(target_w / src_w, target_h / src_h)
+            scale = min(target_w / src_w, content_h / src_h)
         else:
-            scale = max(target_w / src_w, target_h / src_h)
+            scale = max(target_w / src_w, content_h / src_h)
         new_w = max(1, int(round(src_w * scale)))
         new_h = max(1, int(round(src_h * scale)))
         pil_img = pil_img.resize((new_w, new_h), resample=interp_mode)
@@ -250,24 +271,52 @@ class AnimationRenderer:
             x1=timing.trace_time_s,
         )
 
+        active_channel = None
+        if spec.show_inner and window.inner_mean is not None:
+            active_channel = "inner"
+        elif spec.show_outer and window.outer_mean is not None:
+            active_channel = "outer"
+
         # Plot inner diameter
         if spec.show_inner and window.inner_mean is not None:
+            if active_channel == "inner":
+                line_width = spec.line_width * ACTIVE_LINE_SCALE
+                line_alpha = 1.0
+            elif active_channel is None:
+                line_width = spec.line_width
+                line_alpha = 1.0
+            else:
+                line_width = spec.line_width * INACTIVE_LINE_SCALE
+                line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
                 window.time,
                 window.inner_mean,
                 color=spec.inner_color,
-                linewidth=spec.line_width,
+                linewidth=line_width,
+                alpha=line_alpha,
                 label="Inner Diameter",
+                antialiased=False,
             )
 
         # Plot outer diameter
         if spec.show_outer and window.outer_mean is not None:
+            if active_channel == "outer":
+                line_width = spec.line_width * ACTIVE_LINE_SCALE
+                line_alpha = 1.0
+            elif active_channel is None:
+                line_width = spec.line_width
+                line_alpha = 1.0
+            else:
+                line_width = spec.line_width * INACTIVE_LINE_SCALE
+                line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
                 window.time,
                 window.outer_mean,
                 color=spec.outer_color,
-                linewidth=spec.line_width,
+                linewidth=line_width,
+                alpha=line_alpha,
                 label="Outer Diameter",
+                antialiased=False,
             )
 
         # Plot pressure channels (if available)
@@ -281,23 +330,15 @@ class AnimationRenderer:
                 linewidth=spec.line_width,
                 label="Avg Pressure",
                 linestyle='--',
+                antialiased=False,
             )
-            ax2.set_ylabel("Pressure (mmHg)", fontsize=spec.label_fontsize)
+            ax2.set_ylabel(
+                "Pressure (mmHg)",
+                fontsize=spec.label_fontsize,
+                color="black",
+                fontweight="bold",
+            )
 
-        # Add time indicator (vertical line at current time)
-        if spec.show_time_indicator:
-            linestyle_map = {
-                "solid": "-",
-                "dashed": "--",
-                "dotted": ":",
-            }
-            ax.axvline(
-                timing.trace_time_s,
-                color=spec.indicator_color,
-                linewidth=spec.indicator_width,
-                linestyle=linestyle_map.get(spec.indicator_style, "-"),
-                zorder=100,
-            )
 
         # Add event markers
         if spec.show_events:
@@ -310,6 +351,7 @@ class AnimationRenderer:
                         linestyle="--",
                         alpha=0.5,
                         zorder=50,
+                        antialiased=False,
                     )
                     if spec.show_event_labels:
                         y_pos = ax.get_ylim()[1] * 0.95
@@ -326,24 +368,80 @@ class AnimationRenderer:
 
         # Set axis limits
         if spec.x_range is not None:
-            ax.set_xlim(spec.x_range)
+            x_min, x_max = spec.x_range
+            ax.set_xlim(x_min, x_max)
         else:
-            ax.set_xlim(self.spec.start_time_s, self.spec.end_time_s)
+            x_min, x_max = self.spec.start_time_s, self.spec.end_time_s
+            ax.set_xlim(x_min, x_max)
 
         if spec.y_range is not None:
             ax.set_ylim(spec.y_range)
 
+        # Add time indicator (vertical line at current time)
+        if spec.show_time_indicator:
+            linestyle_map = {
+                "solid": "-",
+                "dashed": "--",
+                "dotted": ":",
+            }
+            t_val = float(timing.trace_time_s)
+            if np.isfinite(t_val):
+                if t_val < x_min:
+                    t_val = x_min
+                elif t_val > x_max:
+                    t_val = x_max
+                ax.axvline(
+                    t_val,
+                    color=spec.indicator_color,
+                    linewidth=spec.indicator_width,
+                    linestyle=linestyle_map.get(spec.indicator_style, "-"),
+                    zorder=100,
+                    antialiased=False,
+                )
+                marker_series = None
+                if active_channel == "inner" and window.inner_mean is not None:
+                    marker_series = window.inner_mean
+                elif active_channel == "outer" and window.outer_mean is not None:
+                    marker_series = window.outer_mean
+                if marker_series is not None and window.time.size:
+                    idx = int(np.argmin(np.abs(window.time - t_val)))
+                    y_val = float(marker_series[idx])
+                    if np.isfinite(y_val):
+                        ax.scatter(
+                            [window.time[idx]],
+                            [y_val],
+                            s=ACTIVE_MARKER_SIZE,
+                            color=spec.indicator_color,
+                            edgecolors="black",
+                            linewidths=1.0,
+                            zorder=200,
+                            antialiased=False,
+                        )
+
         # Labels and styling
-        ax.set_xlabel(spec.xlabel, fontsize=spec.label_fontsize, color="black")
-        ax.set_ylabel(spec.ylabel, fontsize=spec.label_fontsize, color="black")
+        ax.set_xlabel(
+            spec.xlabel,
+            fontsize=spec.label_fontsize,
+            color="black",
+            fontweight="bold",
+        )
+        ax.set_ylabel(
+            spec.ylabel,
+            fontsize=spec.label_fontsize,
+            color="black",
+            fontweight="bold",
+        )
         ax.tick_params(labelsize=spec.tick_fontsize, colors="black")
-        ax.grid(spec.show_grid, alpha=0.1, color="black")
+        ax.grid(spec.show_grid, alpha=0.04, color="black")
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
         if spec.show_legend:
             ax.legend(fontsize=spec.tick_fontsize, loc="upper right")
 
         # Tight layout to maximize data area
         fig.tight_layout()
+        self._apply_trace_shape(ax, spec.shape)
 
         # Convert figure to numpy array
         canvas.draw()
@@ -369,6 +467,7 @@ class AnimationRenderer:
             return base.copy()
 
         xlim = self._trace_cache["xlim"]
+        ylim = self._trace_cache.get("ylim")
         bbox = self._trace_cache["bbox"]
         width, height = self._trace_cache["size"]
 
@@ -379,7 +478,15 @@ class AnimationRenderer:
         x0, y0, x1, y1 = bbox
         axis_width = max(1.0, x1 - x0)
         scale = axis_width / (x_max - x_min)
-        x_disp = x0 + (timing.trace_time_s - x_min) * scale
+        t_val = float(timing.trace_time_s)
+        if not np.isfinite(t_val):
+            return base.copy()
+        if t_val < x_min:
+            t_val = x_min
+        elif t_val > x_max:
+            t_val = x_max
+        x_disp = x0 + (t_val - x_min) * scale
+        x_disp = max(x0, min(x1, x_disp))
         x_disp = max(0.0, min(float(width - 1), x_disp))
 
         x_img = int(round(x_disp))
@@ -415,6 +522,55 @@ class AnimationRenderer:
                 y = y_end + gap_len
         else:
             draw.line((x_img, y_top, x_img, y_bottom), fill=color, width=line_width)
+
+        if ylim is not None:
+            y_min, y_max = ylim
+            if y_max != y_min:
+                marker_series = None
+                if spec.show_inner:
+                    marker_series = ctx.trace_model.inner_full
+                elif spec.show_outer and ctx.trace_model.outer_full is not None:
+                    marker_series = ctx.trace_model.outer_full
+                if marker_series is not None and marker_series.size:
+                    time_full = ctx.trace_model.time_full
+                    if time_full.size:
+                        idx = int(np.searchsorted(time_full, t_val))
+                        if idx <= 0:
+                            idx = 0
+                        elif idx >= time_full.size:
+                            idx = time_full.size - 1
+                        else:
+                            prev_idx = idx - 1
+                            if abs(time_full[prev_idx] - t_val) <= abs(
+                                time_full[idx] - t_val
+                            ):
+                                idx = prev_idx
+                        y_val = float(marker_series[idx])
+                        if np.isfinite(y_val):
+                            axis_height = max(1.0, y1 - y0)
+                            y_scale = axis_height / (y_max - y_min)
+                            y_disp = y0 + (y_val - y_min) * y_scale
+                            y_img = int(round(height - y_disp))
+                            y_img = max(0, min(height - 1, y_img))
+                            radius = ACTIVE_MARKER_RADIUS_PX
+                            draw.ellipse(
+                                (
+                                    x_img - radius - 1,
+                                    y_img - radius - 1,
+                                    x_img + radius + 1,
+                                    y_img + radius + 1,
+                                ),
+                                fill=(0, 0, 0),
+                            )
+                            draw.ellipse(
+                                (
+                                    x_img - radius,
+                                    y_img - radius,
+                                    x_img + radius,
+                                    y_img + radius,
+                                ),
+                                fill=color,
+                            )
 
         return np.array(pil_img)
 
@@ -452,22 +608,50 @@ class AnimationRenderer:
             x1=x1,
         )
 
+        active_channel = None
         if spec.show_inner and window.inner_mean is not None:
+            active_channel = "inner"
+        elif spec.show_outer and window.outer_mean is not None:
+            active_channel = "outer"
+
+        if spec.show_inner and window.inner_mean is not None:
+            if active_channel == "inner":
+                line_width = spec.line_width * ACTIVE_LINE_SCALE
+                line_alpha = 1.0
+            elif active_channel is None:
+                line_width = spec.line_width
+                line_alpha = 1.0
+            else:
+                line_width = spec.line_width * INACTIVE_LINE_SCALE
+                line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
                 window.time,
                 window.inner_mean,
                 color=spec.inner_color,
-                linewidth=spec.line_width,
+                linewidth=line_width,
+                alpha=line_alpha,
                 label="Inner Diameter",
+                antialiased=False,
             )
 
         if spec.show_outer and window.outer_mean is not None:
+            if active_channel == "outer":
+                line_width = spec.line_width * ACTIVE_LINE_SCALE
+                line_alpha = 1.0
+            elif active_channel is None:
+                line_width = spec.line_width
+                line_alpha = 1.0
+            else:
+                line_width = spec.line_width * INACTIVE_LINE_SCALE
+                line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
                 window.time,
                 window.outer_mean,
                 color=spec.outer_color,
-                linewidth=spec.line_width,
+                linewidth=line_width,
+                alpha=line_alpha,
                 label="Outer Diameter",
+                antialiased=False,
             )
 
         if spec.show_avg_pressure and window.avg_pressure_mean is not None:
@@ -479,8 +663,14 @@ class AnimationRenderer:
                 linewidth=spec.line_width,
                 label="Avg Pressure",
                 linestyle="--",
+                antialiased=False,
             )
-            ax2.set_ylabel("Pressure (mmHg)", fontsize=spec.label_fontsize)
+            ax2.set_ylabel(
+                "Pressure (mmHg)",
+                fontsize=spec.label_fontsize,
+                color="black",
+                fontweight="bold",
+            )
 
         if spec.show_events:
             for event in ctx.events:
@@ -491,6 +681,7 @@ class AnimationRenderer:
                     linestyle="--",
                     alpha=0.5,
                     zorder=50,
+                    antialiased=False,
                 )
                 if spec.show_event_labels:
                     y_pos = ax.get_ylim()[1] * 0.95
@@ -513,15 +704,28 @@ class AnimationRenderer:
         if spec.y_range is not None:
             ax.set_ylim(spec.y_range)
 
-        ax.set_xlabel(spec.xlabel, fontsize=spec.label_fontsize, color="black")
-        ax.set_ylabel(spec.ylabel, fontsize=spec.label_fontsize, color="black")
+        ax.set_xlabel(
+            spec.xlabel,
+            fontsize=spec.label_fontsize,
+            color="black",
+            fontweight="bold",
+        )
+        ax.set_ylabel(
+            spec.ylabel,
+            fontsize=spec.label_fontsize,
+            color="black",
+            fontweight="bold",
+        )
         ax.tick_params(labelsize=spec.tick_fontsize, colors="black")
-        ax.grid(spec.show_grid, alpha=0.1, color="black")
+        ax.grid(spec.show_grid, alpha=0.04, color="black")
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=5))
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
 
         if spec.show_legend:
             ax.legend(fontsize=spec.tick_fontsize, loc="upper right")
 
         fig.tight_layout()
+        self._apply_trace_shape(ax, spec.shape)
         canvas.draw()
         img_array = self._canvas_to_rgb(canvas)
 
@@ -530,12 +734,29 @@ class AnimationRenderer:
         cache = {
             "img": img_array,
             "xlim": ax.get_xlim(),
+            "ylim": ax.get_ylim(),
             "bbox": (float(bbox.x0), float(bbox.y0), float(bbox.x1), float(bbox.y1)),
             "size": (int(w_px), int(h_px)),
         }
 
         plt.close(fig)
         return cache
+
+    def _apply_trace_shape(self, ax, shape: str) -> None:
+        if shape != "wide":
+            return
+        pos = ax.get_position()
+        ratio = self._wide_trace_height_ratio()
+        target_height = pos.height * ratio
+        y0 = pos.y0 + (pos.height - target_height) * 0.5
+        ax.set_position([pos.x0, y0, pos.width, target_height])
+
+    def _wide_trace_height_ratio(self) -> float:
+        width_px = max(1, int(self.spec.trace_width_px))
+        height_px = max(1, int(self.spec.trace_height_px))
+        target_height = width_px / 3.0
+        ratio = target_height / height_px
+        return min(0.6, max(0.3, ratio))
 
     @staticmethod
     def _canvas_to_rgb(canvas) -> np.ndarray:
@@ -599,6 +820,32 @@ class AnimationRenderer:
         """Convert hex color to RGB tuple."""
         hex_color = hex_color.lstrip('#')
         return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+    def _pad_to_height(self, img: np.ndarray, target_h: int) -> np.ndarray:
+        if img.shape[0] == target_h:
+            return img
+        pad_total = max(0, target_h - img.shape[0])
+        pad_top = pad_total // 2
+        pad_bottom = pad_total - pad_top
+        return np.pad(
+            img,
+            ((pad_top, pad_bottom), (0, 0), (0, 0)),
+            mode="constant",
+            constant_values=255,
+        )
+
+    def _pad_to_width(self, img: np.ndarray, target_w: int) -> np.ndarray:
+        if img.shape[1] == target_w:
+            return img
+        pad_total = max(0, target_w - img.shape[1])
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        return np.pad(
+            img,
+            ((0, 0), (pad_left, pad_right), (0, 0)),
+            mode="constant",
+            constant_values=255,
+        )
 
 
 def save_gif(

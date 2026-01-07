@@ -15,35 +15,75 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect
 from PyQt5.QtGui import QColor, QImage, QPixmap
 
-from .specs import AnimationSpec, TracePanelSpec
+from .specs import AnimationSpec, TracePanelSpec, FrameTimeExtractionResult
 from .frame_synchronizer import FrameSynchronizer, FrameTimingInfo
 from .renderer import AnimationRenderer, RenderContext, EventSpec, save_gif, estimate_gif_size_mb
 from .preview_player import PreviewPlayerWidget
+from .poster_renderer import PosterFigureRenderer
+import logging
+
+logger = logging.getLogger(__name__)
+
+TIFF_STRIP_HEIGHT_DEFAULT = 28
+WIDE_CANVAS_HEIGHT_RATIO = 1 / 3
 
 
 class RenderThread(QThread):
-    """Background thread for rendering frames to avoid blocking UI."""
+    """Background thread for rendering frames to avoid blocking UI with cancellation support."""
 
     progress = pyqtSignal(int, int)  # current, total
     finished = pyqtSignal(list)  # rendered frames
     error = pyqtSignal(str)  # error message
+    cancelled = pyqtSignal()  # emitted when rendering is cancelled
 
     def __init__(self, renderer, ctx, timings):
         super().__init__()
         self.renderer = renderer
         self.ctx = ctx
         self.timings = timings
+        self._should_stop = False
+        import threading
+        self._lock = threading.Lock()
+
+    def cancel(self):
+        """Request cancellation of rendering."""
+        with self._lock:
+            self._should_stop = True
+            logger.info("Render cancellation requested")
 
     def run(self):
-        """Run rendering in background thread."""
+        """Run rendering in background thread with cancellation checks."""
         try:
-            frames = self.renderer.render_all_frames(
-                self.ctx,
-                self.timings,
-                progress_callback=lambda curr, total: self.progress.emit(curr, total),
-            )
+            frames = []
+            total = len(self.timings)
+
+            for i, timing in enumerate(self.timings):
+                # Check cancellation before each frame
+                with self._lock:
+                    if self._should_stop:
+                        logger.info("Render cancelled by user", extra={
+                            "frames_completed": i,
+                            "total_frames": total
+                        })
+                        self.cancelled.emit()
+                        return
+
+                # Render single frame
+                frame = self.renderer.render_frame(self.ctx, timing)
+                frames.append(frame)
+
+                # Report progress
+                self.progress.emit(i + 1, total)
+
             self.finished.emit(frames)
+            logger.info("Render completed successfully", extra={
+                "total_frames": len(frames)
+            })
+
         except Exception as e:
+            logger.error("Render failed with exception", extra={
+                "error": str(e)
+            }, exc_info=True)
             self.error.emit(str(e))
 
 
@@ -186,22 +226,31 @@ class GifAnimatorWindow(QMainWindow):
         self.is_rendering = False
         self.render_thread: RenderThread | None = None
 
-        # Extract frame times
-        self.frame_times = self._extract_frame_times()
+        # Extract frame times with metadata
+        frame_time_result = self._extract_frame_times()
+        self.frame_times = frame_time_result.frame_times
+        self.frame_time_metadata = frame_time_result  # Store metadata for auditability
 
         # Setup UI
         self.setWindowTitle(f"GIF Animator - {sample.name}")
         self.setGeometry(100, 100, 1200, 700)
 
         self._init_ui()
+        self._sync_trace_width_controls()
+        self._sync_y_range_controls()
+        self._seed_y_range_controls()
 
-    def _extract_frame_times(self) -> list[float]:
-        """Extract frame timestamps using TiffPage synchronization logic.
+    def _extract_frame_times(self) -> FrameTimeExtractionResult:
+        """Extract frame timestamps using TiffPage synchronization logic with full auditability.
 
         This follows the same logic as the main window's _derive_frame_trace_time()
         to properly sync TIFF frames with trace data using the TiffPage column.
+
+        Returns:
+            FrameTimeExtractionResult with frame times and metadata about the extraction
         """
         n_frames = len(self.sample.snapshots)
+        warnings = []
 
         # Try to use TiffPage column for proper synchronization
         # Check for both CSV column names (TiffPage, Time (s)) and database column names (tiff_page, t_seconds)
@@ -221,14 +270,31 @@ class GifAnimatorWindow(QMainWindow):
             elif "Time (s)" in trace_data.columns:
                 time_col_name = "Time (s)"
 
+            logger.info("Frame time extraction started", extra={
+                "n_frames": n_frames,
+                "has_tiff_col": tiff_col is not None,
+                "has_time_col": time_col_name is not None,
+                "tiff_col_name": tiff_col,
+                "time_col_name": time_col_name
+            })
+
             if tiff_col is not None and time_col_name is not None:
                 try:
                     # Build mapping from TiffPage to trace row index
                     tiff_rows = trace_data[trace_data[tiff_col].notna()].copy()
                     if not tiff_rows.empty:
-                        tiff_rows.loc[:, tiff_col] = pd.to_numeric(
-                            tiff_rows[tiff_col], errors="coerce"
-                        )
+                        # Track invalid values during numeric conversion
+                        numeric_vals = pd.to_numeric(tiff_rows[tiff_col], errors="coerce")
+                        invalid_count = numeric_vals.isna().sum()
+                        if invalid_count > 0:
+                            warning_msg = f"{invalid_count} invalid TiffPage values coerced to NaN"
+                            warnings.append(warning_msg)
+                            logger.warning("Invalid TiffPage values detected", extra={
+                                "invalid_count": invalid_count,
+                                "total_rows": len(tiff_rows)
+                            })
+
+                        tiff_rows.loc[:, tiff_col] = numeric_vals
                         tiff_rows = tiff_rows[tiff_rows[tiff_col].notna()]
                         mapping = {
                             int(row[tiff_col]): int(idx)
@@ -236,9 +302,23 @@ class GifAnimatorWindow(QMainWindow):
                         }
 
                         if mapping:
+                            # Calculate mapping coverage
+                            coverage = len(mapping) / n_frames if n_frames > 0 else 0.0
+
+                            # Warn if coverage is low
+                            if coverage < 0.8:
+                                warning_msg = f"Only {coverage:.0%} of frames have TiffPage data"
+                                warnings.append(warning_msg)
+                                logger.warning("Low TiffPage mapping coverage", extra={
+                                    "coverage": coverage,
+                                    "mapped_frames": len(mapping),
+                                    "total_frames": n_frames
+                                })
+
                             # Map each TIFF frame to its trace time
                             frame_times = []
                             time_col = pd.to_numeric(trace_data[time_col_name], errors="coerce")
+                            estimated_frames = 0
 
                             for frame_idx in range(n_frames):
                                 trace_idx = mapping.get(frame_idx)
@@ -247,6 +327,7 @@ class GifAnimatorWindow(QMainWindow):
                                     frame_times.append(frame_time)
                                 else:
                                     # Frame not in mapping - estimate
+                                    estimated_frames += 1
                                     if frame_times:
                                         # Use last known time + interval
                                         interval = 0.14
@@ -254,25 +335,94 @@ class GifAnimatorWindow(QMainWindow):
                                     else:
                                         frame_times.append(frame_idx * 0.14)
 
-                            return frame_times
+                            if estimated_frames > 0:
+                                warning_msg = f"{estimated_frames} frames estimated (not in TiffPage mapping)"
+                                warnings.append(warning_msg)
+                                logger.info("Some frames estimated", extra={
+                                    "estimated_frames": estimated_frames,
+                                    "total_frames": n_frames
+                                })
+
+                            # Validate monotonicity
+                            is_monotonic = all(
+                                frame_times[i] <= frame_times[i+1]
+                                for i in range(len(frame_times)-1)
+                            )
+                            if not is_monotonic:
+                                error_msg = "Frame times are not monotonically increasing"
+                                logger.error(error_msg, extra={"frame_times": frame_times[:10]})
+                                raise ValueError(error_msg)
+
+                            # Determine confidence based on coverage
+                            if coverage >= 0.95:
+                                confidence = "high"
+                            elif coverage >= 0.8:
+                                confidence = "medium"
+                            else:
+                                confidence = "low"
+
+                            logger.info("Frame times extracted from TiffPage", extra={
+                                "source": "tiff_page",
+                                "coverage": f"{coverage:.1%}",
+                                "confidence": confidence,
+                                "n_warnings": len(warnings)
+                            })
+
+                            return FrameTimeExtractionResult(
+                                frame_times=frame_times,
+                                source="tiff_page",
+                                confidence=confidence,
+                                warnings=warnings,
+                                mapping_coverage=coverage
+                            )
+                except ValueError as e:
+                    # Re-raise validation errors
+                    raise
                 except Exception as e:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"Failed to derive frame times from TiffPage: {e}"
-                    )
+                    logger.warning("Frame time extraction from TiffPage failed", extra={
+                        "error": str(e),
+                        "fallback_to": "ui_state"
+                    })
+                    # Fall through to next method
 
         # Fallback: Try to get from ui_state
         if self.sample.ui_state:
             frame_times = self.sample.ui_state.get('snapshot_frame_times', None)
-            if frame_times:
-                return frame_times
+            if frame_times and len(frame_times) == n_frames:
+                logger.info("Frame times loaded from ui_state", extra={
+                    "source": "ui_state",
+                    "n_frames": len(frame_times)
+                })
+                return FrameTimeExtractionResult(
+                    frame_times=frame_times,
+                    source="ui_state",
+                    confidence="medium",
+                    warnings=["Frame times loaded from saved ui_state"],
+                    mapping_coverage=1.0  # Assume complete when from ui_state
+                )
 
         # Final fallback: Estimated uniform spacing
         recording_interval = 0.14  # Default
         if self.sample.ui_state:
             recording_interval = self.sample.ui_state.get('recording_interval', 0.14)
 
-        return [i * recording_interval for i in range(n_frames)]
+        frame_times = [i * recording_interval for i in range(n_frames)]
+        warning_msg = f"Frame times estimated using {recording_interval}s interval (no TiffPage or ui_state data)"
+        warnings.append(warning_msg)
+
+        logger.warning("Frame times estimated (no data source available)", extra={
+            "source": "estimation",
+            "interval": recording_interval,
+            "n_frames": n_frames
+        })
+
+        return FrameTimeExtractionResult(
+            frame_times=frame_times,
+            source="estimation",
+            confidence="low",
+            warnings=warnings,
+            mapping_coverage=0.0
+        )
 
     def _create_default_spec(self) -> AnimationSpec:
         """Create default animation specification."""
@@ -287,10 +437,13 @@ class GifAnimatorWindow(QMainWindow):
             loop_count=0,
             output_width_px=800,
             output_height_px=400,
-            vessel_width_ratio=0.5,
+            layout_mode="side_by_side",
+            vessel_width_ratio=0.4,
             use_tiff_frames=True,
+            auto_vessel_width=True,
             trace_spec=TracePanelSpec(),
         )
+        spec.vessel_show_timestamp = False
         self._apply_tiff_aspect_ratio(spec)
         return spec
 
@@ -316,6 +469,8 @@ class GifAnimatorWindow(QMainWindow):
     def _apply_tiff_aspect_ratio(self, spec: AnimationSpec) -> None:
         """Adjust vessel width ratio to match TIFF aspect ratio."""
         if spec.layout_mode != "side_by_side":
+            return
+        if not getattr(spec, "auto_vessel_width", True):
             return
         ratio = self._tiff_aspect_ratio
         if ratio is None:
@@ -443,9 +598,16 @@ class GifAnimatorWindow(QMainWindow):
         end_layout.addWidget(QLabel("End Event:"))
         self.end_event_combo = QComboBox()
         self._populate_event_combo(self.end_event_combo)
-        # Select last event by default
+        # Select last event by default (before adding trace end option)
         if self.end_event_combo.count() > 0:
             self.end_event_combo.setCurrentIndex(self.end_event_combo.count() - 1)
+        # Add end-of-trace option
+        self.end_event_combo.insertSeparator(self.end_event_combo.count())
+        _, t_max = self.trace_model.full_range
+        self.end_event_combo.addItem(
+            f"End of trace ({t_max:.2f}s)",
+            userData={"time": float(t_max), "label": "End of trace"},
+        )
         self.end_event_combo.currentIndexChanged.connect(self._on_event_selection_changed)
         end_layout.addWidget(self.end_event_combo, 1)
         layout.addLayout(end_layout)
@@ -485,31 +647,20 @@ class GifAnimatorWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Get TIFF time range for filtering
+        # Get TIFF time range for annotation
         tiff_start = self.frame_times[0] if self.frame_times else 0
         tiff_end = self.frame_times[-1] if self.frame_times else float('inf')
 
-        # Only show events within TIFF range
-        valid_events = []
-        for idx, row in self.events_df.iterrows():
-            event_time = time_numeric.iloc[idx] if not pd.isna(time_numeric.iloc[idx]) else 0.0
-            # Include events within TIFF range
-            if tiff_start <= event_time <= tiff_end:
-                event_label = row.get('Label', row.get('Event', f'Event {idx + 1}'))
-                valid_events.append((event_time, event_label))
+        events = []
+        for pos, (_, row) in enumerate(self.events_df.iterrows()):
+            event_time = time_numeric.iloc[pos] if not pd.isna(time_numeric.iloc[pos]) else 0.0
+            event_label = row.get('Label', row.get('Event', f'Event {pos + 1}'))
+            out_of_range = event_time < tiff_start or event_time > tiff_end
+            suffix = " [out of TIFF range]" if out_of_range else ""
+            events.append((event_time, event_label, f"{event_label} ({event_time:.2f}s){suffix}"))
 
-        # If no events in range, show all with warning
-        if not valid_events:
-            combo.addItem(f"⚠ No events in TIFF range (0-{tiff_end:.1f}s)", userData=None)
-            # Fall back to showing all events anyway
-            for idx, row in self.events_df.iterrows():
-                event_time = time_numeric.iloc[idx] if not pd.isna(time_numeric.iloc[idx]) else 0.0
-                event_label = row.get('Label', row.get('Event', f'Event {idx + 1}'))
-                combo.addItem(f"{event_label} ({event_time:.2f}s)", userData={'time': event_time, 'label': event_label})
-        else:
-            # Show only valid events
-            for event_time, event_label in valid_events:
-                combo.addItem(f"{event_label} ({event_time:.2f}s)", userData={'time': event_time, 'label': event_label})
+        for event_time, event_label, display_label in events:
+            combo.addItem(display_label, userData={'time': event_time, 'label': event_label})
 
     def _create_animation_settings_group(self) -> QGroupBox:
         """Create animation settings controls."""
@@ -581,6 +732,46 @@ class GifAnimatorWindow(QMainWindow):
         preset_layout.addWidget(self.size_preset_combo, 1)
         layout.addLayout(preset_layout)
 
+        # TIFF position
+        position_layout = QHBoxLayout()
+        position_layout.addWidget(QLabel("TIFF position:"))
+        self.trace_position_combo = QComboBox()
+        self.trace_position_combo.addItem("Left", userData="left")
+        self.trace_position_combo.addItem("Right", userData="right")
+        self.trace_position_combo.addItem("Top", userData="top")
+        self.trace_position_combo.currentIndexChanged.connect(self._on_trace_position_changed)
+        position_layout.addWidget(self.trace_position_combo, 1)
+        layout.addLayout(position_layout)
+
+        # Trace width
+        trace_width_layout = QHBoxLayout()
+        trace_width_layout.addWidget(QLabel("Trace width:"))
+        self.trace_width_spin = QSpinBox()
+        self.trace_width_spin.setRange(20, 80)
+        self.trace_width_spin.setValue(60)
+        self.trace_width_spin.setSingleStep(5)
+        self.trace_width_spin.valueChanged.connect(self._on_settings_changed)
+        trace_width_layout.addWidget(self.trace_width_spin)
+        trace_width_layout.addWidget(QLabel("%"))
+        trace_width_layout.addStretch()
+        layout.addLayout(trace_width_layout)
+
+        self.auto_vessel_width_checkbox = QCheckBox("Auto-fit vessel width")
+        self.auto_vessel_width_checkbox.setChecked(True)
+        self.auto_vessel_width_checkbox.stateChanged.connect(self._on_settings_changed)
+        layout.addWidget(self.auto_vessel_width_checkbox)
+
+        strip_layout = QHBoxLayout()
+        strip_layout.addWidget(QLabel("TIFF strip height:"))
+        self.vessel_height_spin = QSpinBox()
+        self.vessel_height_spin.setRange(20, 40)
+        self.vessel_height_spin.setValue(TIFF_STRIP_HEIGHT_DEFAULT)
+        self.vessel_height_spin.setSingleStep(1)
+        self.vessel_height_spin.valueChanged.connect(self._on_settings_changed)
+        strip_layout.addWidget(self.vessel_height_spin)
+        strip_layout.addWidget(QLabel("%"))
+        strip_layout.addStretch()
+        layout.addLayout(strip_layout)
         # Width
         width_layout = QHBoxLayout()
         width_layout.addWidget(QLabel("Width:"))
@@ -636,6 +827,55 @@ class GifAnimatorWindow(QMainWindow):
         self.fast_trace_checkbox.stateChanged.connect(self._on_settings_changed)
         layout.addWidget(self.fast_trace_checkbox)
 
+        shape_layout = QHBoxLayout()
+        shape_layout.addWidget(QLabel("Trace shape:"))
+        self.trace_shape_combo = QComboBox()
+        self.trace_shape_combo.addItem("Balanced", userData="balanced")
+        self.trace_shape_combo.addItem("Wide", userData="wide")
+        self.trace_shape_combo.currentIndexChanged.connect(self._on_settings_changed)
+        shape_layout.addWidget(self.trace_shape_combo, 1)
+        layout.addLayout(shape_layout)
+
+        font_layout = QHBoxLayout()
+        font_layout.addWidget(QLabel("Axis font:"))
+        self.axis_font_spin = QSpinBox()
+        self.axis_font_spin.setRange(8, 32)
+        self.axis_font_spin.setValue(int(round(self.current_spec.trace_spec.label_fontsize)))
+        self.axis_font_spin.setSingleStep(1)
+        self.axis_font_spin.valueChanged.connect(self._on_settings_changed)
+        font_layout.addWidget(self.axis_font_spin)
+        font_layout.addWidget(QLabel("Tick font:"))
+        self.tick_font_spin = QSpinBox()
+        self.tick_font_spin.setRange(6, 28)
+        self.tick_font_spin.setValue(int(round(self.current_spec.trace_spec.tick_fontsize)))
+        self.tick_font_spin.setSingleStep(1)
+        self.tick_font_spin.valueChanged.connect(self._on_settings_changed)
+        font_layout.addWidget(self.tick_font_spin)
+        font_layout.addStretch()
+        layout.addLayout(font_layout)
+
+        self.manual_y_range_checkbox = QCheckBox("Manual y-axis range")
+        self.manual_y_range_checkbox.setChecked(False)
+        self.manual_y_range_checkbox.stateChanged.connect(self._on_settings_changed)
+        layout.addWidget(self.manual_y_range_checkbox)
+
+        y_range_layout = QHBoxLayout()
+        y_range_layout.addWidget(QLabel("Y min:"))
+        self.y_min_spin = QDoubleSpinBox()
+        self.y_min_spin.setRange(-10000.0, 10000.0)
+        self.y_min_spin.setDecimals(2)
+        self.y_min_spin.setSingleStep(1.0)
+        self.y_min_spin.valueChanged.connect(self._on_settings_changed)
+        y_range_layout.addWidget(self.y_min_spin)
+        y_range_layout.addWidget(QLabel("Y max:"))
+        self.y_max_spin = QDoubleSpinBox()
+        self.y_max_spin.setRange(-10000.0, 10000.0)
+        self.y_max_spin.setDecimals(2)
+        self.y_max_spin.setSingleStep(1.0)
+        self.y_max_spin.valueChanged.connect(self._on_settings_changed)
+        y_range_layout.addWidget(self.y_max_spin)
+        layout.addLayout(y_range_layout)
+
         group.setLayout(layout)
         return group
 
@@ -658,10 +898,22 @@ class GifAnimatorWindow(QMainWindow):
         self.refresh_btn.clicked.connect(self._refresh_preview)
         layout.addWidget(self.refresh_btn)
 
+        # Cancel button (hidden by default, shown during rendering)
+        self.cancel_render_btn = QPushButton("Cancel")
+        self.cancel_render_btn.clicked.connect(self._cancel_render)
+        self.cancel_render_btn.setStyleSheet("QPushButton { background-color: #ff6b6b; color: white; }")
+        self.cancel_render_btn.setVisible(False)
+        layout.addWidget(self.cancel_render_btn)
+
         # Export button
         self.export_btn = QPushButton("Export GIF...")
         self.export_btn.clicked.connect(self._export_gif)
         layout.addWidget(self.export_btn)
+
+        # Export poster figure
+        self.export_poster_btn = QPushButton("Export Poster Figure...")
+        self.export_poster_btn.clicked.connect(self._export_poster_figure)
+        layout.addWidget(self.export_poster_btn)
 
         # Status label
         self.status_label = QLabel("")
@@ -669,8 +921,44 @@ class GifAnimatorWindow(QMainWindow):
         self.status_label.setStyleSheet("QLabel { color: #666; font-size: 10px; }")
         layout.addWidget(self.status_label)
 
+        # Sync status label (shows frame time source)
+        self.sync_status_label = QLabel()
+        self.sync_status_label.setStyleSheet("color: gray; font-size: 9pt;")
+        layout.addWidget(self.sync_status_label)
+        self._update_sync_status()  # Initialize with current metadata
+
         group.setLayout(layout)
         return group
+
+    def _update_sync_status(self):
+        """Update the sync status label to show frame time source and confidence."""
+        if not hasattr(self, 'frame_time_metadata') or not hasattr(self, 'sync_status_label'):
+            return
+
+        result = self.frame_time_metadata
+        color_map = {
+            "high": "green",
+            "medium": "orange",
+            "low": "red"
+        }
+        color = color_map.get(result.confidence, "gray")
+
+        # Create tooltip with detailed information
+        tooltip = f"Frame Time Synchronization\n\n"
+        tooltip += f"Source: {result.source}\n"
+        tooltip += f"Confidence: {result.confidence}\n"
+        tooltip += f"Coverage: {result.mapping_coverage:.1%}\n"
+
+        if result.warnings:
+            tooltip += "\nWarnings:\n"
+            for warning in result.warnings:
+                tooltip += f"  • {warning}\n"
+
+        # Create display text
+        display_text = f'<span style="color: {color};">● Sync: {result.source} ({result.confidence} confidence)</span>'
+
+        self.sync_status_label.setText(display_text)
+        self.sync_status_label.setToolTip(tooltip)
 
     def _on_event_selection_changed(self):
         """Handle event selection change."""
@@ -697,6 +985,7 @@ class GifAnimatorWindow(QMainWindow):
                 self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
             else:
                 self.status_label.setText("")
+            self._update_trace_y_range()
 
     def _on_settings_changed(self):
         """Handle settings change (update spec)."""
@@ -707,15 +996,38 @@ class GifAnimatorWindow(QMainWindow):
         self.current_spec.output_width_px = self.width_spin.value()
         self.current_spec.output_height_px = self.height_spin.value()
         self.current_spec.use_tiff_frames = self.use_tiff_frames_checkbox.isChecked()
-        self._update_vessel_ratio_for_aspect()
+        tiff_position = self.trace_position_combo.currentData()
+        side_layout = tiff_position in ("left", "right")
+        self.current_spec.layout_mode = "side_by_side" if side_layout else "stacked"
+        self.current_spec.vessel_position = tiff_position if side_layout else "left"
+        self.current_spec.auto_vessel_width = self.auto_vessel_width_checkbox.isChecked()
+        if side_layout:
+            if not self.current_spec.auto_vessel_width:
+                trace_ratio = self.trace_width_spin.value() / 100.0
+                self.current_spec.vessel_width_ratio = max(0.1, min(0.9, 1.0 - trace_ratio))
+            self._update_vessel_ratio_for_aspect()
+        else:
+            self.current_spec.vessel_width_ratio = self.vessel_height_spin.value() / 100.0
+        self.current_spec.vessel_fit = "contain"
         self.current_spec.vessel_crop_rect = self._load_crop_rect()
 
         # Trace settings
         self.current_spec.trace_spec.show_inner = self.show_inner_checkbox.isChecked()
         self.current_spec.trace_spec.show_outer = self.show_outer_checkbox.isChecked()
         self.current_spec.trace_spec.show_events = self.show_events_checkbox.isChecked()
-        self.current_spec.trace_spec.show_time_indicator = self.time_indicator_checkbox.isChecked()
+        show_time_indicator = self.time_indicator_checkbox.isChecked()
+        self.current_spec.trace_spec.show_time_indicator = show_time_indicator
+        self.current_spec.vessel_show_timestamp = False
         self.current_spec.trace_spec.fast_render = self.fast_trace_checkbox.isChecked()
+        self.current_spec.trace_spec.shape = self.trace_shape_combo.currentData()
+        self.current_spec.trace_spec.label_fontsize = float(self.axis_font_spin.value())
+        self.current_spec.trace_spec.tick_fontsize = float(self.tick_font_spin.value())
+        self._apply_trace_shape_width()
+        self._apply_trace_shape_height()
+        self._sync_y_range_controls()
+        self._maybe_seed_manual_y_range()
+        self._update_trace_y_range()
+        self._sync_trace_width_controls()
 
     def _on_size_preset_changed(self, index):
         """Handle size preset change."""
@@ -729,6 +1041,141 @@ class GifAnimatorWindow(QMainWindow):
             self.width_spin.blockSignals(False)
             self.height_spin.blockSignals(False)
             self._on_settings_changed()
+
+    def _on_trace_position_changed(self, index: int) -> None:
+        position = self.trace_position_combo.currentData()
+        if position in ("left", "right"):
+            self.current_spec.vessel_position = position
+        else:
+            self.current_spec.vessel_position = "left"
+        self._sync_trace_width_controls()
+
+    def _sync_trace_width_controls(self) -> None:
+        tiff_position = self.trace_position_combo.currentData()
+        side_layout = tiff_position in ("left", "right")
+        self.auto_vessel_width_checkbox.setEnabled(side_layout)
+        auto = self.auto_vessel_width_checkbox.isChecked()
+        self.trace_width_spin.setEnabled(side_layout and not auto)
+        self.vessel_height_spin.setEnabled(not side_layout)
+
+    def _apply_trace_shape_width(self) -> None:
+        if self.current_spec.layout_mode != "side_by_side":
+            return
+        if self.current_spec.trace_spec.shape != "wide":
+            return
+
+        if self.current_spec.auto_vessel_width:
+            self.current_spec.vessel_width_ratio = min(
+                self.current_spec.vessel_width_ratio, 0.3
+            )
+            return
+
+        min_trace_ratio = 70
+        trace_ratio = self.trace_width_spin.value()
+        if trace_ratio < min_trace_ratio:
+            self.trace_width_spin.blockSignals(True)
+            self.trace_width_spin.setValue(min_trace_ratio)
+            self.trace_width_spin.blockSignals(False)
+            trace_ratio = min_trace_ratio
+        self.current_spec.vessel_width_ratio = max(
+            0.1, min(0.9, 1.0 - trace_ratio / 100.0)
+        )
+
+    def _apply_trace_shape_height(self) -> None:
+        if self.current_spec.layout_mode != "side_by_side":
+            self.height_spin.setEnabled(True)
+            return
+        if self.current_spec.trace_spec.shape != "wide":
+            self.height_spin.setEnabled(True)
+            return
+
+        target_height = int(round(self.current_spec.output_width_px * WIDE_CANVAS_HEIGHT_RATIO))
+        target_height = max(self.height_spin.minimum(), min(self.height_spin.maximum(), target_height))
+        if self.current_spec.output_height_px != target_height:
+            self.current_spec.output_height_px = target_height
+            self.height_spin.blockSignals(True)
+            self.height_spin.setValue(target_height)
+            self.height_spin.blockSignals(False)
+        self.height_spin.setEnabled(False)
+
+    def _sync_y_range_controls(self) -> None:
+        manual = self.manual_y_range_checkbox.isChecked()
+        self.y_min_spin.setEnabled(manual)
+        self.y_max_spin.setEnabled(manual)
+
+    def _seed_y_range_controls(self) -> None:
+        y_range = self._compute_trace_y_range()
+        if y_range is not None:
+            self._set_manual_y_range(*y_range)
+
+    def _maybe_seed_manual_y_range(self) -> None:
+        if not self.manual_y_range_checkbox.isChecked():
+            return
+        y_min = self.y_min_spin.value()
+        y_max = self.y_max_spin.value()
+        if y_min < y_max:
+            return
+        y_range = self._compute_trace_y_range()
+        if y_range is not None:
+            self._set_manual_y_range(*y_range)
+
+    def _set_manual_y_range(self, y_min: float, y_max: float) -> None:
+        self.y_min_spin.blockSignals(True)
+        self.y_max_spin.blockSignals(True)
+        self.y_min_spin.setValue(y_min)
+        self.y_max_spin.setValue(y_max)
+        self.y_min_spin.blockSignals(False)
+        self.y_max_spin.blockSignals(False)
+
+    def _update_trace_y_range(self) -> None:
+        spec = self.current_spec.trace_spec
+        if self.manual_y_range_checkbox.isChecked():
+            y_min = float(self.y_min_spin.value())
+            y_max = float(self.y_max_spin.value())
+            if y_min < y_max:
+                spec.y_range = (y_min, y_max)
+            return
+        if spec.fast_render:
+            spec.y_range = None
+            return
+
+        spec.y_range = self._compute_trace_y_range()
+
+    def _compute_trace_y_range(self) -> tuple[float, float] | None:
+        time = self.trace_model.time_full
+        start = self.current_spec.start_time_s
+        end = self.current_spec.end_time_s
+        if start >= end:
+            return None
+
+        mask = (time >= start) & (time <= end)
+        if not np.any(mask):
+            return None
+
+        series = []
+        spec = self.current_spec.trace_spec
+        if spec.show_inner:
+            series.append(self.trace_model.inner_full[mask])
+        if spec.show_outer and self.trace_model.outer_full is not None:
+            series.append(self.trace_model.outer_full[mask])
+
+        if not series:
+            return None
+
+        data = np.concatenate(series)
+        if data.size == 0 or not np.isfinite(data).any():
+            return None
+
+        y_min = float(np.nanmin(data))
+        y_max = float(np.nanmax(data))
+        if not np.isfinite(y_min) or not np.isfinite(y_max):
+            return None
+
+        if y_min == y_max:
+            pad = max(abs(y_min) * 0.05, 1.0)
+        else:
+            pad = (y_max - y_min) * 0.05
+        return (y_min - pad, y_max + pad)
 
     def _refresh_preview(self):
         """Refresh preview by rendering animation frames."""
@@ -775,6 +1222,41 @@ class GifAnimatorWindow(QMainWindow):
             n_frames,
         )
 
+        # Estimate memory usage
+        memory_mb = self._estimate_memory_mb(
+            n_frames,
+            self.current_spec.output_width_px,
+            self.current_spec.output_height_px
+        )
+
+        logger.info("Render initiated", extra={
+            "n_frames": n_frames,
+            "estimated_size_mb": estimated_size_mb,
+            "estimated_memory_mb": memory_mb,
+            "resolution": f"{self.current_spec.output_width_px}x{self.current_spec.output_height_px}"
+        })
+
+        # Warn if memory usage is high
+        if memory_mb > 500:  # Warn if >500MB
+            reply = QMessageBox.warning(
+                self,
+                "Large Animation",
+                f"This animation will use approximately {memory_mb:.0f} MB of memory.\n\n"
+                f"Frame count: {n_frames}\n"
+                f"Resolution: {self.current_spec.output_width_px}x{self.current_spec.output_height_px}\n\n"
+                "Consider reducing frame count (shorter duration or lower FPS), "
+                "resolution, or using faster playback speed.\n\n"
+                "Continue anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                logger.info("User cancelled render due to high memory warning")
+                return
+
+        # Clear old frames before rendering to free memory
+        self.rendered_frames.clear()
+
         self.status_label.setText(
             f"Rendering {n_frames} frames... (estimated size: {estimated_size_mb:.1f} MB)"
         )
@@ -790,10 +1272,13 @@ class GifAnimatorWindow(QMainWindow):
         self.render_thread.progress.connect(self._on_render_progress)
         self.render_thread.finished.connect(self._on_render_finished)
         self.render_thread.error.connect(self._on_render_error)
+        self.render_thread.cancelled.connect(self._on_render_cancelled)
 
-        # Disable controls during rendering
-        self.refresh_btn.setEnabled(False)
+        # Update UI for rendering state
+        self.refresh_btn.setVisible(False)
+        self.cancel_render_btn.setVisible(True)
         self.export_btn.setEnabled(False)
+        self.is_rendering = True
 
         self.render_thread.start()
 
@@ -803,7 +1288,7 @@ class GifAnimatorWindow(QMainWindow):
         events = []
         if self.events_df is not None:
             time_col = None
-            for col in ['Time (s)', 'Time(s)', 'Time', 'time']:
+            for col in ['t_seconds', 'Time (s)', 'Time(s)', 'Time', 'time']:
                 if col in self.events_df.columns:
                     time_col = col
                     break
@@ -834,9 +1319,8 @@ class GifAnimatorWindow(QMainWindow):
         self.status_label.setText(f"✓ Rendered {len(frames)} frames successfully")
         self.status_label.setStyleSheet("QLabel { color: #51cf66; }")
 
-        # Re-enable controls
-        self.refresh_btn.setEnabled(True)
-        self.export_btn.setEnabled(True)
+        # Restore UI state
+        self._restore_ui_after_render()
 
     def _on_render_error(self, error_msg: str):
         """Handle render error."""
@@ -845,9 +1329,58 @@ class GifAnimatorWindow(QMainWindow):
         self.status_label.setText(f"✗ Render failed")
         self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
 
-        # Re-enable controls
-        self.refresh_btn.setEnabled(True)
+        # Restore UI state
+        self._restore_ui_after_render()
+
+    def _on_render_cancelled(self):
+        """Handle render cancellation."""
+        self.status_label.setText("⊗ Render cancelled by user")
+        self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
+
+        logger.info("Render cancelled, UI restored")
+
+        # Restore UI state
+        self._restore_ui_after_render()
+
+    def _cancel_render(self):
+        """Cancel the current rendering operation."""
+        if self.render_thread and self.render_thread.isRunning():
+            self.render_thread.cancel()
+            self.cancel_render_btn.setEnabled(False)  # Prevent multiple clicks
+            self.status_label.setText("Cancelling render...")
+
+    def _restore_ui_after_render(self):
+        """Restore UI controls to normal state after rendering completes/fails/cancels."""
+        self.refresh_btn.setVisible(True)
+        self.cancel_render_btn.setVisible(False)
+        self.cancel_render_btn.setEnabled(True)  # Re-enable for next render
         self.export_btn.setEnabled(True)
+        self.is_rendering = False
+
+    def _estimate_memory_mb(self, n_frames: int, width: int, height: int) -> float:
+        """Estimate memory needed for rendered frames in MB.
+
+        Args:
+            n_frames: Number of frames to render
+            width: Frame width in pixels
+            height: Frame height in pixels
+
+        Returns:
+            Estimated memory usage in megabytes
+        """
+        # RGB frames: width * height * 3 bytes per pixel (uint8)
+        bytes_per_frame = width * height * 3
+        total_bytes = bytes_per_frame * n_frames
+        memory_mb = total_bytes / (1024 * 1024)  # Convert to MB
+
+        logger.debug("Memory estimation", extra={
+            "n_frames": n_frames,
+            "resolution": f"{width}x{height}",
+            "bytes_per_frame": bytes_per_frame,
+            "total_mb": memory_mb
+        })
+
+        return memory_mb
 
     def _export_gif(self):
         """Export animation as GIF file."""
@@ -903,3 +1436,92 @@ class GifAnimatorWindow(QMainWindow):
                 "Export Error",
                 f"Failed to save GIF:\n\n{str(e)}",
             )
+
+    def _export_poster_figure(self):
+        """Export a trace-dominant poster figure as PNG."""
+        self._on_event_selection_changed()
+        self._on_settings_changed()
+
+        if self.current_spec.start_time_s >= self.current_spec.end_time_s:
+            QMessageBox.warning(self, "Time Range Error", "Start time must be before end time.")
+            return
+
+        default_name = f"{self.sample.name}_poster.png"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Poster Figure",
+            default_name,
+            "PNG Files (*.png)",
+        )
+        if not file_path:
+            return
+
+        frame = self._select_poster_frame()
+        renderer = PosterFigureRenderer(
+            self.current_spec.output_width_px,
+            self.current_spec.output_height_px,
+        )
+        image = renderer.render(
+            trace_model=self.trace_model,
+            start_time_s=self.current_spec.start_time_s,
+            end_time_s=self.current_spec.end_time_s,
+            show_inner=self.current_spec.trace_spec.show_inner,
+            show_outer=self.current_spec.trace_spec.show_outer,
+            y_range=self.current_spec.trace_spec.y_range,
+            vessel_frame=frame,
+        )
+
+        from PIL import Image
+
+        try:
+            Image.fromarray(image).save(file_path, format="PNG")
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Poster figure saved successfully:\n{file_path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to save poster figure:\n\n{str(e)}",
+            )
+
+    def _select_poster_frame(self) -> np.ndarray | None:
+        if not isinstance(self.sample.snapshots, np.ndarray) or self.sample.snapshots.size == 0:
+            return None
+
+        n_frames = len(self.sample.snapshots)
+        if not self.frame_times or len(self.frame_times) != n_frames:
+            return self.sample.snapshots[n_frames // 2]
+
+        mid_time = (self.current_spec.start_time_s + self.current_spec.end_time_s) / 2.0
+        times = np.asarray(self.frame_times, dtype=float)
+        idx = int(np.argmin(np.abs(times - mid_time)))
+        idx = max(0, min(n_frames - 1, idx))
+        return self.sample.snapshots[idx]
+
+    def closeEvent(self, event):
+        """Handle window close event with proper thread cleanup.
+
+        Ensures render thread is properly cancelled and cleaned up before
+        the window closes to prevent crashes and zombie threads.
+        """
+        if self.render_thread and self.render_thread.isRunning():
+            logger.info("Window closing during active render, cancelling thread")
+
+            # Cancel the render thread
+            self.render_thread.cancel()
+
+            # Wait up to 5 seconds for thread to finish gracefully
+            if not self.render_thread.wait(5000):
+                logger.warning("Render thread did not finish within timeout, forcing termination")
+                # Force termination as last resort
+                self.render_thread.terminate()
+                # Wait for termination to complete
+                self.render_thread.wait()
+
+            logger.info("Render thread cleaned up successfully")
+
+        # Call parent closeEvent
+        super().closeEvent(event)
