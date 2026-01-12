@@ -9,6 +9,7 @@ import csv
 import logging
 import os
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -20,7 +21,7 @@ except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
 from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
-from vasoanalyzer.io.traces import load_trace
+from vasoanalyzer.io.traces import load_trace, merge_traces
 
 
 def _read_event_dataframe(path: str, *, cache: Any | None = None) -> pd.DataFrame:
@@ -51,7 +52,7 @@ log = logging.getLogger(__name__)
 
 
 def load_trace_and_events(
-    trace_path: str,
+    trace_path: str | Sequence[str],
     events_path: str | pd.DataFrame | None = None,
     *,
     cache: Any | None = None,
@@ -61,7 +62,7 @@ def load_trace_and_events(
     Parameters
     ----------
     trace_path:
-        Path to the trace CSV file.
+        Path to the trace CSV file, or an ordered list of CSVs to merge.
     events_path:
         Optional explicit path to the event file. If ``None``, a matching
         file is searched next to ``trace_path`` using
@@ -83,13 +84,28 @@ def load_trace_and_events(
         and a metadata dictionary describing any adjustments applied during import.
     """
     log.debug("Loading trace and events for %s", trace_path)
-    df = load_trace(trace_path, cache=cache)
-    log.info(
-        "Import: Loaded trace CSV %s with %d rows and columns=%s",
-        trace_path,
-        len(df.index),
-        list(df.columns),
-    )
+    multi_paths: list[str] | None = None
+    if isinstance(trace_path, Sequence) and not isinstance(trace_path, (str, os.PathLike)):
+        multi_paths = [str(p) for p in trace_path]
+        if not multi_paths:
+            raise ValueError("trace_path must include at least one file")
+        df = merge_traces(multi_paths, cache=cache)
+        log.info(
+            "Import: Merged %d trace CSVs into %d rows; columns=%s",
+            len(multi_paths),
+            len(df.index),
+            list(df.columns),
+        )
+        primary_trace_path = multi_paths[0]
+    else:
+        primary_trace_path = str(trace_path)
+        df = load_trace(primary_trace_path, cache=cache)
+        log.info(
+            "Import: Loaded trace CSV %s with %d rows and columns=%s",
+            primary_trace_path,
+            len(df.index),
+            list(df.columns),
+        )
 
     from datetime import datetime, timezone
     from pathlib import Path
@@ -104,11 +120,15 @@ def load_trace_and_events(
         "time_source": None,
         # Provenance metadata
         "import_timestamp": datetime.now(timezone.utc).isoformat(),
-        "trace_original_filename": Path(trace_path).name,
-        "trace_original_directory": str(Path(trace_path).parent),
+        "trace_original_filename": Path(primary_trace_path).name,
+        "trace_original_directory": str(Path(primary_trace_path).parent),
         "canonical_time_source": df.attrs.get("canonical_time_source", "Time (s)"),
         "schema_version": 3,
     }
+    if multi_paths:
+        extras["trace_original_filenames"] = [Path(p).name for p in multi_paths]
+        extras["merged_traces"] = multi_paths
+        extras["merged_segments"] = df.attrs.get("merged_segments", [])
 
     events_df: pd.DataFrame | None = None
     ev_path: str | None = None
@@ -123,7 +143,7 @@ def load_trace_and_events(
             event_source_label = ev_path
 
     if ev_path is None and events_df is None:
-        ev_path = find_matching_event_file(trace_path)
+        ev_path = find_matching_event_file(primary_trace_path)
         if ev_path:
             extras["auto_detected"] = True
             event_source_label = ev_path
@@ -139,7 +159,9 @@ def load_trace_and_events(
             list(events_df.columns),
         )
     elif events_df is None:
-        log.info("Import: No separate events file for %s (using trace-only)", trace_path)
+        log.info(
+            "Import: No separate events file for %s (using trace-only)", primary_trace_path
+        )
         return df, [], [], None, [], [], extras
     else:
         log.info(
@@ -391,7 +413,7 @@ def load_trace_and_events(
     log.info(
         "Import: Prepared %d normalised events for %s (source=%s)",
         len(labels),
-        trace_path,
+        primary_trace_path,
         extras.get("event_file") or "trace-only",
     )
     return df, labels, times, frames, diam, od_diam, extras

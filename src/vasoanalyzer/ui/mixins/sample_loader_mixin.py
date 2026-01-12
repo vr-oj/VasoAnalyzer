@@ -781,10 +781,37 @@ class SampleLoaderMixin:
 
         return load_events
 
+    def _prompt_merge_traces(self, paths: list[str]) -> str:
+        """Ask the user whether to merge multiple trace CSVs."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Merge trace CSVs?")
+        box.setText(
+            f"{len(paths)} trace CSV files selected.\n"
+            "Merge them into one continuous dataset?"
+        )
+        merge_btn = box.addButton("Merge into one trace", QMessageBox.AcceptRole)
+        single_btn = box.addButton("Load first only", QMessageBox.ActionRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(merge_btn)
+        box.exec_()
+        clicked = box.clickedButton()
+        if clicked == merge_btn:
+            return "merge"
+        if clicked == single_btn:
+            return "single"
+        return "cancel"
+
     def load_trace_and_event_files(self, trace_path):
-        """Load a trace file and its matching events if available."""
+        """Load a trace file (or multiple) and its matching events if available."""
+        if isinstance(trace_path, (list, tuple)):
+            trace_paths = list(dict.fromkeys(trace_path))
+            primary_trace = trace_paths[0]
+        else:
+            trace_paths = [trace_path]
+            primary_trace = trace_path
+
         log.info("Importing trace file %s", trace_path)
-        cache = self._ensure_data_cache(trace_path)
+        cache = self._ensure_data_cache(primary_trace)
         (
             df,
             labels,
@@ -793,15 +820,17 @@ class SampleLoaderMixin:
             diam,
             od_diam,
             import_meta,
-        ) = load_trace_and_events(trace_path, cache=cache)
+        ) = load_trace_and_events(trace_paths if len(trace_paths) > 1 else primary_trace, cache=cache)
 
         self.trace_data = self._prepare_trace_dataframe(df)
         self._reset_channel_view_defaults()
         self._last_event_import = import_meta or {}
-        self.trace_file_path = os.path.dirname(trace_path)
-        trace_filename = os.path.basename(trace_path)
+        self.trace_file_path = os.path.dirname(primary_trace)
+        trace_filename = os.path.basename(primary_trace)
+        if len(trace_paths) > 1:
+            trace_filename = f"{trace_filename} (+{len(trace_paths) - 1})"
         self.sampling_rate_hz = self._compute_sampling_rate(self.trace_data)
-        self._set_status_source(f"Trace · {trace_filename}", trace_path)
+        self._set_status_source(f"Trace · {trace_filename}", primary_trace)
         self._reset_session_dirty()
         self.show_analysis_workspace()
 
@@ -819,6 +848,10 @@ class SampleLoaderMixin:
             self.update_plot()
 
         status_notes: list[str] = []
+        if import_meta and import_meta.get("merged_traces"):
+            merged_count = len(import_meta.get("merged_traces") or [])
+            if merged_count > 1:
+                status_notes.append(f"Merged {merged_count} trace files")
         neg_inner = int(self.trace_data.attrs.get("negative_inner_diameters", 0) or 0)
         if neg_inner:
             status_notes.append(f"Ignored {neg_inner} negative inner-diameter samples")
@@ -868,11 +901,19 @@ class SampleLoaderMixin:
         self._clear_canvas_and_table()
         # 1) Prompt for CSV if needed
         if file_path is None:
-            file_path, _ = QFileDialog.getOpenFileName(
-                self, "Select Trace File", "", "CSV Files (*.csv)"
+            selected, _ = QFileDialog.getOpenFileNames(
+                self, "Select Trace File(s)", "", "CSV Files (*.csv)"
             )
-            if not file_path:
+            if not selected:
                 return
+            if len(selected) > 1:
+                choice = self._prompt_merge_traces(selected)
+                if choice == "cancel":
+                    return
+                file_path = selected if choice == "merge" else selected[0]
+            else:
+                file_path = selected[0]
+        primary_trace_path = file_path[0] if isinstance(file_path, list) else file_path
 
         # 2) Load trace and events using helper
         try:
@@ -882,8 +923,8 @@ class SampleLoaderMixin:
             return
 
         # 3) Remember in Recent Files
-        if file_path not in self.recent_files:
-            self.recent_files = [file_path] + self.recent_files[:4]
+        if primary_trace_path not in self.recent_files:
+            self.recent_files = [primary_trace_path] + self.recent_files[:4]
             self.settings.setValue("recentFiles", self.recent_files)
             self.update_recent_files_menu()
 
@@ -926,15 +967,19 @@ class SampleLoaderMixin:
                 self.current_project.experiments.append(target_experiment)
 
         if self.current_project and target_experiment:
-            trace_obj = Path(file_path).expanduser().resolve(strict=False)
-            sample_name = os.path.splitext(os.path.basename(file_path))[0]
+            trace_obj = Path(primary_trace_path).expanduser().resolve(strict=False)
+            sample_name = os.path.splitext(os.path.basename(primary_trace_path))[0]
+            if isinstance(file_path, list) and len(file_path) > 1:
+                sample_name = f"{sample_name} (+{len(file_path) - 1})"
             sample = SampleN(name=sample_name)
             self._update_sample_link_metadata(sample, "trace", trace_obj)
             if isinstance(self.trace_data, pd.DataFrame) and not self.trace_data.empty:
                 with contextlib.suppress(Exception):
                     sample.trace_data = self.trace_data.copy(deep=True)
+            if isinstance(self._last_event_import, dict) and self._last_event_import:
+                sample.import_metadata = dict(self._last_event_import)
 
-            event_path = find_matching_event_file(file_path)
+            event_path = find_matching_event_file(primary_trace_path)
             if event_path and os.path.exists(event_path):
                 event_obj = Path(event_path).expanduser().resolve(strict=False)
                 self._update_sample_link_metadata(sample, "events", event_obj)

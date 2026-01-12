@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -226,3 +227,116 @@ def load_trace(file_path, *, cache: Any | None = None):
 
     log.debug("Loaded trace with %d rows", len(df))
     return df
+
+
+def merge_traces(
+    trace_paths: Sequence[str],
+    *,
+    cache: Any | None = None,
+) -> pd.DataFrame:
+    """Merge multiple trace CSVs into one continuous dataset.
+
+    Files are appended in the provided order with time, frame, and TIFF indices
+    offset so they remain strictly increasing across segments.
+
+    Args:
+        trace_paths: Ordered collection of CSV paths to merge.
+        cache: Optional cache for faster repeated reads.
+
+    Returns:
+        Merged trace dataframe with provenance stored in ``attrs``:
+        ``merged_from_paths`` and ``merged_segments`` (per-segment offsets).
+    """
+
+    if not trace_paths:
+        raise ValueError("trace_paths must contain at least one file")
+
+    normalized_paths = [str(p) for p in trace_paths]
+    merged_frames: list[pd.DataFrame] = []
+    segments: list[dict[str, object]] = []
+
+    time_offset = 0.0
+    frame_offset: float | None = None
+    tiff_offset: float | None = None
+    canonical_source: str | None = None
+    total_neg_inner = 0
+    total_neg_outer = 0
+
+    def _estimate_dt(values: pd.Series | np.ndarray) -> float:
+        arr = pd.to_numeric(values, errors="coerce")
+        diffs = np.diff(arr[np.isfinite(arr)])
+        diffs = diffs[diffs > 0]
+        if diffs.size:
+            return float(np.nanmedian(diffs))
+        return 0.0
+
+    for idx, path in enumerate(normalized_paths):
+        df = load_trace(path, cache=cache).copy()
+
+        if canonical_source is None:
+            canonical_source = df.attrs.get("canonical_time_source", "Time (s)")
+
+        time_values = pd.to_numeric(df["Time (s)"], errors="coerce")
+        dt = _estimate_dt(time_values)
+        t_start = float(np.nanmin(time_values)) if np.isfinite(np.nanmin(time_values)) else 0.0
+        shift = 0.0
+        if idx > 0:
+            shift = time_offset - t_start
+            if dt > 0:
+                shift += dt
+            df["Time (s)"] = time_values + shift
+
+        frame_shift = 0
+        if "FrameNumber" in df.columns:
+            frame_vals = pd.to_numeric(df["FrameNumber"], errors="coerce")
+            f_start = float(np.nanmin(frame_vals)) if np.isfinite(np.nanmin(frame_vals)) else 0.0
+            if idx > 0 and frame_offset is not None and np.isfinite(frame_offset):
+                frame_shift = int(frame_offset - f_start + 1)
+            df["FrameNumber"] = frame_vals + frame_shift
+            frame_offset_candidate = float(np.nanmax(df["FrameNumber"])) if np.isfinite(
+                np.nanmax(df["FrameNumber"])
+            ) else None
+            if frame_offset_candidate is not None and np.isfinite(frame_offset_candidate):
+                frame_offset = frame_offset_candidate
+
+        tiff_shift = 0
+        if "TiffPage" in df.columns:
+            tiff_vals = pd.to_numeric(df["TiffPage"], errors="coerce")
+            tp_start = float(np.nanmin(tiff_vals)) if np.isfinite(np.nanmin(tiff_vals)) else 0.0
+            if idx > 0 and tiff_offset is not None and np.isfinite(tiff_offset):
+                tiff_shift = int(tiff_offset - tp_start + 1)
+            df["TiffPage"] = tiff_vals + tiff_shift
+            tiff_offset_candidate = float(np.nanmax(df["TiffPage"])) if np.isfinite(
+                np.nanmax(df["TiffPage"])
+            ) else None
+            if tiff_offset_candidate is not None and np.isfinite(tiff_offset_candidate):
+                tiff_offset = tiff_offset_candidate
+
+        merged_frames.append(df)
+
+        t_end = float(np.nanmax(df["Time (s)"])) if np.isfinite(np.nanmax(df["Time (s)"])) else time_offset
+        time_offset = max(time_offset, t_end)
+
+        total_neg_inner += int(df.attrs.get("negative_inner_diameters", 0) or 0)
+        total_neg_outer += int(df.attrs.get("negative_outer_diameters", 0) or 0)
+
+        segments.append(
+            {
+                "path": path,
+                "rows": int(len(df.index)),
+                "applied_time_offset": float(shift),
+                "applied_frame_offset": int(frame_shift) if frame_shift else 0,
+                "applied_tiff_offset": int(tiff_shift) if tiff_shift else 0,
+                "t_start": float(t_start),
+                "t_end": float(t_end),
+                "dt_median": float(dt),
+            }
+        )
+
+    merged_df = pd.concat(merged_frames, ignore_index=True, sort=False)
+    merged_df.attrs["canonical_time_source"] = canonical_source or "Time (s)"
+    merged_df.attrs["merged_from_paths"] = normalized_paths
+    merged_df.attrs["merged_segments"] = segments
+    merged_df.attrs["negative_inner_diameters"] = total_neg_inner
+    merged_df.attrs["negative_outer_diameters"] = total_neg_outer
+    return merged_df

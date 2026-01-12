@@ -14,6 +14,23 @@ VasoAnalyzer provides full support for importing VasoTracker experimental data w
 
 ---
 
+## Quick Fix: Merge Split Trace CSVs
+
+If VasoTracker crashes mid-recording and leaves you with multiple trace CSVs for
+the same run, you can optionally merge them during import:
+
+1. Click **Import data… → Open trace…** (or the toolbar button).
+2. Select **all** split CSVs in order and click **Open**.
+3. When prompted, choose **Merge into one trace** to stitch them together, or
+   **Load first only** to keep the default single-file import.
+4. On merge, VasoAnalyzer offsets time, frame numbers, and TIFF page indices so
+   the segments play back seamlessly. A status chip shows how many files were merged.
+
+You can still load an event table afterward (from the first segment or a
+combined table) via **Import data… → Load events…**.
+
+---
+
 ## VasoTracker File Format
 
 A single VasoTracker experiment generates **three files**:
