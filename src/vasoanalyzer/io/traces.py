@@ -253,7 +253,10 @@ def merge_traces(
 
     normalized_paths = [str(p) for p in trace_paths]
     merged_frames: list[pd.DataFrame] = []
+    merged_paths: list[str] = []
     segments: list[dict[str, object]] = []
+    merge_warnings: list[str] = []
+    skipped: list[dict[str, str]] = []
 
     time_offset = 0.0
     frame_offset: float | None = None
@@ -271,7 +274,16 @@ def merge_traces(
         return 0.0
 
     for idx, path in enumerate(normalized_paths):
-        df = load_trace(path, cache=cache).copy()
+        try:
+            df = load_trace(path, cache=cache).copy()
+        except Exception as exc:  # Skip malformed files but record why
+            msg = f"Skipped {os.path.basename(path)}: {exc}"
+            log.warning(msg, exc_info=True)
+            merge_warnings.append(msg)
+            skipped.append({"path": path, "reason": str(exc)})
+            continue
+
+        merged_paths.append(path)
 
         if canonical_source is None:
             canonical_source = df.attrs.get("canonical_time_source", "Time (s)")
@@ -333,10 +345,18 @@ def merge_traces(
             }
         )
 
+    if not merged_frames:
+        raise ValueError("No valid trace files found to merge")
+
     merged_df = pd.concat(merged_frames, ignore_index=True, sort=False)
     merged_df.attrs["canonical_time_source"] = canonical_source or "Time (s)"
-    merged_df.attrs["merged_from_paths"] = normalized_paths
+    merged_df.attrs["merged_requested_paths"] = normalized_paths
+    merged_df.attrs["merged_from_paths"] = merged_paths
     merged_df.attrs["merged_segments"] = segments
     merged_df.attrs["negative_inner_diameters"] = total_neg_inner
     merged_df.attrs["negative_outer_diameters"] = total_neg_outer
+    if merge_warnings:
+        merged_df.attrs["merge_warnings"] = merge_warnings
+    if skipped:
+        merged_df.attrs["merged_skipped_paths"] = skipped
     return merged_df

@@ -852,6 +852,14 @@ class SampleLoaderMixin:
             merged_count = len(import_meta.get("merged_traces") or [])
             if merged_count > 1:
                 status_notes.append(f"Merged {merged_count} trace files")
+            merge_warnings = import_meta.get("merge_warnings") or []
+            skipped = import_meta.get("merged_skipped_paths") or []
+            for warn in merge_warnings:
+                status_notes.append(warn)
+            for skip in skipped:
+                path = os.path.basename(skip.get("path", "unknown"))
+                reason = skip.get("reason", "missing required columns")
+                status_notes.append(f"Skipped {path}: {reason}")
         neg_inner = int(self.trace_data.attrs.get("negative_inner_diameters", 0) or 0)
         if neg_inner:
             status_notes.append(f"Ignored {neg_inner} negative inner-diameter samples")

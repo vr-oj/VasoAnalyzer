@@ -92,11 +92,11 @@ def load_trace_and_events(
         df = merge_traces(multi_paths, cache=cache)
         log.info(
             "Import: Merged %d trace CSVs into %d rows; columns=%s",
-            len(multi_paths),
+            len(df.attrs.get("merged_from_paths", multi_paths)),
             len(df.index),
             list(df.columns),
         )
-        primary_trace_path = multi_paths[0]
+        primary_trace_path = df.attrs.get("merged_from_paths", multi_paths)[0]
     else:
         primary_trace_path = str(trace_path)
         df = load_trace(primary_trace_path, cache=cache)
@@ -129,6 +129,12 @@ def load_trace_and_events(
         extras["trace_original_filenames"] = [Path(p).name for p in multi_paths]
         extras["merged_traces"] = multi_paths
         extras["merged_segments"] = df.attrs.get("merged_segments", [])
+        extras["merge_warnings"] = df.attrs.get("merge_warnings", [])
+        extras["merged_skipped_paths"] = df.attrs.get("merged_skipped_paths", [])
+        extras["merged_from_paths"] = df.attrs.get("merged_from_paths", multi_paths)
+        extras["merged_requested_paths"] = df.attrs.get(
+            "merged_requested_paths", multi_paths
+        )
 
     events_df: pd.DataFrame | None = None
     ev_path: str | None = None
