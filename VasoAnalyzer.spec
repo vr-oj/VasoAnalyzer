@@ -34,7 +34,8 @@ except Exception:
 version_label = APP_VERSION
 if not version_label.lower().startswith("v"):
     version_label = f"v{version_label}"
-APP_NAME = f"VasoAnalyzer {version_label}"
+APP_BASENAME = "VasoAnalyzer"
+APP_NAME = f"{APP_BASENAME} {version_label}"
 
 # generate version-stamped icons at build time
 # decide platform‐specific icon (base icon only; no version overlay)
@@ -63,6 +64,10 @@ icon_datas = []
 if os.path.isdir(icon_dir):
     icon_datas = [(os.path.join(icon_dir, f), 'icons') for f in os.listdir(icon_dir)]
 
+doc_icon_dir = os.path.join(project_dir, 'assets', 'icons')
+doc_icon_ico = os.path.join(doc_icon_dir, 'VasoDocument.ico')
+doc_icon_icns = os.path.join(doc_icon_dir, 'VasoDocument.icns')
+
 # Add Qt platform plugins for macOS
 qt_plugins_dir = QLibraryInfo.location(QLibraryInfo.PluginsPath)
 qt_plugin_datas = [(os.path.join(qt_plugins_dir, 'platforms'), 'PyQt5/Qt/plugins/platforms')]
@@ -74,6 +79,11 @@ datas = [
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.svg'), 'vasoanalyzer'),
 ] + icon_datas + qt_plugin_datas + mpl_datas
+
+if os.path.isfile(doc_icon_icns):
+    datas.append((doc_icon_icns, '.'))
+if os.path.isfile(doc_icon_ico):
+    datas.append((doc_icon_ico, '.'))
 
 a = Analysis(
     [os.path.join(src_dir, 'main.py')],
@@ -159,7 +169,7 @@ if sys.platform == 'darwin':
         coll,
         name=f'{APP_NAME}.app',
         icon=ICON,
-        bundle_identifier='org.vasoanalyzer.vaso',
+        bundle_identifier='com.vasoanalyzer.vaso',
         info_plist=os.path.join(project_dir, 'packaging', 'macos', 'Info.plist'),
     )
 else:
@@ -168,14 +178,22 @@ else:
     exe_common_kwargs_win['upx'] = False
     # Set console=True for debugging, change to False for production
     exe_common_kwargs_win['console'] = False
+    exe_common_kwargs_win['name'] = APP_BASENAME
 
     exe = EXE(
         pyz,
         a.scripts,
+        [],
+        exclude_binaries=True,
+        **exe_common_kwargs_win,
+    )
+
+    coll = COLLECT(
+        exe,
         a.binaries,
         a.zipfiles,
         a.datas,
-        [],
-        exclude_binaries=False,
-        **exe_common_kwargs_win,
+        strip=False,
+        upx=False,
+        name=APP_BASENAME,
     )

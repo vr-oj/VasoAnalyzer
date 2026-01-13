@@ -15,6 +15,7 @@ import os
 import string
 import tempfile
 import time
+import uuid
 import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -224,6 +225,7 @@ class SampleN:
     figure_configs: dict[str, Any] | None = None
     attachments: list[Attachment] = field(default_factory=list)
     dataset_id: int | None = None
+    experiment_id: str | None = None
     asset_roles: dict[str, int] = field(default_factory=dict)
     snapshot_role: str | None = None
     snapshot_tiff_role: str | None = None
@@ -291,6 +293,7 @@ class SampleN:
             else self.figure_configs,
             attachments=attachments_copy,
             dataset_id=self.dataset_id,
+            experiment_id=self.experiment_id,
             asset_roles=dict(self.asset_roles) if self.asset_roles else {},
             snapshot_role=self.snapshot_role,
             snapshot_tiff_role=self.snapshot_tiff_role,
@@ -307,6 +310,7 @@ class SampleN:
 @dataclass
 class Experiment:
     name: str
+    experiment_id: str | None = None
     excel_path: str | None = None
     next_column: str = "B"
     samples: list[SampleN] = field(default_factory=list)
@@ -1398,6 +1402,7 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
     if not project.created_at:
         project.created_at = now_iso
     project.updated_at = now_iso
+    _experiment_ids, _experiment_ids_changed = _ensure_experiment_ids_on_project(project)
 
     # OPTIMIZATION: Check if we can reuse the existing store
     store_needs_close = False
@@ -1523,6 +1528,11 @@ def _load_project_bundle(path: str) -> Project:
     try:
         meta_rows = repo.read_meta()
         experiments_meta = _json_loads(meta_rows.get("experiments_meta"), default={})
+        (
+            experiments_meta,
+            experiment_ids,
+            _experiments_meta_needs_upgrade,
+        ) = _prepare_experiment_meta_map(experiments_meta)
 
         project_name = meta_rows.get("project_name") or path_obj.stem
         project_description = meta_rows.get("project_description")
@@ -1548,12 +1558,21 @@ def _load_project_bundle(path: str) -> Project:
                 )
                 continue
 
-            sample, experiment_name = _dataset_to_sample(
+            sample, experiment_name, sample_experiment_id = _dataset_to_sample(
                 repo=repo,
                 dataset=record,
                 base_dir=base_dir,
                 tmp_root=tmp_root,
             )
+
+            exp_id, added_id = _resolve_experiment_id_for_name(
+                experiment_name,
+                experiments_meta,
+                experiment_ids,
+                sample_experiment_id,
+            )
+            if added_id:
+                _experiments_meta_needs_upgrade = True
 
             exp_meta = experiments_meta.get(experiment_name, {})
             experiment = experiments_map.get(experiment_name)
@@ -1566,6 +1585,7 @@ def _load_project_bundle(path: str) -> Project:
 
                 experiment = Experiment(
                     name=experiment_name,
+                    experiment_id=exp_id,
                     excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
@@ -1576,6 +1596,10 @@ def _load_project_bundle(path: str) -> Project:
                     else [],
                 )
                 experiments_map[experiment_name] = experiment
+            elif experiment.experiment_id is None:
+                experiment.experiment_id = exp_id
+
+            sample.experiment_id = sample.experiment_id or exp_id
 
             experiment.samples.append(sample)
         t_load = time.perf_counter() - t_load_start
@@ -1831,6 +1855,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
     experiments_payload: dict[str, dict[str, Any]] = {}
     for exp in project.experiments:
         experiments_payload[exp.name] = {
+            "experiment_id": exp.experiment_id,
             "excel_path": _relativize_path(exp.excel_path, base_dir),
             "next_column": exp.next_column,
             "style": _normalise_json_data(exp.style),
@@ -2442,12 +2467,100 @@ def _detect_trace_column_labels(trace_df: pd.DataFrame | None) -> dict[str, str]
     return normalized
 
 
+def _normalize_experiment_id_value(value: Any) -> str | None:
+    try:
+        return str(uuid.UUID(str(value)))
+    except Exception:
+        return None
+
+
+def _prepare_experiment_meta_map(
+    experiments_meta: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str], bool]:
+    ids: dict[str, str] = {}
+    needs_upgrade = False
+    for name, meta in list(experiments_meta.items()):
+        if not isinstance(meta, dict):
+            meta = {}
+            experiments_meta[name] = meta
+        raw_id = meta.get("experiment_id")
+        exp_id = _normalize_experiment_id_value(raw_id)
+        if exp_id is None:
+            exp_id = str(uuid.uuid4())
+            needs_upgrade = True
+        elif raw_id != exp_id:
+            needs_upgrade = True
+        if meta.get("experiment_id") != exp_id:
+            meta["experiment_id"] = exp_id
+            needs_upgrade = True
+        ids[name] = exp_id
+    return experiments_meta, ids, needs_upgrade
+
+
+def _resolve_experiment_id_for_name(
+    experiment_name: str,
+    experiments_meta: dict[str, Any],
+    experiment_ids: dict[str, str],
+    sample_experiment_id: str | None = None,
+) -> tuple[str, bool]:
+    meta = experiments_meta.get(experiment_name)
+    if not isinstance(meta, dict):
+        meta = {}
+        experiments_meta[experiment_name] = meta
+
+    exp_id = experiment_ids.get(experiment_name)
+    raw_meta_id = meta.get("experiment_id")
+    if exp_id is None:
+        exp_id = _normalize_experiment_id_value(raw_meta_id)
+
+    sample_id = _normalize_experiment_id_value(sample_experiment_id)
+    if exp_id is None and sample_id is not None:
+        exp_id = sample_id
+
+    changed = False
+    if exp_id is None:
+        exp_id = str(uuid.uuid4())
+        changed = True
+    elif raw_meta_id != exp_id:
+        changed = True
+
+    experiment_ids[experiment_name] = exp_id
+    if meta.get("experiment_id") != exp_id:
+        meta["experiment_id"] = exp_id
+        changed = True
+
+    return exp_id, changed
+
+
+def _ensure_experiment_ids_on_project(project: Project) -> tuple[dict[str, str], bool]:
+    ids: dict[str, str] = {}
+    changed = False
+    for exp in project.experiments:
+        exp_id = _normalize_experiment_id_value(exp.experiment_id)
+        if exp_id is None:
+            exp_id = str(uuid.uuid4())
+            changed = True
+        elif exp.experiment_id != exp_id:
+            changed = True
+        exp.experiment_id = exp_id
+        ids[exp.name] = exp_id
+
+        for sample in exp.samples:
+            if sample.experiment_id != exp_id:
+                sample.experiment_id = exp_id
+                changed = True
+    return ids, changed
+
+
 def _build_sample_extra(
     experiment: Experiment,
     sample: SampleN,
     base_dir: Path,
     trace_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
+    if sample.experiment_id != experiment.experiment_id:
+        sample.experiment_id = experiment.experiment_id
+
     trace_link = _sample_link_payload(
         path_value=sample.trace_path,
         relative_hint=sample.trace_relative,
@@ -2464,6 +2577,7 @@ def _build_sample_extra(
     )
     payload: dict[str, Any] = {
         "experiment": experiment.name,
+        "experiment_id": experiment.experiment_id,
         "experiment_index": experiment.samples.index(sample)
         if sample in experiment.samples
         else None,
@@ -3017,12 +3131,21 @@ def _load_project_sqlite(path: str) -> Project:
                 )
                 continue
 
-            sample, experiment_name = _dataset_to_sample(
+            sample, experiment_name, sample_experiment_id = _dataset_to_sample(
                 repo=repo,
                 dataset=record,
                 base_dir=base_dir,
                 tmp_root=tmp_root,
             )
+
+            exp_id, added_id = _resolve_experiment_id_for_name(
+                experiment_name,
+                experiments_meta,
+                experiment_ids,
+                sample_experiment_id,
+            )
+            if added_id:
+                _experiments_meta_needs_upgrade = True
 
             exp_meta = experiments_meta.get(experiment_name, {})
             experiment = experiments_map.get(experiment_name)
@@ -3035,6 +3158,7 @@ def _load_project_sqlite(path: str) -> Project:
 
                 experiment = Experiment(
                     name=experiment_name,
+                    experiment_id=exp_id,
                     excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
@@ -3045,6 +3169,10 @@ def _load_project_sqlite(path: str) -> Project:
                     else [],
                 )
                 experiments_map[experiment_name] = experiment
+            elif experiment.experiment_id is None:
+                experiment.experiment_id = exp_id
+
+            sample.experiment_id = sample.experiment_id or exp_id
 
             experiment.samples.append(sample)
 
@@ -3265,7 +3393,10 @@ def _dataset_to_sample(
     _populate_link_metadata(sample, "events", events_path, events_link_meta, base_dir)
 
     experiment = extra.get("experiment") or "Default"
-    return sample, experiment
+    experiment_id = _normalize_experiment_id_value(extra.get("experiment_id")) if isinstance(extra, dict) else None
+    if experiment_id:
+        sample.experiment_id = experiment_id
+    return sample, experiment, experiment_id
 
 
 def _format_trace_df(

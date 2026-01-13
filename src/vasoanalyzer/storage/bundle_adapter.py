@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import json
 import logging
 import sqlite3
 import time
@@ -24,6 +25,8 @@ import weakref
 from dataclasses import dataclass
 from pathlib import Path
 
+from utils.config import APP_VERSION
+from vasoanalyzer.core import project_format
 from .migration import auto_migrate_if_needed, detect_project_format
 from .sqlite_store import SCHEMA_VERSION
 from .snapshots import (
@@ -36,6 +39,7 @@ from .snapshots import (
     open_staging_db,
     prune_old_snapshots,
     release_lock,
+    atomic_write_text,
 )
 
 log = logging.getLogger(__name__)
@@ -93,6 +97,8 @@ class ProjectHandle:
     is_cloud_path: bool = False
     cloud_service: str | None = None
     journal_mode: str | None = None
+    format_validation: project_format.ValidationResult | None = None
+    needs_format_upgrade: bool = False
 
     def __post_init__(self):
         # Register cleanup on process exit
@@ -162,6 +168,68 @@ def _detect_cloud_storage(path: Path) -> tuple[bool, str | None]:
         return _is_cloud_storage_path(path.as_posix())
     except Exception:
         return False, None
+
+
+def _validate_bundle_state(bundle_path: Path, *, readonly: bool) -> project_format.ValidationResult:
+    """Run strict validation on bundle metadata and HEAD."""
+
+    try:
+        return project_format.validate_bundle_tree(
+            bundle_path,
+            schema_version=SCHEMA_VERSION,
+            app_version=APP_VERSION,
+        )
+    except project_format.ProjectFormatError as exc:
+        if not readonly:
+            release_lock(bundle_path)
+        raise ValueError(str(exc)) from exc
+
+
+def _upgrade_bundle_meta(bundle_path: Path) -> project_format.ProjectMetaInfo:
+    """Ensure project.meta.json carries required fields before save."""
+
+    meta_path = bundle_path / "project.meta.json"
+    meta_info = project_format.read_project_meta(meta_path, app_version=APP_VERSION)
+    if meta_info.needs_upgrade:
+        atomic_write_text(meta_path, json.dumps(meta_info.data, indent=2))
+    return meta_info
+
+
+def _upgrade_head(bundle_path: Path) -> None:
+    """Normalize HEAD.json to include upgrade fields without changing pointers."""
+
+    head_path = bundle_path / "HEAD.json"
+    snaps_dir = bundle_path / "snapshots"
+    head_info = project_format.read_head(head_path, snaps_dir)
+    if head_info.needs_upgrade:
+        head_doc = project_format.build_head_document(
+            current=head_info.current,
+            previous=head_info.previous,
+            updated_utc=head_info.data.get("updated_utc"),
+            write_in_progress=head_info.data.get("write_in_progress"),
+            base=head_info.data,
+        )
+        atomic_write_text(head_path, json.dumps(head_doc, indent=2))
+
+
+def _set_write_in_progress(bundle_path: Path, flag: bool) -> bool:
+    """Set HEAD.write_in_progress to ``flag`` preserving other fields."""
+
+    head_path = bundle_path / "HEAD.json"
+    snaps_dir = bundle_path / "snapshots"
+    head_info = project_format.read_head(head_path, snaps_dir, require_current=False)
+    if bool(head_info.data.get("write_in_progress")) == bool(flag):
+        return False
+
+    head_doc = project_format.build_head_document(
+        current=head_info.current,
+        previous=head_info.previous,
+        updated_utc=head_info.data.get("updated_utc"),
+        write_in_progress=flag,
+        base=head_info.data,
+    )
+    atomic_write_text(head_path, json.dumps(head_doc, indent=2))
+    return True
 
 
 # =============================================================================
@@ -316,7 +384,7 @@ def create_project_handle(
                 bundle_root = temp_path / "bundle"
 
                 # Create bundle in temp location
-                create_bundle(bundle_root)
+                create_bundle(bundle_root, app_version=APP_VERSION)
 
                 # Initialize schema in bundle
                 staging_path, staging_conn = open_staging_db(
@@ -358,7 +426,7 @@ def create_project_handle(
             is_cloud_path, cloud_service = _detect_cloud_storage(path)
 
             # Create bundle
-            create_bundle(path)
+            create_bundle(path, app_version=APP_VERSION)
 
             # Initialize schema in new bundle
             staging_path, staging_conn = open_staging_db(
@@ -445,6 +513,7 @@ def _open_bundle_handle(
 
     # Open bundle (validates structure, acquires lock)
     bundle_info = open_bundle(bundle_path, readonly=readonly)
+    validation = _validate_bundle_state(bundle_path, readonly=readonly)
 
     # Clean up any orphaned staging databases
     cleanup_staging_dbs(bundle_path)
@@ -475,6 +544,8 @@ def _open_bundle_handle(
             is_cloud_path=bool(is_cloud_path),
             cloud_service=cloud_service,
             journal_mode=journal_mode,
+            format_validation=validation,
+            needs_format_upgrade=validation.needs_upgrade,
         )
         connection = conn
 
@@ -527,6 +598,8 @@ def _open_bundle_handle(
             is_cloud_path=bool(is_cloud_path),
             cloud_service=cloud_service,
             journal_mode=journal_mode,
+            format_validation=validation,
+            needs_format_upgrade=validation.needs_upgrade,
         )
         connection = staging_conn
 
@@ -629,8 +702,24 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
         return
 
     if handle.is_bundle:
+        try:
+            meta_info = _upgrade_bundle_meta(handle.path)
+            handle.needs_format_upgrade = handle.needs_format_upgrade or meta_info.needs_upgrade
+        except project_format.ProjectFormatError as exc:
+            raise RuntimeError(str(exc)) from exc
+        try:
+            _upgrade_head(handle.path)
+        except project_format.ProjectFormatError as exc:
+            raise RuntimeError(str(exc)) from exc
+
         if not skip_snapshot and handle.snapshot_on_save:
             log.info(f"Creating snapshot for bundle: {handle.path}")
+
+            head_marked = False
+            try:
+                head_marked = _set_write_in_progress(handle.path, True)
+            except Exception:
+                log.debug("Could not set write_in_progress before snapshot", exc_info=True)
 
             # Ensure staging connection is committed and WAL is checkpointed
             if handle.staging_conn:
@@ -659,7 +748,15 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
             # WAL has been checkpointed, so snapshot will be complete
             # Connection stays open - snapshot creation opens its own connection
             log.debug(f"Creating snapshot from staging DB: {handle.staging_path}")
-            snapshot_info = create_snapshot(handle.path, handle.staging_path)
+            try:
+                snapshot_info = create_snapshot(handle.path, handle.staging_path)
+            except Exception:
+                if head_marked:
+                    try:
+                        _set_write_in_progress(handle.path, False)
+                    except Exception:
+                        log.debug("Could not clear write_in_progress after snapshot failure", exc_info=True)
+                raise
             log.info(
                 f"Snapshot created: {snapshot_info.number} "
                 f"({snapshot_info.size_bytes / 1024 / 1024:.1f} MB)"
@@ -684,9 +781,21 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
                 log.info("Container updated successfully")
 
         else:
+            head_marked = False
+            try:
+                head_marked = _set_write_in_progress(handle.path, True)
+            except Exception:
+                log.debug("Could not set write_in_progress before commit", exc_info=True)
             # Just commit staging database
             if handle.staging_conn:
-                handle.staging_conn.commit()
+                try:
+                    handle.staging_conn.commit()
+                finally:
+                    if head_marked:
+                        try:
+                            _set_write_in_progress(handle.path, False)
+                        except Exception:
+                            log.debug("Could not clear write_in_progress after commit", exc_info=True)
             else:
                 log.warning("No staging connection to commit for bundle")
 

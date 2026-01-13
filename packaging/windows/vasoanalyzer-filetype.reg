@@ -11,7 +11,7 @@ Windows Registry Editor Version 5.00
 
 ; Set the custom icon (path relative to Program Files installation)
 [HKEY_CLASSES_ROOT\VasoAnalyzer.Project\DefaultIcon]
-@="\"%ProgramFiles%\\VasoAnalyzer\\VasoAnalyzerIcon.ico\",0"
+@="\"%ProgramFiles%\\VasoAnalyzer\\VasoDocument.ico\",0"
 
 ; Optional open command
 [HKEY_CLASSES_ROOT\VasoAnalyzer.Project\shell\open\command]

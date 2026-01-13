@@ -37,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from vasoanalyzer.core import project_format
+
 log = logging.getLogger(__name__)
 
 __all__ = [
@@ -154,7 +156,7 @@ def _fsync_dir(path: Path) -> None:
 # =============================================================================
 
 
-def create_bundle(bundle_path: Path) -> Path:
+def create_bundle(bundle_path: Path, *, app_version: str | None = None) -> Path:
     """
     Create a new project bundle directory structure.
 
@@ -178,15 +180,24 @@ def create_bundle(bundle_path: Path) -> Path:
     (bundle_path / ".staging").mkdir(exist_ok=True)
 
     # Create initial project metadata
+    created_at = time.time()
     meta = {
-        "format": "bundle-v1",
-        "created_at": time.time(),
-        "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "format": "vaso-v1",
+        "created_at": created_at,
+        "created_utc": project_format.iso_utc_now(),
+        "project_uuid": str(uuid.uuid4()),
     }
+    if app_version:
+        meta["app_version_created"] = app_version
     atomic_write_text(bundle_path / "project.meta.json", json.dumps(meta, indent=2))
 
     # Create empty HEAD (no snapshots yet)
-    head = {"current": None, "timestamp": time.time()}
+    head = project_format.build_head_document(
+        current=None,
+        previous=None,
+        updated_utc=project_format.iso_utc_now(),
+        write_in_progress=False,
+    )
     atomic_write_text(bundle_path / "HEAD.json", json.dumps(head, indent=2))
 
     log.info(f"Bundle created successfully at {bundle_path}")
@@ -351,6 +362,16 @@ def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> Snap
 
     snaps_dir = bundle_path / "snapshots"
     snaps_dir.mkdir(parents=True, exist_ok=True)
+    head_path = bundle_path / "HEAD.json"
+
+    previous_current: str | None = None
+    existing_head: dict[str, Any] | None = None
+    try:
+        head_info = project_format.read_head(head_path, snaps_dir, require_current=False)
+        previous_current = head_info.current
+        existing_head = head_info.data
+    except Exception as exc:
+        log.debug("HEAD.json could not be read before snapshot: %s", exc)
 
     # Determine next snapshot path
     dest_tmp = next_snapshot_name(snaps_dir).with_suffix(".sqlite.tmp")
@@ -399,8 +420,14 @@ def create_snapshot(bundle_path: Path, staging_db: Path, db_writer=None) -> Snap
         log.info(f"Snapshot created: {dest.name}")
 
         # Update HEAD to point to new snapshot
-        head_doc = {"current": dest.name, "timestamp": time.time()}
-        atomic_write_text(bundle_path / "HEAD.json", json.dumps(head_doc, indent=2))
+        head_doc = project_format.build_head_document(
+            current=dest.name,
+            previous=previous_current,
+            updated_utc=project_format.iso_utc_now(),
+            write_in_progress=False,
+            base=existing_head,
+        )
+        atomic_write_text(head_path, json.dumps(head_doc, indent=2))
 
         # Return snapshot info
         return SnapshotInfo(
@@ -449,6 +476,9 @@ def get_current_snapshot(bundle_path: Path) -> SnapshotInfo | None:
         head = json.loads(head_path.read_text(encoding="utf-8"))
         snap_name = head.get("current")
 
+        write_in_progress = bool(head.get("write_in_progress"))
+        previous_name = head.get("previous")
+
         if snap_name:
             snap_path = bundle_path / "snapshots" / snap_name
 
@@ -460,6 +490,26 @@ def get_current_snapshot(bundle_path: Path) -> SnapshotInfo | None:
                     timestamp=head.get("timestamp", 0),
                     is_current=True,
                     size_bytes=snap_path.stat().st_size,
+                )
+
+        # Prefer previous snapshot when a write was interrupted
+        if write_in_progress and previous_name:
+            candidate = bundle_path / "snapshots" / previous_name
+            if candidate.exists() and validate_snapshot(candidate):
+                head_doc = project_format.build_head_document(
+                    current=previous_name,
+                    previous=None,
+                    updated_utc=project_format.iso_utc_now(),
+                    write_in_progress=False,
+                    base=head,
+                )
+                atomic_write_text(head_path, json.dumps(head_doc, indent=2))
+                return SnapshotInfo(
+                    path=candidate,
+                    number=int(candidate.stem),
+                    timestamp=time.time(),
+                    is_current=True,
+                    size_bytes=candidate.stat().st_size,
                 )
 
         # Fallback: find latest valid snapshot

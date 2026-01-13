@@ -12,7 +12,10 @@ import logging
 import shutil
 import sqlite3
 import time
+import uuid
 from pathlib import Path
+
+from vasoanalyzer.core import project_format
 
 from .snapshots import (
     atomic_write_text,
@@ -193,15 +196,18 @@ def migrate_to_bundle(
     fsync_file(snapshot_path)
 
     # Update HEAD to point to first snapshot
-    head_doc = {
-        "current": "000001.sqlite",
-        "timestamp": time.time(),
-    }
+    head_doc = project_format.build_head_document(
+        current="000001.sqlite",
+        previous=None,
+        updated_utc=project_format.iso_utc_now(),
+        write_in_progress=False,
+    )
     atomic_write_text(bundle_path / "HEAD.json", json.dumps(head_doc, indent=2))
 
     # Create project metadata
     project_meta = {
-        "format": "bundle-v1",
+        "format": "vaso-v1",
+        "project_uuid": str(uuid.uuid4()),
         "created_at": time.time(),
         "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "migrated_from": str(legacy_path),
@@ -211,6 +217,8 @@ def migrate_to_bundle(
         "original_created_at": legacy_meta.get("created_at"),
         "original_modified_at": legacy_meta.get("modified_at"),
     }
+    if legacy_meta.get("app_version"):
+        project_meta["app_version_created"] = legacy_meta.get("app_version")
     atomic_write_text(bundle_path / "project.meta.json", json.dumps(project_meta, indent=2))
 
     # Handle legacy file

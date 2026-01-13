@@ -54,6 +54,22 @@ TEMP_DIR_PREFIX = "VasoAnalyzer-container-"
 TEMP_DIR_MAX_AGE = 3600
 
 
+def _fsync_dir(path: Path) -> None:
+    """Best-effort directory fsync (POSIX only)."""
+    if os.name == "nt":
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 # =============================================================================
 # Format Detection
 # =============================================================================
@@ -276,6 +292,21 @@ def pack_temp_bundle_to_container(
 
                     # Add to ZIP
                     zf.write(file_path, archive_name)
+
+        # Best-effort fsync of temp container and parent directory before replace
+        try:
+            fd = os.open(temp_target, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except Exception:
+            log.debug("fsync(temp_target) best-effort failed", exc_info=True)
+
+        try:
+            _fsync_dir(target_path.parent)
+        except Exception:
+            log.debug("fsync(target_dir) best-effort failed", exc_info=True)
 
         # Atomic replace: temp -> final
         os.replace(temp_target, target_path)
