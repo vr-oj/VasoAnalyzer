@@ -1,5 +1,5 @@
 #define MyAppName "VasoAnalyzer"
-#define MyAppVersion "2.3.0"
+#define MyAppVersion "2.3.1"
 #define MyAppPublisher "Tykocki Lab"
 #define MyAppExeName "VasoAnalyzer.exe"
 #define MyAppId "{{C7E28CDA-3B4A-4C42-9DD4-84B0437D0B5E}}"

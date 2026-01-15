@@ -136,6 +136,20 @@ class MenuMixin:
         self.action_export_shareable.triggered.connect(self.export_shareable_project)
         export_menu.addAction(self.action_export_shareable)
 
+        self.action_export_dataset_pkg = QAction("Dataset Package (.vasods)…", self)
+        self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
+        export_menu.addAction(self.action_export_dataset_pkg)
+
+        self.action_import_dataset_pkg = QAction("Import Dataset Package…", self)
+        self.action_import_dataset_pkg.triggered.connect(self.import_dataset_package_action)
+        export_menu.addAction(self.action_import_dataset_pkg)
+
+        self.action_import_dataset_from_project = QAction("Import Dataset from Project…", self)
+        self.action_import_dataset_from_project.triggered.connect(
+            self.import_dataset_from_project_action
+        )
+        export_menu.addAction(self.action_import_dataset_from_project)
+
         self.action_export_csv = QAction("Events as CSV…", self)
         self.action_export_csv.triggered.connect(self.auto_export_table)
         export_menu.addAction(self.action_export_csv)
@@ -169,6 +183,18 @@ class MenuMixin:
         redo = self.undo_stack.createRedoAction(self, "Redo")
         redo.setShortcut(QKeySequence.Redo)
         edit_menu.addAction(redo)
+
+        edit_menu.addSeparator()
+
+        self.action_copy_datasets = QAction("Copy Dataset(s)", self)
+        self.action_copy_datasets.setShortcut("Ctrl+Shift+C")
+        self.action_copy_datasets.triggered.connect(self.copy_selected_datasets)
+        edit_menu.addAction(self.action_copy_datasets)
+
+        self.action_paste_datasets = QAction("Paste Dataset(s)", self)
+        self.action_paste_datasets.setShortcut("Ctrl+Shift+V")
+        self.action_paste_datasets.triggered.connect(self.paste_datasets)
+        edit_menu.addAction(self.action_paste_datasets)
 
         edit_menu.addSeparator()
 

@@ -24,6 +24,12 @@ from .sqlite_store import (
     update_dataset_meta,
     write_autosave,
 )
+from .dataset_package import (
+    DatasetPackageError,
+    DatasetPackageValidationError,
+    export_dataset_package,
+    import_dataset_package,
+)
 
 __all__ = [
     "sqlite",
@@ -48,4 +54,8 @@ __all__ = [
     "write_autosave",
     "restore_autosave",
     "update_dataset_meta",
+    "export_dataset_package",
+    "import_dataset_package",
+    "DatasetPackageError",
+    "DatasetPackageValidationError",
 ]

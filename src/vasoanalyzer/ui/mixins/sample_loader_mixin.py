@@ -873,6 +873,12 @@ class SampleLoaderMixin:
                 event_name = os.path.basename(str(event_file))
                 if "_table" in event_name.lower():
                     status_notes.append(f"Matched events: {event_name}")
+            for warn in import_meta.get("event_merge_warnings") or []:
+                status_notes.append(warn)
+            for skip in import_meta.get("event_skipped_paths") or []:
+                path = os.path.basename(skip.get("path", "events.csv"))
+                reason = skip.get("reason", "invalid")
+                status_notes.append(f"Skipped events {path}: {reason}")
 
             ignored = int(import_meta.get("ignored_out_of_range", 0) or 0)
             if ignored:

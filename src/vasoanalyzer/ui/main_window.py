@@ -24,6 +24,7 @@ import os
 import sqlite3
 import sys
 import time
+import shutil
 import uuid
 import webbrowser
 from collections.abc import Mapping, Sequence
@@ -31,6 +32,8 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
+import tempfile
+import json as _json
 
 import numpy as np
 import pandas as pd
@@ -78,6 +81,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QMimeData,
     QShortcut,
     QSizePolicy,
     QSplitter,
@@ -103,6 +107,7 @@ from vasoanalyzer.core.project import (
     close_project_ctx,
     load_project,
     open_project_ctx,
+    ProjectUpgradeRequired,
     save_project,
 )
 from vasoanalyzer.core.project_context import ProjectContext
@@ -124,6 +129,16 @@ from vasoanalyzer.services.project_service import (
     quarantine_autosave_snapshot,
     restore_autosave,
     save_project_file,
+)
+from vasoanalyzer.storage.dataset_package import (
+    DatasetPackageValidationError,
+    export_dataset_package,
+    import_dataset_package,
+)
+from vasoanalyzer.ui.dialogs.source_project_browser import (
+    SourceProjectBrowserDialog,
+    build_import_plan,
+    DatasetInfo,
 )
 from vasoanalyzer.services.types import ProjectRepository
 from vasoanalyzer.ui.commands import PointEditCommand, ReplaceEventCommand
@@ -179,6 +194,7 @@ log = logging.getLogger(__name__)
 _TIME_SYNC_DEBUG = bool(os.getenv("VA_TIME_SYNC_DEBUG"))
 _TIFF_PROMPT_THRESHOLD = 1000
 _TIFF_REDUCED_TARGET_FRAMES = 400
+_CLIP_MIME = "application/x-vaso-datasets"
 
 
 def _log_time_sync(label: str, **fields) -> None:
@@ -1714,6 +1730,38 @@ class VasoAnalyzerApp(QMainWindow):
             if project is None:
                 try:
                     project = load_project(path)
+                except ProjectUpgradeRequired:
+                    choice = QMessageBox.question(
+                        self,
+                        "Convert Project",
+                        (
+                            "This project uses an older format.\n\n"
+                            "Convert it to the new single-file .vaso format now?\n"
+                            "A backup (.bak1) will be kept for safety."
+                        ),
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes,
+                    )
+                    if choice != QMessageBox.Yes:
+                        self.statusBar().showMessage("Conversion cancelled.", 5000)
+                        return
+                    try:
+                        from vasoanalyzer.core.project import convert_project
+
+                        ctx = convert_project(path)
+                        with contextlib.suppress(Exception):
+                            ctx.close()
+                        project = load_project(path)
+                        self.statusBar().showMessage(
+                            "\u2713 Project converted to single-file format.", 5000
+                        )
+                    except Exception as exc:
+                        QMessageBox.critical(
+                            self,
+                            "Project Conversion Failed",
+                            f"Could not convert project:\n{exc}",
+                        )
+                        return
                 except Exception as exc:
                     error_msg = str(exc)
 
@@ -2330,6 +2378,435 @@ class VasoAnalyzerApp(QMainWindow):
             f"\u2713 Shareable project saved: {exported}", 5000
         )
 
+    def export_dataset_package_action(self, checked: bool = False):
+        """Export the currently selected dataset to a .vasods package."""
+
+        if not self.current_project:
+            QMessageBox.information(
+                self, "No Project", "Open or create a project before exporting a dataset."
+            )
+            return
+
+        if not self.current_sample:
+            QMessageBox.information(
+                self, "No Dataset Selected", "Select a dataset to export."
+            )
+            return
+
+        if not self.current_project.path:
+            self.save_project_file_as()
+            if not self.current_project or not self.current_project.path:
+                return
+
+        dataset_id = getattr(self.current_sample, "dataset_id", None)
+        if dataset_id is None:
+            # Ensure dataset exists on disk
+            self.save_project_file()
+            dataset_id = getattr(self.current_sample, "dataset_id", None)
+
+        if dataset_id is None:
+            QMessageBox.warning(
+                self,
+                "Export Blocked",
+                "Save the project once before exporting this dataset.",
+            )
+            return
+
+        sample_name = self.current_sample.name or "Dataset"
+        default_path = (
+            Path(self.current_project.path)
+            .with_name(f"{sample_name}.vasods")
+            .as_posix()
+        )
+        dest, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Dataset Package",
+            default_path,
+            "Dataset Packages (*.vasods)",
+        )
+        if not dest:
+            return
+
+        dest_path = Path(dest).expanduser()
+        if dest_path.suffix.lower() != ".vasods":
+            dest_path = dest_path.with_suffix(".vasods")
+        dest_path = dest_path.resolve(strict=False)
+
+        try:
+            export_dataset_package(self.current_project.path, dataset_id, dest_path)
+        except DatasetPackageValidationError as exc:
+            QMessageBox.warning(self, "Export Failed", f"Dataset export failed:\n{exc}")
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", f"Could not export dataset:\n{exc}")
+            return
+
+        self.statusBar().showMessage(f"\u2713 Dataset exported: {dest_path}", 5000)
+
+    def import_dataset_from_project_action(self, checked: bool = False):
+        """Import dataset(s) from another project without leaving the current window."""
+
+        if not self.current_project:
+            QMessageBox.information(
+                self, "No Project", "Open or create a project before importing."
+            )
+            return
+        if not self.current_project.path:
+            self.save_project_file_as()
+            if not self.current_project or not self.current_project.path:
+                return
+
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        dest_experiments = [
+            (exp.name, getattr(exp, "experiment_id", None))
+            for exp in self.current_project.experiments
+        ] or [("Default", None)]
+        initial_preserve = settings.value(
+            "import_from_project_preserve_experiments", False, type=bool
+        )
+        initial_dest_id = settings.value(
+            "import_from_project_last_dest_experiment_id", None, type=str
+        )
+        dialog = SourceProjectBrowserDialog(
+            self,
+            current_project_path=self.current_project.path,
+            current_experiments=dest_experiments,
+            initial_preserve=initial_preserve,
+            initial_dest_experiment_id=initial_dest_id,
+        )
+        source_path, dataset_entries, dest_exp, preserve, dest_exp_id = dialog.exec_with_source()
+        if not source_path or not dataset_entries:
+            return
+
+        # Ensure destination is saved before mutation
+        self.save_project_file()
+
+        imported_ids: list[int] = []
+        dest_expanded = set()
+        plan = build_import_plan(dataset_entries, dest_exp, preserve)
+        failures: list[tuple[str, str, str]] = []
+        root_temp_dir = tempfile.mkdtemp(prefix="vasods_import_")
+        try:
+            for entry, target_exp in plan:
+                pkg_path = Path(root_temp_dir) / f"dataset_{entry.dataset_id}.vasods"
+                try:
+                    export_dataset_package(source_path, entry.dataset_id, pkg_path)
+                    new_id = import_dataset_package(
+                        self.current_project.path,
+                        pkg_path,
+                        target_experiment_name=target_exp,
+                    )
+                    imported_ids.append(int(new_id))
+                    if target_exp:
+                        dest_expanded.add(target_exp)
+                except Exception as exc:
+                    failures.append((entry.dataset_name, entry.experiment_name, str(exc)))
+        except DatasetPackageValidationError as exc:
+            QMessageBox.warning(self, "Import Failed", f"Dataset package is invalid:\n{exc}")
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Failed", f"Could not import dataset:\n{exc}")
+            return
+        finally:
+            try:
+                shutil.rmtree(root_temp_dir, ignore_errors=True)
+            except Exception:
+                log.debug("Failed to remove temp import dir %s", root_temp_dir, exc_info=True)
+
+        if not imported_ids:
+            if failures:
+                details = "\n".join(f"- {name} ({exp}): {err}" for name, exp, err in failures)
+                QMessageBox.critical(
+                    self,
+                    "Import Failed",
+                    f"No datasets were imported.\n\nErrors:\n{details}",
+                )
+            return
+
+        # Reload project to reflect new datasets and select the first imported one
+        self.open_project_file(self.current_project.path)
+        if dest_expanded:
+            for name in dest_expanded:
+                self._expand_experiment_in_tree(name)
+        self._select_dataset_ids(imported_ids)
+        self.statusBar().showMessage(
+            f"\u2713 Imported {len(imported_ids)} dataset(s) from {Path(source_path).name}", 5000
+        )
+        # Persist user choices
+        settings.setValue("import_from_project_preserve_experiments", bool(preserve))
+        if dest_exp_id:
+            settings.setValue("import_from_project_last_dest_experiment_id", dest_exp_id)
+        elif dest_exp and not preserve:
+            # Fall back to name if no id available
+            settings.setValue("import_from_project_last_dest_experiment_id", dest_exp)
+
+        if failures:
+            detail = "\n".join(f"- {name} ({exp}): {err}" for name, exp, err in failures)
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Import Partial")
+            msg.setText(
+                f"Imported {len(imported_ids)} dataset(s) from {Path(source_path).name}.\n"
+                f"Failed {len(failures)} dataset(s)."
+            )
+            msg.setInformativeText("You can copy the details for support.")
+            copy_btn = msg.addButton("Copy details", QMessageBox.ActionRole)
+            msg.addButton(QMessageBox.Ok)
+            msg.setDetailedText(detail)
+            msg.exec_()
+            if msg.clickedButton() is copy_btn:
+                QApplication.clipboard().setText(detail)
+
+    def _prompt_experiment_for_import(self, default_name: str | None) -> str | None:
+        experiments = [
+            exp.name
+            for exp in getattr(self.current_project, "experiments", []) or []
+            if exp.name
+        ]
+        if default_name and default_name not in experiments:
+            experiments.insert(0, default_name)
+        if not experiments:
+            experiments = ["Imported"]
+        current_index = 0
+        if default_name and default_name in experiments:
+            current_index = experiments.index(default_name)
+        selection, ok = QInputDialog.getItem(
+            self,
+            "Choose Experiment",
+            "Import dataset into experiment:",
+            experiments,
+            current_index,
+            True,
+        )
+        if not ok:
+            return None
+        selected = str(selection).strip()
+        return selected or None
+
+    def import_dataset_package_action(self, checked: bool = False):
+        """Import a .vasods package into the current project."""
+
+        if not self.current_project:
+            QMessageBox.information(
+                self, "No Project", "Open or create a project before importing."
+            )
+            return
+
+        if not self.current_project.path:
+            self.save_project_file_as()
+            if not self.current_project or not self.current_project.path:
+                return
+
+        pkg_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Dataset Package",
+            "",
+            "Dataset Packages (*.vasods)",
+        )
+        if not pkg_path:
+            return
+
+        default_exp = None
+        if getattr(self, "current_experiment", None):
+            default_exp = self.current_experiment.name
+        elif getattr(self.current_project, "experiments", None):
+            default_exp = self.current_project.experiments[0].name
+
+        target_exp = self._prompt_experiment_for_import(default_exp)
+        if not target_exp:
+            return
+
+        # Flush current edits before mutating the project file
+        self.save_project_file()
+
+        try:
+            import_dataset_package(
+                self.current_project.path,
+                pkg_path,
+                target_experiment_name=target_exp,
+            )
+        except DatasetPackageValidationError as exc:
+            QMessageBox.warning(self, "Import Failed", f"Dataset package is invalid:\n{exc}")
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Import Failed", f"Could not import dataset:\n{exc}")
+            return
+
+        # Reload project to reflect the new dataset
+        self.open_project_file(self.current_project.path)
+        self.statusBar().showMessage(f"\u2713 Dataset imported into '{target_exp}'", 5000)
+
+    # Clipboard-based copy/paste of datasets --------------------------------
+    def _gather_selected_samples_for_copy(self) -> list[SampleN]:
+        samples = self._selected_samples_from_tree()
+        if not samples and getattr(self, "current_sample", None):
+            samples = [self.current_sample]
+        return [s for s in samples if getattr(s, "dataset_id", None) is not None]
+
+    def copy_selected_datasets(self) -> None:
+        """Copy selected datasets to a temp .vasods set and place paths on clipboard."""
+
+        if not self.current_project or not self.current_project.path:
+            QMessageBox.information(
+                self, "No Project", "Open or save a project before copying datasets."
+            )
+            return
+
+        samples = self._gather_selected_samples_for_copy()
+        if not samples:
+            QMessageBox.information(self, "No Dataset", "Select a dataset to copy.")
+            return
+
+        # Ensure datasets are saved before exporting
+        self.save_project_file()
+
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        preserve = settings.value(
+            "import_from_project_preserve_experiments", True, type=bool
+        )
+
+        root_temp_dir = tempfile.mkdtemp(prefix="vasods_clip_")
+        payload_entries = []
+        try:
+            for sample in samples:
+                ds_id = getattr(sample, "dataset_id", None)
+                if ds_id is None:
+                    continue
+                pkg_path = Path(root_temp_dir) / f"dataset_{ds_id}.vasods"
+                export_dataset_package(self.current_project.path, ds_id, pkg_path)
+                payload_entries.append(
+                    {
+                        "path": pkg_path.as_posix(),
+                        "dataset_id": ds_id,
+                        "dataset_name": sample.name or f"Dataset {ds_id}",
+                        "experiment": self._experiment_name_for_sample(sample),
+                    }
+                )
+        except Exception:
+            shutil.rmtree(root_temp_dir, ignore_errors=True)
+            raise
+
+        if not payload_entries:
+            shutil.rmtree(root_temp_dir, ignore_errors=True)
+            QMessageBox.warning(self, "Copy Failed", "No datasets were copied.")
+            return
+
+        payload = {
+            "version": 1,
+            "preserve": bool(preserve),
+            "source_project": self.current_project.path,
+            "temp_dir": root_temp_dir,
+            "entries": payload_entries,
+        }
+        mime_data_json = _json.dumps(payload)
+        mime = QMimeData()
+        mime.setData(_CLIP_MIME, mime_data_json.encode("utf-8"))
+        mime.setText(mime_data_json)
+        QApplication.clipboard().setMimeData(mime)
+        self.statusBar().showMessage(
+            f"\u2713 Copied {len(payload_entries)} dataset(s) to clipboard", 4000
+        )
+
+    def paste_datasets(self) -> None:
+        """Paste datasets from clipboard into the current project."""
+
+        if not self.current_project or not self.current_project.path:
+            QMessageBox.information(
+                self, "No Project", "Open or save a project before pasting datasets."
+            )
+            return
+
+        mime = QApplication.clipboard().mimeData()
+        raw = None
+        if mime and mime.hasFormat(_CLIP_MIME):
+            raw = bytes(mime.data(_CLIP_MIME)).decode("utf-8", errors="ignore")
+        elif mime and mime.hasText():
+            raw = mime.text()
+        if not raw:
+            QMessageBox.information(self, "Nothing to Paste", "Clipboard has no datasets.")
+            return
+        try:
+            payload = _json.loads(raw)
+        except Exception:
+            QMessageBox.warning(self, "Paste Failed", "Clipboard data is not valid.")
+            return
+
+        entries = payload.get("entries") or []
+        if not isinstance(entries, list) or not entries:
+            QMessageBox.information(self, "Nothing to Paste", "Clipboard has no datasets.")
+            return
+
+        preserve = bool(payload.get("preserve", True))
+        temp_dir = payload.get("temp_dir")
+        imported_ids: list[int] = []
+        dest_expanded = set()
+        failures: list[tuple[str, str]] = []
+
+        dest_exp = getattr(self, "current_experiment", None)
+        dest_name = dest_exp.name if dest_exp else None
+
+        self.save_project_file()
+
+        try:
+            for entry in entries:
+                pkg_path = entry.get("path")
+                if not pkg_path or not Path(pkg_path).exists():
+                    failures.append((entry.get("dataset_name") or "Dataset", "Package missing"))
+                    continue
+                source_exp = entry.get("experiment")
+                target_exp = source_exp if preserve else dest_name
+                if not target_exp:
+                    target_exp = source_exp or dest_name or "Imported"
+                try:
+                    new_id = import_dataset_package(
+                        self.current_project.path,
+                        pkg_path,
+                        target_experiment_name=target_exp,
+                    )
+                    imported_ids.append(int(new_id))
+                    if target_exp:
+                        dest_expanded.add(target_exp)
+                except Exception as exc:
+                    failures.append((entry.get("dataset_name") or "Dataset", str(exc)))
+        finally:
+            if temp_dir:
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                except Exception:
+                    log.debug("Failed to remove clipboard temp dir %s", temp_dir, exc_info=True)
+
+        if not imported_ids and failures:
+            detail = "\n".join(f"- {name}: {err}" for name, err in failures)
+            QMessageBox.critical(
+                self,
+                "Paste Failed",
+                f"No datasets were pasted.\n\nErrors:\n{detail}",
+            )
+            return
+
+        if imported_ids:
+            self.open_project_file(self.current_project.path)
+            if dest_expanded:
+                for name in dest_expanded:
+                    self._expand_experiment_in_tree(name)
+            self._select_dataset_ids(imported_ids)
+            self.statusBar().showMessage(
+                f"\u2713 Pasted {len(imported_ids)} dataset(s) from clipboard", 4000
+            )
+        if failures:
+            detail = "\n".join(f"- {name}: {err}" for name, err in failures)
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Paste Partial")
+            msg.setText(
+                f"Pasted {len(imported_ids)} dataset(s); {len(failures)} failed."
+            )
+            msg.setInformativeText("You can copy the details for support.")
+            copy_btn = msg.addButton("Copy details", QMessageBox.ActionRole)
+            msg.addButton(QMessageBox.Ok)
+            msg.setDetailedText(detail)
+            msg.exec_()
+            if msg.clickedButton() is copy_btn:
+                QApplication.clipboard().setText(detail)
+
     def _run_deferred_autosave(self):
         reason = self._pending_autosave_reason or "deferred"
         self._pending_autosave_reason = None
@@ -2904,6 +3381,34 @@ class VasoAnalyzerApp(QMainWindow):
             self._update_tree_icons_for_samples(samples)
             self.mark_session_dirty(reason="sample data quality updated")
 
+    def _select_dataset_ids(self, dataset_ids: Sequence[int]) -> None:
+        if not dataset_ids or not self.current_project:
+            return
+        target_set = {int(d) for d in dataset_ids if d is not None}
+        for exp in self.current_project.experiments:
+            for sample in exp.samples:
+                if getattr(sample, "dataset_id", None) in target_set:
+                    self.load_sample_into_view(sample)
+                        self._select_tree_item_for_sample(sample)
+                        return
+
+    def _expand_experiment_in_tree(self, exp_name: str) -> None:
+        if not self.project_tree:
+            return
+        tree = self.project_tree
+        for i in range(tree.topLevelItemCount()):
+            project_item = tree.topLevelItem(i)
+            if project_item is None:
+                continue
+            for j in range(project_item.childCount()):
+                exp_item = project_item.child(j)
+                if exp_item is None:
+                    continue
+                if exp_item.text(0) == exp_name:
+                    tree.expandItem(project_item)
+                    tree.expandItem(exp_item)
+                    return
+
     def _select_tree_item_for_sample(self, sample: SampleN | None) -> None:
         if sample is None or not self.project_tree:
             return
@@ -2928,6 +3433,24 @@ class VasoAnalyzerApp(QMainWindow):
                         tree.blockSignals(False)
                         tree.scrollToItem(sample_item)
                         return
+
+    def _selected_samples_from_tree(self) -> list[SampleN]:
+        if not self.project_tree:
+            return []
+        samples: list[SampleN] = []
+        for item in self.project_tree.selectedItems() or []:
+            obj = item.data(0, Qt.UserRole)
+            if isinstance(obj, SampleN) and obj not in samples:
+                samples.append(obj)
+        return samples
+
+    def _experiment_name_for_sample(self, sample: SampleN) -> str | None:
+        if not self.current_project:
+            return None
+        for exp in self.current_project.experiments:
+            if sample in exp.samples:
+                return exp.name
+        return None
 
     def _open_first_sample_if_none_active(self) -> None:
         if self.current_project is None:
@@ -9781,6 +10304,12 @@ QPushButton[isGhost="true"]:pressed {{
                 event_name = os.path.basename(str(event_file))
                 if "_table" in event_name.lower():
                     status_notes.append(f"Matched events: {event_name}")
+            for warn in import_meta.get("event_merge_warnings") or []:
+                status_notes.append(warn)
+            for skip in import_meta.get("event_skipped_paths") or []:
+                path = os.path.basename(skip.get("path", "events.csv"))
+                reason = skip.get("reason", "invalid")
+                status_notes.append(f"Skipped events {path}: {reason}")
 
             ignored = int(import_meta.get("ignored_out_of_range", 0) or 0)
             if ignored:

@@ -1,4 +1,4 @@
-# VasoAnalyzer v2.3.0
+# VasoAnalyzer v2.3.1
 
 **Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
 
@@ -156,6 +156,12 @@ project to regenerate views.
 - Later, double-click a `.vaso` or open from within the app to resume exactly
   where you left off (including plots, events, edit history, and figures).
 
+### 7. Import datasets between projects
+
+- Use **File → Import Dataset from Project…** to browse another `.vaso` project in read-only mode, select one or more datasets, and import them into your current project.
+- Optionally preserve the source experiment grouping or import everything into a single destination experiment.
+- Transfers use the portable `.vasods` dataset package format with validation and clear success/partial-failure reporting.
+
 ---
 
 ## 🧰 Supported Inputs (summary)
@@ -219,6 +225,14 @@ project to regenerate views.
 
 On first run you may see debug logging in the console; packaged builds typically
 suppress most of this.
+
+---
+
+## 💻 Installing on macOS (packaged build)
+
+- Build or download the `.app`, then move it into `/Applications` (helps Launch Services register file types).
+- In Finder, right-click a `.vaso` file → `Open With` → `VasoAnalyzer`, and enable **Always Open With**. This binds `.vaso` files to VasoAnalyzer so double-click opens the app instead of unzipping.
+- If icons/association still look wrong, run the app once from `/Applications` or refresh Launch Services (`lsregister -f /Applications/VasoAnalyzer*.app`).
 
 ---
 

@@ -53,7 +53,7 @@ log = logging.getLogger(__name__)
 
 def load_trace_and_events(
     trace_path: str | Sequence[str],
-    events_path: str | pd.DataFrame | None = None,
+    events_path: str | Sequence[str] | pd.DataFrame | None = None,
     *,
     cache: Any | None = None,
 ):
@@ -136,46 +136,112 @@ def load_trace_and_events(
             "merged_requested_paths", multi_paths
         )
 
+    # Segment map for merge-aware offsets
+    segment_map: dict[str, dict[str, object]] = {}
+    for seg in df.attrs.get("merged_segments", []) or []:
+        path = seg.get("path")
+        if path:
+            segment_map[str(path)] = seg
+
     events_df: pd.DataFrame | None = None
     ev_path: str | None = None
 
     event_source_label: str | None = None
+    event_merge_warnings: list[str] = []
+    event_skipped: list[dict[str, str]] = []
+    event_files: list[str] = []
+    # Tuples of (event_path, originating_trace_path|None)
+    candidate_event_paths: list[tuple[str, str | None]] = []
+
     if isinstance(events_path, pd.DataFrame):
         events_df = _standardize_headers(events_path.copy())
         event_source_label = "<DataFrame>"
+    elif isinstance(events_path, Sequence) and not isinstance(events_path, (str, os.PathLike)):
+        user_paths = [str(p) for p in events_path]
+        if multi_paths and len(user_paths) == len(multi_paths):
+            candidate_event_paths = list(zip(user_paths, multi_paths))
+        else:
+            candidate_event_paths = [(p, None) for p in user_paths]
     else:
         ev_path = events_path
         if ev_path:
-            event_source_label = ev_path
+            candidate_event_paths = [(str(ev_path), None)]
 
-    if ev_path is None and events_df is None:
-        ev_path = find_matching_event_file(primary_trace_path)
-        if ev_path:
-            extras["auto_detected"] = True
-            event_source_label = ev_path
+    if events_df is None and not candidate_event_paths:
+        # Auto-discover per trace segment (merge-aware)
+        if multi_paths:
+            for path in multi_paths:
+                match = find_matching_event_file(path)
+                if match:
+                    candidate_event_paths.append((match, path))
+            if candidate_event_paths:
+                extras["auto_detected"] = True
+        else:
+            ev_path = find_matching_event_file(primary_trace_path)
+            if ev_path:
+                candidate_event_paths.append((ev_path, primary_trace_path))
+                extras["auto_detected"] = True
 
-    if ev_path and os.path.exists(ev_path):
-        extras["event_file"] = ev_path
-        extras["events_original_filename"] = Path(ev_path).name
-        events_df = _read_event_dataframe(ev_path, cache=cache)
-        log.info(
-            "Import: Loaded events CSV %s with %d rows (columns=%s)",
-            ev_path,
-            len(events_df.index),
-            list(events_df.columns),
-        )
-    elif events_df is None:
+    if candidate_event_paths:
+        event_frames: list[pd.DataFrame] = []
+        for ev, trace_origin in candidate_event_paths:
+            if not os.path.exists(ev):
+                msg = f"Events file not found: {os.path.basename(ev)}"
+                event_merge_warnings.append(msg)
+                event_skipped.append({"path": ev, "reason": "missing file"})
+                log.warning(msg)
+                continue
+            try:
+                frame = _read_event_dataframe(ev, cache=cache)
+            except Exception as exc:
+                msg = f"Skipped events {os.path.basename(ev)}: {exc}"
+                event_merge_warnings.append(msg)
+                event_skipped.append({"path": ev, "reason": str(exc)})
+                log.warning(msg, exc_info=True)
+                continue
+
+            seg = (
+                segment_map.get(trace_origin or "")
+                or segment_map.get(ev)
+                or segment_map.get((trace_origin or "").replace("\\", "/"))
+            )
+            time_offset = float(seg.get("applied_time_offset", 0.0)) if seg else 0.0
+            frame_offset = int(seg.get("applied_frame_offset", 0)) if seg else 0
+            if "Frame" in frame.columns:
+                frame["Frame"] = pd.to_numeric(frame["Frame"], errors="coerce") + frame_offset
+            frame["__time_offset_seconds"] = time_offset
+            frame["__event_source"] = ev
+            event_frames.append(frame)
+            event_files.append(ev)
+
+        if event_frames:
+            events_df = pd.concat(event_frames, ignore_index=True, sort=False)
+            event_source_label = ", ".join(os.path.basename(p) for p in event_files)
+            ev_path = event_files[0]
+
+    if events_df is None:
         log.info(
             "Import: No separate events file for %s (using trace-only)", primary_trace_path
         )
         return df, [], [], None, [], [], extras
-    else:
-        log.info(
-            "Import: Loaded inline events table %s with %d rows (columns=%s)",
-            event_source_label or "(embedded)",
-            len(events_df.index),
-            list(events_df.columns),
-        )
+
+    if event_files and not ev_path:
+        ev_path = event_files[0]
+
+    extras["event_file"] = ev_path if isinstance(ev_path, str) else None
+    extras["event_files"] = event_files or ([ev_path] if ev_path else [])
+    extras["events_original_filename"] = (
+        Path(ev_path).name if isinstance(ev_path, str) else None
+    )
+    extras["event_merge_warnings"] = event_merge_warnings
+    extras["event_skipped_paths"] = event_skipped
+
+    log.info(
+        "Import: Loaded events table %s with %d rows (columns=%s)",
+        event_source_label or "(embedded)",
+        len(events_df.index),
+        list(events_df.columns),
+    )
 
     labels: list[str] = []
     times: list[float] = []
@@ -219,7 +285,7 @@ def load_trace_and_events(
     df.attrs["frame_number_to_trace_idx"] = frame_number_to_trace_idx
     df.attrs["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
 
-    def _coerce_time_values(series: pd.Series) -> pd.Series:
+    def _coerce_time_values(series: pd.Series, *, offsets: pd.Series | None = None) -> pd.Series:
         """Return ``series`` converted to seconds where possible."""
 
         numeric = pd.to_numeric(series, errors="coerce")
@@ -227,6 +293,12 @@ def load_trace_and_events(
         if mask.any():
             td = pd.to_timedelta(series.loc[mask], errors="coerce")
             numeric.loc[mask] = td.dt.total_seconds()
+        if offsets is not None:
+            try:
+                offsets_series = pd.to_numeric(offsets, errors="coerce").fillna(0.0)
+                numeric = numeric.add(offsets_series, fill_value=0.0)
+            except Exception:
+                pass
         return numeric.astype(float)
 
     def _map_frames_to_trace_time(frame_series: pd.Series) -> pd.Series:
@@ -287,7 +359,10 @@ def load_trace_and_events(
         frame_series = pd.to_numeric(working_df[frame_col], errors="coerce")
 
     time_series = (
-        _coerce_time_values(working_df[time_col])
+        _coerce_time_values(
+            working_df[time_col],
+            offsets=working_df.get("__time_offset_seconds"),
+        )
         if time_col
         else pd.Series(np.nan, index=working_df.index, dtype=float)
     )

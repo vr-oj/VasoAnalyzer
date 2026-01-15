@@ -578,19 +578,23 @@ class WelcomeGuideDialog(QDialog):
                 "Add event CSV/TXT for protocol markers and, optionally, a TIFF stack for snapshot/preview frames.",
             ),
             (
-                "4. Clean and annotate",
+                "4. Bring datasets from another project",
+                "Use File → Import Dataset from Project… to browse a source .vaso read-only, select one or more datasets, and import them—optionally preserving their original experiment grouping.",
+            ),
+            (
+                "5. Clean and annotate",
                 "Open the Point Editor to clean spikes and artefacts; edits are recorded in the project’s Edit History. Adjust event times and labels in the Events table.",
             ),
             (
-                "5. Adjust plots",
+                "6. Adjust plots",
                 "Use plot settings to tweak grid, axes, fonts, and event label appearance until the trace clearly communicates your experiment.",
             ),
             (
-                "6. Export tables and figures",
+                "7. Export tables and figures",
                 "Export event tables, use Excel Mapper to fill your lab templates, or build multi-panel figures with Figure Composer.",
             ),
             (
-                "7. Save and resume later",
+                "8. Save and resume later",
                 "Use Save Project to persist everything into the .vaso file so you can reopen it later and pick up exactly where you left off.",
             ),
         ):
