@@ -50,6 +50,7 @@ from PyQt5.QtCore import (
     QTimer,
     QUrl,
     pyqtSignal,
+    QMimeData,
 )
 from PyQt5.QtGui import (
     QColor,
@@ -81,7 +82,6 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QMimeData,
     QShortcut,
     QSizePolicy,
     QSplitter,
