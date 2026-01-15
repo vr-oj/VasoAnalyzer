@@ -903,6 +903,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._last_hover_time: float | None = None
         self._pending_plot_layout: dict | None = None
         self._pending_pyqtgraph_track_state: dict | None = None
+        self.trace_nav_bar = None
+        self.overview_strip = None
         self._plot_host_window_listener = None
         self._pending_sample_loads: dict[int, SampleN] = {}
         self._processing_pending_sample_loads = False
@@ -4241,6 +4243,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.ax2 = None
         self.outer_line = None
         self.trace_model = None
+        self._refresh_trace_navigation_data()
         if self.zoom_dock:
             self.zoom_dock.set_trace_model(None)
         if self.scope_dock:
@@ -6067,6 +6070,12 @@ class VasoAnalyzerApp(QMainWindow):
         zoom_sel_act.triggered.connect(self.zoom_to_selection)
         view_menu.addAction(zoom_sel_act)
 
+        goto_act = QAction("Go to Time…", self)
+        goto_act.setShortcut("Ctrl+G")
+        goto_act.triggered.connect(self.show_goto_time_dialog)
+        view_menu.addAction(goto_act)
+        self.action_goto_time = goto_act
+
         view_menu.addSeparator()
 
         anno_menu = view_menu.addMenu("Annotations")
@@ -6099,6 +6108,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.showhide_menu.addAction(snap_vw)
         self.snapshot_viewer_action = snap_vw
         self.event_table_action = evt_tbl
+
+        self._register_trace_nav_shortcuts()
 
         view_menu.addSeparator()
         self.action_use_pg_snapshot = QAction(
@@ -6721,9 +6732,123 @@ class VasoAnalyzerApp(QMainWindow):
             self.ylim_full = self.ax.get_ylim()
 
         if self.xlim_full is not None:
-            self._apply_time_window(self.xlim_full)
+        self._apply_time_window(self.xlim_full)
         self.ax.set_ylim(self.ylim_full)
         self.canvas.draw_idle()
+
+    def _register_trace_nav_shortcuts(self) -> None:
+        if getattr(self, "_trace_nav_shortcuts", None):
+            return
+        self._trace_nav_shortcuts: list[QAction] = []
+
+        def _add_action(label: str, shortcut: str, handler) -> None:
+            action = QAction(label, self)
+            action.setShortcut(shortcut)
+            action.setShortcutContext(Qt.WindowShortcut)
+            action.triggered.connect(handler)
+            self.addAction(action)
+            self._trace_nav_shortcuts.append(action)
+
+        _add_action("Jump to Start", "Home", self._jump_to_start)
+        _add_action("Jump to End", "End", self._jump_to_end)
+        _add_action("Previous Event", "[", lambda: self._jump_to_event(-1))
+        _add_action("Next Event", "]", lambda: self._jump_to_event(1))
+
+    def show_goto_time_dialog(self) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None:
+            return
+        full_range = (
+            plot_host.full_range() if hasattr(plot_host, "full_range") else None
+        )
+        current_window = (
+            plot_host.current_window() if hasattr(plot_host, "current_window") else None
+        )
+        if full_range is None and current_window is None:
+            return
+        cursor_available = self._time_cursor_time is not None
+
+        from vasoanalyzer.ui.dialogs.goto_time_dialog import GotoTimeDialog
+
+        dialog = GotoTimeDialog(
+            self,
+            full_range=full_range,
+            current_window=current_window,
+            cursor_available=cursor_available,
+        )
+        if not dialog.exec_():
+            return
+        time_value = dialog.time_value()
+        if time_value is None:
+            return
+        mode = dialog.mode()
+        if mode == "cursor":
+            self.jump_to_time(float(time_value), source="cursor")
+        else:
+            self.jump_to_time(float(time_value), source="manual")
+
+    def _jump_to_start(self) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "full_range"):
+            return
+        full_range = plot_host.full_range()
+        if full_range is None:
+            return
+        start, end = full_range
+        span = None
+        window = plot_host.current_window() if hasattr(plot_host, "current_window") else None
+        if window is not None:
+            span = window[1] - window[0]
+        if span is None or span <= 0 or span >= (end - start):
+            self._apply_time_window(full_range)
+            return
+        self._apply_time_window((start, start + span))
+
+    def _jump_to_end(self) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "full_range"):
+            return
+        full_range = plot_host.full_range()
+        if full_range is None:
+            return
+        start, end = full_range
+        span = None
+        window = plot_host.current_window() if hasattr(plot_host, "current_window") else None
+        if window is not None:
+            span = window[1] - window[0]
+        if span is None or span <= 0 or span >= (end - start):
+            self._apply_time_window(full_range)
+            return
+        self._apply_time_window((end - span, end))
+
+    def _jump_to_event(self, direction: int) -> None:
+        times = sorted(self._overview_event_times())
+        if not times:
+            return
+        plot_host = getattr(self, "plot_host", None)
+        current = self._time_cursor_time
+        if current is None:
+            window = plot_host.current_window() if plot_host is not None else None
+            if window is not None:
+                current = 0.5 * (window[0] + window[1])
+            else:
+                current = times[0]
+        idx = 0
+        if direction > 0:
+            for i, t in enumerate(times):
+                if t > current:
+                    idx = i
+                    break
+            else:
+                return
+        else:
+            for i in range(len(times) - 1, -1, -1):
+                if times[i] < current:
+                    idx = i
+                    break
+            else:
+                return
+        self.jump_to_time(float(times[idx]), from_event=True, source="event")
 
     def reset_view(self, checked: bool = False):
         """Reset view to full extent.
@@ -7231,6 +7356,7 @@ class VasoAnalyzerApp(QMainWindow):
         else:
             self.event_text_objects = []
             self._apply_current_style()
+        self._refresh_overview_events()
         return
 
     def _apply_event_rows_to_current_sample(self, rows: list[tuple]) -> None:
@@ -8408,6 +8534,14 @@ class VasoAnalyzerApp(QMainWindow):
         if plot_host is not None and hasattr(plot_host, "apply_theme"):
             with contextlib.suppress(Exception):
                 plot_host.apply_theme()
+        nav = getattr(self, "trace_nav_bar", None)
+        if nav is not None and hasattr(nav, "apply_theme"):
+            with contextlib.suppress(Exception):
+                nav.apply_theme()
+        overview = getattr(self, "overview_strip", None)
+        if overview is not None and hasattr(overview, "apply_theme"):
+            with contextlib.suppress(Exception):
+                overview.apply_theme()
 
         for dock_name in (
             "layout_dock",
@@ -11319,6 +11453,7 @@ QPushButton[isGhost="true"]:pressed {{
             self._sync_event_controls()
             self._update_trace_controls_state()
         self._maybe_prompt_event_review()
+        self._refresh_overview_events()
 
         sample = getattr(self, "current_sample", None)
         sample_name = getattr(sample, "name", getattr(sample, "label", "N/A"))
@@ -12885,6 +13020,7 @@ QPushButton[isGhost="true"]:pressed {{
             # Apply plot style (defaults on first load) - defer draw to avoid redundant redraws
             self.apply_plot_style(self.get_current_plot_style(), persist=False, draw=False)
             self._apply_pending_pyqtgraph_track_state()
+            self._refresh_trace_navigation_data()
             self.canvas.draw_idle()
 
             # Cache the current window for this dataset to avoid re-autoscaling on next load
@@ -12999,6 +13135,85 @@ QPushButton[isGhost="true"]:pressed {{
         finally:
             self._syncing_time_window = False
 
+    def _on_trace_nav_window_requested(self, x0: float, x1: float) -> None:
+        self._apply_time_window((x0, x1))
+        self.mark_session_dirty(reason="view range changed")
+
+    def _trace_full_range(self) -> tuple[float, float] | None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "full_range"):
+            with contextlib.suppress(Exception):
+                full = plot_host.full_range()
+                if full is not None:
+                    return float(full[0]), float(full[1])
+        if self.trace_model is not None:
+            try:
+                return self.trace_model.full_range
+            except Exception:
+                pass
+        if self.trace_data is not None and "Time (s)" in self.trace_data.columns:
+            series = self.trace_data["Time (s)"]
+            with contextlib.suppress(Exception):
+                return float(series.min()), float(series.max())
+        return None
+
+    def _set_trace_navigation_visible(self, visible: bool) -> None:
+        nav = getattr(self, "trace_nav_bar", None)
+        overview = getattr(self, "overview_strip", None)
+        for widget in (nav, overview):
+            if widget is None:
+                continue
+            widget.setVisible(bool(visible))
+            widget.setEnabled(bool(visible))
+
+    def _overview_event_times(self) -> list[float]:
+        rows = list(getattr(self, "event_table_data", []) or [])
+        times: list[float] = []
+        if rows:
+            for row in rows:
+                if len(row) < 2:
+                    continue
+                try:
+                    t_val = float(row[1])
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(t_val):
+                    times.append(t_val)
+            return times
+        times = [float(t) for t in getattr(self, "event_times", []) or [] if t is not None]
+        return [t for t in times if math.isfinite(t)]
+
+    def _refresh_overview_events(self) -> None:
+        overview = getattr(self, "overview_strip", None)
+        if overview is None:
+            return
+        overview.set_events(self._overview_event_times())
+
+    def _refresh_trace_navigation_data(self) -> None:
+        nav = getattr(self, "trace_nav_bar", None)
+        overview = getattr(self, "overview_strip", None)
+        if nav is None or overview is None:
+            return
+
+        full_range = self._trace_full_range()
+        if self.trace_model is None or full_range is None:
+            nav.set_full_range(None, None)
+            nav.set_time_window(None, None)
+            overview.clear()
+            self._set_trace_navigation_visible(False)
+            return
+
+        nav.set_full_range(*full_range)
+        overview.set_trace_model(self.trace_model)
+        overview.set_full_range(*full_range)
+        plot_host = getattr(self, "plot_host", None)
+        window = plot_host.current_window() if plot_host is not None else None
+        if window is not None:
+            nav.set_time_window(window[0], window[1])
+            overview.set_time_window(window[0], window[1])
+        self._refresh_overview_events()
+        self._set_trace_navigation_visible(True)
+
     def _plot_host_is_pyqtgraph(self) -> bool:
         plot_host = getattr(self, "plot_host", None)
         is_pg = bool(
@@ -13029,6 +13244,12 @@ QPushButton[isGhost="true"]:pressed {{
             self.sync_slider_with_plot()
         except Exception:
             log.exception("Failed to synchronize scroll slider with plot window")
+        nav = getattr(self, "trace_nav_bar", None)
+        if nav is not None:
+            nav.set_time_window(x0, x1)
+        overview = getattr(self, "overview_strip", None)
+        if overview is not None:
+            overview.set_time_window(x0, x1)
         self._invalidate_sample_state_cache()
         plot_host = getattr(self, "plot_host", None)
         is_user_range = bool(
@@ -15670,6 +15891,7 @@ QPushButton[isGhost="true"]:pressed {{
         self.ax2 = None
         self.outer_line = None
         self.trace_model = None
+        self._refresh_trace_navigation_data()
         if self.zoom_dock:
             self.zoom_dock.set_trace_model(None)
         if self.scope_dock:
@@ -15948,6 +16170,8 @@ QPushButton[isGhost="true"]:pressed {{
     def rebuild_default_main_layout(self):
         for widget in (
             getattr(self, "trace_widget", None),
+            getattr(self, "trace_nav_bar", None),
+            getattr(self, "overview_strip", None),
             self.scroll_slider,
             self.snapshot_label,
             self.slider,
@@ -15966,6 +16190,10 @@ QPushButton[isGhost="true"]:pressed {{
         plot_container_layout = QVBoxLayout(plot_container)
         plot_container_layout.setContentsMargins(14, 14, 14, 14)
         plot_container_layout.setSpacing(6)
+        if getattr(self, "trace_nav_bar", None) is not None:
+            plot_container_layout.addWidget(self.trace_nav_bar)
+        if getattr(self, "overview_strip", None) is not None:
+            plot_container_layout.addWidget(self.overview_strip)
         plot_container_layout.addWidget(self.trace_widget)
         plot_container_layout.addWidget(self.scroll_slider)
         plot_panel_layout.addWidget(plot_container)

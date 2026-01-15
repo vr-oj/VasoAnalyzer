@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import QApplication
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
-from vasoanalyzer.ui.plots.pan_only_viewbox import PanOnlyViewBox
+from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
@@ -52,9 +52,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._explicit_ylabel = y_label
         self._enable_opengl = enable_opengl
 
-        # Create custom ViewBox that handles scroll as horizontal pan (not zoom)
+        # Create custom ViewBox that handles smooth horizontal pan (not zoom)
         # This is the single source of truth for scroll behavior
-        view_box = PanOnlyViewBox(enableMenu=False)
+        view_box = SmoothPanViewBox(enableMenu=False)
         view_box.setMouseEnabled(x=True, y=False)  # Horizontal interactions only
         view_box.setMouseMode(view_box.PanMode)  # Default: grab to pan horizontally
         self._mouse_mode: str = "pan"
@@ -143,7 +143,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if scene is not None:
             scene.sigMouseClicked.connect(self._handle_mouse_clicked)
 
-    def view_box(self) -> PanOnlyViewBox:
+    def view_box(self) -> SmoothPanViewBox:
         """Return the underlying ViewBox for this trace view."""
         return self._view_box
 

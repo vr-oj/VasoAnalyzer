@@ -26,6 +26,8 @@ from vasoanalyzer.ui.interactions import InteractionController
 from vasoanalyzer.ui.panels.home_page import HomePage
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.mpl_interactions import MplInteractionHost
+from vasoanalyzer.ui.plots.overview_strip import OverviewStrip
+from vasoanalyzer.ui.plots.professional_nav_bar import ProfessionalNavigationBar
 from vasoanalyzer.ui.plots.renderer_factory import create_plot_host
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -111,6 +113,17 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         target_mouse_widget.installEventFilter(window._pg_leave_filter)
     if not use_pyqtgraph:
         window.canvas.toolbar = None
+
+    window.trace_nav_bar = ProfessionalNavigationBar(window)
+    window.overview_strip = OverviewStrip(window)
+    window.trace_nav_bar.timeWindowRequested.connect(
+        window._on_trace_nav_window_requested
+    )
+    window.overview_strip.timeWindowRequested.connect(
+        window._on_trace_nav_window_requested
+    )
+    window.trace_nav_bar.setVisible(False)
+    window.overview_strip.setVisible(False)
     initial_specs = [
         ChannelTrackSpec(
             track_id="inner",
