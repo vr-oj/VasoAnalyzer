@@ -87,8 +87,11 @@ class OverviewStrip(QFrame):
 
         region_brush = pg.mkBrush(color=self._alpha_color(accent, 0.25))
         region_pen = pg.mkPen(color=accent, width=1)
-        self._region.setBrush(region_brush)
-        self._region.setPen(region_pen)
+        with contextlib.suppress(Exception):
+            self._region.setBrush(region_brush)
+        for line in getattr(self._region, "lines", []):
+            with contextlib.suppress(Exception):
+                line.setPen(region_pen)
 
         for line in self._event_lines:
             line.setPen(pg.mkPen(color=event_line, width=1))
