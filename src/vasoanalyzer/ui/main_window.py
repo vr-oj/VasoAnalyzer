@@ -3391,8 +3391,8 @@ class VasoAnalyzerApp(QMainWindow):
             for sample in exp.samples:
                 if getattr(sample, "dataset_id", None) in target_set:
                     self.load_sample_into_view(sample)
-                        self._select_tree_item_for_sample(sample)
-                        return
+                    self._select_tree_item_for_sample(sample)
+                    return
 
     def _expand_experiment_in_tree(self, exp_name: str) -> None:
         if not self.project_tree:
