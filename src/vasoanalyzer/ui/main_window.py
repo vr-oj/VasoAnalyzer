@@ -6732,7 +6732,7 @@ class VasoAnalyzerApp(QMainWindow):
             self.ylim_full = self.ax.get_ylim()
 
         if self.xlim_full is not None:
-        self._apply_time_window(self.xlim_full)
+            self._apply_time_window(self.xlim_full)
         self.ax.set_ylim(self.ylim_full)
         self.canvas.draw_idle()
 
