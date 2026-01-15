@@ -6749,8 +6749,14 @@ class VasoAnalyzerApp(QMainWindow):
             self.addAction(action)
             self._trace_nav_shortcuts.append(action)
 
-        _add_action("Jump to Start", "Home", self._jump_to_start)
-        _add_action("Jump to End", "End", self._jump_to_end)
+        zoom_all = QAction("Zoom to All (X)", self)
+        zoom_all.setShortcuts([QKeySequence("Ctrl+0"), QKeySequence("Home")])
+        zoom_all.setShortcutContext(Qt.WindowShortcut)
+        zoom_all.triggered.connect(self._zoom_all_x)
+        self.addAction(zoom_all)
+        self._trace_nav_shortcuts.append(zoom_all)
+        self.actZoomAllX = zoom_all
+
         _add_action("Previous Event", "[", lambda: self._jump_to_event(-1))
         _add_action("Next Event", "]", lambda: self._jump_to_event(1))
 
@@ -6849,6 +6855,16 @@ class VasoAnalyzerApp(QMainWindow):
             else:
                 return
         self.jump_to_time(float(times[idx]), from_event=True, source="event")
+
+    def _zoom_all_x(self) -> None:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "full_range"):
+            full = plot_host.full_range()
+            if full is not None:
+                self._apply_time_window(full)
+                return
+        if self.xlim_full is not None:
+            self._apply_time_window(self.xlim_full)
 
     def reset_view(self, checked: bool = False):
         """Reset view to full extent.

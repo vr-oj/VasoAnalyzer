@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QIcon, QKeySequence
-from PyQt5.QtWidgets import QAction
+from PyQt5.QtWidgets import QAction, QMenu, QToolButton
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
@@ -56,7 +56,8 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
     else:
         _build_matplotlib_plot_toolbar(window, canvas, plot_host, toolbar)
 
-    _add_shared_plot_actions(window, toolbar, is_pyqtgraph=is_pyqtgraph)
+    _add_shared_plot_actions(window, toolbar, is_pyqtgraph=is_pyqtgraph, add_to_toolbar=False)
+    _add_view_overflow_menu(window, toolbar, is_pyqtgraph=is_pyqtgraph)
     window._ensure_event_label_actions()
     window._sync_event_controls()
     window._sync_grid_action()
@@ -66,6 +67,10 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
         log.debug("[THEME-DEBUG] PlotToolbar.apply_theme called, id(self)=%s", id(toolbar))
         _apply_toolbar_styles(toolbar)
         _reassign_toolbar_icons(toolbar, window)
+        view_button = getattr(toolbar, "_view_menu_button", None)
+        if view_button is not None:
+            with contextlib.suppress(Exception):
+                view_button.setIcon(QIcon(window.icon_path("plot-settings.svg")))
         try:
             from .. import theme as theme_module
 
@@ -138,9 +143,9 @@ def _build_matplotlib_plot_toolbar(
         pan_act.setCheckable(True)
 
     if zoom_act:
-        zoom_act.setText("Zoom")
+        zoom_act.setText("Select")
         zoom_act.setToolTip(
-            "<b>Zoom</b> <kbd>Z</kbd><br><br>"
+            "<b>Select</b> <kbd>Z</kbd><br><br>"
             "Drag a rectangle to zoom in.<br>"
             "Press <kbd>Esc</kbd> to exit zoom mode."
         )
@@ -157,15 +162,7 @@ def _build_matplotlib_plot_toolbar(
     window.actForward = forward_act
     window.actPan = pan_act
     window.actZoom = zoom_act
-
-    if window.actReset:
-        toolbar.addAction(window.actReset)
-    if window.actBack:
-        toolbar.addAction(window.actBack)
-    if window.actForward:
-        toolbar.addAction(window.actForward)
-
-    toolbar.addSeparator()
+    window.actZoomBack = back_act
 
     if window.actPan:
         toolbar.addAction(window.actPan)
@@ -179,8 +176,6 @@ def _build_matplotlib_plot_toolbar(
         with contextlib.suppress(Exception):
             action.toggled.disconnect(window._handle_nav_mode_toggled)
         action.toggled.connect(window._handle_nav_mode_toggled)
-
-    toolbar.addSeparator()
 
 
 def _build_pyqtgraph_plot_toolbar(
@@ -207,11 +202,11 @@ def _build_pyqtgraph_plot_toolbar(
     window.actPgPan.toggled.connect(window._handle_nav_mode_toggled)
     toolbar.addAction(window.actPgPan)
 
-    window.actBoxZoom = QAction(QIcon(window.icon_path("Zoom.svg")), "Box Zoom", window)
+    window.actBoxZoom = QAction(QIcon(window.icon_path("Zoom.svg")), "Select", window)
     window.actBoxZoom.setCheckable(True)
     window.actBoxZoom.setShortcut(QKeySequence("Z"))
     window.actBoxZoom.setToolTip(
-        "<b>Box Zoom</b> <kbd>Z</kbd><br><br>"
+        "<b>Select</b> <kbd>Z</kbd><br><br>"
         "Drag a rectangle to zoom in along time.<br>"
         "Press <kbd>Esc</kbd> or toggle off to return to pan."
     )
@@ -230,7 +225,6 @@ def _build_pyqtgraph_plot_toolbar(
         "Increases magnification 2x."
     )
     window.actZoomIn.triggered.connect(window._on_zoom_in_triggered)
-    toolbar.addAction(window.actZoomIn)
 
     window.actZoomOut = QAction(QIcon(window.icon_path("ZoomOut.svg")), "Zoom Out", window)
     window.actZoomOut.setShortcut(QKeySequence("-"))
@@ -240,7 +234,6 @@ def _build_pyqtgraph_plot_toolbar(
         "Decreases magnification 2x."
     )
     window.actZoomOut.triggered.connect(window._on_zoom_out_triggered)
-    toolbar.addAction(window.actZoomOut)
 
     window.actZoomBack = QAction(QIcon(window.icon_path("Back.svg")), "Zoom Back", window)
     window.actZoomBack.setShortcut(QKeySequence("Backspace"))
@@ -250,7 +243,6 @@ def _build_pyqtgraph_plot_toolbar(
         "Returns to previous view state."
     )
     window.actZoomBack.triggered.connect(window._on_zoom_back_triggered)
-    toolbar.addAction(window.actZoomBack)
 
     window.actAutoscale = QAction(QIcon(window.icon_path("autoscale.svg")), "Autoscale", window)
     window.actAutoscale.setShortcut(QKeySequence("A"))
@@ -260,7 +252,6 @@ def _build_pyqtgraph_plot_toolbar(
         "Shows all data in view."
     )
     window.actAutoscale.triggered.connect(window._on_autoscale_triggered)
-    toolbar.addAction(window.actAutoscale)
 
     window.actAutoscaleY = QAction(
         QIcon(window.icon_path("y-autoscale.svg")), "Y-Axis Autoscale", window
@@ -275,13 +266,14 @@ def _build_pyqtgraph_plot_toolbar(
     )
     window.actAutoscaleY.triggered.connect(window._on_autoscale_y_triggered)
     window._sync_autoscale_y_action_from_host()
-    toolbar.addAction(window.actAutoscaleY)
-
-    toolbar.addSeparator()
 
 
 def _add_shared_plot_actions(
-    window: VasoAnalyzerApp, toolbar: CustomToolbar, *, is_pyqtgraph: bool
+    window: VasoAnalyzerApp,
+    toolbar: CustomToolbar,
+    *,
+    is_pyqtgraph: bool,
+    add_to_toolbar: bool = True,
 ) -> None:
     """Add actions common to both backends."""
 
@@ -297,7 +289,8 @@ def _add_shared_plot_actions(
     with contextlib.suppress(Exception):
         window.actGrid.triggered.disconnect(window._on_grid_action_triggered)
     window.actGrid.triggered.connect(window._on_grid_action_triggered)
-    toolbar.addAction(window.actGrid)
+    if add_to_toolbar:
+        toolbar.addAction(window.actGrid)
 
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
     if is_pyqtgraph:
@@ -318,7 +311,8 @@ def _add_shared_plot_actions(
         with contextlib.suppress(Exception):
             window.actStyle.triggered.disconnect()
         window.actStyle.triggered.connect(lambda: window.open_unified_plot_settings_dialog("style"))
-    toolbar.addAction(window.actStyle)
+    if add_to_toolbar:
+        toolbar.addAction(window.actStyle)
 
     window.actEditPoints = QAction(
         QIcon(window.icon_path("tour-pencil.svg")),
@@ -333,7 +327,57 @@ def _add_shared_plot_actions(
     )
     window.actEditPoints.setEnabled(False)
     window.actEditPoints.triggered.connect(window._on_edit_points_triggered)
-    toolbar.addAction(window.actEditPoints)
+    if add_to_toolbar:
+        toolbar.addAction(window.actEditPoints)
+
+
+def _add_view_overflow_menu(
+    window: VasoAnalyzerApp, toolbar: CustomToolbar, *, is_pyqtgraph: bool
+) -> None:
+    """Attach overflow View menu with secondary actions."""
+
+    view_menu = QMenu(toolbar)
+
+    zoom_all = getattr(window, "actZoomAllX", None)
+    if zoom_all is None:
+        zoom_all = QAction(QIcon(window.icon_path("Home.svg")), "Zoom to All (X)", window)
+        zoom_all.triggered.connect(window._zoom_all_x)
+        window.actZoomAllX = zoom_all
+    view_menu.addAction(zoom_all)
+
+    for action in (
+        getattr(window, "actZoomIn", None),
+        getattr(window, "actZoomOut", None),
+        getattr(window, "actZoomBack", None),
+    ):
+        if action is not None:
+            view_menu.addAction(action)
+
+    view_menu.addSeparator()
+
+    for action in (
+        getattr(window, "actAutoscale", None),
+        getattr(window, "actAutoscaleY", None),
+        getattr(window, "actGrid", None),
+        getattr(window, "actStyle", None),
+    ):
+        if action is not None:
+            view_menu.addAction(action)
+
+    edit_points = getattr(window, "actEditPoints", None)
+    if edit_points is not None:
+        view_menu.addSeparator()
+        view_menu.addAction(edit_points)
+
+    view_button = QToolButton(toolbar)
+    view_button.setObjectName("PlotToolbarViewMenu")
+    view_button.setText("View")
+    view_button.setIcon(QIcon(window.icon_path("plot-settings.svg")))
+    view_button.setPopupMode(QToolButton.InstantPopup)
+    view_button.setMenu(view_menu)
+    view_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+    toolbar.addWidget(view_button)
+    toolbar._view_menu_button = view_button
 
 
 def _apply_toolbar_styles(toolbar: CustomToolbar) -> None:
@@ -397,6 +441,7 @@ def _reassign_toolbar_icons(toolbar: CustomToolbar, window: VasoAnalyzerApp) -> 
         getattr(window, "actZoomIn", None): "Zoom.svg",
         getattr(window, "actZoomOut", None): "ZoomOut.svg",
         getattr(window, "actZoomBack", None): "Back.svg",
+        getattr(window, "actZoomAllX", None): "Home.svg",
         getattr(window, "actAutoscale", None): "autoscale.svg",
         getattr(window, "actAutoscaleY", None): "y-autoscale.svg",
         getattr(window, "actPgPan", None): "Pan.svg",

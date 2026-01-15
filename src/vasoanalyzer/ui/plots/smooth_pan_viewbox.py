@@ -112,6 +112,12 @@ class SmoothPanViewBox(PanOnlyViewBox):
                 angle_delta = ev.delta()
             except Exception:
                 angle_delta = 0
+        if angle_delta == 0:
+            try:
+                pixel_delta = ev.pixelDelta().y()
+            except Exception:
+                pixel_delta = 0
+            angle_delta = pixel_delta
 
         if angle_delta == 0:
             ev.accept()
@@ -123,12 +129,19 @@ class SmoothPanViewBox(PanOnlyViewBox):
             ev.accept()
             return
 
-        direction = -1 if angle_delta > 0 else 1
-        shift = direction * 0.10 * span
-        moved = self._apply_pan(shift)
-        if moved:
-            self._update_velocity_from_shift(shift)
-            self._start_momentum()
+        zoom_in = angle_delta > 0
+        factor = 0.9 if zoom_in else 1.1
+        new_span = span * factor
+        if self._min_x_range is not None:
+            new_span = max(new_span, float(self._min_x_range))
+        if self._max_x_range is not None:
+            new_span = min(new_span, float(self._max_x_range))
+
+        center = 0.5 * (x_min + x_max)
+        new_x_min = center - new_span * 0.5
+        new_x_max = center + new_span * 0.5
+        new_x_min, new_x_max = self._clamp_x_range(new_x_min, new_x_max)
+        self.setXRange(new_x_min, new_x_max, padding=0.0, update=True)
 
         try:
             self.sigWheelEvent.emit(ev)
