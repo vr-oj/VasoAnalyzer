@@ -206,7 +206,13 @@ class VasoAnalyzerLauncher:
 
     # ------------------------------------------------------------------
     def run(self) -> None:
-        sys.exit(self.app.exec_())
+        exit_code = self.app.exec_()
+        if sys.platform == "darwin":
+            try:
+                logging.shutdown()
+            finally:
+                os._exit(exit_code)
+        sys.exit(exit_code)
 
 
 __all__ = ["VasoAnalyzerLauncher"]

@@ -4170,6 +4170,14 @@ class VasoAnalyzerApp(QMainWindow):
             load_async = bool(
                 (repo or project_path) and (needs_trace or needs_events or needs_results)
             )
+            force_sync = os.environ.get("VA_FORCE_SYNC_LOAD", "0") == "1"
+            if force_sync:
+                if load_async:
+                    log.info(
+                        "VA_FORCE_SYNC_LOAD=1: forcing synchronous dataset load for sample '%s'",
+                        sample.name,
+                    )
+                load_async = False
 
             log.info(
                 "DATASET_LOAD: sample='%s' dataset_id=%s cached=(trace=%s, events=%s) "
@@ -9098,7 +9106,7 @@ class VasoAnalyzerApp(QMainWindow):
             button.setProperty("isSecondary", True)
         else:
             button.setProperty("isGhost", True)
-        button.clicked.connect(callback)
+        button.clicked.connect(lambda _checked=False: callback())
         self._apply_button_style(button)
         return button
 
@@ -9265,7 +9273,7 @@ QPushButton[isGhost="true"]:pressed {{
         open_btn.setProperty("isGhost", True)
         open_btn.setMinimumHeight(36)
         open_btn.setToolTip(path)
-        open_btn.clicked.connect(open_callback)
+        open_btn.clicked.connect(lambda _checked=False: open_callback())
         self._apply_button_style(open_btn)
         row_layout.addWidget(open_btn, 1)
 
@@ -9276,7 +9284,7 @@ QPushButton[isGhost="true"]:pressed {{
         remove_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
         remove_btn.setText("Remove")
         remove_btn.setToolTip(f"Remove {path}")
-        remove_btn.clicked.connect(remove_callback)
+        remove_btn.clicked.connect(lambda _checked=False: remove_callback())
         row_layout.addWidget(remove_btn, 0, Qt.AlignRight)
 
         return row

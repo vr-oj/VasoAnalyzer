@@ -7,8 +7,14 @@
 
 from __future__ import annotations
 
+import os
 import logging
 import sys
+
+if os.environ.get("VA_FAULTHANDLER", "1") != "0":
+    import faulthandler
+
+    faulthandler.enable()
 
 from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
 from vasoanalyzer.core.logging_config import setup_production_logging
