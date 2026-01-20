@@ -122,6 +122,7 @@ from vasoanalyzer.export.profiles import (
 )
 from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.core.trace_model import TraceModel
+from vasoanalyzer.core.timebase import derive_tiff_page_times, page_for_time
 from vasoanalyzer.io.events import find_matching_event_file, load_events
 from vasoanalyzer.io.tiffs import load_tiff, resolve_frame_times
 from vasoanalyzer.io.trace_events import load_trace_and_events
@@ -177,7 +178,6 @@ from vasoanalyzer.ui.snapshot_viewer import (
     SnapshotViewerWidget,
 )
 from vasoanalyzer.ui.snapshot_viewer.snapshot_data_source import SnapshotStackDataSource
-from vasoanalyzer.ui.snapshot_viewer.snapshot_perf import log_perf, perf_enabled
 from vasoanalyzer.ui.theme import (
     CURRENT_THEME,
     css_rgba_to_mpl,
@@ -728,6 +728,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.frame_numbers: np.ndarray | None = None
         self.frame_number_to_trace_idx: dict[int, int] = {}
         self.tiff_page_to_trace_idx: dict[int, int] = {}
+        self.tiff_page_times: list[float] = []
+        self.tiff_page_times_valid: bool = False
+        self.snapshot_interval_median: float | None = None
         self.frame_trace_time: np.ndarray | None = None
         self.frame_trace_index: np.ndarray | None = None
         self.frame_trace_indices = []
@@ -739,11 +742,18 @@ class VasoAnalyzerApp(QMainWindow):
         self.snapshot_frame_stride: int = 1
         self.snapshot_total_frames: int | None = None
         self.current_frame = 0
-        self.snapshot_speed_multiplier = 1.0
+        self.current_page = 0
+        self.page_float = 0.0
+        self._snapshot_pps_default = self._resolve_snapshot_pps_default()
+        self.snapshot_pps = float(self._snapshot_pps_default)
+        self.snapshot_sync_enabled = True
         self._snapshot_play_start_wall_time: float | None = None
         self._snapshot_play_start_frame_index: int = 0
         self._snapshot_last_rendered_frame: int | None = None
-        self._snapshot_play_fps: float | None = None
+        self._snapshot_ui_tick_hz: float | None = None
+        self._snapshot_playback_last_tick_time: float | None = None
+        self._snapshot_play_time_s: float | None = None
+        self._snapshot_playback_last_log_time: float | None = None
         self.event_labels = []
         self.event_times = []
         self.event_frames = []
@@ -3917,7 +3927,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.next_frame_btn.setEnabled(False)
         self.play_pause_btn.setEnabled(False)
         self.snapshot_speed_label.setEnabled(False)
-        self.snapshot_speed_combo.setEnabled(False)
+        self.snapshot_speed_input.setEnabled(False)
+        if hasattr(self, "snapshot_speed_units_label"):
+            self.snapshot_speed_units_label.setEnabled(False)
+        if hasattr(self, "snapshot_sync_checkbox"):
+            self.snapshot_sync_checkbox.setEnabled(False)
+            self.snapshot_sync_checkbox.blockSignals(True)
+            self.snapshot_sync_checkbox.setChecked(False)
+            self.snapshot_sync_checkbox.blockSignals(False)
         self._reset_snapshot_speed()
         self.metadata_details_label.setText("No metadata available.")
         self._clear_event_highlight()
@@ -9353,6 +9370,9 @@ QPushButton[isGhost="true"]:pressed {{
         self.frame_numbers = None
         self.frame_number_to_trace_idx = {}
         self.tiff_page_to_trace_idx = {}
+        self.tiff_page_times = []
+        self.tiff_page_times_valid = False
+        self.snapshot_interval_median = None
         self.frame_trace_time = None
         self.frame_trace_index = None
         self.trace_time_exact = None
@@ -9384,6 +9404,14 @@ QPushButton[isGhost="true"]:pressed {{
         if "TiffPage" in self.trace_data.columns:
             try:
                 tiff_series = pd.to_numeric(self.trace_data["TiffPage"], errors="coerce")
+                if "Saved" in self.trace_data.columns:
+                    saved_mask = (
+                        pd.to_numeric(self.trace_data["Saved"], errors="coerce")
+                        .fillna(0)
+                        .to_numpy()
+                        > 0
+                    )
+                    tiff_series = tiff_series.where(saved_mask)
                 self.tiff_page_to_trace_idx = {
                     int(tp): int(i)
                     for i, tp in enumerate(tiff_series.to_numpy())
@@ -9391,6 +9419,66 @@ QPushButton[isGhost="true"]:pressed {{
                 }
             except Exception:
                 log.debug("Unable to build TIFF page→trace mapping", exc_info=True)
+
+        self._refresh_tiff_page_times()
+
+    def _refresh_tiff_page_times(self, *, expected_page_count: int | None = None) -> None:
+        """Derive canonical TIFF page times from trace data when available."""
+
+        self.tiff_page_times = []
+        self.tiff_page_times_valid = False
+        self.snapshot_interval_median = None
+
+        if self.trace_data is None:
+            return
+
+        sample = getattr(self, "current_sample", None)
+        result = derive_tiff_page_times(
+            self.trace_data, expected_page_count=expected_page_count
+        )
+        self.tiff_page_times = result.tiff_page_times
+        self.tiff_page_times_valid = bool(result.valid)
+        self.snapshot_interval_median = result.median_interval_s
+
+        if not result.tiff_page_times and sample is not None:
+            meta = dict(sample.import_metadata or {})
+            timebase_block = dict(meta.get("timebase") or {})
+            tiff_block = dict(timebase_block.get("tiff") or {})
+            stored_times = tiff_block.get("tiff_page_times")
+            if isinstance(stored_times, list) and stored_times:
+                self.tiff_page_times = stored_times
+                self.tiff_page_times_valid = bool(
+                    tiff_block.get("tiff_page_times_valid", False)
+                )
+                stored_median = tiff_block.get("snapshot_interval_median_s")
+                if stored_median is not None:
+                    self.snapshot_interval_median = float(stored_median)
+
+        if result.warnings:
+            for warning in result.warnings:
+                log.warning("TIFF page time mapping: %s", warning)
+
+        self._update_snapshot_sync_toggle()
+
+        if sample is None:
+            return
+
+        meta = dict(sample.import_metadata or {})
+        timebase_block = dict(meta.get("timebase") or {})
+        tiff_block = dict(timebase_block.get("tiff") or {})
+        if result.tiff_page_times:
+            tiff_block["tiff_page_times"] = result.tiff_page_times
+            tiff_block["tiff_page_times_valid"] = bool(result.valid)
+            tiff_block["tiff_page_time_warnings"] = list(result.warnings)
+            tiff_block["snapshot_interval_median_s"] = (
+                float(result.median_interval_s) if result.median_interval_s is not None else None
+            )
+            tiff_block["tiff_page_time_column"] = result.time_column
+        elif "tiff_page_times" not in tiff_block:
+            tiff_block["tiff_page_times"] = None
+        timebase_block["tiff"] = tiff_block
+        meta["timebase"] = timebase_block
+        sample.import_metadata = meta
 
     def _get_trace_model_for_sample(self, sample: SampleN | None) -> TraceModel:
         """Return a TraceModel for the current trace_data, using a per-dataset cache."""
@@ -10864,11 +10952,7 @@ QPushButton[isGhost="true"]:pressed {{
         self.frame_trace_time = None
         self.frame_times = []
 
-        if (
-            self.trace_data is None
-            or "TiffPage" not in self.trace_data.columns
-            or "Time (s)" not in self.trace_data.columns
-        ):
+        if self.trace_data is None or "TiffPage" not in self.trace_data.columns:
             return None, None
 
         frame_indices = []
@@ -10891,6 +10975,14 @@ QPushButton[isGhost="true"]:pressed {{
                 tiff_rows.loc[:, "TiffPage"] = pd.to_numeric(
                     tiff_rows["TiffPage"], errors="coerce"
                 )
+                if "Saved" in tiff_rows.columns:
+                    saved_mask = (
+                        pd.to_numeric(tiff_rows["Saved"], errors="coerce")
+                        .fillna(0)
+                        .to_numpy()
+                        > 0
+                    )
+                    tiff_rows = tiff_rows.loc[saved_mask]
                 tiff_rows = tiff_rows[tiff_rows["TiffPage"].notna()]
                 mapping = {
                     int(row["TiffPage"]): int(idx) for idx, row in tiff_rows.iterrows()
@@ -10899,7 +10991,47 @@ QPushButton[isGhost="true"]:pressed {{
             if not mapping:
                 return None, None
 
-            trace_times = pd.to_numeric(self.trace_data["Time (s)"], errors="coerce").to_numpy(dtype=float)
+            expected_pages = self.snapshot_total_frames
+            if expected_pages is None and frame_indices:
+                try:
+                    expected_pages = int(max(frame_indices) + 1)
+                except Exception:
+                    expected_pages = None
+            if expected_pages is not None:
+                self._refresh_tiff_page_times(expected_page_count=int(expected_pages))
+
+            if self.tiff_page_times_valid and self.tiff_page_times:
+                times = []
+                frame_trace_index = np.full(n_frames, -1, dtype=int)
+                invalid = False
+                for idx, page in enumerate(frame_indices):
+                    try:
+                        page_int = int(page)
+                    except Exception:
+                        invalid = True
+                        break
+                    if page_int < 0 or page_int >= len(self.tiff_page_times):
+                        invalid = True
+                        break
+                    time_val = self.tiff_page_times[page_int]
+                    if not math.isfinite(time_val):
+                        invalid = True
+                        break
+                    times.append(float(time_val))
+                    trace_idx = mapping.get(page_int)
+                    if trace_idx is not None:
+                        frame_trace_index[idx] = int(trace_idx)
+                if not invalid:
+                    frame_trace_time = np.asarray(times, dtype=float)
+                    self.frame_trace_index = frame_trace_index
+                    self.frame_trace_time = frame_trace_time
+                    self.frame_times = frame_trace_time.tolist()
+                    self.snapshot_frame_indices = frame_indices
+                    return frame_trace_index, frame_trace_time
+
+            trace_times = pd.to_numeric(
+                self.trace_data["Time (s)"], errors="coerce"
+            ).to_numpy(dtype=float)
             result = resolve_frame_times(
                 self.frames_metadata,
                 n_frames=n_frames,
@@ -11125,7 +11257,9 @@ QPushButton[isGhost="true"]:pressed {{
             if self.current_sample is not None:
                 meta = dict(self.current_sample.import_metadata or {})
                 timebase_block = dict(meta.get("timebase") or {})
-                timebase_block["tiff"] = timebase_meta
+                tiff_block = dict(timebase_block.get("tiff") or {})
+                tiff_block.update(timebase_meta)
+                timebase_block["tiff"] = tiff_block
                 meta["timebase"] = timebase_block
                 self.current_sample.import_metadata = meta
             self._set_snapshot_data_source(self.snapshot_frames, canonical_times)
@@ -11137,11 +11271,14 @@ QPushButton[isGhost="true"]:pressed {{
             self.next_frame_btn.setEnabled(True)
             self.play_pause_btn.setEnabled(True)
             self.snapshot_speed_label.setEnabled(True)
-            self.snapshot_speed_combo.setEnabled(True)
+            self.snapshot_speed_input.setEnabled(True)
+            if hasattr(self, "snapshot_speed_units_label"):
+                self.snapshot_speed_units_label.setEnabled(True)
+            if hasattr(self, "snapshot_sync_checkbox"):
+                self._update_snapshot_sync_toggle()
             self._set_playback_state(False)
             self.update_snapshot_size()
             self._clear_slider_markers()
-            self._configure_snapshot_timer()
             self._apply_frame_change(0)
             self.toggle_snapshot_viewer(True)
             self._update_snapshot_sampling_badge()
@@ -11578,9 +11715,12 @@ QPushButton[isGhost="true"]:pressed {{
             self.next_frame_btn.setEnabled(True)
             self.play_pause_btn.setEnabled(True)
             self.snapshot_speed_label.setEnabled(True)
-            self.snapshot_speed_combo.setEnabled(True)
+            self.snapshot_speed_input.setEnabled(True)
+            if hasattr(self, "snapshot_speed_units_label"):
+                self.snapshot_speed_units_label.setEnabled(True)
+            if hasattr(self, "snapshot_sync_checkbox"):
+                self._update_snapshot_sync_toggle()
             self._set_playback_state(False)
-            self._configure_snapshot_timer()
             self._update_snapshot_sampling_badge()
             self._update_snapshot_rotation_controls()
 
@@ -11676,8 +11816,7 @@ QPushButton[isGhost="true"]:pressed {{
         if times is None or times.size == 0:
             return None
 
-        idx = int(np.argmin(np.abs(times - t_val)))
-        return idx
+        return page_for_time(t_val, times, mode="nearest")
 
     def jump_to_time(
         self,
@@ -11687,6 +11826,7 @@ QPushButton[isGhost="true"]:pressed {{
         from_playback: bool = False,
         from_frame_change: bool = False,
         source: str | None = None,
+        snap_to_trace: bool = True,
     ) -> None:
         """
         Canonical time jump (seconds) that updates trace and video consistently.
@@ -11712,13 +11852,12 @@ QPushButton[isGhost="true"]:pressed {{
         )
 
         resolved_time = t_val
-        if self.trace_time is not None and len(self.trace_time):
+        if snap_to_trace and self.trace_time is not None and len(self.trace_time):
             idx_trace = int(np.searchsorted(self.trace_time, t_val))
             idx_trace = max(0, min(idx_trace, len(self.trace_time) - 1))
             resolved_time = float(self.trace_time[idx_trace])
-            self._time_cursor_time = resolved_time
-        else:
-            self._time_cursor_time = t_val
+        self._time_cursor_time = resolved_time
+        self._snapshot_play_time_s = float(resolved_time)
 
         # Update trace cursor + highlight.
         self._highlight_selected_event(resolved_time)
@@ -11742,6 +11881,8 @@ QPushButton[isGhost="true"]:pressed {{
         frame_idx = self._frame_index_for_time_canonical(resolved_time)
         if frame_idx is not None:
             self.current_frame = frame_idx
+            self.current_page = frame_idx
+            self.page_float = float(frame_idx)
             if self.slider is not None and self.slider.value() != frame_idx:
                 self.slider.blockSignals(True)
                 self.slider.setValue(frame_idx)
@@ -11778,7 +11919,9 @@ QPushButton[isGhost="true"]:pressed {{
         self.update_scroll_slider()
         self.canvas.draw_idle()
 
-    def set_current_frame(self, idx, *, from_jump: bool = False):
+    def set_current_frame(
+        self, idx, *, from_jump: bool = False, from_playback: bool = False
+    ):
         if not self.snapshot_frames:
             return
         idx = max(0, min(int(idx), len(self.snapshot_frames) - 1))
@@ -11786,7 +11929,7 @@ QPushButton[isGhost="true"]:pressed {{
             self.slider.blockSignals(True)
             self.slider.setValue(idx)
             self.slider.blockSignals(False)
-        self._apply_frame_change(idx)
+        self._apply_frame_change(idx, from_playback=from_playback)
 
     def _set_snapshot_frame(self, idx: int) -> None:
         """Legacy entry point retained for compatibility; uses controller path."""
@@ -11952,8 +12095,11 @@ QPushButton[isGhost="true"]:pressed {{
             return float(self.trace_time_exact[int(trace_idx)])
         return None
 
-    def _apply_frame_change(self, idx: int):
+    def _apply_frame_change(self, idx: int, *, from_playback: bool = False):
         self.current_frame = idx
+        self.current_page = idx
+        if not from_playback:
+            self.page_float = float(idx)
         frame_time = self._time_for_frame(idx)
 
         trace_idx = None
@@ -11988,13 +12134,22 @@ QPushButton[isGhost="true"]:pressed {{
                 trace_time,
                 time_exact,
             )
-        if frame_time is not None:
-            self.jump_to_time(
-                float(frame_time),
-                from_playback=True,
-                from_frame_change=True,
-                source="video",
+        if frame_time is not None and not from_playback:
+            is_playing = bool(
+                getattr(self, "play_pause_btn", None)
+                and self.play_pause_btn.isChecked()
             )
+            if is_playing:
+                controller = getattr(self, "snapshot_controller", None)
+                if controller is not None:
+                    controller.set_trace_time(float(frame_time), source="playback")
+            else:
+                self.jump_to_time(
+                    float(frame_time),
+                    from_playback=True,
+                    from_frame_change=True,
+                    source="video",
+                )
 
         self.update_slider_marker()
         self._update_snapshot_status(idx)
@@ -12116,140 +12271,78 @@ QPushButton[isGhost="true"]:pressed {{
             # keep summary text in sync when hiding with the viewer
             self.metadata_details_label.setText("No metadata available.")
 
-    def on_snapshot_speed_changed(self, index: int) -> None:
-        if index < 0 or not hasattr(self, "snapshot_speed_combo"):
-            return
-
-        data = self.snapshot_speed_combo.itemData(index)
+    def on_snapshot_speed_changed(self, value: float) -> None:
         try:
-            speed = float(data)
+            speed = float(value)
         except (TypeError, ValueError):
-            speed = 1.0
+            speed = getattr(self, "_snapshot_pps_default", 30.0)
 
-        if speed <= 0:
-            speed = 1.0
+        if not math.isfinite(speed) or speed <= 0:
+            speed = getattr(self, "_snapshot_pps_default", 30.0)
 
-        self.snapshot_speed_multiplier = speed
+        self.snapshot_pps = speed
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            controller.set_playback_pps(speed)
 
-        if not hasattr(self, "snapshot_timer"):
-            return
-
-        was_active = self.snapshot_timer.isActive()
-        self._configure_snapshot_timer()
-
-        if was_active and self.snapshot_frames:
-            self._reset_snapshot_playback_clock()
-            self.snapshot_timer.start()
+    def on_snapshot_sync_toggled(self, checked: bool) -> None:
+        self.snapshot_sync_enabled = bool(checked)
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            controller.set_sync_enabled(self.snapshot_sync_enabled)
 
     def _reset_snapshot_speed(self) -> None:
-        self.snapshot_speed_multiplier = 1.0
+        self.snapshot_pps = float(getattr(self, "_snapshot_pps_default", 30.0))
 
-        if hasattr(self, "snapshot_speed_combo"):
-            self.snapshot_speed_combo.blockSignals(True)
-            self.snapshot_speed_combo.setCurrentIndex(
-                getattr(self, "snapshot_speed_default_index", 0)
+        if hasattr(self, "snapshot_speed_input"):
+            self.snapshot_speed_input.blockSignals(True)
+            self.snapshot_speed_input.setValue(
+                max(1.0, min(float(self.snapshot_pps), 120.0))
             )
-            self.snapshot_speed_combo.blockSignals(False)
+            self.snapshot_speed_input.blockSignals(False)
 
-            data = self.snapshot_speed_combo.itemData(
-                getattr(self, "snapshot_speed_default_index", 0)
-            )
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            controller.set_playback_pps(self.snapshot_pps)
+
+    def _resolve_snapshot_pps_default(self) -> float:
+        default_pps = 30.0
+        raw_pps = os.environ.get("VA_SNAPSHOT_PPS", "").strip()
+        if raw_pps:
             try:
-                self.snapshot_speed_multiplier = float(data)
+                value = float(raw_pps)
             except (TypeError, ValueError):
-                self.snapshot_speed_multiplier = 1.0
+                log.warning(
+                    "Invalid VA_SNAPSHOT_PPS=%s; using default %.1f PPS",
+                    raw_pps,
+                    default_pps,
+                )
+                return default_pps
+            if not math.isfinite(value) or value <= 0:
+                log.warning(
+                    "Invalid VA_SNAPSHOT_PPS=%s; using default %.1f PPS",
+                    raw_pps,
+                    default_pps,
+                )
+                return default_pps
+            return value
+        return default_pps
 
-        if hasattr(self, "snapshot_timer"):
-            self._configure_snapshot_timer()
-
-    def _calculate_snapshot_fps(self) -> float:
-        """Calculate playback FPS from frame times and speed multiplier.
-
-        Returns canonical frame rate for smooth PyQtGraph playback.
-        """
-        default_interval = 1.0 / 30.0
-        # Calculate base interval from frame times (canonical pattern)
-        interval = None
-        if self.frame_trace_time is not None and len(self.frame_trace_time) > 1:
-            with contextlib.suppress(Exception):
-                diffs = np.diff(self.frame_trace_time)
-                finite = diffs[np.isfinite(diffs)]
-                if finite.size:
-                    interval = float(np.median(finite))  # Use median (robust)
-
-        # Fallback to recording interval
-        if interval is None or interval <= 0:
-            try:
-                interval = float(self.recording_interval)
-            except (TypeError, ValueError):
-                interval = default_interval
-
-        if not interval or interval <= 0:
-            interval = default_interval
-
-        # Apply speed multiplier
-        try:
-            speed = float(self.snapshot_speed_multiplier)
-        except (TypeError, ValueError):
-            speed = 1.0
-
-        if speed <= 0:
-            speed = 1.0
-
-        # Calculate FPS
-        effective_interval = interval / speed
-        fps = 1.0 / effective_interval if effective_interval > 0 else 10.0
-
-        # Cap to reasonable range (1-60 FPS for smooth display)
-        fps = min(max(fps, 1.0), 60.0)
-
-        return fps
-
-    def _configure_snapshot_timer(self) -> None:
-        """Configure timer for legacy snapshot viewer playback."""
-        fps = self._calculate_snapshot_fps()
-        self._snapshot_play_fps = fps
-        interval_ms = max(1, int(1000.0 / fps)) if fps > 0 else 1
-        self.snapshot_timer.setInterval(interval_ms)
-
-    def _reset_snapshot_playback_clock(self) -> None:
-        self._snapshot_play_start_wall_time = time.perf_counter()
-        self._snapshot_play_start_frame_index = (
-            int(self.current_frame) if self.snapshot_frames else 0
+    def _sync_time_cursor_to_snapshot(self) -> None:
+        frame_time = self._time_for_frame(self.current_frame)
+        if frame_time is None:
+            return
+        self.jump_to_time(
+            float(frame_time),
+            from_playback=True,
+            from_frame_change=True,
+            source="video",
         )
-        self._snapshot_last_rendered_frame = self._snapshot_play_start_frame_index
-        self._snapshot_play_fps = self._calculate_snapshot_fps()
-
-    def _clear_snapshot_playback_clock(self) -> None:
-        self._snapshot_play_start_wall_time = None
-        self._snapshot_play_start_frame_index = 0
-        self._snapshot_last_rendered_frame = None
-        self._snapshot_play_fps = None
 
     # Playback controller:
-    # - current_frame stored in self.current_frame; slider.valueChanged -> change_frame -> _apply_frame_change -> jump_to_time -> controller.
-    # - snapshot_timer.timeout -> advance_snapshot_frame -> set_current_frame(...) follows same path.
-    # - play/pause + speed toggle snapshot_timer state; controller drives the widget.
-    def _set_playback_state(self, playing: bool) -> None:
-        """Control playback using PyQtGraph native engine via wrapper API."""
-        if not self.snapshot_frames:
-            playing = False
-            self._clear_snapshot_playback_clock()
-        viewer = getattr(self, "snapshot_widget", None)
-        if viewer is not None:
-            with contextlib.suppress(Exception):
-                viewer.set_playing(playing)
-
-        # Canonical viewer: use timer-based playback to step controller time.
-        if playing:
-            self._reset_snapshot_playback_clock()
-            self._configure_snapshot_timer()
-            self.snapshot_timer.start()
-        else:
-            self.snapshot_timer.stop()
-            self._clear_snapshot_playback_clock()
-
-        # Update button UI
+    # - slider.valueChanged -> change_frame -> _apply_frame_change -> jump_to_time -> controller.
+    # - flipbook playback timer lives in SnapshotViewerController.
+    def _update_playback_button_state(self, playing: bool) -> None:
         self.play_pause_btn.blockSignals(True)
         self.play_pause_btn.setChecked(playing)
         self.play_pause_btn.blockSignals(False)
@@ -12265,52 +12358,100 @@ QPushButton[isGhost="true"]:pressed {{
         tooltip = "Pause snapshot playback" if playing else "Play snapshot sequence"
         self.play_pause_btn.setToolTip(tooltip)
 
+    def _set_playback_state(self, playing: bool) -> None:
+        """Control playback using controller-owned flipbook stepping."""
+        if not self.snapshot_frames:
+            playing = False
+        was_playing = bool(self.play_pause_btn.isChecked())
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_playing(playing)
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            with contextlib.suppress(Exception):
+                controller.set_playing(playing)
+        if not playing and was_playing and self.snapshot_frames and self.snapshot_sync_enabled:
+            self._sync_time_cursor_to_snapshot()
+
+        self._update_playback_button_state(playing)
+
+    def _on_snapshot_page_changed(self, page_index: int, source: str) -> None:
+        if source != "playback":
+            return
+        if not self.snapshot_frames:
+            return
+        idx = int(page_index)
+        if idx < 0 or idx >= len(self.snapshot_frames):
+            return
+        if self.slider is not None and self.slider.value() != idx:
+            self.slider.blockSignals(True)
+            self.slider.setValue(idx)
+            self.slider.blockSignals(False)
+        self.page_float = float(idx)
+        self._apply_frame_change(idx, from_playback=True)
+
+    def _on_snapshot_playback_time_changed(self, trace_time: float) -> None:
+        try:
+            time_val = float(trace_time)
+        except (TypeError, ValueError):
+            return
+        if math.isfinite(time_val):
+            self._sync_trace_cursor_to_time(time_val)
+
+    def _on_snapshot_playing_changed(self, playing: bool) -> None:
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_playing(bool(playing))
+        self._update_playback_button_state(bool(playing))
+
     def toggle_snapshot_playback(self, checked: bool) -> None:
         if checked and not self.snapshot_frames:
             self._set_playback_state(False)
             return
         self._set_playback_state(bool(checked))
 
-    def advance_snapshot_frame(self) -> None:
-        if not self.snapshot_frames:
-            self._set_playback_state(False)
+    def _render_snapshot_page(self, page_index: int) -> None:
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            with contextlib.suppress(Exception):
+                controller.set_frame_index(page_index, source="playback")
+                return
+
+        widget = getattr(self, "snapshot_widget", None)
+        if widget is None or not self.snapshot_frames:
             return
+        try:
+            frame = self.snapshot_frames[int(page_index)]
+        except Exception:
+            return
+        with contextlib.suppress(Exception):
+            widget.set_frame(frame, frame_index=page_index)
 
-        if self._snapshot_play_start_wall_time is None:
-            self._reset_snapshot_playback_clock()
+    def _mapped_trace_time_for_page(self, page_index: int) -> float | None:
+        tiff_page = self._tiff_page_for_frame(page_index)
+        if (
+            tiff_page is not None
+            and self.tiff_page_times_valid
+            and 0 <= int(tiff_page) < len(self.tiff_page_times)
+        ):
+            return float(self.tiff_page_times[int(tiff_page)])
+        if self.frame_trace_time is not None and page_index < len(self.frame_trace_time):
+            with contextlib.suppress(Exception):
+                return float(self.frame_trace_time[page_index])
+        if self.frame_times and page_index < len(self.frame_times):
+            with contextlib.suppress(Exception):
+                return float(self.frame_times[page_index])
+        return None
 
-        fps = self._snapshot_play_fps or self._calculate_snapshot_fps()
-        if fps <= 0:
-            fps = 30.0
-        elapsed = time.perf_counter() - (self._snapshot_play_start_wall_time or 0.0)
-        target_index = int(
-            round(self._snapshot_play_start_frame_index + elapsed * fps)
-        )
-        max_index = len(self.snapshot_frames) - 1
-        target_index = max(0, min(target_index, max_index))
-
-        last_index = (
-            self._snapshot_last_rendered_frame
-            if self._snapshot_last_rendered_frame is not None
-            else self.current_frame
-        )
-        skipped = 0
-        if target_index > last_index + 1:
-            skipped = target_index - last_index - 1
-
-        if target_index != self.current_frame:
-            self.set_current_frame(target_index)
-            self._snapshot_last_rendered_frame = target_index
-        else:
-            self._snapshot_last_rendered_frame = target_index
-
-        if skipped and perf_enabled():
-            log_perf(
-                "playback",
-                skipped_frames=skipped,
-                target_index=target_index,
-                fps=round(fps, 2),
-            )
+    def _sync_trace_cursor_to_time(self, trace_time: float) -> None:
+        self._time_cursor_time = float(trace_time)
+        self._highlight_selected_event(float(trace_time))
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "set_time_cursor"):
+            with contextlib.suppress(Exception):
+                plot_host.set_time_cursor(float(trace_time), visible=True)
 
     def step_previous_frame(self) -> None:
         if not self.snapshot_frames:
@@ -15408,6 +15549,8 @@ QPushButton[isGhost="true"]:pressed {{
         self.snapshot_total_frames = None
         self.snapshot_loading_info = None
         self.current_frame = 0
+        self.current_page = 0
+        self.page_float = 0.0
         self.event_labels = []
         self.event_times = []
         self.event_text_objects = []
@@ -15465,7 +15608,14 @@ QPushButton[isGhost="true"]:pressed {{
         if hasattr(self, "rotate_reset_btn"):
             self.rotate_reset_btn.setEnabled(False)
         self.snapshot_speed_label.setEnabled(False)
-        self.snapshot_speed_combo.setEnabled(False)
+        self.snapshot_speed_input.setEnabled(False)
+        if hasattr(self, "snapshot_speed_units_label"):
+            self.snapshot_speed_units_label.setEnabled(False)
+        if hasattr(self, "snapshot_sync_checkbox"):
+            self.snapshot_sync_checkbox.setEnabled(False)
+            self.snapshot_sync_checkbox.blockSignals(True)
+            self.snapshot_sync_checkbox.setChecked(False)
+            self.snapshot_sync_checkbox.blockSignals(False)
         self._reset_snapshot_speed()
         self.reset_snapshot_rotation()
         self.snapshot_time_label.setText("Frame 0 / 0")
@@ -16103,6 +16253,7 @@ QPushButton[isGhost="true"]:pressed {{
                 color: {text};
             }}
             QLabel#SnapshotSpeedLabel,
+            QLabel#SnapshotSpeedUnitsLabel,
             QLabel#SnapshotSyncLabel {{
                 color: {status};
                 font-size: 10px;
@@ -16151,7 +16302,7 @@ QPushButton[isGhost="true"]:pressed {{
             QFrame#SnapshotCard QToolButton:checked {{
                 background: {button_active};
             }}
-            QFrame#SnapshotCard QComboBox#SnapshotSpeedCombo {{
+            QFrame#SnapshotCard QDoubleSpinBox#SnapshotSpeedInput {{
                 background: {button_bg};
                 border: 1px solid {border};
                 border-radius: {radius}px;
@@ -16175,6 +16326,20 @@ QPushButton[isGhost="true"]:pressed {{
             label.setText("Synced: Cursor")
         else:
             label.setText("Synced: —")
+
+    def _update_snapshot_sync_toggle(self) -> None:
+        checkbox = getattr(self, "snapshot_sync_checkbox", None)
+        if checkbox is None:
+            return
+        available = bool(self.tiff_page_times_valid and self.tiff_page_times)
+        desired = bool(self.snapshot_sync_enabled) if available else False
+        checkbox.blockSignals(True)
+        checkbox.setEnabled(available)
+        checkbox.setChecked(desired)
+        checkbox.blockSignals(False)
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            controller.set_sync_enabled(desired)
 
     def _update_snapshot_playback_icons(self) -> None:
         prev_btn = getattr(self, "prev_frame_btn", None)

@@ -7,7 +7,8 @@ from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
-    QComboBox,
+    QCheckBox,
+    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -251,35 +252,41 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.next_frame_btn.setEnabled(False)
     controls_layout.addWidget(window.next_frame_btn)
 
-    window.snapshot_speed_label = QLabel("Speed")
+    window.snapshot_speed_label = QLabel("Playback speed")
     window.snapshot_speed_label.setObjectName("SnapshotSpeedLabel")
     window.snapshot_speed_label.setEnabled(False)
     controls_layout.addWidget(window.snapshot_speed_label)
 
-    window.snapshot_speed_combo = QComboBox(window.snapshot_controls)
-    window.snapshot_speed_combo.setObjectName("SnapshotSpeedCombo")
-    window.snapshot_speed_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-    window.snapshot_speed_presets = [
-        ("0.25x", 0.25),
-        ("0.5x", 0.5),
-        ("1x", 1.0),
-        ("1.5x", 1.5),
-        ("2x", 2.0),
-        ("3x", 3.0),
-        ("4x", 4.0),
-    ]
-    for label, value in window.snapshot_speed_presets:
-        window.snapshot_speed_combo.addItem(label, value)
-    window.snapshot_speed_default_index = next(
-        (idx for idx, (_, val) in enumerate(window.snapshot_speed_presets) if val == 1.0),
-        0,
-    )
-    window.snapshot_speed_combo.setCurrentIndex(window.snapshot_speed_default_index)
-    window.snapshot_speed_combo.setEnabled(False)
-    window.snapshot_speed_label.setToolTip("Adjust snapshot playback speed")
-    window.snapshot_speed_combo.setToolTip("Adjust snapshot playback speed")
-    window.snapshot_speed_combo.currentIndexChanged.connect(window.on_snapshot_speed_changed)
-    controls_layout.addWidget(window.snapshot_speed_combo)
+    window.snapshot_speed_input = QDoubleSpinBox(window.snapshot_controls)
+    window.snapshot_speed_input.setObjectName("SnapshotSpeedInput")
+    window.snapshot_speed_input.setDecimals(1)
+    window.snapshot_speed_input.setSingleStep(1.0)
+    window.snapshot_speed_input.setRange(1.0, 120.0)
+    default_pps = 30.0
+    try:
+        default_pps = float(getattr(window, "snapshot_pps", default_pps))
+    except (TypeError, ValueError):
+        default_pps = 30.0
+    window.snapshot_speed_input.setValue(max(1.0, min(float(default_pps), 120.0)))
+    window.snapshot_speed_input.setEnabled(False)
+    window.snapshot_speed_label.setToolTip("Adjust snapshot playback speed (pages / second)")
+    window.snapshot_speed_input.setToolTip("Adjust snapshot playback speed (pages / second)")
+    window.snapshot_speed_input.valueChanged.connect(window.on_snapshot_speed_changed)
+    controls_layout.addWidget(window.snapshot_speed_input)
+
+    window.snapshot_speed_units_label = QLabel("pages / second")
+    window.snapshot_speed_units_label.setObjectName("SnapshotSpeedUnitsLabel")
+    window.snapshot_speed_units_label.setEnabled(False)
+    window.snapshot_speed_units_label.setToolTip("Playback speed units")
+    controls_layout.addWidget(window.snapshot_speed_units_label)
+
+    window.snapshot_sync_checkbox = QCheckBox("Sync to trace")
+    window.snapshot_sync_checkbox.setObjectName("SnapshotSyncCheckbox")
+    window.snapshot_sync_checkbox.setChecked(True)
+    window.snapshot_sync_checkbox.setEnabled(False)
+    window.snapshot_sync_checkbox.setToolTip("Sync snapshot playback to trace cursor")
+    window.snapshot_sync_checkbox.toggled.connect(window.on_snapshot_sync_toggled)
+    controls_layout.addWidget(window.snapshot_sync_checkbox)
 
     controls_layout.addStretch()
 
@@ -307,10 +314,22 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         window.snapshot_controller.sync_mode_changed.connect(
             window._update_snapshot_sync_label
         )
+        window.snapshot_controller.page_changed.connect(
+            window._on_snapshot_page_changed
+        )
+        window.snapshot_controller.playback_time_changed.connect(
+            window._on_snapshot_playback_time_changed
+        )
+        window.snapshot_controller.playing_changed.connect(
+            window._on_snapshot_playing_changed
+        )
+        window.snapshot_controller.set_playback_pps(
+            float(getattr(window, "snapshot_pps", 30.0))
+        )
+        window.snapshot_controller.set_sync_enabled(
+            bool(getattr(window, "snapshot_sync_enabled", True))
+        )
         window._update_snapshot_sync_label("none")
-
-    window.snapshot_timer = QTimer(window)
-    window.snapshot_timer.timeout.connect(window.advance_snapshot_frame)
 
     window.metadata_panel = QFrame()
     window.metadata_panel.setObjectName("MetadataPanel")
