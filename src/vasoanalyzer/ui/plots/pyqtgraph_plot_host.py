@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
+import os
+import traceback
 from collections.abc import Callable, Iterable
 from typing import Any, cast
 
@@ -31,11 +34,24 @@ from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
     PyQtGraphEventHighlightOverlay,
     PyQtGraphTimeCursorOverlay,
 )
+from vasoanalyzer.ui.plots.pyqtgraph_nav_math import (
+    tick_style_for_trace_count,
+    zoomed_range,
+)
+from vasoanalyzer.ui.plots.pyqtgraph_style import (
+    PLOT_AXIS_LABELS,
+    PLOT_AXIS_TOOLTIPS,
+    get_pyqtgraph_style,
+)
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 __all__ = ["PyQtGraphPlotHost"]
 
 log = logging.getLogger(__name__)
+
+
+def _xrange_debug_enabled() -> bool:
+    return os.getenv("VASO_DEBUG_XRANGE") == "1"
 
 
 class PyQtGraphPlotHost(InteractionHost):
@@ -113,10 +129,15 @@ class PyQtGraphPlotHost(InteractionHost):
         self._hover_tooltip_enabled = True
         self._hover_tooltip_precision = 3
         self._tooltip_proximity = 10.0
-        self._axis_font_family: str = "Arial"
-        self._axis_font_size: float = 20.0
-        self._tick_font_size: float = 16.0
+        style = get_pyqtgraph_style()
+        self._axis_font_family = str(style.font_family)
+        self._axis_font_size = float(style.font_size)
+        self._tick_font_size = float(style.tick_font_size)
         self._default_line_width: float = 4.0
+        self._xrange_debug_connected = False
+        self._xrange_debug_view_box = None
+        self._xrange_debug_getter = None
+        self._xrange_debug_setter = None
         self._selection_region: pg.LinearRegionItem | None = None
         self._window_bg_color: tuple[int, int, int] | None = None
         self._plot_bg_color: tuple[int, int, int] | None = None
@@ -136,7 +157,8 @@ class PyQtGraphPlotHost(InteractionHost):
         )
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
-        self._grid_alpha: float = 0.10
+        self._grid_alpha = float(style.grid_alpha)
+        self._last_mouse_x: float | None = None
         self._click_handlers: list[Callable[[ClickContext], None]] = []
         self._move_handlers: list[Callable[[MoveContext], None]] = []
         self._scroll_handlers: list[Callable[[ScrollContext], None]] = []
@@ -163,6 +185,9 @@ class PyQtGraphPlotHost(InteractionHost):
             id(self),
         )
 
+        style = get_pyqtgraph_style()
+        self._grid_alpha = float(style.grid_alpha)
+
         # Use plot_bg for white content area in light mode (not window_bg which is gray toolbar)
         bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
         border_color = CURRENT_THEME.get(
@@ -179,6 +204,8 @@ class PyQtGraphPlotHost(InteractionHost):
                 plot_item.getViewBox().setBorder(self._lane_border_pen)
             except Exception:
                 pass
+
+        self._apply_grid_to_all_tracks(alpha=self._grid_alpha)
 
         # Force immediate visual update
         self._widget.repaint()
@@ -692,6 +719,10 @@ class PyQtGraphPlotHost(InteractionHost):
         ctx = self._build_move_context(track, scene_pos)
         if ctx is None:
             return
+        try:
+            self._last_mouse_x = float(ctx.x_data)
+        except Exception:
+            self._last_mouse_x = None
         self._dispatch_move(ctx)
 
     def _handle_track_mouse_pressed(self, track: PyQtGraphChannelTrack, event) -> None:
@@ -902,7 +933,7 @@ class PyQtGraphPlotHost(InteractionHost):
         )
         if track.primary_line:
             track.set_line_width(self._default_line_width)
-        self._apply_axis_font_to_track(track)
+        self._apply_axis_font_to_track(track, trace_count=self._count_visible_tracks())
 
     def _configure_bottom_axis(
         self,
@@ -1005,8 +1036,9 @@ class PyQtGraphPlotHost(InteractionHost):
         self._update_bottom_axis_assignments()
 
         # Reapply fonts based on current geometry
+        trace_count = self._count_visible_tracks()
         for track in self._tracks.values():
-            self._apply_axis_font_to_track(track)
+            self._apply_axis_font_to_track(track, trace_count=trace_count)
 
     def _apply_event_label_options(self) -> None:
         if not self._tracks:
@@ -1236,36 +1268,57 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 axis.resizeEvent()
 
-    def _apply_axis_font_to_track(self, track: PyQtGraphChannelTrack) -> None:
+    def _apply_axis_font_to_track(
+        self, track: PyQtGraphChannelTrack, *, trace_count: int | None = None
+    ) -> None:
         plot_item = track.view.get_widget().getPlotItem()
-
         height_px = self._estimate_track_height(track)
+        count = max(trace_count if trace_count is not None else self._count_visible_tracks(), 1)
+        tick_style = tick_style_for_trace_count(count)
 
-        # Scale fonts to the available track height; clamp to readable bounds
-        def _clamp(value: float, lo: int, hi: int) -> int:
-            return int(max(lo, min(hi, round(value))))
+        tick_size = int(round(self._tick_font_size))
+        label_size = int(round(self._axis_font_size))
 
-        tick_size = _clamp(height_px * 0.045, 10, 18)
-        ylabel_size = _clamp(height_px * 0.06, 12, 28)
-        xlabel_size = int(self._axis_font_size)  # Keep x-axis title a steady, readable size
-
-        ylabel_font = QFont(self._axis_font_family, ylabel_size)
-        xlabel_font = QFont(self._axis_font_family, xlabel_size)
+        ylabel_font = QFont(self._axis_font_family, label_size)
+        xlabel_font = QFont(self._axis_font_family, label_size)
         tick_font = QFont(self._axis_font_family, tick_size)
 
         left_axis = plot_item.getAxis("left")
+        label_key = getattr(getattr(track, "spec", None), "component", None) or track.id
+        label_text = PLOT_AXIS_LABELS.get(str(label_key))
+        if label_text:
+            with contextlib.suppress(Exception):
+                left_axis.setLabel(label_text)
+            tooltip = PLOT_AXIS_TOOLTIPS.get(str(label_key))
+            if tooltip and getattr(left_axis, "label", None) is not None:
+                with contextlib.suppress(Exception):
+                    left_axis.label.setToolTip(tooltip)
         with contextlib.suppress(AttributeError):
             left_axis.enableAutoSIPrefix(False)
         left_axis.label.setFont(ylabel_font)
         with contextlib.suppress(AttributeError):
             left_axis.setTickFont(tick_font)
             left_axis.setTickLength(5, 0)
+            left_axis.setTickDensity(tick_style.density)
+            left_axis.setStyle(
+                tickTextOffset=tick_style.text_offset,
+                tickTextWidth=tick_style.text_width,
+                tickTextHeight=tick_style.text_height,
+            )
         self._recenter_axis_label(left_axis, height_px)
 
         right_axis = plot_item.getAxis("right")
         if right_axis is not None:
             with contextlib.suppress(AttributeError):
                 right_axis.enableAutoSIPrefix(False)
+            with contextlib.suppress(AttributeError):
+                right_axis.setTickFont(tick_font)
+                right_axis.setTickDensity(tick_style.density)
+                right_axis.setStyle(
+                    tickTextOffset=tick_style.text_offset,
+                    tickTextWidth=tick_style.text_width,
+                    tickTextHeight=tick_style.text_height,
+                )
 
         # Use cached bottom track ID (single source of truth)
         bottom_visible_id = self._bottom_visible_track_id or track.id
@@ -1275,6 +1328,12 @@ class PyQtGraphPlotHost(InteractionHost):
             bottom_axis.label.setFont(xlabel_font)
             with contextlib.suppress(AttributeError):
                 bottom_axis.setTickFont(tick_font)
+                bottom_axis.setTickDensity(tick_style.density)
+                bottom_axis.setStyle(
+                    tickTextOffset=tick_style.text_offset,
+                    tickTextWidth=tick_style.text_width,
+                    tickTextHeight=tick_style.text_height,
+                )
             self._recenter_bottom_label(bottom_axis)
 
     def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:
@@ -1369,6 +1428,28 @@ class PyQtGraphPlotHost(InteractionHost):
         """Set the visible time window for all tracks."""
         x0 = float(x0)
         x1 = float(x1)
+        if _xrange_debug_enabled() and self._xrange_debug_getter is not None:
+            try:
+                source, expected, scrolling = self._xrange_debug_getter()
+            except Exception:
+                source, expected, scrolling = "<error>", None, False
+            log.info(
+                "[XRANGE WATCH] set_time_window source=%s scrolling=%s requested=(%s, %s) expected=%s",
+                source,
+                scrolling,
+                x0,
+                x1,
+                expected,
+            )
+        if (
+            _xrange_debug_enabled()
+            and self._xrange_debug_getter is not None
+            and not self._xrange_debug_connected
+        ):
+            self.attach_xrange_debug(
+                self._xrange_debug_getter,
+                set_source_callable=self._xrange_debug_setter,
+            )
         log.debug(
             "PyQtGraphPlotHost.set_time_window: requested=(%r, %r) data_span=(%r, %r)",
             x0,
@@ -1386,7 +1467,14 @@ class PyQtGraphPlotHost(InteractionHost):
                 plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
 
             track.update_window(x0, x1)
-            plot_item.setXRange(x0, x1, padding=0)
+            view_box = track.view.view_box()
+            with contextlib.suppress(Exception):
+                view_box.enableAutoRange(x=False)
+                view_box.setRange(
+                    xRange=(float(x0), float(x1)),
+                    padding=0.0,
+                    update=True,
+                )
 
             # Reconnect signals
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
@@ -1886,7 +1974,7 @@ class PyQtGraphPlotHost(InteractionHost):
     def is_autoscale_y_enabled(self) -> bool:
         """Check if Y-axis autoscaling is enabled (checks first track)."""
         if not self._tracks:
-            return True  # Default to enabled
+            return False  # Default to disabled
         first_track = next(iter(self._tracks.values()))
         return bool(first_track.view.is_autoscale_enabled())
 
@@ -2060,42 +2148,236 @@ class PyQtGraphPlotHost(InteractionHost):
             except Exception:
                 log.debug("Click handler failed for track %s", track_id, exc_info=True)
 
-    def zoom_at(self, center: float, factor: float) -> None:
-        """Zoom X-axis around current view center using viewRange() + setXRange().
-
-        This is the canonical approach per PyQtGraph docs: read current range
-        with viewRange(), calculate new range, then apply with setXRange().
-
-        Args:
-            center: Center point (unused - zoom is always around current center)
-            factor: Scale factor where:
-                - factor < 1.0 zooms in (e.g., 0.5 = 2x zoom in)
-                - factor > 1.0 zooms out (e.g., 2.0 = 2x zoom out)
-        """
+    def _primary_view_box(self):
         if not self._tracks:
+            return None
+        tracks = list(self._tracks.values())
+        primary = next((t for t in tracks if t.is_visible()), tracks[0])
+        return primary.view.get_widget().getPlotItem().getViewBox()
+
+    def _all_view_boxes(self) -> list[Any]:
+        boxes: list[Any] = []
+        for track in self._tracks.values():
+            try:
+                boxes.append(track.view.view_box())
+            except Exception:
+                with contextlib.suppress(Exception):
+                    plot_item = track.view.get_widget().getPlotItem()
+                    boxes.append(plot_item.getViewBox())
+        return boxes
+
+    def _all_plot_items(self) -> list[Any]:
+        items: list[Any] = []
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                items.append(track.view.get_widget().getPlotItem())
+        return items
+
+    def attach_xrange_debug(
+        self,
+        get_source_callable,
+        *,
+        set_source_callable=None,
+    ) -> bool:
+        """Attach an x-range watcher to the primary ViewBox for debugging."""
+        if not _xrange_debug_enabled():
+            return False
+        if self._xrange_debug_connected:
+            log.info("[XRANGE WATCH] attach skipped (already attached)")
+            return True
+        view_boxes = self._all_view_boxes()
+        if not view_boxes:
+            log.info("[XRANGE WATCH] attach skipped (no view boxes)")
+            return False
+
+        attached = 0
+
+        def _handler(*_args, _idx: int = 0) -> None:
+            self._on_xrange_changed_debug(get_source_callable, idx=_idx)
+
+        for idx, view_box in enumerate(view_boxes):
+            try:
+                if hasattr(view_box, "sigRangeChanged"):
+                    view_box.sigRangeChanged.connect(
+                        lambda *_args, _idx=idx: _handler(_idx=_idx)
+                    )
+                    attached += 1
+                elif hasattr(view_box, "sigXRangeChanged"):
+                    view_box.sigXRangeChanged.connect(
+                        lambda *_args, _idx=idx: _handler(_idx=_idx)
+                    )
+                    attached += 1
+            except Exception as exc:
+                log.warning("[XRANGE WATCH] failed to attach vb[%d]: %s", idx, exc)
+
+        plot_items = self._all_plot_items()
+        for idx, plot_item in enumerate(plot_items):
+            try:
+                if hasattr(plot_item, "sigRangeChanged"):
+                    plot_item.sigRangeChanged.connect(
+                        lambda *_args, _idx=idx: self._on_plotitem_range_changed_debug(
+                            get_source_callable, idx=_idx
+                        )
+                    )
+                    attached += 1
+            except Exception as exc:
+                log.warning("[XRANGE WATCH] failed to attach plotitem[%d]: %s", idx, exc)
+
+        if set_source_callable is not None:
+            for view_box in view_boxes:
+                if hasattr(view_box, "set_xrange_source_callback"):
+                    with contextlib.suppress(Exception):
+                        view_box.set_xrange_source_callback(set_source_callable)
+                elif hasattr(view_box, "sigWheelEvent"):
+                    def _wheel_tag(ev) -> None:
+                        try:
+                            modifiers = ev.modifiers()
+                        except Exception:
+                            modifiers = Qt.NoModifier
+                        ctrl_or_cmd = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+                        if ctrl_or_cmd:
+                            set_source_callable("wheel.ctrl_zoom", None)
+                    view_box.sigWheelEvent.connect(_wheel_tag)
+
+        self._xrange_debug_getter = get_source_callable
+        self._xrange_debug_setter = set_source_callable
+        if attached:
+            self._xrange_debug_connected = True
+            self._xrange_debug_view_box = view_boxes[0]
+            log.info("[XRANGE WATCH] attached watchers=%d", attached)
+            return True
+
+        log.info("[XRANGE WATCH] attach failed (no signals connected)")
+        return False
+
+    def _on_xrange_changed_debug(self, get_source_callable, *, idx: int = 0) -> None:
+        if not _xrange_debug_enabled():
+            return
+        try:
+            source, expected, scrolling = get_source_callable()
+        except Exception:
+            source, expected, scrolling = "<error>", None, False
+
+        window = self.current_window()
+        if window is None:
+            view_box = self._primary_view_box()
+            if view_box is not None:
+                try:
+                    x_range = view_box.viewRange()[0]
+                    window = (float(x_range[0]), float(x_range[1]))
+                except Exception:
+                    window = None
+
+        if window is None:
+            log.info(
+                "[XRANGE WATCH] source=%s scrolling=%s current=None expected=%s",
+                source,
+                scrolling,
+                expected,
+            )
             return
 
-        # Get current X range from the first (primary) track using viewRange()
-        first_track = next(iter(self._tracks.values()))
-        plot_item = first_track.view.get_widget().getPlotItem()
-        view_box = plot_item.getViewBox()
+        x0, x1 = float(window[0]), float(window[1])
+        width = x1 - x0
+        log.info(
+            "[XRANGE WATCH] idx=%s source=%s scrolling=%s current=(%.6f, %.6f) width=%.6f expected=%s",
+            idx,
+            source,
+            scrolling,
+            x0,
+            x1,
+            width,
+            expected,
+        )
+        if scrolling and expected is not None:
+            exp_w = float(expected[1]) - float(expected[0])
+            if abs(width - exp_w) > 1e-6:
+                log.error(
+                    "[XRANGE WATCH] WIDTH MISMATCH while scrolling: expected_width=%.6f got=%.6f",
+                    exp_w,
+                    width,
+                )
+                log.error("[XRANGE WATCH] STACK:\n%s", "".join(traceback.format_stack(limit=30)))
+
+    def _on_plotitem_range_changed_debug(self, get_source_callable, *, idx: int = 0) -> None:
+        if not _xrange_debug_enabled():
+            return
+        try:
+            source, expected, scrolling = get_source_callable()
+        except Exception:
+            source, expected, scrolling = "<error>", None, False
+        window = self.current_window()
+        if window is None:
+            log.info(
+                "[XRANGE WATCH] plotitem idx=%s source=%s scrolling=%s current=None expected=%s",
+                idx,
+                source,
+                scrolling,
+                expected,
+            )
+            return
+        x0, x1 = float(window[0]), float(window[1])
+        width = x1 - x0
+        log.info(
+            "[XRANGE WATCH] plotitem idx=%s source=%s scrolling=%s current=(%.6f, %.6f) width=%.6f expected=%s",
+            idx,
+            source,
+            scrolling,
+            x0,
+            x1,
+            width,
+            expected,
+        )
+
+    def _resolve_zoom_anchor(self, requested: float | None) -> float | None:
+        if requested is not None and math.isfinite(requested):
+            return float(requested)
+        window = self.current_window()
+        if window is None:
+            return None
+        x0, x1 = window
+        if (
+            self._last_mouse_x is not None
+            and math.isfinite(self._last_mouse_x)
+            and x0 <= self._last_mouse_x <= x1
+        ):
+            return float(self._last_mouse_x)
+        return 0.5 * (x0 + x1)
+
+    def zoom_x_at(self, anchor: float | None, factor: float) -> None:
+        """Zoom the X axis around an anchor point if available."""
+        view_box = self._primary_view_box()
+        if view_box is None:
+            return
+        anchor = self._resolve_zoom_anchor(anchor)
+        if hasattr(view_box, "zoom_x_at"):
+            try:
+                view_box.zoom_x_at(anchor, factor)
+                return
+            except Exception:
+                pass
         (x_min, x_max), _ = view_box.viewRange()
-
-        # Calculate new X range: zoom around the current center
-        x_center = 0.5 * (x_min + x_max)
-        half_span = 0.5 * (x_max - x_min) * factor
-        new_x_min = x_center - half_span
-        new_x_max = x_center + half_span
-
-        # Apply new X range to the primary ViewBox using setXRange()
-        # X-links will propagate this to all other tracks automatically
+        new_x_min, new_x_max = zoomed_range(x_min, x_max, anchor, factor)
         view_box.setXRange(new_x_min, new_x_max, padding=0.0)
 
-        # Update internal state
-        self._current_window = (new_x_min, new_x_max)
+    def zoom_at(self, center: float | None, factor: float) -> None:
+        """Backward-compatible alias for X-axis zoom with cursor anchoring."""
+        self.zoom_x_at(center, factor)
 
-        # Notify listeners about the window change
-        self._notify_time_window_changed()
+    def zoom_to_full_range(self) -> None:
+        """Zoom to full X extent while preserving zoom history."""
+        full = self.full_range()
+        if full is None:
+            return
+        view_box = self._primary_view_box()
+        if view_box is None:
+            return
+        x_min, x_max = float(full[0]), float(full[1])
+        if hasattr(view_box, "set_x_range_with_history"):
+            with contextlib.suppress(Exception):
+                view_box.set_x_range_with_history(x_min, x_max)
+                return
+        view_box.setXRange(x_min, x_max, padding=0.0)
 
     def scroll_by(self, delta: float) -> None:
         """Scroll the current time window by delta seconds."""

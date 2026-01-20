@@ -1,7 +1,7 @@
 """Main window for GIF animation creation and preview.
 
 This module provides the primary UI for the GIF Animator feature,
-following the Figure Composer window pattern.
+following the shared window layout pattern.
 """
 
 import numpy as np
@@ -14,6 +14,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect
 from PyQt5.QtGui import QColor, QImage, QPixmap
+
+from vasoanalyzer.io.tiffs import resolve_frame_times
 
 from .specs import AnimationSpec, TracePanelSpec, FrameTimeExtractionResult
 from .frame_synchronizer import FrameSynchronizer, FrameTimingInfo
@@ -250,144 +252,51 @@ class GifAnimatorWindow(QMainWindow):
             FrameTimeExtractionResult with frame times and metadata about the extraction
         """
         n_frames = len(self.sample.snapshots)
-        warnings = []
+        warnings: list[str] = []
 
-        # Try to use TiffPage column for proper synchronization
-        # Check for both CSV column names (TiffPage, Time (s)) and database column names (tiff_page, t_seconds)
         trace_data = self.sample.trace_data
         if trace_data is not None:
-            # Determine which column names to use
-            tiff_col = None
-            time_col_name = None
-
-            if "tiff_page" in trace_data.columns:
-                tiff_col = "tiff_page"
-            elif "TiffPage" in trace_data.columns:
+            tiff_col = "tiff_page" if "tiff_page" in trace_data.columns else None
+            if tiff_col is None and "TiffPage" in trace_data.columns:
                 tiff_col = "TiffPage"
-
-            if "t_seconds" in trace_data.columns:
-                time_col_name = "t_seconds"
-            elif "Time (s)" in trace_data.columns:
+            time_col_name = "t_seconds" if "t_seconds" in trace_data.columns else None
+            if time_col_name is None and "Time (s)" in trace_data.columns:
                 time_col_name = "Time (s)"
-
-            logger.info("Frame time extraction started", extra={
-                "n_frames": n_frames,
-                "has_tiff_col": tiff_col is not None,
-                "has_time_col": time_col_name is not None,
-                "tiff_col_name": tiff_col,
-                "time_col_name": time_col_name
-            })
 
             if tiff_col is not None and time_col_name is not None:
                 try:
-                    # Build mapping from TiffPage to trace row index
-                    tiff_rows = trace_data[trace_data[tiff_col].notna()].copy()
-                    if not tiff_rows.empty:
-                        # Track invalid values during numeric conversion
-                        numeric_vals = pd.to_numeric(tiff_rows[tiff_col], errors="coerce")
-                        invalid_count = numeric_vals.isna().sum()
-                        if invalid_count > 0:
-                            warning_msg = f"{invalid_count} invalid TiffPage values coerced to NaN"
-                            warnings.append(warning_msg)
-                            logger.warning("Invalid TiffPage values detected", extra={
-                                "invalid_count": invalid_count,
-                                "total_rows": len(tiff_rows)
-                            })
-
-                        tiff_rows.loc[:, tiff_col] = numeric_vals
-                        tiff_rows = tiff_rows[tiff_rows[tiff_col].notna()]
-                        mapping = {
-                            int(row[tiff_col]): int(idx)
-                            for idx, row in tiff_rows.iterrows()
-                        }
-
-                        if mapping:
-                            # Calculate mapping coverage
-                            coverage = len(mapping) / n_frames if n_frames > 0 else 0.0
-
-                            # Warn if coverage is low
-                            if coverage < 0.8:
-                                warning_msg = f"Only {coverage:.0%} of frames have TiffPage data"
-                                warnings.append(warning_msg)
-                                logger.warning("Low TiffPage mapping coverage", extra={
-                                    "coverage": coverage,
-                                    "mapped_frames": len(mapping),
-                                    "total_frames": n_frames
-                                })
-
-                            # Map each TIFF frame to its trace time
-                            frame_times = []
-                            time_col = pd.to_numeric(trace_data[time_col_name], errors="coerce")
-                            estimated_frames = 0
-
-                            for frame_idx in range(n_frames):
-                                trace_idx = mapping.get(frame_idx)
-                                if trace_idx is not None and 0 <= trace_idx < len(time_col):
-                                    frame_time = float(time_col.iloc[trace_idx])
-                                    frame_times.append(frame_time)
-                                else:
-                                    # Frame not in mapping - estimate
-                                    estimated_frames += 1
-                                    if frame_times:
-                                        # Use last known time + interval
-                                        interval = 0.14
-                                        frame_times.append(frame_times[-1] + interval)
-                                    else:
-                                        frame_times.append(frame_idx * 0.14)
-
-                            if estimated_frames > 0:
-                                warning_msg = f"{estimated_frames} frames estimated (not in TiffPage mapping)"
-                                warnings.append(warning_msg)
-                                logger.info("Some frames estimated", extra={
-                                    "estimated_frames": estimated_frames,
-                                    "total_frames": n_frames
-                                })
-
-                            # Validate monotonicity
-                            is_monotonic = all(
-                                frame_times[i] <= frame_times[i+1]
-                                for i in range(len(frame_times)-1)
-                            )
-                            if not is_monotonic:
-                                error_msg = "Frame times are not monotonically increasing"
-                                logger.error(error_msg, extra={"frame_times": frame_times[:10]})
-                                raise ValueError(error_msg)
-
-                            # Determine confidence based on coverage
-                            if coverage >= 0.95:
-                                confidence = "high"
-                            elif coverage >= 0.8:
-                                confidence = "medium"
-                            else:
-                                confidence = "low"
-
-                            logger.info("Frame times extracted from TiffPage", extra={
-                                "source": "tiff_page",
-                                "coverage": f"{coverage:.1%}",
-                                "confidence": confidence,
-                                "n_warnings": len(warnings)
-                            })
-
-                            return FrameTimeExtractionResult(
-                                frame_times=frame_times,
-                                source="tiff_page",
-                                confidence=confidence,
-                                warnings=warnings,
-                                mapping_coverage=coverage
-                            )
-                except ValueError as e:
-                    # Re-raise validation errors
-                    raise
-                except Exception as e:
+                    tiff_series = pd.to_numeric(trace_data[tiff_col], errors="coerce")
+                    mapping = {
+                        int(tp): int(i)
+                        for i, tp in enumerate(tiff_series.to_numpy())
+                        if pd.notna(tp)
+                    }
+                    trace_times = pd.to_numeric(
+                        trace_data[time_col_name], errors="coerce"
+                    ).to_numpy(dtype=float)
+                    result = resolve_frame_times(
+                        [],
+                        n_frames=n_frames,
+                        trace_time_s=trace_times,
+                        tiff_page_to_trace_idx=mapping,
+                        allow_fallback=False,
+                    )
+                    return FrameTimeExtractionResult(
+                        frame_times=result.frame_times_s.tolist(),
+                        source="tiff_page",
+                        confidence="high",
+                        warnings=result.warnings,
+                        mapping_coverage=1.0,
+                    )
+                except Exception as exc:
+                    warnings.append(f"TiffPage sync failed: {exc}")
                     logger.warning("Frame time extraction from TiffPage failed", extra={
-                        "error": str(e),
+                        "error": str(exc),
                         "fallback_to": "ui_state"
                     })
-                    # Fall through to next method
 
-        # Fallback: Try to get from ui_state
         if self.sample.ui_state:
-            frame_times = self.sample.ui_state.get('snapshot_frame_times', None)
+            frame_times = self.sample.ui_state.get("snapshot_frame_times")
             if frame_times and len(frame_times) == n_frames:
                 logger.info("Frame times loaded from ui_state", extra={
                     "source": "ui_state",
@@ -398,18 +307,22 @@ class GifAnimatorWindow(QMainWindow):
                     source="ui_state",
                     confidence="medium",
                     warnings=["Frame times loaded from saved ui_state"],
-                    mapping_coverage=1.0  # Assume complete when from ui_state
+                    mapping_coverage=1.0,
                 )
 
-        # Final fallback: Estimated uniform spacing
-        recording_interval = 0.14  # Default
+        recording_interval = 0.14
         if self.sample.ui_state:
-            recording_interval = self.sample.ui_state.get('recording_interval', 0.14)
+            recording_interval = self.sample.ui_state.get("recording_interval", 0.14)
 
-        frame_times = [i * recording_interval for i in range(n_frames)]
-        warning_msg = f"Frame times estimated using {recording_interval}s interval (no TiffPage or ui_state data)"
-        warnings.append(warning_msg)
-
+        result = resolve_frame_times(
+            [],
+            n_frames=n_frames,
+            fps=1.0 / float(recording_interval) if recording_interval else None,
+        )
+        warnings.extend(result.warnings)
+        warnings.append(
+            f"Frame times estimated using {recording_interval}s interval (no TiffPage or ui_state data)"
+        )
         logger.warning("Frame times estimated (no data source available)", extra={
             "source": "estimation",
             "interval": recording_interval,
@@ -417,11 +330,11 @@ class GifAnimatorWindow(QMainWindow):
         })
 
         return FrameTimeExtractionResult(
-            frame_times=frame_times,
+            frame_times=result.frame_times_s.tolist(),
             source="estimation",
             confidence="low",
             warnings=warnings,
-            mapping_coverage=0.0
+            mapping_coverage=0.0,
         )
 
     def _create_default_spec(self) -> AnimationSpec:

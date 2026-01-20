@@ -20,6 +20,7 @@ try:
 except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
+from vasoanalyzer.core.timebase import RANGE_TOL_S, TIME_EPS_S, validate_and_normalize_events
 from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
 from vasoanalyzer.io.traces import load_trace, merge_traces
 
@@ -366,6 +367,20 @@ def load_trace_and_events(
         if time_col
         else pd.Series(np.nan, index=working_df.index, dtype=float)
     )
+    trace_t0_s = None
+    if isinstance(df.attrs, dict):
+        trace_t0_s = (
+            df.attrs.get("timebase", {})
+            .get("trace", {})
+            .get("t0_s")
+        )
+    if trace_t0_s is not None and time_col:
+        try:
+            trace_t0_s = float(trace_t0_s)
+        except (TypeError, ValueError):
+            trace_t0_s = None
+    if trace_t0_s is not None and abs(trace_t0_s) > TIME_EPS_S:
+        time_series = time_series - float(trace_t0_s)
 
     approx_frame_times = None
     if frame_series is not None and not frame_number_to_trace_idx:
@@ -400,6 +415,18 @@ def load_trace_and_events(
             resolved_times = resolved_times.combine_first(approx_frame_times)
 
     working_df = working_df.assign(_time_seconds=resolved_times)
+    try:
+        working_df, report = validate_and_normalize_events(
+            working_df,
+            trace_time,
+            range_tol_s=RANGE_TOL_S,
+            eps_s=TIME_EPS_S,
+            time_col=time_col,
+        )
+    except ValueError as exc:
+        log.warning("Event time validation failed: %s", exc)
+        return df, [], [], None, [], [], extras
+
     valid_mask_series = working_df["_time_seconds"].notna()
     dropped_missing_time = int((~valid_mask_series).sum())
     if dropped_missing_time:
@@ -412,26 +439,33 @@ def load_trace_and_events(
         log.info("Events table became empty after dropping invalid times")
         return df, [], [], None, [], [], extras
 
+    extras["ignored_out_of_range"] = 0
+    extras["flagged_out_of_range"] = int(report.out_of_range)
+    extras["clamped_out_of_range"] = int(report.clamped)
+    extras["event_time_invalid"] = int(report.invalid)
+
+    timebase_meta = df.attrs.get("timebase") if isinstance(df.attrs, dict) else None
+    if not isinstance(timebase_meta, dict):
+        timebase_meta = {}
+    event_warnings = list(report.warnings)
+    if trace_t0_s is not None and abs(float(trace_t0_s)) > TIME_EPS_S:
+        event_warnings.append(
+            f"Applied trace t0 offset of {float(trace_t0_s):.6f}s to event times."
+        )
+    timebase_meta["events"] = {
+        "range_tol_s": float(RANGE_TOL_S),
+        "eps_s": float(TIME_EPS_S),
+        "total": int(report.total),
+        "valid": int(report.valid),
+        "invalid": int(report.invalid),
+        "clamped": int(report.clamped),
+        "out_of_range": int(report.out_of_range),
+        "trace_t0_s": float(trace_t0_s) if trace_t0_s is not None else None,
+        "warnings": event_warnings,
+    }
+    extras["timebase"] = timebase_meta
+
     times_series = working_df["_time_seconds"].astype(float)
-
-    arr_t = df["Time (s)"].to_numpy(dtype=float)
-    if arr_t.size:
-        finite_trace_mask = np.isfinite(arr_t)
-        if finite_trace_mask.any():
-            t_min = float(arr_t[finite_trace_mask].min())
-            t_max = float(arr_t[finite_trace_mask].max())
-            in_range_mask = (times_series >= t_min) & (times_series <= t_max)
-            ignored_out_of_range = int((~in_range_mask).sum())
-            if ignored_out_of_range:
-                extras["ignored_out_of_range"] = ignored_out_of_range
-                working_df = working_df.loc[in_range_mask].reset_index(drop=True)
-                times_series = times_series.loc[in_range_mask].reset_index(drop=True)
-                if frame_series is not None:
-                    frame_series = frame_series.loc[in_range_mask].reset_index(drop=True)
-
-    if working_df.empty:
-        log.info("No events remain within trace time range")
-        return df, [], [], None, [], [], extras
 
     labels = working_df[label_col].astype(str).tolist()
     times = times_series.astype(float).tolist()

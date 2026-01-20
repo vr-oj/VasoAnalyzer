@@ -4,12 +4,14 @@ from typing import TYPE_CHECKING
 
 import logging
 from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QScrollBar,
     QScrollArea,
     QSizePolicy,
     QSlider,
@@ -23,11 +25,9 @@ from PyQt5.QtWidgets import (
 from vasoanalyzer.ui.event_table import EventTableWidget
 from vasoanalyzer.ui.event_table_controller import EventTableController
 from vasoanalyzer.ui.interactions import InteractionController
-from vasoanalyzer.ui.panels.home_page import HomePage
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.mpl_interactions import MplInteractionHost
 from vasoanalyzer.ui.plots.overview_strip import OverviewStrip
-from vasoanalyzer.ui.plots.professional_nav_bar import ProfessionalNavigationBar
 from vasoanalyzer.ui.plots.renderer_factory import create_plot_host
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -72,9 +72,6 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.stack = QStackedWidget()
     window.setCentralWidget(window.stack)
 
-    window.home_page = HomePage(window)
-    window.stack.addWidget(window.home_page)
-
     window.data_page = QWidget()
     window.data_page.setObjectName("DataPage")
     window.stack.addWidget(window.data_page)
@@ -88,7 +85,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     # - renderer_factory.get_default_renderer_type() -> "pyqtgraph"
     # - window.fig stays None for this backend
     # - window.canvas is a PyQtGraphCanvasCompat wrapper around plot_host.widget()
-    # Matplotlib is reserved for the figure composer / exports, not the live trace view.
+    # Matplotlib is reserved for static exports, not the live trace view.
     window.plot_host = create_plot_host(dpi=dpi)
     backend = (
         window.plot_host.get_render_backend()
@@ -114,15 +111,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     if not use_pyqtgraph:
         window.canvas.toolbar = None
 
-    window.trace_nav_bar = ProfessionalNavigationBar(window)
     window.overview_strip = OverviewStrip(window)
-    window.trace_nav_bar.timeWindowRequested.connect(
-        window._on_trace_nav_window_requested
-    )
     window.overview_strip.timeWindowRequested.connect(
         window._on_trace_nav_window_requested
     )
-    window.trace_nav_bar.setVisible(False)
     window.overview_strip.setVisible(False)
     initial_specs = [
         ChannelTrackSpec(
@@ -187,6 +179,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         on_drag_state=window._set_plot_drag_state,
     )
 
+    window.toolbar.addSeparator()
     window.toolbar.addAction(window.id_toggle_act)
     window.toolbar.addAction(window.od_toggle_act)
     window.toolbar.addAction(window.avg_pressure_toggle_act)
@@ -195,24 +188,31 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window._update_toolbar_compact_mode(window.width())
 
-    window.scroll_slider = QSlider(Qt.Horizontal)
+    window.scroll_slider = QScrollBar(Qt.Horizontal)
+    window.scroll_slider.setObjectName("TimeScrollbar")
     window.scroll_slider.setMinimum(0)
-    window.scroll_slider.setMaximum(1000)
+    window.scroll_slider.setMaximum(1_000_000)
     window.scroll_slider.setSingleStep(1)
     window.scroll_slider.setValue(0)
-    window.scroll_slider.valueChanged.connect(window.scroll_plot)
+    window.scroll_slider.sliderMoved.connect(window._on_scrollbar_moved)
+    window.scroll_slider.sliderPressed.connect(window._on_scrollbar_pressed)
+    window.scroll_slider.sliderReleased.connect(window._on_scrollbar_released)
+    window.scroll_slider.valueChanged.connect(window._on_scrollbar_value_changed)
     window.scroll_slider.hide()
     window.scroll_slider.setToolTip("Scroll timeline (X-axis)")
+    window.scroll_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-    # Legacy snapshot viewer: QLabel baseline with 220px minimum height; PG viewer mirrors this minimum.
-    window.snapshot_label = _SnapshotPreviewLabel("Snapshot preview")
-    window.snapshot_label.setObjectName("SnapshotPreview")
-    window.snapshot_label.setAlignment(Qt.AlignCenter)
-    window.snapshot_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-    window.snapshot_label.setMinimumHeight(220)
-    window.snapshot_label.hide()
-    window.snapshot_label.setContextMenuPolicy(Qt.CustomContextMenu)
-    window.snapshot_label.customContextMenuRequested.connect(window.show_snapshot_context_menu)
+    # Canonical snapshot viewer widget (replaces legacy QLabel/PG instantiation).
+    if window.snapshot_widget is not None:
+        window.snapshot_widget.setObjectName("SnapshotPreview")
+        window.snapshot_widget.setSizePolicy(
+            QSizePolicy.Expanding, QSizePolicy.Expanding
+        )
+        window.snapshot_widget.hide()
+        window.snapshot_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        window.snapshot_widget.customContextMenuRequested.connect(
+            window.show_snapshot_context_menu
+        )
 
     window.slider = QSlider(Qt.Horizontal)
     window.slider.setMinimum(0)
@@ -225,10 +225,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.snapshot_controls.setObjectName("SnapshotControls")
     controls_layout = QHBoxLayout(window.snapshot_controls)
     controls_layout.setContentsMargins(0, 0, 0, 0)
-    controls_layout.setSpacing(8)
+    controls_layout.setSpacing(6)
 
     window.prev_frame_btn = QToolButton(window.snapshot_controls)
-    window.prev_frame_btn.setIcon(window.style().standardIcon(QStyle.SP_MediaSkipBackward))
+    window.prev_frame_btn.setIcon(QIcon(window.icon_path("fast_rewind.svg")))
     window.prev_frame_btn.setToolTip("Previous frame")
     window.prev_frame_btn.clicked.connect(window.step_previous_frame)
     window.prev_frame_btn.setEnabled(False)
@@ -237,7 +237,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.play_pause_btn = QToolButton(window.snapshot_controls)
     window.play_pause_btn.setCheckable(True)
     window.play_pause_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-    window.play_pause_btn.setIcon(window.style().standardIcon(QStyle.SP_MediaPlay))
+    window.play_pause_btn.setIcon(QIcon(window.icon_path("play_arrow.svg")))
     window.play_pause_btn.setText("Play")
     window.play_pause_btn.setToolTip("Play snapshot sequence")
     window.play_pause_btn.clicked.connect(window.toggle_snapshot_playback)
@@ -245,13 +245,13 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     controls_layout.addWidget(window.play_pause_btn)
 
     window.next_frame_btn = QToolButton(window.snapshot_controls)
-    window.next_frame_btn.setIcon(window.style().standardIcon(QStyle.SP_MediaSkipForward))
+    window.next_frame_btn.setIcon(QIcon(window.icon_path("fast_forward.svg")))
     window.next_frame_btn.setToolTip("Next frame")
     window.next_frame_btn.clicked.connect(window.step_next_frame)
     window.next_frame_btn.setEnabled(False)
     controls_layout.addWidget(window.next_frame_btn)
 
-    window.snapshot_speed_label = QLabel("Speed:")
+    window.snapshot_speed_label = QLabel("Speed")
     window.snapshot_speed_label.setObjectName("SnapshotSpeedLabel")
     window.snapshot_speed_label.setEnabled(False)
     controls_layout.addWidget(window.snapshot_speed_label)
@@ -283,6 +283,12 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     controls_layout.addStretch()
 
+    window.snapshot_sync_label = QLabel("Synced: —")
+    window.snapshot_sync_label.setObjectName("SnapshotSyncLabel")
+    window.snapshot_sync_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+    window.snapshot_sync_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+    controls_layout.addWidget(window.snapshot_sync_label)
+
     window.snapshot_subsample_label = QLabel("")
     window.snapshot_subsample_label.setObjectName("SnapshotSubsampleLabel")
     window.snapshot_subsample_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -296,6 +302,12 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.snapshot_time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
     controls_layout.addWidget(window.snapshot_time_label)
     window.snapshot_controls.hide()
+
+    if window.snapshot_controller is not None:
+        window.snapshot_controller.sync_mode_changed.connect(
+            window._update_snapshot_sync_label
+        )
+        window._update_snapshot_sync_label("none")
 
     window.snapshot_timer = QTimer(window)
     window.snapshot_timer.timeout.connect(window.advance_snapshot_frame)
@@ -329,7 +341,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.metadata_panel.hide()
 
     window.event_table = EventTableWidget(window)
-    window.event_table.setMinimumWidth(560)
+    window.event_table.setMinimumWidth(0)
     window.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
     window.event_table.customContextMenuRequested.connect(window.show_event_table_context_menu)
     window.event_table.installEventFilter(window)
@@ -338,6 +350,9 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.event_table_controller.cell_edited.connect(window.handle_table_edit)
     window.event_table_controller.label_edited.connect(window.handle_event_label_edit)
     window.event_table_controller.rows_changed.connect(window._on_event_rows_changed)
+    selection_model = window.event_table.selectionModel()
+    if selection_model is not None:
+        selection_model.selectionChanged.connect(window._on_event_table_selection_changed)
 
     window.header_frame = window._build_data_header()
     window.main_layout.addWidget(window.header_frame)
@@ -353,6 +368,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         text_color = CURRENT_THEME["text"]
         hover_bg = CURRENT_THEME["button_hover_bg"]
         content_bg = CURRENT_THEME.get("table_bg", CURRENT_THEME["window_bg"])
+        panel_bg = CURRENT_THEME.get("panel_bg", content_bg)
+        panel_border = CURRENT_THEME.get("panel_border", border_color)
+        panel_radius = int(CURRENT_THEME.get("panel_radius", 6))
+        snapshot_bg = CURRENT_THEME.get("snapshot_bg", panel_bg)
 
         def rgba_from_hex(color: str, alpha: float) -> str:
             """Return rgba string from a hex color with alpha applied."""
@@ -371,8 +390,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
         subtitle_color = rgba_from_hex(text_color, 0.70)
         section_color = rgba_from_hex(text_color, 0.82)
-        status_color = rgba_from_hex(text_color, 0.68)
+        status_color = rgba_from_hex(text_color, 0.60)
         preview_color = rgba_from_hex(text_color, 0.58)
+        preview_border = rgba_from_hex(panel_border, 0.45)
+        preview_radius = max(2, panel_radius - 2)
 
         window.data_page.setStyleSheet(
             window._shared_button_css()
@@ -404,21 +425,26 @@ QFrame#PlotPanel, QFrame#SidePanel {{
     border: none;
 }}
 QFrame#PlotContainer {{
-    background: {content_bg};
-    border: 1px solid {border_color};
-    border-radius: 16px;
+    background: {panel_bg};
+    border: 1px solid {panel_border};
+    border-radius: {panel_radius}px;
 }}
 QFrame#SnapshotCard, QFrame#TableCard {{
-    background: {content_bg};
-    border: 1px solid {border_color};
-    border-radius: 16px;
+    background: {panel_bg};
+    border: 1px solid {panel_border};
+    border-radius: {panel_radius}px;
 }}
 QWidget#SnapshotControls {{
     background: transparent;
 }}
+QLabel#SnapshotSpeedLabel,
+QLabel#SnapshotSyncLabel {{
+    color: {status_color};
+    font-size: 10px;
+}}
 QLabel#SnapshotStatusLabel {{
     color: {status_color};
-    font-size: 12px;
+    font-size: 11px;
 }}
 QLabel#SnapshotSubsampleLabel {{
     background: {hover_bg};
@@ -433,21 +459,24 @@ QLabel#SectionTitle {{
     color: {section_color};
     padding-bottom: 4px;
 }}
-QLabel#SnapshotPreview {{
-    background: {content_bg};
-    border: 1px dashed {border_color};
-    border-radius: 12px;
+QWidget#SnapshotPreview {{
+    background: {snapshot_bg};
+    border: 1px solid {preview_border};
+    border-radius: {preview_radius}px;
+    color: {preview_color};
+}}
+QWidget#SnapshotPreview QLabel {{
     color: {preview_color};
 }}
 QSplitter#DataSplitter::handle {{
-    background: {border_color};
-    width: 6px;
-    border-radius: 3px;
+    background: {panel_border};
+    width: 4px;
+    border-radius: 2px;
 }}
 QFrame#MetadataPanel {{
-    background: {content_bg};
-    border: 1px solid {border_color};
-    border-radius: 12px;
+    background: {panel_bg};
+    border: 1px solid {panel_border};
+    border-radius: {panel_radius}px;
 }}
 QScrollArea#MetadataScroll {{
     border: none;
@@ -465,8 +494,8 @@ QLabel#MetadataDetails {{
     window._apply_data_page_style = _apply_data_page_style
     window._apply_data_page_style()
 
-    window.stack.setCurrentWidget(window.home_page)
-    window._set_toolbars_visible(False)
+    window.stack.setCurrentWidget(window.data_page)
+    window._set_toolbars_visible(True)
 
     backend = window.plot_host.get_render_backend() if hasattr(window.plot_host, "get_render_backend") else ""
     if backend == "matplotlib":

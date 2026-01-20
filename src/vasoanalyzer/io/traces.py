@@ -16,6 +16,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from vasoanalyzer.core.timebase import TimebaseSource, resolve_trace_timebase
+
 try:
     from vasoanalyzer.services.cache_service import DataCache
 except ImportError:  # pragma: no cover - optional during bootstrap
@@ -95,11 +97,7 @@ def load_trace(file_path, *, cache: Any | None = None):
     def _normalize(col):
         return re.sub(r"[^a-z0-9]", "", col.lower())
 
-    # Locate time and diameter columns using flexible matching for legacy files
-    # VasoTracker files have Time_s_exact (high precision) - prioritize it!
-    time_s_exact_col = None
-    time_s_col = None
-    time_col = None  # Generic fallback
+    # Locate diameter columns using flexible matching for legacy files
     diam_col = None
     outer_col = None
     avg_pressure_col = None
@@ -112,16 +110,6 @@ def load_trace(file_path, *, cache: Any | None = None):
 
     for c in df.columns:
         norm = _normalize(c)
-
-        # Priority 1: Look for Time_s_exact (VasoTracker high-precision time)
-        if norm == "timesexact":
-            time_s_exact_col = c
-        # Priority 2: Look for Time (s) or similar
-        elif norm in ("times", "timeseconds") or c == "Time (s)":
-            time_s_col = c
-        # Priority 3: Generic time column
-        elif time_col is None and ("time" in norm or "sec" in norm or norm in {"t", "ts"}):
-            time_col = c
 
         if "inner" in norm and "diam" in norm:
             inner_candidates.append(c)
@@ -153,28 +141,42 @@ def load_trace(file_path, *, cache: Any | None = None):
     if set_pressure_candidates:
         set_pressure_col = set_pressure_candidates[0]
 
-    # Use Time_s_exact if available (VasoTracker), fall back to Time (s), then generic
-    canonical_time_col = time_s_exact_col or time_s_col or time_col
-
-    if canonical_time_col is None or diam_col is None or canonical_time_col == diam_col:
+    if diam_col is None:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")
 
-    # Log warning for legacy files missing Time_s_exact
-    if time_s_exact_col:
-        log.info(f"Using high-precision time column '{time_s_exact_col}' as canonical")
-    elif time_s_col or time_col:
+    timebase = resolve_trace_timebase(df)
+    canonical_time_col = timebase.source_column
+    if canonical_time_col is not None and canonical_time_col == diam_col:
+        raise ValueError("Trace file must contain distinct Time and Inner Diameter columns")
+
+    if timebase.source == TimebaseSource.TIME_S_EXACT and canonical_time_col:
+        log.info("Using high-precision time column '%s' as canonical", canonical_time_col)
+    elif timebase.source == TimebaseSource.TIME_SECONDS and canonical_time_col:
         log.warning(
-            f"Using legacy time column '{canonical_time_col}' (Time_s_exact not found). "
-            "Sub-millisecond precision may be lost."
+            "Using legacy time column '%s' (Time_s_exact not found). "
+            "Sub-millisecond precision may be lost.",
+            canonical_time_col,
+        )
+    elif timebase.source == TimebaseSource.TIMESTAMP and canonical_time_col:
+        log.info("Using timestamp column '%s' as canonical timebase", canonical_time_col)
+    elif timebase.source == TimebaseSource.SAMPLE_RATE:
+        log.info("Using explicit sample_rate_hz to construct trace timebase")
+
+    for warning in timebase.warnings:
+        log.warning("Timebase warning: %s", warning)
+
+    # If using a different time column, drop the old "Time (s)" column to avoid conflict
+    if canonical_time_col and canonical_time_col != "Time (s)" and "Time (s)" in df.columns:
+        df = df.drop(columns=["Time (s)"])
+        log.info(
+            "Dropped legacy 'Time (s)' column in favor of canonical '%s'",
+            canonical_time_col,
         )
 
-    # If using Time_s_exact, drop the old "Time (s)" column to avoid conflict
-    if time_s_exact_col and "Time (s)" in df.columns and time_s_exact_col != "Time (s)":
-        df = df.drop(columns=["Time (s)"])
-        log.info("Dropped rounded 'Time (s)' column in favor of high-precision 'Time_s_exact'")
-
     # Rename to standardized column names (canonical_time_col → "Time (s)")
-    rename_map = {canonical_time_col: "Time (s)", diam_col: "Inner Diameter"}
+    rename_map = {diam_col: "Inner Diameter"}
+    if canonical_time_col:
+        rename_map[canonical_time_col] = "Time (s)"
     if outer_col:
         rename_map[outer_col] = "Outer Diameter"
     if avg_pressure_col:
@@ -184,11 +186,23 @@ def load_trace(file_path, *, cache: Any | None = None):
     df = df.rename(columns=rename_map)
     df = df.loc[:, ~df.columns.duplicated()]
 
+    if "Time (s)" not in df.columns:
+        df["Time (s)"] = timebase.time_s
+    else:
+        df["Time (s)"] = timebase.time_s
+
     # Store provenance: which column was used as canonical time
-    df.attrs["canonical_time_source"] = canonical_time_col
+    df.attrs["canonical_time_source"] = canonical_time_col or timebase.source.value
+    df.attrs["timebase"] = {
+        "trace": {
+            "source": timebase.source.value,
+            "column": canonical_time_col,
+            "t0_s": float(timebase.t0_s) if timebase.t0_s is not None else None,
+            "warnings": list(timebase.warnings),
+        }
+    }
 
     # Ensure numeric types
-    df["Time (s)"] = pd.to_numeric(df["Time (s)"], errors="coerce")
     df["Inner Diameter"] = pd.to_numeric(df["Inner Diameter"], errors="coerce")
     if "Outer Diameter" in df.columns:
         df["Outer Diameter"] = pd.to_numeric(df["Outer Diameter"], errors="coerce")

@@ -252,6 +252,10 @@ class TraceView:
             self.outer_line.set_data([], [])
             if self.outer_band:
                 self.outer_band.set_verts([])
+        if np.isclose(y_min, y_max, rtol=0.0, atol=1e-12):
+            delta = max(1e-6, abs(y_min) * 0.01)
+            y_min -= delta
+            y_max += delta
         if self.ax.get_autoscaley_on():
             self.ax.set_ylim(y_min, y_max)
         ax2 = self.ax2

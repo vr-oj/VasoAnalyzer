@@ -7,10 +7,10 @@ import re
 from pathlib import Path
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFontMetrics
 from PyQt5.QtWidgets import (
     QCheckBox,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -37,18 +37,25 @@ class NewProjectDialog(QDialog):
         self.setWindowTitle("Create Project")
         self.setModal(True)
         self._settings = settings
-        self._path_edited_manually = False
+        self._selected_directory = ""
+        self._preview_path = ""
+        self._resolved_project_path = ""
 
-        self._default_dir = (
-            self._settings.value("paths/last_project_directory", "", type=str)
-            if self._settings
-            else ""
-        )
-        if not self._default_dir:
-            self._default_dir = str(Path.home())
+        self._default_dir = self._resolve_default_directory()
 
         self._build_ui()
         self._apply_defaults()
+
+    # ------------------------------------------------------------------#
+    def _resolve_default_directory(self) -> str:
+        if self._settings is None:
+            return str(Path.home() / "Documents")
+        default_dir = self._settings.value("projects/last_directory", "", type=str)
+        if not default_dir:
+            default_dir = self._settings.value("paths/last_project_directory", "", type=str)
+        if not default_dir:
+            default_dir = str(Path.home() / "Documents")
+        return default_dir
 
     # ------------------------------------------------------------------#
     def _build_ui(self) -> None:
@@ -56,12 +63,12 @@ class NewProjectDialog(QDialog):
         main_layout.setContentsMargins(16, 16, 16, 16)
         main_layout.setSpacing(12)
 
-        intro = QLabel("Follow the steps below to initialise a project and get ready to add data.")
+        intro = QLabel("Create a project to organize datasets, events, and exports.")
         intro.setWordWrap(True)
         main_layout.addWidget(intro)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
+        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         form.setFormAlignment(Qt.AlignTop)
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
@@ -76,124 +83,163 @@ class NewProjectDialog(QDialog):
         path_layout.setContentsMargins(0, 0, 0, 0)
         path_layout.setSpacing(6)
         self.project_path_edit = QLineEdit(self)
-        self.project_path_edit.setPlaceholderText("Select where the project will be saved")
-        browse_button = QPushButton("Browse…", self)
-        browse_button.clicked.connect(self._choose_path)
+        self.project_path_edit.setPlaceholderText("Choose a folder")
+        self.project_path_edit.setReadOnly(True)
+        self.project_path_edit.setToolTip("")
+        self.choose_location_button = QPushButton("Choose…", self)
+        self.choose_location_button.clicked.connect(self._choose_location)
         path_layout.addWidget(self.project_path_edit, stretch=1)
-        path_layout.addWidget(browse_button, stretch=0)
-        form.addRow("Save location:", path_container)
+        path_layout.addWidget(self.choose_location_button, stretch=0)
+        form.addRow("Location:", path_container)
 
-        experiment_container = QWidget(self)
-        exp_layout = QHBoxLayout(experiment_container)
-        exp_layout.setContentsMargins(0, 0, 0, 0)
-        exp_layout.setSpacing(6)
-        self.create_experiment_checkbox = QCheckBox("Add first experiment", self)
+        self.create_experiment_checkbox = QCheckBox("Create first experiment", self)
         self.create_experiment_checkbox.setChecked(True)
+        form.addRow("Create first experiment:", self.create_experiment_checkbox)
+
         self.experiment_name_edit = QLineEdit(self)
         self.experiment_name_edit.setPlaceholderText("e.g. Baseline")
-        exp_layout.addWidget(self.create_experiment_checkbox, stretch=0)
-        exp_layout.addWidget(self.experiment_name_edit, stretch=1)
-        form.addRow("Experiment:", experiment_container)
+        form.addRow("Experiment name:", self.experiment_name_edit)
 
-        guidance = QLabel(
-            "After creating the project, use the toolbar to load traces, events, and images."
-        )
-        guidance.setWordWrap(True)
-        guidance.setStyleSheet("color: palette(mid);")
-        main_layout.addWidget(guidance)
+        self.preview_label = QLabel("", self)
+        self.preview_label.setWordWrap(False)
+        self.preview_label.setStyleSheet("color: palette(mid);")
+        main_layout.addWidget(self.preview_label)
 
-        button_box = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
-        )
-        button_box.accepted.connect(self.accept)
-        button_box.rejected.connect(self.reject)
-        main_layout.addWidget(button_box)
+        self.hint_label = QLabel("", self)
+        self.hint_label.setWordWrap(False)
+        self.hint_label.setStyleSheet("color: palette(mid);")
+        self.hint_label.setVisible(False)
+        main_layout.addWidget(self.hint_label)
 
-        self.project_name_edit.textChanged.connect(self._sync_path_with_name)
-        self.project_path_edit.textEdited.connect(self._mark_manual_path)
+        button_box = QHBoxLayout()
+        button_box.setContentsMargins(0, 0, 0, 0)
+        button_box.setSpacing(8)
+        main_layout.addLayout(button_box)
+
+        self.cancel_button = QPushButton("Cancel", self)
+        self.cancel_button.clicked.connect(self.reject)
+        button_box.addStretch(1)
+        button_box.addWidget(self.cancel_button)
+
+        self.create_button = QPushButton("Create", self)
+        self.create_button.setDefault(True)
+        self.create_button.setAutoDefault(True)
+        self.create_button.clicked.connect(self.accept)
+        button_box.addWidget(self.create_button)
+
+        self.project_name_edit.textChanged.connect(self._on_project_name_changed)
         self.create_experiment_checkbox.toggled.connect(self._toggle_experiment_input)
+        self.experiment_name_edit.textChanged.connect(self._update_validation)
 
     # ------------------------------------------------------------------#
     def _apply_defaults(self) -> None:
+        self.project_name_edit.setText("Untitled Project")
+        self._set_location(self._default_dir)
         self._toggle_experiment_input(self.create_experiment_checkbox.isChecked())
         self.project_name_edit.setFocus(Qt.OtherFocusReason)
+        self.project_name_edit.selectAll()
+        self._update_preview()
+        self._update_validation()
 
     # ------------------------------------------------------------------#
     def _toggle_experiment_input(self, checked: bool) -> None:
         self.experiment_name_edit.setEnabled(checked)
         if checked and not self.experiment_name_edit.text().strip():
             self.experiment_name_edit.setText("Experiment 1")
+        self._update_validation()
 
     # ------------------------------------------------------------------#
-    def _sync_path_with_name(self, text: str) -> None:
-        if self._path_edited_manually:
-            return
-        clean_name = _sanitize_project_name(text)
-        if not clean_name:
-            self.project_path_edit.clear()
-            return
-        suggested = Path(self._default_dir) / f"{clean_name}.vaso"
-        self.project_path_edit.setText(str(suggested))
+    def _on_project_name_changed(self, text: str) -> None:
+        _ = text
+        self._update_preview()
+        self._update_validation()
 
     # ------------------------------------------------------------------#
-    def _mark_manual_path(self) -> None:
-        self._path_edited_manually = True
+    def _set_location(self, directory: str) -> None:
+        self._selected_directory = directory.strip()
+        self.project_path_edit.setText(self._selected_directory)
+        self.project_path_edit.setToolTip(self._selected_directory)
+        self._update_preview()
+        self._update_validation()
 
     # ------------------------------------------------------------------#
-    def _choose_path(self) -> None:
-        filename, selected_filter = QFileDialog.getSaveFileName(
+    def _choose_location(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
             self,
-            "Create Project",
+            "Select Project Location",
             self.project_path_edit.text() or self._default_dir,
-            "VasoAnalyzer Projects (*.vaso);;Folder Bundles (*.vasopack)",
         )
-        if not filename:
+        if not directory:
             return
-        path = Path(filename).expanduser()
+        self._default_dir = directory
+        self._set_location(directory)
+        if self._settings:
+            self._settings.setValue("projects/last_directory", directory)
 
-        # Enforce extension based on selected filter
-        if "Folder Bundles" in selected_filter:
-            if path.suffix.lower() != ".vasopack":
-                path = path.with_suffix(".vasopack")
+    # ------------------------------------------------------------------#
+    def _build_project_path(self) -> Path | None:
+        name = _sanitize_project_name(self.project_name_edit.text())
+        if not name:
+            return None
+        if not self._selected_directory:
+            return None
+        return Path(self._selected_directory).expanduser() / f"{name}.vaso"
+
+    # ------------------------------------------------------------------#
+    def _update_preview(self) -> None:
+        path = self._build_project_path()
+        self._preview_path = str(path) if path else ""
+        self._refresh_preview_label()
+
+    # ------------------------------------------------------------------#
+    def _refresh_preview_label(self) -> None:
+        if not self._preview_path:
+            self.preview_label.setText("")
+            self.preview_label.setToolTip("")
+            return
+        full_text = f"Will create: {self._preview_path}"
+        if self.preview_label.width() > 0:
+            metrics = QFontMetrics(self.preview_label.font())
+            display = metrics.elidedText(
+                full_text, Qt.ElideMiddle, self.preview_label.width()
+            )
         else:
-            # Default to .vaso (single-file container)
-            if path.suffix.lower() != ".vaso":
-                path = path.with_suffix(".vaso")
+            display = full_text
+        self.preview_label.setText(display)
+        self.preview_label.setToolTip(self._preview_path)
 
-        self.project_path_edit.setText(str(path))
-        self._path_edited_manually = True
+    # ------------------------------------------------------------------#
+    def _update_validation(self) -> bool:
+        hint = ""
+        if not _sanitize_project_name(self.project_name_edit.text()):
+            hint = "Enter a project name."
+        elif not self._selected_directory:
+            hint = "Choose a location for the project."
+        elif (
+            self.create_experiment_checkbox.isChecked()
+            and not self.experiment_name_edit.text().strip()
+        ):
+            hint = "Enter a name for the first experiment."
+
+        is_valid = not hint
+        self.create_button.setEnabled(is_valid)
+        self.hint_label.setText(hint)
+        self.hint_label.setVisible(bool(hint))
+        return is_valid
+
+    # ------------------------------------------------------------------#
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._refresh_preview_label()
 
     # ------------------------------------------------------------------#
     def accept(self) -> None:
+        if not self._update_validation():
+            return
         name = _sanitize_project_name(self.project_name_edit.text())
-        if not name:
-            QMessageBox.warning(self, "Missing Information", "Please enter a project name.")
-            self.project_name_edit.setFocus(Qt.OtherFocusReason)
+        project_path = self._build_project_path()
+        if project_path is None:
             return
-
-        path_text = self.project_path_edit.text().strip()
-        if not path_text:
-            QMessageBox.warning(
-                self, "Missing Information", "Select where the project should be saved."
-            )
-            self.project_path_edit.setFocus(Qt.OtherFocusReason)
-            return
-
-        if self.create_experiment_checkbox.isChecked():
-            exp_name = self.experiment_name_edit.text().strip()
-            if not exp_name:
-                QMessageBox.warning(
-                    self,
-                    "Missing Information",
-                    "Provide a name for the first experiment or uncheck the option.",
-                )
-                self.experiment_name_edit.setFocus(Qt.OtherFocusReason)
-                return
-
-        project_path = Path(path_text).expanduser()
-        # Ensure valid extension (default to .vaso for new projects)
-        if project_path.suffix.lower() not in [".vaso", ".vasopack"]:
-            project_path = project_path.with_suffix(".vaso")
 
         try:
             project_path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,11 +250,10 @@ class NewProjectDialog(QDialog):
             return
 
         if self._settings:
-            self._settings.setValue("paths/last_project_directory", str(project_path.parent))
+            self._settings.setValue("projects/last_directory", str(project_path.parent))
 
         self.project_name_edit.setText(name)
-        self.project_path_edit.setText(str(project_path))
-        self._path_edited_manually = True
+        self._resolved_project_path = str(project_path)
         super().accept()
 
     # ------------------------------------------------------------------#
@@ -217,7 +262,10 @@ class NewProjectDialog(QDialog):
 
     # ------------------------------------------------------------------#
     def project_path(self) -> str:
-        return self.project_path_edit.text().strip()
+        if self._resolved_project_path:
+            return self._resolved_project_path
+        path = self._build_project_path()
+        return str(path) if path else ""
 
     # ------------------------------------------------------------------#
     def experiment_name(self) -> str | None:

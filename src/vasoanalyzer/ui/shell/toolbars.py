@@ -57,7 +57,12 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
         _build_matplotlib_plot_toolbar(window, canvas, plot_host, toolbar)
 
     _add_shared_plot_actions(window, toolbar, is_pyqtgraph=is_pyqtgraph, add_to_toolbar=False)
-    _add_view_overflow_menu(window, toolbar, is_pyqtgraph=is_pyqtgraph)
+    promoted_actions = _add_quick_view_actions(
+        window, toolbar, is_pyqtgraph=is_pyqtgraph
+    )
+    _add_view_overflow_menu(
+        window, toolbar, is_pyqtgraph=is_pyqtgraph, promoted_actions=promoted_actions
+    )
     window._ensure_event_label_actions()
     window._sync_event_controls()
     window._sync_grid_action()
@@ -132,11 +137,7 @@ def _build_matplotlib_plot_toolbar(
 
     if pan_act:
         pan_act.setText("Pan")
-        pan_act.setToolTip(
-            "<b>Pan</b> <kbd>P</kbd><br><br>"
-            "Click and drag to move the view.<br>"
-            "Press <kbd>Esc</kbd> to exit pan mode."
-        )
+        pan_act.setToolTip("Pan: drag to move the view")
         pan_act.setStatusTip("Drag to move the view. Press Esc to exit.")
         pan_act.setIcon(QIcon(window.icon_path("Pan.svg")))
         pan_act.setShortcut(QKeySequence("P"))
@@ -144,11 +145,7 @@ def _build_matplotlib_plot_toolbar(
 
     if zoom_act:
         zoom_act.setText("Select")
-        zoom_act.setToolTip(
-            "<b>Select</b> <kbd>Z</kbd><br><br>"
-            "Drag a rectangle to zoom in.<br>"
-            "Press <kbd>Esc</kbd> to exit zoom mode."
-        )
+        zoom_act.setToolTip("Select: drag to zoom into a region")
         zoom_act.setStatusTip("Drag a rectangle to zoom in. Press Esc to exit.")
         zoom_act.setIcon(QIcon(window.icon_path("Zoom.svg")))
         zoom_act.setShortcut(QKeySequence("Z"))
@@ -186,11 +183,8 @@ def _build_pyqtgraph_plot_toolbar(
     window.actPgPan = QAction(QIcon(window.icon_path("Pan.svg")), "Pan", window)
     window.actPgPan.setCheckable(True)
     window.actPgPan.setShortcut(QKeySequence("P"))
-    window.actPgPan.setToolTip(
-        "<b>Pan</b> <kbd>P</kbd><br><br>"
-        "Drag to move the view along time.<br>"
-        "PyQtGraph native pan mode."
-    )
+    window.actPgPan.setShortcutContext(Qt.WindowShortcut)
+    window.actPgPan.setToolTip("Pan: drag to move the view")
 
     mouse_mode = "pan"
     if plot_host is not None and hasattr(plot_host, "mouse_mode"):
@@ -205,11 +199,8 @@ def _build_pyqtgraph_plot_toolbar(
     window.actBoxZoom = QAction(QIcon(window.icon_path("Zoom.svg")), "Select", window)
     window.actBoxZoom.setCheckable(True)
     window.actBoxZoom.setShortcut(QKeySequence("Z"))
-    window.actBoxZoom.setToolTip(
-        "<b>Select</b> <kbd>Z</kbd><br><br>"
-        "Drag a rectangle to zoom in along time.<br>"
-        "Press <kbd>Esc</kbd> or toggle off to return to pan."
-    )
+    window.actBoxZoom.setShortcutContext(Qt.WindowShortcut)
+    window.actBoxZoom.setToolTip("Select: drag to zoom into a region")
     window.actBoxZoom.setChecked(not pan_checked)
     window.actBoxZoom.toggled.connect(window._on_box_zoom_toggled)
     window.actBoxZoom.toggled.connect(window._handle_nav_mode_toggled)
@@ -218,25 +209,28 @@ def _build_pyqtgraph_plot_toolbar(
     window._nav_mode_actions = [window.actPgPan, window.actBoxZoom]
 
     window.actZoomIn = QAction(QIcon(window.icon_path("Zoom.svg")), "Zoom In", window)
-    window.actZoomIn.setShortcut(QKeySequence("+"))
+    window.actZoomIn.setShortcuts([QKeySequence("+"), QKeySequence("=")])
+    window.actZoomIn.setShortcutContext(Qt.WindowShortcut)
     window.actZoomIn.setToolTip(
         "<b>Zoom In</b> <kbd>+</kbd><br><br>"
         "Zoom in to see more detail along time.<br>"
-        "Increases magnification 2x."
+        "Increases magnification along X."
     )
     window.actZoomIn.triggered.connect(window._on_zoom_in_triggered)
 
     window.actZoomOut = QAction(QIcon(window.icon_path("ZoomOut.svg")), "Zoom Out", window)
     window.actZoomOut.setShortcut(QKeySequence("-"))
+    window.actZoomOut.setShortcutContext(Qt.WindowShortcut)
     window.actZoomOut.setToolTip(
         "<b>Zoom Out</b> <kbd>-</kbd><br><br>"
         "Zoom out to see more time range.<br>"
-        "Decreases magnification 2x."
+        "Decreases magnification along X."
     )
     window.actZoomOut.triggered.connect(window._on_zoom_out_triggered)
 
     window.actZoomBack = QAction(QIcon(window.icon_path("Back.svg")), "Zoom Back", window)
     window.actZoomBack.setShortcut(QKeySequence("Backspace"))
+    window.actZoomBack.setShortcutContext(Qt.WindowShortcut)
     window.actZoomBack.setToolTip(
         "<b>Zoom Back</b> <kbd>Backspace</kbd><br><br>"
         "Step back through zoom history.<br>"
@@ -244,12 +238,15 @@ def _build_pyqtgraph_plot_toolbar(
     )
     window.actZoomBack.triggered.connect(window._on_zoom_back_triggered)
 
-    window.actAutoscale = QAction(QIcon(window.icon_path("autoscale.svg")), "Autoscale", window)
+    window.actAutoscale = QAction(
+        QIcon(window.icon_path("autoscale.svg")), "Autoscale Y (Once)", window
+    )
     window.actAutoscale.setShortcut(QKeySequence("A"))
+    window.actAutoscale.setShortcutContext(Qt.WindowShortcut)
     window.actAutoscale.setToolTip(
         "<b>Autoscale</b> <kbd>A</kbd><br><br>"
-        "Reset to full time range and autoscale Y axes.<br>"
-        "Shows all data in view."
+        "Autoscale Y in the current time window.<br>"
+        "Runs once and keeps continuous autoscale off."
     )
     window.actAutoscale.triggered.connect(window._on_autoscale_triggered)
 
@@ -257,9 +254,10 @@ def _build_pyqtgraph_plot_toolbar(
         QIcon(window.icon_path("y-autoscale.svg")), "Y-Axis Autoscale", window
     )
     window.actAutoscaleY.setCheckable(True)
-    window.actAutoscaleY.setShortcut(QKeySequence("Y"))
+    window.actAutoscaleY.setShortcut(QKeySequence("Shift+A"))
+    window.actAutoscaleY.setShortcutContext(Qt.WindowShortcut)
     window.actAutoscaleY.setToolTip(
-        "<b>Y-Axis Autoscale</b> <kbd>Y</kbd><br><br>"
+        "<b>Y-Axis Autoscale</b> <kbd>Shift+A</kbd><br><br>"
         "Toggle Y-axis autoscaling.<br>"
         "When checked: Y-axis rescales as you pan.<br>"
         "When unchecked: Y-axis stays locked at current range."
@@ -281,6 +279,7 @@ def _add_shared_plot_actions(
     window.actGrid.setCheckable(True)
     window.actGrid.setChecked(window.grid_visible)
     window.actGrid.setShortcut(QKeySequence("G"))
+    window.actGrid.setShortcutContext(Qt.WindowShortcut)
     window.actGrid.setToolTip(
         "<b>Toggle Grid</b> <kbd>G</kbd><br><br>"
         "Shows/hides coordinate grid overlay.<br>"
@@ -291,6 +290,14 @@ def _add_shared_plot_actions(
     window.actGrid.triggered.connect(window._on_grid_action_triggered)
     if add_to_toolbar:
         toolbar.addAction(window.actGrid)
+
+    window.actOverviewStrip = QAction("Overview strip", window)
+    window.actOverviewStrip.setCheckable(True)
+    window.actOverviewStrip.setChecked(getattr(window, "_overview_strip_enabled", False))
+    window.actOverviewStrip.setToolTip("Show or hide the overview strip")
+    with contextlib.suppress(Exception):
+        window.actOverviewStrip.triggered.disconnect()
+    window.actOverviewStrip.triggered.connect(window.toggle_overview_strip)
 
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
     if is_pyqtgraph:
@@ -331,60 +338,161 @@ def _add_shared_plot_actions(
         toolbar.addAction(window.actEditPoints)
 
 
-def _add_view_overflow_menu(
+def _ensure_zoom_all_action(window: VasoAnalyzerApp) -> QAction:
+    zoom_all = getattr(window, "actZoomAllX", None)
+    if zoom_all is None:
+        zoom_all = QAction(QIcon(window.icon_path("Home.svg")), "Zoom All (X)", window)
+        zoom_all.triggered.connect(window._zoom_all_x)
+        window.actZoomAllX = zoom_all
+    zoom_all.setText("Zoom All (X)")
+    zoom_all.setIcon(QIcon(window.icon_path("Home.svg")))
+    return zoom_all
+
+
+def _ensure_time_preset_actions(window: VasoAnalyzerApp) -> list[QAction]:
+    presets = [
+        ("actTimePreset1s", "Window 1s", 1.0, "Set view to 1 second"),
+        ("actTimePreset10s", "Window 10s", 10.0, "Set view to 10 seconds"),
+        ("actTimePreset60s", "Window 60s", 60.0, "Set view to 60 seconds"),
+    ]
+    actions: list[QAction] = []
+    for attr_name, label, span, tooltip in presets:
+        action = getattr(window, attr_name, None)
+        if action is None:
+            action = QAction(label, window)
+            action.setToolTip(tooltip)
+            action.triggered.connect(
+                lambda _checked=False, s=span: window._apply_time_span_preset(s)
+            )
+            setattr(window, attr_name, action)
+        actions.append(action)
+    return actions
+
+
+def _add_quick_view_actions(
     window: VasoAnalyzerApp, toolbar: CustomToolbar, *, is_pyqtgraph: bool
+) -> set[QAction]:
+    """Attach quick-access view actions as toolbar buttons."""
+
+    promoted: set[QAction] = set()
+
+    def add_button(
+        action: QAction | None,
+        tooltip: str,
+        attr_name: str,
+        object_name: str,
+    ) -> None:
+        if action is None:
+            return
+        button = QToolButton(toolbar)
+        button.setObjectName(object_name)
+        button.setDefaultAction(action)
+        button.setToolTip(tooltip)
+        button.setIconSize(toolbar.iconSize())
+        button.setToolButtonStyle(toolbar.toolButtonStyle())
+        action_widget = toolbar.addWidget(button)
+        setattr(toolbar, attr_name, action_widget)
+        promoted.add(action)
+
+    zoom_all = _ensure_zoom_all_action(window)
+    add_button(
+        zoom_all,
+        "Zoom to full time range",
+        "_quick_zoom_all_action",
+        "PlotToolbarZoomAll",
+    )
+
+    add_button(
+        getattr(window, "actZoomBack", None),
+        "Back to previous view",
+        "_quick_zoom_back_action",
+        "PlotToolbarZoomBack",
+    )
+    add_button(
+        getattr(window, "actZoomIn", None),
+        "Zoom in (time axis)",
+        "_quick_zoom_in_action",
+        "PlotToolbarZoomIn",
+    )
+    add_button(
+        getattr(window, "actZoomOut", None),
+        "Zoom out (time axis)",
+        "_quick_zoom_out_action",
+        "PlotToolbarZoomOut",
+    )
+    add_button(
+        getattr(window, "actAutoscale", None),
+        "Autoscale Y once (does not stay on)",
+        "_quick_autoscale_action",
+        "PlotToolbarAutoscale",
+    )
+
+    return promoted
+
+
+def _add_view_overflow_menu(
+    window: VasoAnalyzerApp,
+    toolbar: CustomToolbar,
+    *,
+    is_pyqtgraph: bool,
+    promoted_actions: set[QAction] | None = None,
 ) -> None:
     """Attach overflow View menu with secondary actions."""
 
     view_menu = QMenu(toolbar)
 
-    zoom_all = getattr(window, "actZoomAllX", None)
-    if zoom_all is None:
-        zoom_all = QAction(QIcon(window.icon_path("Home.svg")), "Zoom to All (X)", window)
-        zoom_all.triggered.connect(window._zoom_all_x)
-        window.actZoomAllX = zoom_all
-    view_menu.addAction(zoom_all)
+    promoted = promoted_actions or set()
 
-    for action in (
+    primary_actions = [
+        _ensure_zoom_all_action(window),
         getattr(window, "actZoomIn", None),
         getattr(window, "actZoomOut", None),
         getattr(window, "actZoomBack", None),
-    ):
-        if action is not None:
-            view_menu.addAction(action)
+    ]
+    added_primary = False
+    for action in primary_actions:
+        if action is None or action in promoted:
+            continue
+        view_menu.addAction(action)
+        added_primary = True
 
-    view_menu.addSeparator()
-
-    for action in (
+    secondary_actions = [
         getattr(window, "actAutoscale", None),
         getattr(window, "actAutoscaleY", None),
+        *_ensure_time_preset_actions(window),
         getattr(window, "actGrid", None),
+        getattr(window, "actOverviewStrip", None),
         getattr(window, "actStyle", None),
-    ):
-        if action is not None:
-            view_menu.addAction(action)
-
-    edit_points = getattr(window, "actEditPoints", None)
-    if edit_points is not None:
+    ]
+    secondary_actions = [
+        action for action in secondary_actions if action is not None and action not in promoted
+    ]
+    if added_primary and secondary_actions:
         view_menu.addSeparator()
-        view_menu.addAction(edit_points)
+    for action in secondary_actions:
+        view_menu.addAction(action)
 
     view_button = QToolButton(toolbar)
     view_button.setObjectName("PlotToolbarViewMenu")
-    view_button.setText("View")
+    view_button.setText("More…")
     view_button.setIcon(QIcon(window.icon_path("plot-settings.svg")))
+    view_button.setIconSize(toolbar.iconSize())
+    view_button.setToolTip("More view options")
     view_button.setPopupMode(QToolButton.InstantPopup)
     view_button.setMenu(view_menu)
-    view_button.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-    toolbar.addWidget(view_button)
+    view_button.setToolButtonStyle(toolbar.toolButtonStyle())
+    view_action = toolbar.addWidget(view_button)
     toolbar._view_menu_button = view_button
+    toolbar._view_menu_action = view_action
 
 
 def _apply_toolbar_styles(toolbar: CustomToolbar) -> None:
     """Apply stylesheet to the plot toolbar based on CURRENT_THEME."""
 
-    border_color = CURRENT_THEME["grid_color"]
+    border_color = CURRENT_THEME.get("panel_border", CURRENT_THEME["grid_color"])
+    separator_color = CURRENT_THEME.get("grid_color", border_color)
     bg = CURRENT_THEME.get("toolbar_bg", CURRENT_THEME.get("window_bg", "#FFFFFF"))
+    button_bg = CURRENT_THEME.get("button_bg", bg)
     hover_bg = CURRENT_THEME.get("button_hover_bg", CURRENT_THEME.get("selection_bg", bg))
     checked_bg = CURRENT_THEME.get("selection_bg", hover_bg)
     pressed_bg = CURRENT_THEME.get("button_active_bg", checked_bg)
@@ -395,20 +503,27 @@ def _apply_toolbar_styles(toolbar: CustomToolbar) -> None:
         QToolBar#PlotToolbar {{
             background: {bg};
             border: 1px solid {border_color};
-            border-radius: 10px;
+            border-radius: 6px;
             padding: 4px 6px;
-            spacing: 2px;
+            spacing: 4px;
+        }}
+        QToolBar#PlotToolbar::separator {{
+            background: {separator_color};
+            width: 1px;
+            margin: 2px 8px;
         }}
         QToolBar#PlotToolbar QToolButton {{
-            background: transparent;
-            border: none;
-            border-radius: 10px;
-            margin: 0px 3px;
-            padding: 6px 10px;
-            min-width: 54px;
+            background: {button_bg};
+            border: 1px solid {border_color};
+            border-radius: 6px;
+            margin: 1px 3px;
+            padding: 5px 8px;
+            min-width: 48px;
             color: {text_color};
         }}
         QToolBar#PlotToolbar QToolButton:disabled {{
+            background: {bg};
+            border: 1px solid {border_color};
             color: {disabled_text};
         }}
         QToolBar#PlotToolbar QToolButton:hover {{
@@ -416,6 +531,11 @@ def _apply_toolbar_styles(toolbar: CustomToolbar) -> None:
         }}
         QToolBar#PlotToolbar QToolButton:checked {{
             background: {checked_bg};
+            color: {text_color};
+        }}
+        QToolBar#PlotToolbar QToolButton:checked:hover {{
+            background: {checked_bg};
+            border: 1px solid {border_color};
             color: {text_color};
         }}
         QToolBar#PlotToolbar QToolButton:pressed {{

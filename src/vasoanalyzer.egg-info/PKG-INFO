@@ -76,9 +76,9 @@ can send a whole analysis to a collaborator as one file.
   - Map event- and trace-level data into your lab’s Excel templates.
   - Reuse mappings so you don’t have to redo column wiring every time.
 
-- **Figure Composer**
-  - Build publication-ready multi-panel figures from your plots.
-  - Share figure layouts inside the `.vaso` project for reproducibility.
+- **Exports + GIFs**
+  - Export to clipboard, CSV, and Excel templates with consistent formatting.
+  - Generate high-res plot images and synchronized GIFs from the same data.
 
 - **Cross-platform**
   - Runs on recent Windows and macOS versions.
@@ -98,7 +98,7 @@ A `.vaso` project is a **ZIP container** that typically includes:
 - **Snapshots** — optional TIFF snapshots or down-sampled frames for preview.
 - **Views & settings** — plot styles, axis settings, event label options.
 - **Edit history** — audit entries for point edits made in the Point Editor.
-- **Figures & exports** — saved figure configurations and exported tables.
+- **Exports** — exported tables, plot images, and GIF settings.
 
 You can safely back up, version, and share a project by copying the `.vaso`
 file. For advanced debugging, the file can be unzipped with any ZIP tool.
@@ -163,8 +163,8 @@ VasoAnalyzer supports several export paths:
 - **Event tables** (CSV) — one row per event with associated diameters /
   pressures and metadata.
 - **Excel Mapper** — map data into a lab-specific Excel template.
-- **Figures** — export plots and composed figures as PNG/TIFF/SVG (depending on
-  platform and configuration).
+- **Plot exports** — export PNG/TIFF/SVG images and GIFs (depending on platform
+  and configuration).
 
 All exports are reproducible: VasoAnalyzer stores enough state inside the
 project to regenerate views.
@@ -173,7 +173,7 @@ project to regenerate views.
 
 - Use **Save Project** in the toolbar to persist your work to the `.vaso` file.
 - Later, double-click a `.vaso` or open from within the app to resume exactly
-  where you left off (including plots, events, edit history, and figures).
+  where you left off (including plots, events, edit history, and export settings).
 
 ---
 
@@ -202,7 +202,7 @@ project to regenerate views.
 
 - `src/vasoanalyzer/`
   - `app/` — application entry points and launchers
-  - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, Figure Composer
+  - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, export dialogs
   - `core/` — project model, trace/event handling, audit, logging
   - `storage/` — SQLite / project I/O
   - `resources/` — icons, QSS styles, etc.

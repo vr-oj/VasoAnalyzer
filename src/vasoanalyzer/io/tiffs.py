@@ -12,6 +12,8 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import tifffile
 
+from vasoanalyzer.core.timebase import FrameTimeResult, resolve_tiff_frame_times
+
 log = logging.getLogger(__name__)
 
 # Snapshot image model:
@@ -157,3 +159,36 @@ def load_tiff_preview(file_path, max_frames=300):
 
     log.info("Loading TIFF preview from %s", file_path)
     return load_tiff(file_path, max_frames=max_frames, metadata=False)
+
+
+def resolve_frame_times(
+    frames_metadata: list[dict] | None,
+    *,
+    n_frames: int | None = None,
+    frame_indices: list[int] | None = None,
+    trace_time_s: np.ndarray | None = None,
+    tiff_page_to_trace_idx: dict[int, int] | None = None,
+    fps: float | None = None,
+    uniform_time_window_s: tuple[float, float] | None = None,
+    time_offset_s: float | None = None,
+    allow_fallback: bool = True,
+) -> FrameTimeResult:
+    """Resolve frame timing with canonical timebase rules."""
+
+    info = {
+        "frames_metadata": frames_metadata or [],
+        "n_frames": n_frames,
+        "frame_indices": frame_indices,
+        "trace_time_s": trace_time_s,
+        "tiff_page_to_trace_idx": tiff_page_to_trace_idx or {},
+    }
+    return resolve_tiff_frame_times(
+        info,
+        fps=fps,
+        uniform_time_window_s=uniform_time_window_s,
+        time_offset_s=time_offset_s,
+        allow_fallback=allow_fallback,
+    )
+
+
+__all__ = ["load_tiff", "load_tiff_preview", "resolve_frame_times"]

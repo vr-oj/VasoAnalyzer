@@ -414,8 +414,8 @@ class WelcomeGuideDialog(QDialog):
                 "Map event- and trace-level data into your lab’s Excel templates and reuse mappings so you don’t have to redo column wiring every time.",
             ),
             (
-                "Figure Composer",
-                "Build publication-ready multi-panel figures from your plots and share layouts inside the .vaso project for reproducibility.",
+                "Figure export",
+                "Export publication-ready plots and tables from your traces and keep them with the .vaso project for reproducibility.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -571,7 +571,7 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "2. Import traces",
-                "Use Import data… to load trace CSVs with time and diameter (and optionally pressure) channels. The trace viewer will show stacked tracks and an event strip.",
+                "Use Open Data… to load trace CSVs with time and diameter (and optionally pressure) channels. The trace viewer will show stacked tracks and an event strip.",
             ),
             (
                 "3. Import events and images",
@@ -579,7 +579,7 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "4. Bring datasets from another project",
-                "Use File → Import Dataset from Project… to browse a source .vaso read-only, select one or more datasets, and import them—optionally preserving their original experiment grouping.",
+                "Use File → Open Data → Import from Project… to browse a source .vaso read-only, select one or more datasets, and import them—optionally preserving their original experiment grouping.",
             ),
             (
                 "5. Clean and annotate",
@@ -591,7 +591,7 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "7. Export tables and figures",
-                "Export event tables, use Excel Mapper to fill your lab templates, or build multi-panel figures with Figure Composer.",
+                "Export event tables, use Excel Mapper to fill your lab templates, or export plots as publication-ready figures.",
             ),
             (
                 "8. Save and resume later",
@@ -672,7 +672,7 @@ class WelcomeGuideDialog(QDialog):
             self._make_shortcut_grid(
                 [
                     ((("⌘", "Ctrl"), "Shift", "N"), "Create new project"),
-                    ((("⌘", "Ctrl"), "O"), "Open trace and event files"),
+                    ((("⌘", "Ctrl"), "O"), "Import trace CSV"),
                     (
                         (("⌘", "Ctrl"), "Shift", "O"),
                         "Open saved project (.vaso / .vasopack)",
@@ -687,7 +687,7 @@ class WelcomeGuideDialog(QDialog):
                     ((("⌘", "Ctrl"), "A"), "Select all events"),
                     ((("⌘", "Ctrl"), "F"), "Find event / Fit data to window"),
                     ((("⌘", "Ctrl"), ","), "Open Preferences"),
-                    ((("⌘", "Ctrl"), "Shift", "T"), "Load VasoTracker TIFF stack"),
+                    ((("⌘", "Ctrl"), "Shift", "T"), "Import result TIFF stack"),
                     ((("⌘", "Ctrl"), "Shift", "H"), "Return to home screen"),
                     ((("⌘", "Ctrl"), "R"), "Reset plot view"),
                     ((("⌘", "Ctrl"), "E"), "Zoom to selection"),

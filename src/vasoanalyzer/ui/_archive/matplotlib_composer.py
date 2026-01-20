@@ -1,4 +1,4 @@
-"""Minimal Matplotlib-based composer window for quick figure exports.
+"""Minimal Matplotlib-based export window for quick figure exports.
 
 Phase 1 scope:
 - Single Axes
@@ -226,7 +226,7 @@ class FigureConfig:
 
 
 class MatplotlibComposerWindow(QMainWindow):
-    """A lightweight Matplotlib-native composer with a single Axes."""
+    """A lightweight Matplotlib-native export window with a single Axes."""
 
     def __init__(
         self,
@@ -258,7 +258,7 @@ class MatplotlibComposerWindow(QMainWindow):
         self._trace_controls: Dict[str, Dict[str, object]] = {}
         self._text_controls: Dict[str, Dict[str, object]] = {}
 
-        self.setWindowTitle("Matplotlib Composer")
+        self.setWindowTitle("Matplotlib Export")
 
         self.fig_cfg = FigureConfig()
 
@@ -281,7 +281,7 @@ class MatplotlibComposerWindow(QMainWindow):
     # ------------------------------------------------------------------ UI setup
     def _build_controls(self) -> None:
         dock = QDockWidget("Figure Controls", self)
-        dock.setObjectName("MatplotlibComposerControls")
+        dock.setObjectName("MatplotlibExportControls")
         dock_widget = QWidget(dock)
         form = QFormLayout(dock_widget)
         form.setContentsMargins(8, 8, 8, 8)
@@ -810,7 +810,7 @@ class MatplotlibComposerWindow(QMainWindow):
             if x_events:
                 try:
                     log.debug(
-                        "MatplotlibComposer events sample=%s trace_xlim=%s",
+                        "MatplotlibExport events sample=%s trace_xlim=%s",
                         x_events[:3],
                         ax.get_xlim(),
                     )

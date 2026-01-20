@@ -51,7 +51,7 @@ class TutorialDialog(QDialog):
                 "2. Name Your First Experiment",
                 [
                     'Enter an experiment name, such as "Concentration Response".',
-                    "Click <b>Finish</b> to open the main window.",
+                    "Click <b>Finish</b> to open the workspace.",
                 ],
             ),
             (

@@ -40,12 +40,12 @@ class ProjectExplorerWidget(QDockWidget):
         card = QFrame(container)
         card.setObjectName("ProjectCard")
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 12, 12, 12)
-        card_layout.setSpacing(8)
+        card_layout.setContentsMargins(8, 8, 8, 8)
+        card_layout.setSpacing(6)
 
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(6)
+        header_layout.setSpacing(4)
         title_label = QLabel("Project", card)
         title_label.setObjectName("ProjectHeaderLabel")
         header_layout.addWidget(title_label)
@@ -60,10 +60,19 @@ class ProjectExplorerWidget(QDockWidget):
         self.tree.setHeaderHidden(True)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.setUniformRowHeights(True)
+        self.tree.setIndentation(14)
+
+        self.empty_state_label = QLabel(
+            "No datasets yet. Open Data… or Import Folder…", card
+        )
+        self.empty_state_label.setObjectName("ProjectEmptyState")
+        self.empty_state_label.setWordWrap(True)
+        self.empty_state_label.setVisible(False)
 
         card_layout.addLayout(header_layout)
         card_layout.addWidget(separator)
-        card_layout.addWidget(self.tree)
+        card_layout.addWidget(self.tree, 1)
+        card_layout.addWidget(self.empty_state_label, 0)
 
         container_layout.addWidget(card)
         self.setWidget(container)
@@ -83,33 +92,41 @@ class ProjectExplorerWidget(QDockWidget):
 
         border = CURRENT_THEME.get("grid_color", "#d0d0d0")
         bg = CURRENT_THEME.get("table_bg", "#ffffff")
+        panel_bg = CURRENT_THEME.get("panel_bg", bg)
+        panel_border = CURRENT_THEME.get("panel_border", border)
+        panel_radius = int(CURRENT_THEME.get("panel_radius", 6))
         text = CURRENT_THEME.get("text", "#000000")
 
         self.setStyleSheet(
             f"""
             QDockWidget#ProjectDock {{
-                background: {bg};
+                background: {panel_bg};
                 border: none;
             }}
             QDockWidget#ProjectDock QWidget {{
-                background: {bg};
+                background: {panel_bg};
                 color: {text};
             }}
             QFrame#ProjectCard {{
-                background: {bg};
-                border: 1px solid {border};
-                border-radius: 9px;
-                padding: 3px 3px 6px 3px;
+                background: {panel_bg};
+                border: 1px solid {panel_border};
+                border-radius: {panel_radius}px;
+                padding: 2px 2px 4px 2px;
             }}
             QTreeWidget#ProjectTree {{
-                background: {bg};
+                background: {panel_bg};
                 border: none;
             }}
             QTreeWidget#ProjectTree::item {{
-                background: {bg};
+                background: {panel_bg};
             }}
             QTreeWidget#ProjectTree::item:alternate {{
                 background: {CURRENT_THEME.get("alternate_bg", bg)};
             }}
         """
         )
+
+    def set_empty_state_visible(self, visible: bool) -> None:
+        """Show or hide the project empty-state message."""
+        if hasattr(self, "empty_state_label") and self.empty_state_label is not None:
+            self.empty_state_label.setVisible(bool(visible))

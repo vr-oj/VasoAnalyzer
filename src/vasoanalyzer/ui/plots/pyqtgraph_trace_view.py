@@ -19,6 +19,12 @@ from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
 from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
+from vasoanalyzer.ui.plots.pyqtgraph_style import (
+    apply_selection_box_style,
+    get_pyqtgraph_style,
+    make_event_pen,
+    PLOT_AXIS_LABELS,
+)
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
@@ -108,10 +114,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._event_labels_visible: bool = False
 
         # Event line styling parameters
-        self._event_line_width: float = 2.0
-        self._event_line_style: Qt.PenStyle = Qt.DashLine
-        self._event_line_color: str = "#8A8A8A"
-        self._event_line_alpha: float = 1.0
+        style = get_pyqtgraph_style()
+        self._event_line_width = float(style.event_marker.width)
+        self._event_line_style = style.event_marker.style
+        self._event_line_color = str(style.event_marker.color)
+        self._event_line_alpha = float(style.event_marker.alpha)
 
         # Create initial plot items
         self._create_plot_items()
@@ -262,20 +269,21 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def _apply_theme(self) -> None:
         """Apply color theme from CURRENT_THEME."""
+        style = get_pyqtgraph_style()
         # Background colors - use plot_bg for white content area in light mode
-        bg_color = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
-        bg_rgb = hex_to_pyqtgraph_color(bg_color)
+        bg_rgb = hex_to_pyqtgraph_color(style.background_color)
         self._plot_widget.setBackground(bg_rgb)
 
         # Axis colors
-        text_color = CURRENT_THEME.get("text", "#000000")
+        axis_color = style.axis_pen_color
+        tick_color = style.tick_label_color
         for axis in ["bottom", "left", "right"]:
             ax = self._plot_item.getAxis(axis)
-            ax.setPen(text_color)
-            ax.setTextPen(text_color)
+            ax.setPen(pg.mkPen(axis_color))
+            ax.setTextPen(pg.mkPen(tick_color))
 
         # Grid visibility
-        self._plot_item.showGrid(x=True, y=True, alpha=0.10)
+        self._plot_item.showGrid(x=True, y=True, alpha=style.grid_alpha)
 
         # Update trace line colors
         # Only update inner diameter trace color (changes with theme: black in light, white in dark)
@@ -289,23 +297,27 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # No need to update outer_curve color on theme change
 
         # Update event line colors
-        event_color = CURRENT_THEME.get("event_line", "#8A8A8A")
-        if event_color != self._event_line_color:
-            self._event_line_color = event_color
-            qcolor = QColor(self._event_line_color)
-            qcolor.setAlphaF(self._event_line_alpha)
+        event_style = style.event_marker
+        if (
+            event_style.color != self._event_line_color
+            or event_style.width != self._event_line_width
+            or event_style.style != self._event_line_style
+            or event_style.alpha != self._event_line_alpha
+        ):
+            self._event_line_color = str(event_style.color)
+            self._event_line_width = float(event_style.width)
+            self._event_line_style = event_style.style
+            self._event_line_alpha = float(event_style.alpha)
+            pen = make_event_pen(event_style)
             for line in self.event_lines:
-                pen = pg.mkPen(
-                    color=qcolor,
-                    width=self._event_line_width,
-                    style=self._event_line_style,
-                )
                 line.setPen(pen)
 
     def apply_theme(self) -> None:
         """Public hook to refresh colors after a theme change."""
 
         self._apply_theme()
+        with contextlib.suppress(Exception):
+            apply_selection_box_style(self._view_box, get_pyqtgraph_style().selection_box)
         self._init_hover_label()
 
         # Force immediate visual update
@@ -380,13 +392,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def _default_ylabel(self) -> str:
         """Get default Y-axis label based on mode."""
-        if self._mode == "outer":
-            return "Outer Diameter (µm)"
-        elif self._mode == "avg_pressure":
-            return "Avg Pressure (mmHg)"
-        elif self._mode == "set_pressure":
-            return "Set Pressure (mmHg)"
-        return "Inner Diameter (µm)"
+        mapped = PLOT_AXIS_LABELS.get(self._mode)
+        if mapped:
+            return mapped
+        return PLOT_AXIS_LABELS.get("inner", "ID (µm)")
 
     def set_events(
         self,
@@ -409,7 +418,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return
 
         # Default event color
-        default_color = CURRENT_THEME.get("event_line", "#8A8A8A")
+        default_color = get_pyqtgraph_style().event_marker.color
 
         # Create EventEntryV3 objects for labeling system
         self._event_entries.clear()
@@ -714,12 +723,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         y_range = self._plot_item.viewRange()[1]
         return float(y_range[0]), float(y_range[1])
 
-    def set_ylim(self, y_min: float, y_max: float) -> None:
+    def set_ylim(self, y_min: float, y_max: float, *, preserve_autoscale: bool = False) -> None:
         """Set the visible Y range using public ViewBox API."""
-        vb = self._view_box
-        vb.enableAutoRange(y=False)
-        vb.setRange(yRange=(float(y_min), float(y_max)), padding=0.0)
-        self._autoscale_y = False
+        self._set_ylim_internal(
+            float(y_min),
+            float(y_max),
+            preserve_autoscale=bool(preserve_autoscale),
+        )
         trace_id = self._explicit_ylabel or self._mode or hex(id(self))
         log.debug(
             "[PLOT DEBUG] set_ylim trace=%s new_ylim=(%s, %s)",
@@ -728,14 +738,46 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             y_max,
         )
 
+    def _set_ylim_internal(
+        self, y_min: float, y_max: float, *, preserve_autoscale: bool
+    ) -> None:
+        vb = self._view_box
+        if preserve_autoscale:
+            vb.setRange(
+                yRange=(float(y_min), float(y_max)),
+                padding=0.0,
+                update=True,
+                disableAutoRange=not self._autoscale_y,
+            )
+            return
+        vb.enableAutoRange(y=False)
+        vb.setRange(
+            yRange=(float(y_min), float(y_max)),
+            padding=0.0,
+            update=True,
+            disableAutoRange=True,
+        )
+        self._autoscale_y = False
+
     def autoscale_y(self) -> None:
         """Autoscale Y-axis to fit visible data."""
         if self._current_window is None:
             return
-
-        # Recalculate Y limits from current window
-        self._autoscale_y = True
-        self._apply_window(self._current_window)
+        limits = self.data_limits()
+        if limits is None:
+            return
+        y_min, y_max = limits
+        if not np.isfinite(y_min) or not np.isfinite(y_max):
+            return
+        span = y_max - y_min
+        if span <= 0:
+            span = max(abs(y_min), abs(y_max), 1.0)
+        padding = span * 0.05
+        self._set_ylim_internal(
+            float(y_min - padding),
+            float(y_max + padding),
+            preserve_autoscale=True,
+        )
 
     def set_autoscale_y(self, enabled: bool) -> None:
         """Enable/disable Y-axis autoscaling using public ViewBox API."""
@@ -758,7 +800,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def set_grid_visible(self, visible: bool) -> None:
         """Toggle grid visibility."""
-        self._plot_item.showGrid(x=bool(visible), y=bool(visible))
+        self._plot_item.showGrid(
+            x=bool(visible),
+            y=bool(visible),
+            alpha=get_pyqtgraph_style().grid_alpha,
+        )
 
     def current_window(self) -> TraceWindow | None:
         """Get the currently displayed data window."""

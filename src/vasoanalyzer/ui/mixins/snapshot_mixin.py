@@ -5,6 +5,7 @@
 
 """Snapshot viewer functionality for VasoAnalyzer main window."""
 
+import contextlib
 import html
 import io
 import logging
@@ -13,13 +14,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
+import pandas as pd
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QIcon, QImage, QPixmap
 from PyQt5.QtWidgets import QApplication, QFileDialog, QMenu, QMessageBox, QStyle, QWidget
 
 from vasoanalyzer.core.project import SampleN, close_project_ctx, open_project_ctx
 from vasoanalyzer.core.project_context import ProjectContext
-from vasoanalyzer.io.tiffs import load_tiff
+from vasoanalyzer.io.tiffs import load_tiff, resolve_frame_times
 
 log = logging.getLogger(__name__)
 
@@ -285,33 +287,64 @@ class SnapshotMixin:
             self.snapshot_frames = valid_frames
             self.frames_metadata = valid_metadata
 
-            if self.frames_metadata:
-                first_meta = self.frames_metadata[0] or {}
-                found = False
-                for key in ("Rec_intvl", "FrameInterval", "FrameTime"):
-                    if key in first_meta:
-                        try:
-                            val = float(str(first_meta[key]).replace("ms", "").strip())
-                            if val > 1:
-                                val /= 1000.0
-                            if val > 0:
-                                self.recording_interval = val
-                                found = True
-                        except (ValueError, TypeError):
-                            pass
-                        break
-                if not found:
-                    self.recording_interval = 0.14
-            else:
-                self.recording_interval = 0.14
+            trace_time = None
+            tiff_map = None
+            if getattr(self, "trace_data", None) is not None:
+                with contextlib.suppress(Exception):
+                    if "Time (s)" in self.trace_data.columns:
+                        trace_time = pd.to_numeric(
+                            self.trace_data["Time (s)"], errors="coerce"
+                        ).to_numpy(dtype=float)
+                    if "TiffPage" in self.trace_data.columns:
+                        series = pd.to_numeric(
+                            self.trace_data["TiffPage"], errors="coerce"
+                        )
+                        tiff_map = {
+                            int(tp): int(i)
+                            for i, tp in enumerate(series.to_numpy())
+                            if pd.notna(tp)
+                        }
 
-            self.frame_times = []
-            if self.frames_metadata:
-                for idx, meta in enumerate(self.frames_metadata):
-                    self.frame_times.append(meta.get("FrameTime", idx * self.recording_interval))
+            fallback_interval = 0.14
+            try:
+                frame_result = resolve_frame_times(
+                    self.frames_metadata,
+                    n_frames=len(self.snapshot_frames),
+                    trace_time_s=trace_time,
+                    tiff_page_to_trace_idx=tiff_map,
+                )
+            except ValueError:
+                frame_result = resolve_frame_times(
+                    self.frames_metadata,
+                    n_frames=len(self.snapshot_frames),
+                    fps=1.0 / fallback_interval,
+                )
+                frame_result.warnings.append(
+                    f"Frame times estimated using default interval {fallback_interval:.2f}s (no metadata)."
+                )
+
+            self.frame_times = frame_result.frame_times_s.tolist()
+            if len(self.frame_times) >= 2:
+                diffs = np.diff(np.asarray(self.frame_times, dtype=float))
+                diffs = diffs[diffs > 0]
+                self.recording_interval = float(np.median(diffs)) if diffs.size else fallback_interval
             else:
-                for idx in range(len(self.snapshot_frames)):
-                    self.frame_times.append(idx * self.recording_interval)
+                self.recording_interval = fallback_interval
+            current_sample = getattr(self, "current_sample", None)
+            if current_sample is not None:
+                meta = dict(current_sample.import_metadata or {})
+                timebase_block = dict(meta.get("timebase") or {})
+                timebase_block["tiff"] = {
+                    "source": getattr(frame_result.source, "value", str(frame_result.source)),
+                    "warnings": list(frame_result.warnings),
+                    "fps": float(frame_result.fps) if frame_result.fps is not None else None,
+                    "recording_interval_s": float(self.recording_interval)
+                    if self.recording_interval is not None
+                    else None,
+                    "frame_count": int(len(self.frame_times)),
+                }
+                meta["timebase"] = timebase_block
+                current_sample.import_metadata = meta
 
             self.compute_frame_trace_indices()
 
@@ -617,8 +650,13 @@ class SnapshotMixin:
         self.play_pause_btn.setChecked(playing)
         self.play_pause_btn.blockSignals(False)
 
-        icon_role = QStyle.SP_MediaPause if playing else QStyle.SP_MediaPlay
-        self.play_pause_btn.setIcon(self.style().standardIcon(icon_role))
+        icon_name = "pause.svg" if playing else "play_arrow.svg"
+        icon_path = self.icon_path(icon_name) if hasattr(self, "icon_path") else None
+        if icon_path:
+            self.play_pause_btn.setIcon(QIcon(icon_path))
+        else:
+            icon_role = QStyle.SP_MediaPause if playing else QStyle.SP_MediaPlay
+            self.play_pause_btn.setIcon(self.style().standardIcon(icon_role))
         self.play_pause_btn.setText("Pause" if playing else "Play")
         tooltip = "Pause snapshot playback" if playing else "Play snapshot sequence"
         self.play_pause_btn.setToolTip(tooltip)

@@ -1,4 +1,4 @@
-"""Interactive figure-level annotation tools for the Figure Composer."""
+"""Interactive figure-level annotation tools."""
 
 from __future__ import annotations
 

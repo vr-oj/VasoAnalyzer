@@ -1,0 +1,17 @@
+INFO     | vasoanalyzer.core.logging_config | ======================================================================
+INFO     | vasoanalyzer.core.logging_config | VasoAnalyzer logging initialized
+INFO     | vasoanalyzer.core.logging_config | Log directory: /Users/valdovegarodr/Library/Logs/VasoAnalyzer
+INFO     | vasoanalyzer.core.logging_config | Main log: /Users/valdovegarodr/Library/Logs/VasoAnalyzer/vasoanalyzer.log
+INFO     | vasoanalyzer.core.logging_config | Error log: /Users/valdovegarodr/Library/Logs/VasoAnalyzer/errors.log
+INFO     | vasoanalyzer.core.logging_config | Platform: darwin, Python: 3.13.5
+INFO     | vasoanalyzer.core.logging_config | ======================================================================
+======================================================================
+VasoAnalyzer - Intuitive Vascular Analysis
+======================================================================
+libpng warning: iCCP: known incorrect sRGB profile
+INFO     | vasoanalyzer.ui.main_window | Snapshot container child sizes/policies: snapshot=PyQt5.QtCore.QSize(100, 220), sizePolicy=<PyQt5.QtWidgets.QSizePolicy object at 0x1208ca040>, min=PyQt5.QtCore.QSize(0, 220), max=PyQt5.QtCore.QSize(16777215, 16777215)
+INFO     | vasoanalyzer.ui.main_window | Snapshot splitter sizes: [0, 0] stretchFactors: unavailable (PyQt5 QSplitter has no stretchFactor())
+INFO     | vasoanalyzer.ui.main_window | Project dirty state changed: True (reason=snapshot viewer visibility, path=<unsaved>)
+INFO     | vasoanalyzer.ui.main_window | Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked
+INFO     | vasoanalyzer.ui.main_window | Snapshot column geom: right_panel_card=PyQt5.QtCore.QSize(640, 480) snapshot_card=PyQt5.QtCore.QSize(640, 480) event_table_card=PyQt5.QtCore.QSize(640, 480)
+INFO     | vasoanalyzer.app.launcher | Main window started successfully

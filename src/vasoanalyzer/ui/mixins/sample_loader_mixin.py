@@ -43,7 +43,7 @@ from vasoanalyzer.core.project import (
 )
 from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.io.events import find_matching_event_file, load_events
-from vasoanalyzer.io.tiffs import load_tiff
+from vasoanalyzer.io.tiffs import load_tiff, resolve_frame_times
 from vasoanalyzer.io.trace_events import load_trace_and_events
 from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.services.cache_service import DataCache, cache_dir_for_project
@@ -310,7 +310,7 @@ class SampleLoaderMixin:
         self._clear_canvas_and_table()
         self.snapshot_frames = []
         self.frames_metadata = []
-        self.toggle_snapshot_viewer(False)
+        self.toggle_snapshot_viewer(False, source="data")
         self.snapshot_label.hide()
         self.slider.hide()
         self.snapshot_controls.hide()
@@ -505,6 +505,8 @@ class SampleLoaderMixin:
             if self.current_experiment:
                 self.current_project.ui_state["last_experiment"] = self.current_experiment.name
             self.current_project.ui_state["last_sample"] = sample.name
+            if getattr(sample, "dataset_id", None) is not None:
+                self.current_project.ui_state["last_dataset_id"] = int(sample.dataset_id)
 
         self._update_snapshot_viewer_state(sample)
         self._update_home_resume_button()
@@ -1073,33 +1075,64 @@ class SampleLoaderMixin:
             self.snapshot_frames = valid_frames
             self.frames_metadata = valid_metadata
 
-            if self.frames_metadata:
-                first_meta = self.frames_metadata[0] or {}
-                found = False
-                for key in ("Rec_intvl", "FrameInterval", "FrameTime"):
-                    if key in first_meta:
-                        try:
-                            val = float(str(first_meta[key]).replace("ms", "").strip())
-                            if val > 1:
-                                val /= 1000.0
-                            if val > 0:
-                                self.recording_interval = val
-                                found = True
-                        except (ValueError, TypeError):
-                            pass
-                        break
-                if not found:
-                    self.recording_interval = 0.14
-            else:
-                self.recording_interval = 0.14
+            trace_time = None
+            tiff_map = None
+            if getattr(self, "trace_data", None) is not None:
+                with contextlib.suppress(Exception):
+                    if "Time (s)" in self.trace_data.columns:
+                        trace_time = pd.to_numeric(
+                            self.trace_data["Time (s)"], errors="coerce"
+                        ).to_numpy(dtype=float)
+                    if "TiffPage" in self.trace_data.columns:
+                        series = pd.to_numeric(
+                            self.trace_data["TiffPage"], errors="coerce"
+                        )
+                        tiff_map = {
+                            int(tp): int(i)
+                            for i, tp in enumerate(series.to_numpy())
+                            if pd.notna(tp)
+                        }
 
-            self.frame_times = []
-            if self.frames_metadata:
-                for idx, meta in enumerate(self.frames_metadata):
-                    self.frame_times.append(meta.get("FrameTime", idx * self.recording_interval))
+            fallback_interval = 0.14
+            try:
+                frame_result = resolve_frame_times(
+                    self.frames_metadata,
+                    n_frames=len(self.snapshot_frames),
+                    trace_time_s=trace_time,
+                    tiff_page_to_trace_idx=tiff_map,
+                )
+            except ValueError:
+                frame_result = resolve_frame_times(
+                    self.frames_metadata,
+                    n_frames=len(self.snapshot_frames),
+                    fps=1.0 / fallback_interval,
+                )
+                frame_result.warnings.append(
+                    f"Frame times estimated using default interval {fallback_interval:.2f}s (no metadata)."
+                )
+
+            self.frame_times = frame_result.frame_times_s.tolist()
+            if len(self.frame_times) >= 2:
+                diffs = np.diff(np.asarray(self.frame_times, dtype=float))
+                diffs = diffs[diffs > 0]
+                self.recording_interval = float(np.median(diffs)) if diffs.size else fallback_interval
             else:
-                for idx in range(len(self.snapshot_frames)):
-                    self.frame_times.append(idx * self.recording_interval)
+                self.recording_interval = fallback_interval
+            current_sample = getattr(self, "current_sample", None)
+            if current_sample is not None:
+                meta = dict(current_sample.import_metadata or {})
+                timebase_block = dict(meta.get("timebase") or {})
+                timebase_block["tiff"] = {
+                    "source": getattr(frame_result.source, "value", str(frame_result.source)),
+                    "warnings": list(frame_result.warnings),
+                    "fps": float(frame_result.fps) if frame_result.fps is not None else None,
+                    "recording_interval_s": float(self.recording_interval)
+                    if self.recording_interval is not None
+                    else None,
+                    "frame_count": int(len(self.frame_times)),
+                }
+                meta["timebase"] = timebase_block
+                current_sample.import_metadata = meta
 
             self.compute_frame_trace_indices()
 

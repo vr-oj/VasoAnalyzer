@@ -1,7 +1,7 @@
 """Pure rendering functions for GIF animation (no Qt dependencies).
 
 This module provides the core rendering logic for creating animated GIFs,
-following the spec-based architecture pattern from Figure Composer.
+following the spec-based architecture pattern used across the UI.
 """
 
 from dataclasses import dataclass

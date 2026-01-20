@@ -57,9 +57,9 @@ can send a whole analysis to a collaborator as one file.
   - Map event- and trace-level data into your lab’s Excel templates.
   - Reuse mappings so you don’t have to redo column wiring every time.
 
-- **Figure Composer**
-  - Build publication-ready multi-panel figures from your plots.
-  - Share figure layouts inside the `.vaso` project for reproducibility.
+- **Exports + GIFs**
+  - Export to clipboard, CSV, and Excel templates with consistent formatting.
+  - Generate high-res plot images and synchronized GIFs from the same data.
 
 - **Cross-platform**
   - Runs on recent Windows and macOS versions.
@@ -79,7 +79,7 @@ A `.vaso` project is a **ZIP container** that typically includes:
 - **Snapshots** — optional TIFF snapshots or down-sampled frames for preview.
 - **Views & settings** — plot styles, axis settings, event label options.
 - **Edit history** — audit entries for point edits made in the Point Editor.
-- **Figures & exports** — saved figure configurations and exported tables.
+- **Exports** — exported tables, plot images, and GIF settings.
 
 You can safely back up, version, and share a project by copying the `.vaso`
 file. For advanced debugging, the file can be unzipped with any ZIP tool.
@@ -189,7 +189,7 @@ project to regenerate views.
 
 - `src/vasoanalyzer/`
   - `app/` — application entry points and launchers
-  - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, Figure Composer
+  - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, export dialogs
   - `core/` — project model, trace/event handling, audit, logging
   - `storage/` — SQLite / project I/O
 - `docs/` — user guide, welcome tour, and import documentation

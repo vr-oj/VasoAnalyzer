@@ -16,19 +16,35 @@ if os.environ.get("VA_FAULTHANDLER", "1") != "0":
 
     faulthandler.enable()
 
-from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
-from vasoanalyzer.core.logging_config import setup_production_logging
-from vasoanalyzer.core.single_instance import (
-    SingleInstanceManager,
-    collect_vaso_paths,
-    queue_open_requests,
-)
-
 log = logging.getLogger(__name__)
+
+
+def _configure_sip_exit_behavior() -> None:
+    for module_name in ("sip", "PyQt5.sip", "PyQt6.sip"):
+        try:
+            sip_module = __import__(module_name, fromlist=["setdestroyonexit"])
+        except Exception:
+            continue
+        setter = getattr(sip_module, "setdestroyonexit", None)
+        if callable(setter):
+            try:
+                setter(False)
+            except Exception:
+                pass
+            break
 
 
 def main(argv: list[str] | None = None) -> None:
     """Bootstrap the Qt application and block until it exits."""
+    _configure_sip_exit_behavior()
+    from vasoanalyzer.core.logging_config import setup_production_logging
+    from vasoanalyzer.core.single_instance import (
+        SingleInstanceManager,
+        collect_vaso_paths,
+        queue_open_requests,
+    )
+    from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
+
     argv = list(sys.argv if argv is None else argv)
     vaso_paths = collect_vaso_paths(argv)
     project_path = vaso_paths[0] if vaso_paths else None

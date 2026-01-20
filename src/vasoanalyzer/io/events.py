@@ -21,6 +21,8 @@ try:
 except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
+from vasoanalyzer.core.timebase import validate_and_normalize_events
+
 log = logging.getLogger(__name__)
 
 HEADER_ALIASES: dict[str, str] = {
@@ -220,27 +222,16 @@ def load_events(file_path, *, cache: Any | None = None):
 
     frame_col = _find_column(df, ["frame"])
 
-    time_series = df[time_col]
-    numeric = pd.to_numeric(time_series, errors="coerce")
-    if numeric.notna().any():
-        time_values = numeric.copy()
-        missing = numeric.isna()
-        if missing.any():
-            td = pd.to_timedelta(time_series[missing], errors="coerce").dt.total_seconds()
-            time_values.loc[missing] = td
-    else:
-        td = pd.to_timedelta(time_series, errors="coerce")
-        time_values = td.dt.total_seconds()
+    df, report = validate_and_normalize_events(df, None, time_col=time_col)
+    for warning in report.warnings:
+        log.warning("Event time warning: %s", warning)
 
-    valid_mask = time_values.notna()
+    valid_mask = df["_time_seconds"].notna()
     if not valid_mask.all():
         df = df.loc[valid_mask].reset_index(drop=True)
-        time_values = time_values.loc[valid_mask].reset_index(drop=True)
-    else:
-        time_values = time_values.reset_index(drop=True)
 
     labels = df[label_col].astype(str).reset_index(drop=True).tolist()
-    times = time_values.astype(float).tolist()
+    times = df["_time_seconds"].astype(float).tolist()
 
     frames = None
     if frame_col and frame_col in df.columns:

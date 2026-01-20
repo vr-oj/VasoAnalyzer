@@ -1,4 +1,4 @@
-"""Dockable panels for Figure Composer."""
+"""Dockable panels for optional plot tooling."""
 
 from __future__ import annotations
 

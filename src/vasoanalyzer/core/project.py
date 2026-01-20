@@ -222,7 +222,6 @@ class SampleN:
     snapshots: np.ndarray | None = None
     notes: str | None = None
     analysis_results: dict[str, Any] | None = None
-    figure_configs: dict[str, Any] | None = None
     attachments: list[Attachment] = field(default_factory=list)
     dataset_id: int | None = None
     experiment_id: str | None = None
@@ -288,9 +287,6 @@ class SampleN:
             analysis_results=copy.deepcopy(self.analysis_results)
             if isinstance(self.analysis_results, dict)
             else self.analysis_results,
-            figure_configs=copy.deepcopy(self.figure_configs)
-            if isinstance(self.figure_configs, dict)
-            else self.figure_configs,
             attachments=attachments_copy,
             dataset_id=self.dataset_id,
             experiment_id=self.experiment_id,
@@ -651,10 +647,31 @@ def _populate_link_metadata(
             setattr(sample, signature_attr, sig)
 
 
+def _strip_legacy_composer_sample_state(state: dict | None) -> dict | None:
+    if not isinstance(state, dict):
+        return state
+    cleaned = dict(state)
+    cleaned.pop("figure_slides", None)
+    return cleaned or None
+
+
+def _strip_legacy_composer_project_state(state: dict | None) -> dict | None:
+    if not isinstance(state, dict):
+        return state
+    cleaned = dict(state)
+    cleaned.pop("publication_presets", None)
+    return cleaned or None
+
+
 def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
     data = asdict(sample)
     data.pop("snapshots", None)
     data.pop("attachments", None)
+    ui_state = _strip_legacy_composer_sample_state(data.get("ui_state"))
+    if ui_state is None:
+        data.pop("ui_state", None)
+    else:
+        data["ui_state"] = ui_state
     if isinstance(sample.trace_data, pd.DataFrame):
         data["trace_data"] = sample.trace_data.to_dict(orient="list")
         edit_log = sample.trace_data.attrs.get("edit_log")
@@ -672,8 +689,6 @@ def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
             data.pop("analysis_results", None)
     elif data.get("analysis_results") is None:
         data.pop("analysis_results", None)
-    if sample.figure_configs is None:
-        data.pop("figure_configs", None)
     if sample.edit_history:
         data["edit_history"] = sample.edit_history
     if sample.notes is None:
@@ -885,7 +900,6 @@ def sample_from_dict(data: dict) -> SampleN:
         snapshots=None,
         notes=data.get("notes"),
         analysis_results=analysis_results,
-        figure_configs=data.get("figure_configs"),
         attachments=attachments,
         edit_history=edit_history,
     )
@@ -1845,9 +1859,10 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
         meta_entries.append(("project_updated_at", project.updated_at))
     if project.tags:
         meta_entries.append(("project_tags", _json_dumps(project.tags)))
-    if project.ui_state is not None:
+    project_ui_state = _strip_legacy_composer_project_state(project.ui_state)
+    if project_ui_state is not None:
         meta_entries.append(
-            ("project_ui_state", _json_dumps(_normalise_json_data(project.ui_state)))
+            ("project_ui_state", _json_dumps(_normalise_json_data(project_ui_state)))
         )
     if project.path:
         meta_entries.append(("project_path", project.path))
@@ -1882,7 +1897,6 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                 source_repo = None
 
     try:
-        dataset_id_map: dict[int, int] = {}
         for _exp_index, exp in enumerate(project.experiments):
             for sample_index, sample in enumerate(exp.samples):
                 # DEBUG: _populate_store_from_project per-sample instrumentation start
@@ -1893,7 +1907,6 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     getattr(sample, "dataset_id", None),
                 )
                 # DEBUG: _populate_store_from_project per-sample instrumentation end
-                old_dataset_id = getattr(sample, "dataset_id", None)
                 _save_sample_to_store(
                     repo=repo,
                     base_dir=base_dir,
@@ -1903,81 +1916,6 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     source_repo=source_repo,
                     embed_snapshots=embed_snapshots,
                     embed_tiff_snapshots=embed_tiff_snapshots,
-                )
-                new_dataset_id = getattr(sample, "dataset_id", None)
-                if old_dataset_id is not None and new_dataset_id is not None:
-                    try:
-                        dataset_id_map[int(old_dataset_id)] = int(new_dataset_id)
-                    except (TypeError, ValueError):
-                        pass
-
-        if source_repo is not None and dataset_id_map:
-            try:
-                copied = 0
-                for old_id, new_id in dataset_id_map.items():
-                    try:
-                        recipes = source_repo.list_figure_recipes(int(old_id))
-                    except Exception:
-                        log.debug(
-                            "Failed to list figure recipes for dataset_id=%s",
-                            old_id,
-                            exc_info=True,
-                        )
-                        continue
-                    for recipe in recipes or []:
-                        recipe_id = recipe.get("recipe_id")
-                        if not recipe_id:
-                            continue
-                        try:
-                            payload = source_repo.get_figure_recipe(recipe_id)
-                        except Exception:
-                            log.debug(
-                                "Failed to load figure recipe %s",
-                                recipe_id,
-                                exc_info=True,
-                            )
-                            continue
-                        if not payload:
-                            continue
-                        spec_json = payload.get("spec_json")
-                        if not spec_json:
-                            continue
-                        name = (
-                            payload.get("name")
-                            or recipe.get("name")
-                            or "Figure Recipe"
-                        )
-                        try:
-                            repo.add_figure_recipe(
-                                int(new_id),
-                                name,
-                                spec_json,
-                                source=payload.get("source") or "current_view",
-                                trace_key=payload.get("trace_key"),
-                                x_min=payload.get("x_min"),
-                                x_max=payload.get("x_max"),
-                                y_min=payload.get("y_min"),
-                                y_max=payload.get("y_max"),
-                                export_background=payload.get("export_background") or "white",
-                                recipe_id=recipe_id,
-                            )
-                            copied += 1
-                        except Exception:
-                            log.debug(
-                                "Failed to copy figure recipe %s to dataset_id=%s",
-                                recipe_id,
-                                new_id,
-                                exc_info=True,
-                            )
-                if copied:
-                    log.info(
-                        "SAVE: copied %d figure recipe(s) into saved project",
-                        copied,
-                    )
-            except Exception:
-                log.warning(
-                    "Failed to copy figure recipes into saved project",
-                    exc_info=True,
                 )
 
         if project.attachments:
@@ -2586,8 +2524,7 @@ def _build_sample_extra(
         "trace_path": _relativize_path(sample.trace_path, base_dir),
         "events_path": _relativize_path(sample.events_path, base_dir),
         "snapshot_path": _relativize_path(sample.snapshot_path, base_dir),
-        "ui_state": sample.ui_state,
-        "figure_configs": sample.figure_configs,
+        "ui_state": _strip_legacy_composer_sample_state(sample.ui_state),
     }
     if trace_link:
         payload["trace_link"] = trace_link
@@ -3378,7 +3315,6 @@ def _dataset_to_sample(
         snapshot_path=snapshot_path,
         notes=dataset.get("notes"),
         analysis_results=None,
-        figure_configs=extra.get("figure_configs"),
         attachments=attachments,
         dataset_id=dataset_id,
         asset_roles={role: asset["id"] for role, asset in assets_by_role.items()},

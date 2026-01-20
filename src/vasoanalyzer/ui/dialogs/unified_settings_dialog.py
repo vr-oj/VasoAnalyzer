@@ -1209,7 +1209,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         figure_changed = False
 
         # ============================================================
-        # CANVAS SIZE (white rectangle boundary in Figure Composer)
+        # CANVAS SIZE (white rectangle boundary in plot workspace)
         # ============================================================
         canvas_preset = self.canvas_preset.currentText()
         if canvas_preset == "Custom":
@@ -1225,7 +1225,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             canvas_w = getattr(parent, "_default_frame_width_in", 10.0)
             canvas_h = getattr(parent, "_default_frame_height_in", 7.5)
 
-        # Update canvas size in parent (Figure Composer)
+        # Update canvas size in parent window
         if parent is not None:
             old_canvas_w = getattr(parent, "_canvas_width_in", canvas_w)
             old_canvas_h = getattr(parent, "_canvas_height_in", canvas_h)
@@ -1282,7 +1282,7 @@ class UnifiedPlotSettingsDialog(QDialog):
                 fig_h = min(fig_h, canvas_h)
                 self.fig_preset.setCurrentText("Custom")
 
-        # Update figure size in parent (Figure Composer)
+        # Update figure size in parent window
         if parent is not None:
             old_fig_w = getattr(parent, "_figure_width_in", fig_w)
             old_fig_h = getattr(parent, "_figure_height_in", fig_h)
@@ -1309,8 +1309,8 @@ class UnifiedPlotSettingsDialog(QDialog):
         # Apply canvas and figure sizes if anything changed
         if canvas_changed or figure_changed:
             if parent is not None and hasattr(parent, "_apply_canvas_size"):
-                # Figure Composer: apply canvas and figure sizes from state variables
-                # This will call set_size_inches() with the correct values
+                # Apply canvas and figure sizes from state variables.
+                # This will call set_size_inches() with the correct values.
                 parent._apply_canvas_size()
             else:
                 # Main window: just redraw

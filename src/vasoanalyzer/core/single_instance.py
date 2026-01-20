@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 _pending_paths: list[str] = []
 _window_ref: weakref.ReferenceType | None = None
+_manager_ref: weakref.ReferenceType | None = None
 _ipc_warning: bool = False
 
 
@@ -98,10 +99,23 @@ def _get_window():
     return _window_ref() if _window_ref else None
 
 
+def _get_manager():
+    return _manager_ref() if _manager_ref else None
+
+
 def register_main_window(window) -> None:
     """Register the main window so queued opens can be dispatched."""
     global _window_ref
     _window_ref = weakref.ref(window)
+
+    if _pending_paths:
+        QTimer.singleShot(100, dispatch_pending_open_requests)
+
+
+def register_window_manager(manager) -> None:
+    """Register the window manager so queued opens can be dispatched."""
+    global _manager_ref
+    _manager_ref = weakref.ref(manager)
 
     if _pending_paths:
         QTimer.singleShot(100, dispatch_pending_open_requests)
@@ -139,6 +153,11 @@ def open_project_from_path(path: str) -> None:
         log.debug("Ignoring non-.vaso path: %s", path)
         return
 
+    manager = _get_manager()
+    if manager is not None:
+        manager.open_project(normalized)
+        return
+
     window = _get_window()
     if window is None:
         _unique_pending_append(normalized)
@@ -153,14 +172,20 @@ def has_pending_open_requests() -> bool:
 
 def dispatch_pending_open_requests() -> None:
     """Flush queued opens once the main window is available."""
+    manager = _get_manager()
     window = _get_window()
-    if window is None or not _pending_paths:
+    if manager is None and window is None:
+        return
+    if not _pending_paths:
         return
 
     to_open = list(_pending_paths)
     _pending_paths.clear()
     for path in to_open:
-        _open_on_window(window, path)
+        if manager is not None:
+            manager.open_project(path)
+        elif window is not None:
+            _open_on_window(window, path)
 
 
 class SingleInstanceManager(QObject):

@@ -544,159 +544,8 @@ class SQLiteProjectRepository(ProjectRepository):
             sqlite_store.get_results(self._store, dataset_id, kind),
         )
 
-    # Internal helpers -------------------------------------------------
-    def _open_recipe_store(self) -> tuple[sqlite_store.ProjectStore, bool]:
-        """
-        Get the ProjectStore for figure recipe operations.
-
-        Returns a tuple of (store, should_close). If ``should_close`` is True,
-        the caller must close/commit the store when finished.
-
-        Note: Always returns the shared store to avoid transaction isolation issues.
-        Using fresh connections per operation causes queries to not see recently
-        committed data, especially on cloud-synced storage like iCloud.
-        """
-        if self._store is None:
-            raise RuntimeError("Project store is not available for figure recipe operations")
-        # Always use the shared store - never open fresh connections for recipes
-        # This ensures all operations see each other's changes immediately
-        return self._store, False
-
     def iter_datasets(self) -> Sequence[Mapping[str, Any]]:
         return list(sqlite_store.iter_datasets(self._store))
-
-    # Figure recipes
-    def add_figure_recipe(
-        self,
-        dataset_id: int,
-        name: str,
-        spec_json: str,
-        *,
-        source: str = "current_view",
-        trace_key: str | None = None,
-        x_min: float | None = None,
-        x_max: float | None = None,
-        y_min: float | None = None,
-        y_max: float | None = None,
-        export_background: str = "white",
-        recipe_id: str | None = None,
-    ) -> str:
-        print(f"[DB] add_figure_recipe called: dataset_id={dataset_id}, name='{name}', source={source}")
-        store, should_close = self._open_recipe_store()
-        print(f"[DB]   Store opened, should_close={should_close}")
-        try:
-            rid = sqlite_store.add_figure_recipe(
-                store,
-                dataset_id,
-                name,
-                spec_json,
-                source=source,
-                trace_key=trace_key,
-                x_min=x_min,
-                x_max=x_max,
-                y_min=y_min,
-                y_max=y_max,
-                export_background=export_background,
-                recipe_id=recipe_id,
-            )
-            print(f"[DB]   ✓ Recipe added to store, recipe_id={rid}")
-            if should_close:
-                print(f"[DB]   Committing transaction...")
-                with contextlib.suppress(Exception):
-                    store.commit()
-                print(f"[DB]   ✓ Transaction committed")
-            else:
-                print(f"[DB]   No commit needed (using shared store)")
-            return cast(str, rid)
-        finally:
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.close()
-                print(f"[DB]   Store closed")
-
-    def update_figure_recipe(
-        self,
-        recipe_id: str,
-        *,
-        name: str | None = None,
-        spec_json: str | None = None,
-        source: str | None = None,
-        trace_key: str | None = None,
-        x_min: float | None = None,
-        x_max: float | None = None,
-        y_min: float | None = None,
-        y_max: float | None = None,
-        export_background: str | None = None,
-    ) -> None:
-        store, should_close = self._open_recipe_store()
-        try:
-            sqlite_store.update_figure_recipe(
-                store,
-                recipe_id,
-                name=name,
-                spec_json=spec_json,
-                source=source,
-                trace_key=trace_key,
-                x_min=x_min,
-                x_max=x_max,
-                y_min=y_min,
-                y_max=y_max,
-                export_background=export_background,
-            )
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.commit()
-        finally:
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.close()
-
-    def list_figure_recipes(self, dataset_id: int) -> list[dict[str, Any]]:
-        print(f"[DB] list_figure_recipes called for dataset_id={dataset_id}")
-        store, should_close = self._open_recipe_store()
-        try:
-            recipes = cast(list[dict[str, Any]], sqlite_store.list_figure_recipes(store, dataset_id))
-            print(f"[DB]   Found {len(recipes)} recipe(s)")
-            for i, r in enumerate(recipes, 1):
-                print(f"[DB]     Recipe {i}: id={r.get('recipe_id')}, name='{r.get('name')}'")
-            return recipes
-        finally:
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.close()
-
-    def get_figure_recipe(self, recipe_id: str) -> dict[str, Any] | None:
-        store, should_close = self._open_recipe_store()
-        try:
-            return cast(dict[str, Any] | None, sqlite_store.get_figure_recipe(store, recipe_id))
-        finally:
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.close()
-
-    def delete_figure_recipe(self, recipe_id: str) -> None:
-        store, should_close = self._open_recipe_store()
-        try:
-            sqlite_store.delete_figure_recipe(store, recipe_id)
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.commit()
-        finally:
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.close()
-
-    def rename_figure_recipe(self, recipe_id: str, name: str) -> None:
-        store, should_close = self._open_recipe_store()
-        try:
-            sqlite_store.rename_figure_recipe(store, recipe_id, name)
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.commit()
-        finally:
-            if should_close:
-                with contextlib.suppress(Exception):
-                    store.close()
 
     def save(self, *, skip_optimize: bool = False) -> None:
         log.info(
@@ -742,14 +591,14 @@ class SQLiteProjectRepository(ProjectRepository):
                 try:
                     store.commit()
                 except Exception:
-                    log.debug("Failed to commit fresh store after figure recipe op", exc_info=True)
+                    log.debug("Failed to commit fresh store after operation", exc_info=True)
             return result
         finally:
             if use_fresh and store is not None:
                 try:
                     store.close()
                 except Exception:
-                    log.debug("Failed to close fresh store after figure recipe op", exc_info=True)
+                    log.debug("Failed to close fresh store after operation", exc_info=True)
 
 
 def open_project_repository(path: str) -> SQLiteProjectRepository:

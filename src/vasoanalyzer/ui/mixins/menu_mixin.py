@@ -13,6 +13,12 @@ from functools import partial
 from PyQt5.QtGui import QIcon, QKeySequence
 from PyQt5.QtWidgets import QAction, QMessageBox, QWidget
 
+from vasoanalyzer.export.profiles import (
+    EVENT_TABLE_ROW_PER_EVENT_ID,
+    EVENT_VALUES_SINGLE_COLUMN_ID,
+    PRESSURE_CURVE_STANDARD_ID,
+)
+
 
 class MenuMixin:
     """Mixin class providing menu bar construction and management functionality."""
@@ -21,7 +27,7 @@ class MenuMixin:
         self.recent_menu.clear()
 
         if not self.recent_files:
-            self.recent_menu.addAction("No recent files").setEnabled(False)
+            self.recent_menu.addAction("No recent imports").setEnabled(False)
         else:
             for path in self.recent_files:
                 action = QAction(os.path.basename(path), self)
@@ -95,34 +101,125 @@ class MenuMixin:
         self.action_add_sample.triggered.connect(self.add_sample_to_current_experiment)
         project_menu.addAction(self.action_add_sample)
 
-        file_menu.addSection("Session Data")
+        file_menu.addSeparator()
 
         self.action_new = QAction("Start New Analysis…", self)
         self.action_new.setShortcut(QKeySequence.New)
         self.action_new.triggered.connect(self.start_new_analysis)
         file_menu.addAction(self.action_new)
 
-        self.action_open_trace = QAction("Open Trace & Events…", self)
+        import_menu = file_menu.addMenu("Open Data")
+
+        self.action_open_trace = QAction("Import Trace CSV…", self)
         self.action_open_trace.setShortcut(QKeySequence.Open)
         self.action_open_trace.triggered.connect(self._handle_load_trace)
-        file_menu.addAction(self.action_open_trace)
+        import_menu.addAction(self.action_open_trace)
 
-        self.action_open_tiff = QAction("Open Result TIFF…", self)
+        self.action_import_events = QAction("Import Events CSV…", self)
+        self.action_import_events.triggered.connect(self._handle_load_events)
+        self.action_import_events.setEnabled(False)
+        import_menu.addAction(self.action_import_events)
+
+        self.action_open_tiff = QAction("Import Result TIFF…", self)
         self.action_open_tiff.setShortcut("Ctrl+Shift+T")
         self.action_open_tiff.triggered.connect(self.load_snapshot)
-        file_menu.addAction(self.action_open_tiff)
+        import_menu.addAction(self.action_open_tiff)
 
         self.action_import_folder = QAction("Import Folder…", self)
         self.action_import_folder.setShortcut("Ctrl+Shift+I")
         self.action_import_folder.triggered.connect(self._handle_import_folder)
-        file_menu.addAction(self.action_import_folder)
+        import_menu.addAction(self.action_import_folder)
 
-        self.recent_menu = file_menu.addMenu("Recent Files")
+        self.action_import_dataset_pkg = QAction("Import Dataset Package…", self)
+        self.action_import_dataset_pkg.triggered.connect(
+            self.import_dataset_package_action
+        )
+        import_menu.addAction(self.action_import_dataset_pkg)
+
+        self.action_import_dataset_from_project = QAction("Import from Project…", self)
+        self.action_import_dataset_from_project.triggered.connect(
+            self.import_dataset_from_project_action
+        )
+        import_menu.addAction(self.action_import_dataset_from_project)
+
+        self.recent_menu = file_menu.addMenu("Recent Imports")
         self.update_recent_files_menu()
 
         file_menu.addSeparator()
 
         export_menu = file_menu.addMenu("Export")
+
+        copy_menu = export_menu.addMenu("Copy for Excel")
+        self.action_copy_excel_row = QAction("Row-per-Event (Excel)", self)
+        self.action_copy_excel_row.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_row)
+        self.action_copy_excel_values = QAction("Values Only (Column Paste)", self)
+        self.action_copy_excel_values.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                EVENT_VALUES_SINGLE_COLUMN_ID, include_header=False
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_values)
+        copy_menu.addSeparator()
+        self.action_copy_excel_pressure = QAction("Pressure Curve (Standard)", self)
+        self.action_copy_excel_pressure.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                PRESSURE_CURVE_STANDARD_ID, include_header=True
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_pressure)
+
+        export_csv_menu = export_menu.addMenu("Export CSV")
+        self.action_export_csv = export_csv_menu.menuAction()
+        self.action_export_csv_row = QAction("Row-per-Event (Excel)…", self)
+        self.action_export_csv_row.triggered.connect(
+            lambda: self._export_event_profile_csv_via_dialog(
+                EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True
+            )
+        )
+        export_csv_menu.addAction(self.action_export_csv_row)
+        self.action_export_csv_values = QAction("Values Only (Column Paste)…", self)
+        self.action_export_csv_values.triggered.connect(
+            lambda: self._export_event_profile_csv_via_dialog(
+                EVENT_VALUES_SINGLE_COLUMN_ID, include_header=False
+            )
+        )
+        export_csv_menu.addAction(self.action_export_csv_values)
+        export_csv_menu.addSeparator()
+        self.action_export_csv_pressure = QAction("Pressure Curve (Standard)…", self)
+        self.action_export_csv_pressure.triggered.connect(
+            lambda: self._export_event_profile_csv_via_dialog(
+                PRESSURE_CURVE_STANDARD_ID, include_header=True
+            )
+        )
+        export_csv_menu.addAction(self.action_export_csv_pressure)
+
+        self.action_export_excel_template = QAction(
+            "Export to VasoAnalyzer Excel Template…", self
+        )
+        self.action_export_excel_template.triggered.connect(
+            self.open_excel_template_export_dialog
+        )
+        export_menu.addAction(self.action_export_excel_template)
+
+        self.action_export_excel = QAction("Export to Excel Template…", self)
+        self.action_export_excel.triggered.connect(self.open_excel_mapping_dialog)
+        export_menu.addAction(self.action_export_excel)
+
+        if hasattr(self, "show_gif_animator"):
+            self.action_gif_animator = QAction("Export GIF…", self)
+            self.action_gif_animator.setToolTip(
+                "Create animated GIFs from traces and snapshots"
+            )
+            self.action_gif_animator.triggered.connect(self.show_gif_animator)
+            self.action_gif_animator.setEnabled(False)
+            export_menu.addAction(self.action_gif_animator)
+
+        export_menu.addSeparator()
 
         self.action_export_tiff = QAction("High-Res Plot…", self)
         self.action_export_tiff.triggered.connect(self.export_high_res_plot)
@@ -139,24 +236,6 @@ class MenuMixin:
         self.action_export_dataset_pkg = QAction("Dataset Package (.vasods)…", self)
         self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
         export_menu.addAction(self.action_export_dataset_pkg)
-
-        self.action_import_dataset_pkg = QAction("Import Dataset Package…", self)
-        self.action_import_dataset_pkg.triggered.connect(self.import_dataset_package_action)
-        export_menu.addAction(self.action_import_dataset_pkg)
-
-        self.action_import_dataset_from_project = QAction("Import Dataset from Project…", self)
-        self.action_import_dataset_from_project.triggered.connect(
-            self.import_dataset_from_project_action
-        )
-        export_menu.addAction(self.action_import_dataset_from_project)
-
-        self.action_export_csv = QAction("Events as CSV…", self)
-        self.action_export_csv.triggered.connect(self.auto_export_table)
-        export_menu.addAction(self.action_export_csv)
-
-        self.action_export_excel = QAction("To Excel Template…", self)
-        self.action_export_excel.triggered.connect(self.open_excel_mapping_dialog)
-        export_menu.addAction(self.action_export_excel)
 
         file_menu.addSeparator()
 
@@ -250,17 +329,6 @@ class MenuMixin:
         view_menu.addAction(home_act)
 
         view_menu.addSeparator()
-
-        # Renderer selection
-        renderer_menu = view_menu.addMenu("Renderer")
-        self.action_use_matplotlib = QAction("Matplotlib", self, checkable=True)
-        self.action_use_pyqtgraph = QAction("PyQtGraph", self, checkable=True)
-        self.action_use_matplotlib.triggered.connect(lambda: self.set_renderer("matplotlib"))
-        self.action_use_pyqtgraph.triggered.connect(lambda: self.set_renderer("pyqtgraph"))
-        renderer_menu.addAction(self.action_use_matplotlib)
-        renderer_menu.addAction(self.action_use_pyqtgraph)
-        # Set default checked state
-        self.action_use_matplotlib.setChecked(True)
 
         # Color scheme selection
         theme_menu = view_menu.addMenu("Color Scheme")
@@ -370,10 +438,6 @@ class MenuMixin:
         tools_menu.addSeparator()
 
         # Data management tools
-        self.action_map_excel = QAction("Map Events to Excel…", self)
-        self.action_map_excel.triggered.connect(self.open_excel_mapping_dialog)
-        tools_menu.addAction(self.action_map_excel)
-
         self.action_relink_assets = QAction("Relink Missing Files…", self)
         self.action_relink_assets.setEnabled(False)
         self.action_relink_assets.triggered.connect(self.show_relink_dialog)
@@ -427,6 +491,9 @@ class MenuMixin:
 
         act_update = QAction("Check for Updates", self)
         act_update.triggered.connect(self.check_for_updates)
+        if getattr(self, "_updates_disabled_by_env", False):
+            act_update.setEnabled(False)
+            act_update.setToolTip("Disabled by VASO_DISABLE_UPDATE_CHECK")
         help_menu.addAction(act_update)
 
         act_keys = QAction("Keyboard Shortcuts…", self)

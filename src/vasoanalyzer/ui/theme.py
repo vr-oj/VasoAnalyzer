@@ -32,6 +32,7 @@ LIGHT_THEME = {
     "toolbar_bg": "#F3F4F6",
     "table_bg": "#FFFFFF",
     "alternate_bg": "#F9FAFB",
+    "panel_bg": "#FFFFFF",
 
     # Text
     "text": "#111827",
@@ -46,6 +47,7 @@ LIGHT_THEME = {
     # Grids and borders
     "grid_color": "#E5E7EB",
     "table_header_border": "#D1D5DB",
+    "panel_border": "#D1D5DB",
     "hover_label_bg": "rgba(243, 244, 246, 0.9)",
     "hover_label_border": "#D1D5DB",
 
@@ -73,10 +75,11 @@ LIGHT_THEME = {
     "warning_text": "#78350F",
 
     # Snapshot
-    "snapshot_bg": "#2B2B2B",
+    "snapshot_bg": "#F3F4F6",
     "table_hover": "#F3F4F6",
     "table_editable_hover": "#DBEAFE",
     "table_focused_border": "#3366FF",
+    "panel_radius": 6,
 }
 
 DARK_THEME = {
@@ -86,6 +89,7 @@ DARK_THEME = {
     "toolbar_bg": "#1E242D",
     "table_bg": "#0D1117",
     "alternate_bg": "#161B22",
+    "panel_bg": "#0D1117",
 
     # Text
     "text": "#E6EDF3",
@@ -100,6 +104,7 @@ DARK_THEME = {
     # Grids and borders
     "grid_color": "#30363D",
     "table_header_border": "#373E47",
+    "panel_border": "#373E47",
     "hover_label_bg": "rgba(30, 36, 45, 0.9)",
     "hover_label_border": "#30363D",
 
@@ -127,10 +132,11 @@ DARK_THEME = {
     "warning_text": "#FDE68A",
 
     # Snapshot
-    "snapshot_bg": "#1F2933",
+    "snapshot_bg": "#0D1117",
     "table_hover": "#21262D",
     "table_editable_hover": "#1C3D5A",
     "table_focused_border": "#3B82F6",
+    "panel_radius": 6,
 }
 
 
@@ -275,7 +281,7 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "warning_text": "#FDE68A" if is_dark else "#78350F",
 
         # Snapshot (for matplotlib snapshots)
-        "snapshot_bg": "#1F2933" if is_dark else "#2B2B2B",
+        "snapshot_bg": "#0F141B" if is_dark else "#F3F4F6",
 
         # Table-specific
         "table_hover": _derive_hover_color(base, is_dark),
@@ -371,6 +377,59 @@ QGroupBox::title {
 }
 """
 
+UI_INTERACTION_CONTRACT_QSS = """
+/* UI interaction contract: menus, tooltips, disabled, focus */
+QMenu {
+    background-color: #1f232a;
+    border: 1px solid #2c313a;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 18px 6px 24px;
+    color: #e6e6e6;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: #2f3b4a;
+    color: #ffffff;
+}
+
+QMenu::item:disabled {
+    color: #7a7f87;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #2c313a;
+    margin: 6px 6px;
+}
+
+QToolTip {
+    background-color: #2b2b2b;
+    color: #ffffff;
+    border: 1px solid #3a3a3a;
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
+QPushButton:focus,
+QToolButton:focus,
+QLineEdit:focus,
+QComboBox:focus,
+QTreeWidget:focus,
+QTableWidget:focus {
+    outline: none;
+    border: 1px solid #3d556e;
+}
+
+QPushButton:disabled,
+QToolButton:disabled {
+    color: #7a7f87;
+}
+"""
+
 LIGHT_THEME = {
     # Surfaces
     "window_bg": "#F3F4F6",
@@ -385,6 +444,7 @@ LIGHT_THEME = {
     "table_text": "#111827",
     "alternate_bg": "#F3F6FB",
     "selection_bg": "#E6F0FF",
+    "panel_bg": "#FFFFFF",
     # Buttons
     "button_bg": "#FFFFFF",
     "button_hover_bg": "#EAF2FF",
@@ -413,12 +473,14 @@ LIGHT_THEME = {
     "warning_border": "#F59E0B",
     "warning_text": "#78350F",
     # Snapshot
-    "snapshot_bg": "#2B2B2B",
+    "snapshot_bg": "#F3F4F6",
     # Table-specific
     "table_hover": "#F0F0F0",
     "table_editable_hover": "#E6F0FF",
     "table_focused_border": "#3366FF",
     "table_header_border": "#CBD5E1",
+    "panel_border": "#CBD5E1",
+    "panel_radius": 6,
 }
 
 DARK_THEME = {
@@ -435,6 +497,7 @@ DARK_THEME = {
     "table_text": "#E5E7EB",
     "alternate_bg": "#161C25",
     "selection_bg": "#263248",
+    "panel_bg": "#0F141B",
     # Buttons
     "button_bg": "#1A212B",
     "button_hover_bg": "#232E3C",
@@ -463,12 +526,14 @@ DARK_THEME = {
     "warning_border": "#F59E0B",
     "warning_text": "#FDE68A",
     # Snapshot
-    "snapshot_bg": "#0B1017",
+    "snapshot_bg": "#0F141B",
     # Table-specific
     "table_hover": "#1F2835",
     "table_editable_hover": "#2F3F55",
     "table_focused_border": "#38BDF8",
     "table_header_border": "#364659",
+    "panel_border": "#364659",
+    "panel_radius": 6,
 }
 
 # Currently applied theme; initialized from light preset to avoid KeyErrors
@@ -593,10 +658,6 @@ QToolButton {{
     border-radius: 6px;
     padding: 6px;
 }}
-QToolTip {{
-    padding: 2px 6px;
-    border-radius: 5px;
-}}
 QHeaderView::section {{
     font-weight: bold;
 }}
@@ -668,7 +729,8 @@ def _apply_theme(theme: dict) -> None:
     # Apply stylesheet and matplotlib
     app = QApplication.instance()
     if app is not None:
-        cast(QApplication, app).setStyleSheet(apply_qt_stylesheet(theme))
+        q_app = cast(QApplication, app)
+        q_app.setStyleSheet(_build_complete_stylesheet(theme))
 
     apply_matplotlib_style(theme)
 
@@ -704,6 +766,19 @@ def _load_light_stylesheet() -> str:
         except Exception:
             continue
     return ""
+
+
+def _build_complete_stylesheet(theme: dict) -> str:
+    """Build the full application stylesheet from all global sources."""
+    complete_qss = apply_qt_stylesheet(theme)
+
+    main_stylesheet = _load_light_stylesheet()
+    if main_stylesheet:
+        complete_qss += "\n" + main_stylesheet
+
+    complete_qss += "\n" + DARK_WIDGET_CONTRAST_QSS
+    complete_qss += "\n" + UI_INTERACTION_CONTRACT_QSS
+    return complete_qss
 
 
 def set_theme_mode(mode: str, *, persist: bool = True) -> str:
@@ -748,16 +823,7 @@ def set_theme_mode(mode: str, *, persist: bool = True) -> str:
     if app is not None:
         q_app = cast(QApplication, app)
 
-        # Start with base stylesheet
-        complete_qss = apply_qt_stylesheet(CURRENT_THEME)
-
-        # Add main application stylesheet (style.qss)
-        main_stylesheet = _load_light_stylesheet()
-        if main_stylesheet:
-            complete_qss += "\n" + main_stylesheet
-
-        # Add widget contrast styles
-        complete_qss += "\n" + DARK_WIDGET_CONTRAST_QSS
+        complete_qss = _build_complete_stylesheet(CURRENT_THEME)
 
         # Apply complete stylesheet (this forces re-evaluation of palette() refs)
         q_app.setStyleSheet(complete_qss)

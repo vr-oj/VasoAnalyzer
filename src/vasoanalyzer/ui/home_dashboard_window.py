@@ -111,19 +111,19 @@ class HomeDashboardWindow(QMainWindow):
             self.refresh_recent()
         return window
 
+    def home_open_project(self) -> None:
+        self.open_project_file()
+
     def new_project(self, checked: bool = False):
         return self._window_manager.create_new_project_via_dialog()
+
+    def home_open_data(self) -> None:
+        self._window_manager.open_data_from_home(self)
 
     def show_import_data_menu(
         self, checked: bool = False, anchor: QWidget | None = None
     ) -> None:
-        if anchor is None:
-            sender = self.sender()
-            if isinstance(sender, QWidget):
-                anchor = sender
-            else:
-                anchor = self
-        self._window_manager.import_data(anchor=anchor)
+        self._window_manager.open_data_from_home(self)
 
     def show_analysis_workspace(self):
         window = self._window_manager.get_active_main_window()

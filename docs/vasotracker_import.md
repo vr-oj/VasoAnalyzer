@@ -355,10 +355,10 @@ All UI components stay synchronized through the canonical `Time_s_exact` timelin
 - Scrubbing timeline updates TIFF frame
 - Click in plot → TIFF jumps to corresponding frame
 
-### Matplotlib Figure Composer
-- Uses same canonical data
-- Event lines placed at exact `t_seconds` values
-- Guarantees consistency with PyQtGraph plots
+### Exports and GIFs
+- Plot exports (PNG/TIFF/SVG) and clipboard/CSV/Excel template outputs use the same canonical data
+- Event markers and labels align to exact `t_seconds` values
+- GIF animator frames stay synchronized with the trace timeline
 
 ---
 

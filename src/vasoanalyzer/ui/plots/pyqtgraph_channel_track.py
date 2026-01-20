@@ -15,6 +15,7 @@ from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_axes_compat import PyQtGraphAxesCompat
 from vasoanalyzer.ui.plots.pyqtgraph_line_compat import PyQtGraphLineCompat
 from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
+from vasoanalyzer.ui.plots.pyqtgraph_style import PLOT_AXIS_LABELS
 
 __all__ = ["PyQtGraphChannelTrack"]
 
@@ -40,9 +41,10 @@ class PyQtGraphChannelTrack:
             if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}
             else "inner"
         )
+        y_label = PLOT_AXIS_LABELS.get(spec.component)
         self.view: PyQtGraphTraceView = PyQtGraphTraceView(
             mode=mode,
-            y_label=spec.label,
+            y_label=y_label,
             enable_opengl=enable_opengl,
         )
         self._model: TraceModel | None = None
@@ -156,17 +158,8 @@ class PyQtGraphChannelTrack:
         self.view.set_model(model)
 
         # Set axis labels
-        if self.spec.component == "outer":
-            label = self.spec.label or "Outer Diameter (µm)"
-            self.view.set_ylabel(label)
-        elif self.spec.component == "inner":
-            label = self.spec.label or "Inner Diameter (µm)"
-            self.view.set_ylabel(label)
-        elif self.spec.component == "avg_pressure":
-            label = self.spec.label or "Avg Pressure (mmHg)"
-            self.view.set_ylabel(label)
-        elif self.spec.component == "set_pressure":
-            label = self.spec.label or "Set Pressure (mmHg)"
+        label = PLOT_AXIS_LABELS.get(self.spec.component) or self.spec.label
+        if label:
             self.view.set_ylabel(label)
 
         # Apply events if already set
@@ -260,8 +253,7 @@ class PyQtGraphChannelTrack:
 
         ymin, ymax = padded
         self._auto_margin = float(margin)
-        self.view.set_ylim(ymin, ymax)
-        self.view.set_autoscale_y(True)
+        self.view.set_ylim(ymin, ymax, preserve_autoscale=True)
         return (ymin, ymax)
 
     def set_ylim(self, ymin: float, ymax: float) -> None:

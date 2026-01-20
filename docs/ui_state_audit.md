@@ -11,7 +11,6 @@
 | State key | Captured in | Restored in | Backend constraints |
 | --- | --- | --- | --- |
 | `data_quality` | `_set_samples_data_quality` in `src/vasoanalyzer/ui/main_window.py` | Not restored in `apply_sample_state` (used by tree icon logic) | N/A |
-| `figure_slides` | `_on_figure_state_saved` / `_get_sample_figure_slides` in `src/vasoanalyzer/ui/main_window.py` | Used by figure composer open flow | N/A |
 | `event_table_data` | `gather_sample_state` in `src/vasoanalyzer/ui/main_window.py` | `apply_sample_state` in same file | Restored even for embedded fast path |
 | `event_label_meta` | `gather_sample_state` | `apply_sample_state` (with fallback and normalization) | Restored even for embedded fast path |
 | `event_table_path` | `gather_sample_state` | `apply_sample_state` | N/A |

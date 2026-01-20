@@ -18,10 +18,10 @@ from vasoanalyzer.core.single_instance import (
     consume_ipc_warning,
     open_project_from_path,
     queue_open_requests,
-    register_main_window,
+    register_window_manager,
 )
 from vasoanalyzer.ui import theme
-from vasoanalyzer.ui.main_window import VasoAnalyzerApp
+from vasoanalyzer.app.window_manager import WindowManager
 
 try:  # Optional helper used for locating packaged resources
     from utils import resource_path
@@ -106,6 +106,7 @@ class VasoAnalyzerLauncher:
             theme.set_theme_mode("light", persist=False)
 
         # Use native OS style for better platform integration
+        # Force a hard exit on macOS to avoid SIP teardown segfaults on exit.
         if sys.platform == "darwin":
             self.app.setStyle("macintosh")
         # Windows uses default style which is already native
@@ -173,19 +174,19 @@ class VasoAnalyzerLauncher:
     def _start_main_window(self) -> None:
         splash = getattr(self, "splash", None)
         try:
-            window = VasoAnalyzerApp()
-            window.show()
+            manager = WindowManager(self.app)
+            home = manager.open_home()
             if splash:
-                splash.finish(window)
+                splash.finish(home)
 
             # Note: Crash recovery is handled inline when opening projects
             # (see main_window.py lines ~945 and project_mixin.py lines ~192)
             # No need for global scan of autosave files
 
-            register_main_window(window)
+            register_window_manager(manager)
             if consume_ipc_warning():
                 QMessageBox.warning(
-                    window,
+                    home,
                     "Single Instance Unavailable",
                     (
                         "Could not forward the open request to an existing VasoAnalyzer window.\n"
@@ -196,9 +197,9 @@ class VasoAnalyzerLauncher:
             if has_pending_open_requests():
                 QTimer.singleShot(100, dispatch_pending_open_requests)
             else:
-                QTimer.singleShot(100, window.show_welcome_dialog)
-            self.window = window
-            log.info("Main window started successfully")
+                QTimer.singleShot(100, home.show_welcome_dialog)
+            self.window_manager = manager
+            log.info("Home dashboard started successfully")
         except Exception:  # pragma: no cover - defensive logging for GUI
             log.exception("Error launching main window")
             if splash:

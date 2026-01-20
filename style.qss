@@ -118,6 +118,32 @@ QCheckBox::indicator:checked:hover {
   image: url(icons/checkmark.svg);
 }
 
+QScrollBar#TimeScrollbar:horizontal {
+  height: 10px;
+  background: palette(base);
+  border: 1px solid palette(mid);
+  border-radius: 5px;
+  margin: 0px;
+}
+
+QScrollBar#TimeScrollbar::handle:horizontal {
+  background: palette(midlight);
+  border: 1px solid palette(mid);
+  border-radius: 4px;
+  min-width: 24px;
+}
+
+QScrollBar#TimeScrollbar::add-line:horizontal,
+QScrollBar#TimeScrollbar::sub-line:horizontal {
+  width: 0px;
+  height: 0px;
+}
+
+QScrollBar#TimeScrollbar::add-page:horizontal,
+QScrollBar#TimeScrollbar::sub-page:horizontal {
+  background: transparent;
+}
+
 QCheckBox::indicator:disabled {
   background-color: palette(window);
   border: 2px solid palette(mid);
@@ -156,6 +182,16 @@ QMenu {
   background-color: palette(base);
   border: 1px solid palette(mid);
   color: palette(text);
+}
+
+QStatusBar {
+  background-color: palette(window);
+  border-top: 1px solid palette(mid);
+  padding: 2px 8px;
+}
+
+QStatusBar::item {
+  border: none;
 }
 
 /* ----- Buttons and dropdowns hover/press feedback ----- */
@@ -218,13 +254,13 @@ QDockWidget {
 QFrame#ProjectCard {
   background-color: palette(base);
   border: 1px solid palette(mid);
-  border-radius: 9px;
-  padding: 3px 3px 6px 3px;
+  border-radius: 6px;
+  padding: 2px 2px 4px 2px;
 }
 
 QLabel#ProjectHeaderLabel {
-  font-weight: 700;
-  font-size: 10.5pt;
+  font-weight: 600;
+  font-size: 10pt;
   letter-spacing: 0.2px;
   color: palette(windowText);
   font-family: "Arial";
@@ -233,73 +269,99 @@ QLabel#ProjectHeaderLabel {
 QTreeWidget#ProjectTree {
   background: transparent;
   border: none;
-  padding: 4px 0 4px 0;
-  font-size: 13px;
+  padding: 2px 0 2px 0;
+  font-size: 12px;
   font-family: ".AppleSystemUIFont";
   color: palette(text);
 }
 
 QTreeWidget#ProjectTree::item:selected {
-  background-color: palette(highlight);
-  border-left: 3px solid palette(highlight);
-  color: palette(highlightedText);
-  border-radius: 5px;
+  background-color: palette(light);
+  color: palette(text);
+  border-radius: 4px;
+  border: 1px solid palette(highlight);
 }
 
 QTreeWidget#ProjectTree::item:hover {
-  background-color: palette(light);
+  background-color: palette(midlight);
 }
 
 QTreeWidget#ProjectTree::item {
-  margin: 2px 6px;
-  padding: 6px 12px;
-  border-radius: 5px;
+  margin: 1px 4px;
+  padding: 2px 8px;
+  min-height: 22px;
+  border-radius: 4px;
+  border: 1px solid transparent;
   color: palette(text);
+}
+
+QLabel#ProjectEmptyState {
+  color: palette(mid);
+  font-size: 11px;
+  padding: 6px 8px 8px 8px;
 }
 
 /* Primary toolbar styling */
 QToolBar#PrimaryToolbar {
   background-color: palette(window);
   border: 1px solid palette(mid);
-  border-radius: 10px;
-  padding: 6px 8px;
-  spacing: 2px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  spacing: 4px;
+}
+
+QToolBar#PrimaryToolbar::separator {
+  background-color: palette(midlight);
+  width: 1px;
+  margin: 2px 8px;
 }
 
 QToolBar#PrimaryToolbar > QToolButton,
 QToolBar#PrimaryToolbar > QWidget > QToolButton {
   background-color: palette(button);
   border: 1px solid palette(mid);
-  border-radius: 10px;
-  margin: 2px 4px;
-  padding: 6px 10px;
-  min-width: 56px;
+  border-radius: 6px;
+  margin: 1px 3px;
+  padding: 5px 8px;
+  min-width: 48px;
   color: palette(buttonText);
+}
+
+QToolBar#PrimaryToolbar > QToolButton[isWorkflowAction="true"],
+QToolBar#PrimaryToolbar > QWidget > QToolButton[isWorkflowAction="true"] {
+  background-color: palette(window);
+  border: 1px solid palette(midlight);
+}
+
+QToolBar#PrimaryToolbar > QToolButton[isWorkflowAction="true"]:hover,
+QToolBar#PrimaryToolbar > QWidget > QToolButton[isWorkflowAction="true"]:hover {
+  background-color: palette(light);
+  border: 1px solid palette(mid);
 }
 
 QToolBar#PrimaryToolbar > QToolButton:hover,
 QToolBar#PrimaryToolbar > QWidget > QToolButton:hover {
   background-color: palette(light);
-  border: 2px solid palette(dark);
+  border: 1px solid palette(dark);
 }
 
 QToolBar#PrimaryToolbar > QToolButton:pressed,
 QToolBar#PrimaryToolbar > QWidget > QToolButton:pressed {
   background-color: palette(midlight);
-  border: 2px solid palette(dark);
+  border: 1px solid palette(dark);
 }
 
 QToolBar#PrimaryToolbar > QToolButton:checked,
 QToolBar#PrimaryToolbar > QWidget > QToolButton:checked {
   background-color: palette(highlight);
-  border: 2px solid palette(highlight);
+  border: 1px solid palette(highlight);
   color: palette(highlightedText);
 }
 
 QToolBar#PrimaryToolbar > QToolButton:checked:hover,
 QToolBar#PrimaryToolbar > QWidget > QToolButton:checked:hover {
   background-color: palette(highlight);
-  border: 2px solid palette(dark);
+  border: 1px solid palette(dark);
 }
 
 /* Plot toolbar (canvas) buttons share the same button look */
@@ -307,43 +369,86 @@ QToolBar#PlotToolbar,
 QToolBar[objectName="PlotToolbar"] {
   background-color: palette(window);
   border: 1px solid palette(mid);
-  border-radius: 10px;
-  padding: 6px 8px;
-  spacing: 2px;
+  border-radius: 6px;
+  padding: 4px 6px;
+  spacing: 4px;
+}
+
+QToolBar#PlotToolbar::separator,
+QToolBar[objectName="PlotToolbar"]::separator {
+  background-color: palette(midlight);
+  width: 1px;
+  margin: 2px 8px;
 }
 
 QToolBar#PlotToolbar > QToolButton,
 QToolBar[objectName="PlotToolbar"] > QToolButton {
   background-color: palette(button);
   border: 1px solid palette(mid);
-  border-radius: 10px;
-  margin: 2px 4px;
-  padding: 7px 12px;
-  min-width: 56px;
+  border-radius: 6px;
+  margin: 1px 3px;
+  padding: 5px 8px;
+  min-width: 48px;
   color: palette(buttonText);
 }
 
 QToolBar#PlotToolbar > QToolButton:hover,
 QToolBar[objectName="PlotToolbar"] > QToolButton:hover {
   background-color: palette(light);
-  border: 2px solid palette(dark);
+  border: 1px solid palette(dark);
 }
 
 QToolBar#PlotToolbar > QToolButton:pressed,
 QToolBar[objectName="PlotToolbar"] > QToolButton:pressed {
   background-color: palette(midlight);
-  border: 2px solid palette(dark);
+  border: 1px solid palette(dark);
 }
 
 QToolBar#PlotToolbar > QToolButton:checked,
 QToolBar[objectName="PlotToolbar"] > QToolButton:checked {
   background-color: palette(highlight);
-  border: 2px solid palette(highlight);
+  border: 1px solid palette(highlight);
   color: palette(highlightedText);
 }
 
 QToolBar#PlotToolbar > QToolButton:checked:hover,
 QToolBar[objectName="PlotToolbar"] > QToolButton:checked:hover {
   background-color: palette(highlight);
-  border: 2px solid palette(dark);
+  border: 1px solid palette(dark);
+}
+
+/* Review notice banner */
+QFrame#ReviewNoticeBanner {
+  background-color: palette(base);
+  border: 1px solid palette(mid);
+  border-radius: 6px;
+}
+
+QLabel#ReviewNoticeText {
+  color: palette(text);
+  font-weight: 600;
+  font-size: 10pt;
+}
+
+QFrame#ReviewNoticeBanner QPushButton {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 10pt;
+}
+
+/* Plot empty state panel */
+QFrame#PlotEmptyState {
+  background-color: palette(window);
+  border: 1px solid palette(mid);
+  border-radius: 12px;
+}
+
+QLabel#PlotEmptyStateTitle {
+  color: palette(text);
+  font-size: 12pt;
+  font-weight: 600;
+}
+
+QLabel#PlotEmptyStateBody {
+  color: palette(mid);
 }

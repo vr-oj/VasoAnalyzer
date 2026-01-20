@@ -1,0 +1,296 @@
+# VasoAnalyzer
+# Copyright © 2025 Osvaldo J. Vega Rodríguez
+# Licensed under CC BY-NC-SA 4.0 International
+# http://creativecommons.org/licenses/by-nc-sa/4.0/
+
+"""Snapshot render backends (Qt-native + PyQtGraph fallback)."""
+
+from __future__ import annotations
+
+import time
+from typing import Protocol, Union
+
+import numpy as np
+from PyQt5 import QtCore, QtGui, QtWidgets
+
+from vasoanalyzer.ui.panels.snapshot_view_pg import SnapshotViewPG
+from vasoanalyzer.ui.snapshot_viewer.snapshot_perf import log_perf, perf_enabled
+from vasoanalyzer.ui.theme import CURRENT_THEME
+
+FrameData = Union[np.ndarray, QtGui.QImage, QtGui.QPixmap]
+
+
+def numpy_rgb_to_qimage(arr: np.ndarray) -> QtGui.QImage:
+    """Convert an RGB uint8 ndarray to a deep-copied QImage."""
+    assert arr.dtype == np.uint8 and arr.ndim == 3 and arr.shape[2] == 3
+    arr = np.ascontiguousarray(arr)
+    height, width, _channels = arr.shape
+    bytes_per_line = 3 * width
+    qimage = QtGui.QImage(
+        arr.data,
+        width,
+        height,
+        bytes_per_line,
+        QtGui.QImage.Format_RGB888,
+    )
+    return qimage.copy()
+
+
+def _ensure_uint8(arr: np.ndarray) -> np.ndarray:
+    if arr.dtype == np.uint8:
+        return arr
+    arr_f = arr.astype(float)
+    vmax = float(arr_f.max()) if arr_f.size else 0.0
+    if vmax <= 0:
+        return np.zeros_like(arr_f, dtype=np.uint8)
+    scaled = np.clip(arr_f / vmax * 255.0, 0.0, 255.0)
+    return scaled.astype(np.uint8)
+
+
+def _numpy_gray_to_qimage(arr: np.ndarray) -> QtGui.QImage:
+    arr = np.ascontiguousarray(arr)
+    height, width = arr.shape
+    qimage = QtGui.QImage(
+        arr.data,
+        width,
+        height,
+        width,
+        QtGui.QImage.Format_Grayscale8,
+    )
+    return qimage.copy()
+
+
+class SnapshotRenderer(Protocol):
+    """Minimal renderer interface for snapshot frames."""
+
+    @property
+    def widget(self) -> QtWidgets.QWidget: ...
+
+    def set_frame(self, frame: FrameData, frame_index: int | None = None) -> None: ...
+
+    def clear(self) -> None: ...
+
+    def set_rotation(self, angle_deg: int) -> None: ...
+
+    @property
+    def last_scale_ms(self) -> float | None: ...
+
+
+class QtFrameView(QtWidgets.QWidget):
+    """Lightweight widget that paints a cached, scaled pixmap."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._qimage: QtGui.QImage | None = None
+        self._scaled_pixmap: QtGui.QPixmap | None = None
+        self._scaled_for_size = QtCore.QSize()
+        self._scaled_for_dpr = 1.0
+        self._rotation_deg = 0
+        self._scale_dirty = False
+        self._last_scale_ms: float | None = None
+        self._current_frame_index: int | None = None
+        self.setMinimumHeight(220)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
+
+    @property
+    def last_scale_ms(self) -> float | None:
+        return self._last_scale_ms
+
+    def set_frame(self, qimage: QtGui.QImage | None, frame_index: int | None = None) -> None:
+        self._qimage = qimage
+        self._current_frame_index = frame_index
+        self._scale_dirty = True
+        self._update_scaled_pixmap()
+        self.update()
+
+    def clear(self) -> None:
+        self._qimage = None
+        self._scaled_pixmap = None
+        self._scaled_for_size = QtCore.QSize()
+        self._scaled_for_dpr = 1.0
+        self._scale_dirty = False
+        self._last_scale_ms = None
+        self._current_frame_index = None
+        self.update()
+
+    def set_rotation(self, angle_deg: int) -> None:
+        angle = int(angle_deg) % 360
+        if angle == self._rotation_deg:
+            return
+        self._rotation_deg = angle
+        self._scale_dirty = True
+        self._update_scaled_pixmap()
+        self.update()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._scale_dirty = True
+        self._update_scaled_pixmap()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802
+        start = time.perf_counter() if perf_enabled() else None
+        painter = QtGui.QPainter(self)
+        bg = CURRENT_THEME.get("snapshot_bg", "#000000")
+        painter.fillRect(self.rect(), QtGui.QColor(bg))
+        pixmap = self._scaled_pixmap
+        if pixmap is not None:
+            dpr = pixmap.devicePixelRatioF()
+            pix_width = pixmap.width() / dpr
+            pix_height = pixmap.height() / dpr
+            x = (self.width() - pix_width) / 2.0
+            y = (self.height() - pix_height) / 2.0
+            painter.drawPixmap(QtCore.QPointF(x, y), pixmap)
+        if start is not None:
+            paint_ms = (time.perf_counter() - start) * 1000.0
+            log_perf(
+                "paint",
+                backend="qt",
+                paint_ms=round(paint_ms, 3),
+                frame_index=self._current_frame_index,
+            )
+
+    def _update_scaled_pixmap(self) -> None:
+        if self._qimage is None:
+            self._scaled_pixmap = None
+            self._scaled_for_size = QtCore.QSize()
+            self._last_scale_ms = None
+            return
+
+        size = self.size()
+        if size.width() <= 0 or size.height() <= 0:
+            return
+
+        dpr = self.devicePixelRatioF() or 1.0
+        if (
+            not self._scale_dirty
+            and self._scaled_pixmap is not None
+            and self._scaled_for_size == size
+            and abs(self._scaled_for_dpr - dpr) < 0.01
+        ):
+            self._last_scale_ms = 0.0
+            return
+
+        start = time.perf_counter() if perf_enabled() else None
+        image = self._qimage
+        if self._rotation_deg:
+            transform = QtGui.QTransform()
+            transform.rotate(self._rotation_deg)
+            image = image.transformed(transform, QtCore.Qt.SmoothTransformation)
+        target_size = QtCore.QSize(
+            max(1, int(size.width() * dpr)),
+            max(1, int(size.height() * dpr)),
+        )
+        scaled = image.scaled(
+            target_size,
+            QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.SmoothTransformation,
+        )
+        pixmap = QtGui.QPixmap.fromImage(scaled)
+        pixmap.setDevicePixelRatio(dpr)
+        self._scaled_pixmap = pixmap
+        self._scaled_for_size = size
+        self._scaled_for_dpr = dpr
+        self._scale_dirty = False
+        if start is not None:
+            self._last_scale_ms = (time.perf_counter() - start) * 1000.0
+        else:
+            self._last_scale_ms = None
+
+
+class QtSnapshotRenderer:
+    """Qt-native renderer using QWidget paintEvent + cached QPixmap."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        self._view = QtFrameView(parent)
+
+    @property
+    def widget(self) -> QtWidgets.QWidget:
+        return self._view
+
+    @property
+    def last_scale_ms(self) -> float | None:
+        return self._view.last_scale_ms
+
+    def set_frame(self, frame: FrameData, frame_index: int | None = None) -> None:
+        qimage = self._coerce_qimage(frame)
+        if qimage is None:
+            raise ValueError("Unsupported frame format for Qt snapshot renderer")
+        self._view.set_frame(qimage, frame_index=frame_index)
+
+    def clear(self) -> None:
+        self._view.clear()
+
+    def set_rotation(self, angle_deg: int) -> None:
+        self._view.set_rotation(angle_deg)
+
+    def _coerce_qimage(self, frame: FrameData) -> QtGui.QImage | None:
+        if isinstance(frame, QtGui.QImage):
+            return frame
+        if isinstance(frame, QtGui.QPixmap):
+            return frame.toImage()
+        if not isinstance(frame, np.ndarray):
+            return None
+
+        arr = np.asarray(frame)
+        if arr.size == 0:
+            return None
+
+        if arr.ndim == 2:
+            arr = _ensure_uint8(arr)
+            return _numpy_gray_to_qimage(arr)
+        if arr.ndim == 3:
+            if arr.shape[2] == 1:
+                arr = arr[:, :, 0]
+                arr = _ensure_uint8(arr)
+                return _numpy_gray_to_qimage(arr)
+            if arr.shape[2] == 3:
+                arr = _ensure_uint8(arr)
+                return numpy_rgb_to_qimage(arr)
+        return None
+
+
+class PyqtgraphSnapshotRenderer:
+    """PyQtGraph fallback renderer (ImageView)."""
+
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        show_native_controls: bool = False,
+    ) -> None:
+        self._view = SnapshotViewPG(parent, show_native_controls=show_native_controls)
+        self._rotation_deg = 0
+
+    @property
+    def widget(self) -> QtWidgets.QWidget:
+        return self._view
+
+    @property
+    def last_scale_ms(self) -> float | None:
+        return None
+
+    def set_frame(self, frame: FrameData, frame_index: int | None = None) -> None:
+        if not isinstance(frame, np.ndarray):
+            raise ValueError("PyQtGraph renderer expects numpy frames")
+        self._view.set_stack(frame)
+        if self._rotation_deg:
+            self._view.set_rotation(self._rotation_deg)
+
+    def clear(self) -> None:
+        self._view.set_stack(None)
+
+    def set_rotation(self, angle_deg: int) -> None:
+        self._rotation_deg = int(angle_deg) % 360
+        self._view.set_rotation(self._rotation_deg)
+
+
+__all__ = [
+    "FrameData",
+    "SnapshotRenderer",
+    "QtFrameView",
+    "QtSnapshotRenderer",
+    "PyqtgraphSnapshotRenderer",
+    "numpy_rgb_to_qimage",
+]
