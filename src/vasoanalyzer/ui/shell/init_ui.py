@@ -30,6 +30,7 @@ from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.mpl_interactions import MplInteractionHost
 from vasoanalyzer.ui.plots.overview_strip import OverviewStrip
 from vasoanalyzer.ui.plots.renderer_factory import create_plot_host
+from vasoanalyzer.ui.snapshot_viewer import SnapshotTimelineWidget
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -215,12 +216,14 @@ def init_ui(window: VasoAnalyzerApp) -> None:
             window.show_snapshot_context_menu
         )
 
-    window.slider = QSlider(Qt.Horizontal)
-    window.slider.setMinimum(0)
-    window.slider.setValue(0)
-    window.slider.valueChanged.connect(window.change_frame)
-    window.slider.hide()
-    window.slider.setToolTip("Navigate TIFF frames")
+    window.snapshot_timeline = SnapshotTimelineWidget()
+    window.snapshot_timeline.setObjectName("SnapshotTimeline")
+    window.snapshot_timeline.seek_requested.connect(window.change_frame_from_timeline)
+    window.snapshot_timeline.hide()
+    window.snapshot_timeline.setToolTip("Click or drag to navigate snapshot frames")
+
+    # Legacy compatibility: some code may reference window.slider
+    window.slider = window.snapshot_timeline
 
     window.snapshot_controls = QWidget()
     window.snapshot_controls.setObjectName("SnapshotControls")
@@ -287,6 +290,14 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.snapshot_sync_checkbox.setToolTip("Sync snapshot playback to trace cursor")
     window.snapshot_sync_checkbox.toggled.connect(window.on_snapshot_sync_toggled)
     controls_layout.addWidget(window.snapshot_sync_checkbox)
+
+    window.snapshot_loop_checkbox = QCheckBox("Loop playback")
+    window.snapshot_loop_checkbox.setObjectName("SnapshotLoopCheckbox")
+    window.snapshot_loop_checkbox.setChecked(False)
+    window.snapshot_loop_checkbox.setEnabled(False)
+    window.snapshot_loop_checkbox.setToolTip("Restart playback from beginning when reaching last frame")
+    window.snapshot_loop_checkbox.toggled.connect(window.on_snapshot_loop_toggled)
+    controls_layout.addWidget(window.snapshot_loop_checkbox)
 
     controls_layout.addStretch()
 

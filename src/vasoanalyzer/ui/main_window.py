@@ -3935,6 +3935,16 @@ class VasoAnalyzerApp(QMainWindow):
             self.snapshot_sync_checkbox.blockSignals(True)
             self.snapshot_sync_checkbox.setChecked(False)
             self.snapshot_sync_checkbox.blockSignals(False)
+        if hasattr(self, "snapshot_loop_checkbox"):
+            self.snapshot_loop_checkbox.setEnabled(False)
+            self.snapshot_loop_checkbox.blockSignals(True)
+            self.snapshot_loop_checkbox.setChecked(False)
+            self.snapshot_loop_checkbox.blockSignals(False)
+        if hasattr(self, 'snapshot_timeline'):
+            self.snapshot_timeline.set_frame_count(0)
+            self.snapshot_timeline.set_frame_times(None)
+            self.snapshot_timeline.set_current_frame(0)
+            self.snapshot_timeline.hide()
         self._reset_snapshot_speed()
         self.metadata_details_label.setText("No metadata available.")
         self._clear_event_highlight()
@@ -11267,6 +11277,20 @@ QPushButton[isGhost="true"]:pressed {{
             self.slider.setMinimum(0)
             self.slider.setMaximum(len(self.snapshot_frames) - 1)
             self.slider.setValue(0)
+
+            # Initialize timeline widget
+            if hasattr(self, 'snapshot_timeline'):
+                self.snapshot_timeline.set_frame_count(len(self.snapshot_frames))
+                # Set frame times if available
+                frame_times = None
+                if hasattr(self, 'frame_times') and self.frame_times:
+                    frame_times = self.frame_times
+                elif hasattr(self, 'frame_trace_time') and self.frame_trace_time is not None:
+                    frame_times = list(self.frame_trace_time)
+                self.snapshot_timeline.set_frame_times(frame_times)
+                self.snapshot_timeline.set_current_frame(0)
+                self.snapshot_timeline.show()
+
             self.prev_frame_btn.setEnabled(True)
             self.next_frame_btn.setEnabled(True)
             self.play_pause_btn.setEnabled(True)
@@ -11276,6 +11300,8 @@ QPushButton[isGhost="true"]:pressed {{
                 self.snapshot_speed_units_label.setEnabled(True)
             if hasattr(self, "snapshot_sync_checkbox"):
                 self._update_snapshot_sync_toggle()
+            if hasattr(self, "snapshot_loop_checkbox"):
+                self.snapshot_loop_checkbox.setEnabled(True)
             self._set_playback_state(False)
             self.update_snapshot_size()
             self._clear_slider_markers()
@@ -11720,6 +11746,8 @@ QPushButton[isGhost="true"]:pressed {{
                 self.snapshot_speed_units_label.setEnabled(True)
             if hasattr(self, "snapshot_sync_checkbox"):
                 self._update_snapshot_sync_toggle()
+            if hasattr(self, "snapshot_loop_checkbox"):
+                self.snapshot_loop_checkbox.setEnabled(True)
             self._set_playback_state(False)
             self._update_snapshot_sampling_badge()
             self._update_snapshot_rotation_controls()
@@ -12032,6 +12060,26 @@ QPushButton[isGhost="true"]:pressed {{
         idx = self.slider.value()
         self._apply_frame_change(idx)
 
+    def change_frame_from_timeline(self, frame_index: int) -> None:
+        """Handle seek request from timeline widget."""
+        if not self.snapshot_frames:
+            return
+
+        idx = max(0, min(int(frame_index), len(self.snapshot_frames) - 1))
+
+        # Stop playback if seeking manually
+        if self.play_pause_btn.isChecked():
+            self._set_playback_state(False)
+
+        # Block timeline signals to prevent feedback loop
+        if hasattr(self, 'snapshot_timeline'):
+            self.snapshot_timeline.blockSignals(True)
+
+        self.set_current_frame(idx)
+
+        if hasattr(self, 'snapshot_timeline'):
+            self.snapshot_timeline.blockSignals(False)
+
     def _update_snapshot_sampling_badge(self) -> None:
         """Show or hide the reduced-load badge near the snapshot controls."""
 
@@ -12150,6 +12198,12 @@ QPushButton[isGhost="true"]:pressed {{
                     from_frame_change=True,
                     source="video",
                 )
+
+        # Update timeline widget
+        if hasattr(self, 'snapshot_timeline'):
+            self.snapshot_timeline.blockSignals(True)
+            self.snapshot_timeline.set_current_frame(idx)
+            self.snapshot_timeline.blockSignals(False)
 
         self.update_slider_marker()
         self._update_snapshot_status(idx)
@@ -12290,6 +12344,13 @@ QPushButton[isGhost="true"]:pressed {{
         controller = getattr(self, "snapshot_controller", None)
         if controller is not None:
             controller.set_sync_enabled(self.snapshot_sync_enabled)
+
+    def on_snapshot_loop_toggled(self, checked: bool) -> None:
+        """Handle loop playback checkbox toggle."""
+        controller = getattr(self, "snapshot_controller", None)
+        if controller is not None:
+            with contextlib.suppress(Exception):
+                controller.set_loop_enabled(bool(checked))
 
     def _reset_snapshot_speed(self) -> None:
         self.snapshot_pps = float(getattr(self, "_snapshot_pps_default", 30.0))
@@ -15616,6 +15677,16 @@ QPushButton[isGhost="true"]:pressed {{
             self.snapshot_sync_checkbox.blockSignals(True)
             self.snapshot_sync_checkbox.setChecked(False)
             self.snapshot_sync_checkbox.blockSignals(False)
+        if hasattr(self, "snapshot_loop_checkbox"):
+            self.snapshot_loop_checkbox.setEnabled(False)
+            self.snapshot_loop_checkbox.blockSignals(True)
+            self.snapshot_loop_checkbox.setChecked(False)
+            self.snapshot_loop_checkbox.blockSignals(False)
+        if hasattr(self, 'snapshot_timeline'):
+            self.snapshot_timeline.set_frame_count(0)
+            self.snapshot_timeline.set_frame_times(None)
+            self.snapshot_timeline.set_current_frame(0)
+            self.snapshot_timeline.hide()
         self._reset_snapshot_speed()
         self.reset_snapshot_rotation()
         self.snapshot_time_label.setText("Frame 0 / 0")

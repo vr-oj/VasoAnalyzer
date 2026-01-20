@@ -113,6 +113,7 @@ class SnapshotViewerController(QtCore.QObject):
         self._page_float = 0.0
         self._current_page = 0
         self._sync_enabled = True
+        self._loop_enabled = False
         self._page_times: list[float] | None = None
         self._playback_last_log_time: float | None = None
         self._playback_elapsed_ms: int | None = None
@@ -171,6 +172,10 @@ class SnapshotViewerController(QtCore.QObject):
 
     def sync_enabled(self) -> bool:
         return bool(self._sync_enabled)
+
+    def set_loop_enabled(self, enabled: bool) -> None:
+        """Enable or disable loop playback."""
+        self._loop_enabled = bool(enabled)
 
     def bind_widget(self, widget: QtCore.QObject | None) -> None:
         if widget is None:
@@ -695,22 +700,31 @@ class SnapshotViewerController(QtCore.QObject):
         next_page = int(page_float)
         mapped_trace_time = None
         if next_page >= max_page:
-            page_float = float(max_page)
-            self._page_float = page_float
-            if max_page != self._current_page:
-                self.set_frame_index(max_page, source="playback")
-                mapped_trace_time = self._emit_playback_sync(max_page)
+            if self._loop_enabled:
+                # Loop mode: reset to frame 0 and continue
+                self._page_float = 0.0
+                self.set_frame_index(0, source="playback")
+                mapped_trace_time = self._emit_playback_sync(0)
+                self._log_playback_tick(0, dt_ms, mapped_trace_time)
+                # Do not stop - playback continues
             else:
-                mapped_trace_time = (
-                    float(self._page_times[max_page])
-                    if self._page_times is not None
-                    and self._sync_enabled
-                    and 0 <= max_page < len(self._page_times)
-                    else None
-                )
-            self._log_playback_tick(max_page, dt_ms, mapped_trace_time)
-            self.set_playing(False)
-            return
+                # Original behavior: stop at last frame
+                page_float = float(max_page)
+                self._page_float = page_float
+                if max_page != self._current_page:
+                    self.set_frame_index(max_page, source="playback")
+                    mapped_trace_time = self._emit_playback_sync(max_page)
+                else:
+                    mapped_trace_time = (
+                        float(self._page_times[max_page])
+                        if self._page_times is not None
+                        and self._sync_enabled
+                        and 0 <= max_page < len(self._page_times)
+                        else None
+                    )
+                self._log_playback_tick(max_page, dt_ms, mapped_trace_time)
+                self.set_playing(False)
+                return
 
         self._page_float = page_float
         if next_page != self._current_page:

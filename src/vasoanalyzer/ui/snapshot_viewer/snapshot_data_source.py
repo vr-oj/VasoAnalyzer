@@ -12,6 +12,8 @@ from typing import Any, Protocol, Sequence, runtime_checkable
 
 import numpy as np
 
+from vasoanalyzer.core.timebase import page_for_time
+
 
 @runtime_checkable
 class SnapshotDataSource(Protocol):
@@ -34,12 +36,15 @@ class SnapshotStackDataSource:
         self,
         frames: Sequence[Any],
         frame_times: Sequence[float] | None = None,
+        *,
+        selection_mode: str = "nearest",
     ) -> None:
         self._frames = list(frames)
         self._frame_times = (
             np.asarray(frame_times, dtype=float) if frame_times is not None else None
         )
         self._source_kind = "in-memory"
+        self._selection_mode = selection_mode
 
     def get_frame_at_time(self, t_seconds: float):
         idx = self.index_for_time(t_seconds)
@@ -69,7 +74,7 @@ class SnapshotStackDataSource:
             return None
         if not math.isfinite(t_val):
             return None
-        return int(np.argmin(np.abs(self._frame_times - t_val)))
+        return page_for_time(t_val, self._frame_times, mode=self._selection_mode)
 
     @property
     def frame_times(self) -> np.ndarray | None:

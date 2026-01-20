@@ -21,7 +21,7 @@
 - Canonical mapping (trace time to frame index):
   - `src/vasoanalyzer/ui/main_window.py:_derive_frame_trace_time()` uses trace `TiffPage` and `Time (s)` via `resolve_frame_times()`.
   - `src/vasoanalyzer/io/tiffs.py:resolve_frame_times()` delegates to `src/vasoanalyzer/core/timebase.py:resolve_tiff_frame_times()`.
-- Runtime mapping for playback/scrub:
+- Runtime mapping for cursor/event scrub:
   - `src/vasoanalyzer/ui/main_window.py:_frame_index_for_time_canonical()` uses `np.argmin` against `frame_trace_time` or `frame_times`.
   - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_data_source.py:SnapshotStackDataSource.get_frame_at_time()` uses `np.argmin` on `frame_times`.
 
@@ -31,11 +31,23 @@
 - `src/vasoanalyzer/ui/panels/snapshot_view_pg.py:SnapshotViewPG.set_stack()` calls `ImageView.setImage()` with `autoRange/autoLevels`.
 - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_widget.py:_coerce_pixmap()` (QImage/QPixmap path) is used only if the frame is not an ndarray.
 
-5) Playback timer runs on the UI thread.
+5) Playback is PPS-based and runs on the UI thread.
 
-- `src/vasoanalyzer/ui/shell/init_ui.py` connects `snapshot_timer.timeout` to `advance_snapshot_frame`.
-- `src/vasoanalyzer/ui/main_window.py:advance_snapshot_frame()` -> `set_current_frame()` -> `_apply_frame_change()` -> `jump_to_time()` -> controller update.
+- `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_controller.py:SnapshotViewerController` manages flipbook-style playback at configurable pages/second (default 30 PPS).
+- Controller timer: `_playback_timer.timeout` → `_on_playback_tick()` → `page_float += pps * dt_s` → `set_frame_index(source="playback")`.
+- Trace synchronization uses canonical page→time mapping: `_page_times[page_index]` emitted via `playback_time_changed` signal.
 - All of the above run synchronously on the UI thread (no worker threads during playback).
+
+6) Playback architecture (controller-based).
+
+- **Controller:** `SnapshotViewerController` owns all playback state (`_playing`, `_playback_pps`, `_page_float`).
+- **Flipbook model:** Advances `page_float` at fixed PPS rate, independent of experiment time.
+- **Trace sync:** Page→time mapping via `_page_times` array (extracted from data source `frame_times`).
+- **Signals:**
+  - `page_changed(index, source)` for UI updates
+  - `playback_time_changed(trace_time)` for trace cursor sync
+  - `playing_changed(bool)` for playback state
+- **Legacy code removed:** Time-based timer (`snapshot_timer`) and `advance_snapshot_frame()` removed in cleanup.
 
 ## Diagram
 

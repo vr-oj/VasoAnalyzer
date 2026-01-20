@@ -80,6 +80,9 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
                 frame_dtype = str(frame.dtype)
             convert_ms = self._renderer.last_convert_ms
             scale_ms = self._renderer.last_scale_ms
+            cache_hit = getattr(self._renderer, "last_cache_hit", None)
+            cache_bytes = getattr(self._renderer, "cache_bytes", None)
+            cache_max = getattr(self._renderer, "cache_max_bytes", None)
             log_perf(
                 "render",
                 backend=self._backend_name,
@@ -87,6 +90,9 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
                 render_ms=round(render_ms, 3),
                 convert_ms=round(convert_ms, 3) if convert_ms is not None else None,
                 scale_ms=round(scale_ms, 3) if scale_ms is not None else None,
+                cache_hit=cache_hit,
+                cache_bytes=cache_bytes,
+                cache_max=cache_max,
                 frame_shape=frame_shape,
                 frame_dtype=frame_dtype,
                 frame_index=frame_index,
@@ -112,6 +118,13 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
 
     def reset_rotation(self) -> None:
         self.set_rotation(0)
+
+    @property
+    def rotation_deg(self) -> int:
+        return self._rotation_deg
+
+    def get_qimage_cache(self):
+        return getattr(self._renderer, "cache", None)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802
         if event.button() == QtCore.Qt.LeftButton:

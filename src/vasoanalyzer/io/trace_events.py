@@ -20,7 +20,12 @@ try:
 except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
-from vasoanalyzer.core.timebase import RANGE_TOL_S, TIME_EPS_S, validate_and_normalize_events
+from vasoanalyzer.core.timebase import (
+    RANGE_TOL_S,
+    TIME_EPS_S,
+    derive_tiff_page_times,
+    validate_and_normalize_events,
+)
 from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
 from vasoanalyzer.io.traces import load_trace, merge_traces
 
@@ -271,6 +276,9 @@ def load_trace_and_events(
     if "TiffPage" in df.columns:
         # TiffPage values come from the VasoTracker TIFF stack (0-based frame indices).
         tiff_pages = pd.to_numeric(df["TiffPage"], errors="coerce")
+        if "Saved" in df.columns:
+            saved_mask = pd.to_numeric(df["Saved"], errors="coerce").fillna(0) > 0
+            tiff_pages = tiff_pages.where(saved_mask)
         tiff_page_to_trace_idx = {
             int(tp): int(i)
             for i, tp in enumerate(tiff_pages.to_numpy())
@@ -285,6 +293,14 @@ def load_trace_and_events(
     extras["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
     df.attrs["frame_number_to_trace_idx"] = frame_number_to_trace_idx
     df.attrs["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
+
+    tiff_result = derive_tiff_page_times(df)
+    extras["tiff_page_times"] = tiff_result.tiff_page_times
+    extras["tiff_page_times_valid"] = tiff_result.valid
+    extras["tiff_page_times_warnings"] = tiff_result.warnings
+    extras["snapshot_interval_median_s"] = tiff_result.median_interval_s
+    df.attrs["tiff_page_times"] = tiff_result.tiff_page_times
+    df.attrs["tiff_page_times_valid"] = tiff_result.valid
 
     def _coerce_time_values(series: pd.Series, *, offsets: pd.Series | None = None) -> pd.Series:
         """Return ``series`` converted to seconds where possible."""

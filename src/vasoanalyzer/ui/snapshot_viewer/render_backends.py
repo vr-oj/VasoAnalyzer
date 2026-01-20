@@ -14,6 +14,10 @@ import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from vasoanalyzer.ui.panels.snapshot_view_pg import SnapshotViewPG
+from vasoanalyzer.ui.snapshot_viewer.qimage_cache import (
+    QImageLruCache,
+    qimage_cache_key,
+)
 from vasoanalyzer.ui.snapshot_viewer.snapshot_perf import log_perf, perf_enabled
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -60,6 +64,38 @@ def _numpy_gray_to_qimage(arr: np.ndarray) -> QtGui.QImage:
     return qimage.copy()
 
 
+def numpy_to_qimage(arr: np.ndarray) -> QtGui.QImage | None:
+    """Convert a numpy array to a QImage when possible."""
+    arr = np.asarray(arr)
+    if arr.size == 0:
+        return None
+
+    if arr.ndim == 2:
+        arr = _ensure_uint8(arr)
+        return _numpy_gray_to_qimage(arr)
+    if arr.ndim == 3:
+        if arr.shape[2] == 1:
+            arr = arr[:, :, 0]
+            arr = _ensure_uint8(arr)
+            return _numpy_gray_to_qimage(arr)
+        if arr.shape[2] == 3:
+            arr = _ensure_uint8(arr)
+            return numpy_rgb_to_qimage(arr)
+        return None
+    return None
+
+
+def coerce_qimage(frame: FrameData) -> QtGui.QImage | None:
+    """Coerce supported frame types into a QImage."""
+    if isinstance(frame, QtGui.QImage):
+        return frame
+    if isinstance(frame, QtGui.QPixmap):
+        return frame.toImage()
+    if isinstance(frame, np.ndarray):
+        return numpy_to_qimage(frame)
+    return None
+
+
 class SnapshotRenderer(Protocol):
     """Minimal renderer interface for snapshot frames."""
 
@@ -79,6 +115,18 @@ class SnapshotRenderer(Protocol):
 
     @property
     def last_scale_ms(self) -> float | None: ...
+
+    @property
+    def last_cache_hit(self) -> bool | None: ...
+
+    @property
+    def cache_bytes(self) -> int | None: ...
+
+    @property
+    def cache_max_bytes(self) -> int | None: ...
+
+    @property
+    def cache(self) -> QImageLruCache | None: ...
 
 
 class QtFrameView(QtWidgets.QWidget):
@@ -228,9 +276,19 @@ class QtFrameView(QtWidgets.QWidget):
 class QtSnapshotRenderer:
     """Qt-native renderer using QWidget paintEvent + cached QImage."""
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        cache: QImageLruCache | None = None,
+    ) -> None:
         self._view = QtFrameView(parent)
         self._last_convert_ms: float | None = None
+        self._last_cache_hit: bool | None = None
+        self._last_cache_bytes: int | None = None
+        self._last_cache_max_bytes: int | None = None
+        self._cache = cache if cache is not None else QImageLruCache.from_env()
+        self._rotation_deg = 0
 
     @property
     def widget(self) -> QtWidgets.QWidget:
@@ -244,8 +302,24 @@ class QtSnapshotRenderer:
     def last_scale_ms(self) -> float | None:
         return self._view.last_scale_ms
 
+    @property
+    def last_cache_hit(self) -> bool | None:
+        return self._last_cache_hit
+
+    @property
+    def cache_bytes(self) -> int | None:
+        return self._last_cache_bytes
+
+    @property
+    def cache_max_bytes(self) -> int | None:
+        return self._last_cache_max_bytes
+
+    @property
+    def cache(self) -> QImageLruCache | None:
+        return self._cache
+
     def set_frame(self, frame: FrameData, frame_index: int | None = None) -> None:
-        qimage = self._coerce_qimage(frame)
+        qimage = self._coerce_qimage(frame, frame_index=frame_index)
         if qimage is None:
             raise ValueError("Unsupported frame format for Qt snapshot renderer")
         self._view.set_frame(qimage, frame_index=frame_index)
@@ -258,48 +332,67 @@ class QtSnapshotRenderer:
         self._view.set_playing(playing)
 
     def set_rotation(self, angle_deg: int) -> None:
+        self._rotation_deg = int(angle_deg) % 360
         self._view.set_rotation(angle_deg)
 
-    def _coerce_qimage(self, frame: FrameData) -> QtGui.QImage | None:
+    def _coerce_qimage(
+        self, frame: FrameData, frame_index: int | None = None
+    ) -> QtGui.QImage | None:
+        self._last_cache_hit = None
+        cache_key = None
+        if frame_index is not None and self._cache is not None:
+            cache_key = qimage_cache_key(frame_index, self._rotation_deg)
+
         if isinstance(frame, QtGui.QImage):
             self._last_convert_ms = None
+            if self._cache is not None and cache_key is not None:
+                self._cache.set(cache_key, frame)
+            self._update_cache_stats()
             return frame
         if isinstance(frame, QtGui.QPixmap):
             self._last_convert_ms = None
-            return frame.toImage()
+            qimage = frame.toImage()
+            if self._cache is not None and cache_key is not None:
+                self._cache.set(cache_key, qimage)
+            self._update_cache_stats()
+            return qimage
         if not isinstance(frame, np.ndarray):
             self._last_convert_ms = None
+            self._update_cache_stats()
             return None
+
+        if self._cache is not None and cache_key is not None:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                self._last_cache_hit = True
+                self._last_convert_ms = 0.0
+                self._update_cache_stats()
+                return cached
 
         start = time.perf_counter() if perf_enabled() else None
-        arr = np.asarray(frame)
-        if arr.size == 0:
+        qimage = numpy_to_qimage(frame)
+        if qimage is None:
             self._last_convert_ms = None
+            self._last_cache_hit = False
+            self._update_cache_stats()
             return None
-
-        if arr.ndim == 2:
-            arr = _ensure_uint8(arr)
-            qimage = _numpy_gray_to_qimage(arr)
-        elif arr.ndim == 3:
-            if arr.shape[2] == 1:
-                arr = arr[:, :, 0]
-                arr = _ensure_uint8(arr)
-                qimage = _numpy_gray_to_qimage(arr)
-            elif arr.shape[2] == 3:
-                arr = _ensure_uint8(arr)
-                qimage = numpy_rgb_to_qimage(arr)
-            else:
-                self._last_convert_ms = None
-                return None
-        else:
-            self._last_convert_ms = None
-            return None
-
+        if self._cache is not None and cache_key is not None:
+            self._cache.set(cache_key, qimage)
         if start is not None:
             self._last_convert_ms = (time.perf_counter() - start) * 1000.0
         else:
             self._last_convert_ms = None
+        self._last_cache_hit = False
+        self._update_cache_stats()
         return qimage
+
+    def _update_cache_stats(self) -> None:
+        if self._cache is None:
+            self._last_cache_bytes = None
+            self._last_cache_max_bytes = None
+            return
+        self._last_cache_bytes = self._cache.current_bytes
+        self._last_cache_max_bytes = self._cache.max_bytes
 
 
 class PyqtgraphSnapshotRenderer:
@@ -326,6 +419,22 @@ class PyqtgraphSnapshotRenderer:
     def last_convert_ms(self) -> float | None:
         return None
 
+    @property
+    def last_cache_hit(self) -> bool | None:
+        return None
+
+    @property
+    def cache_bytes(self) -> int | None:
+        return None
+
+    @property
+    def cache_max_bytes(self) -> int | None:
+        return None
+
+    @property
+    def cache(self) -> QImageLruCache | None:
+        return None
+
     def set_frame(self, frame: FrameData, frame_index: int | None = None) -> None:
         if not isinstance(frame, np.ndarray):
             raise ValueError("PyQtGraph renderer expects numpy frames")
@@ -350,5 +459,7 @@ __all__ = [
     "QtFrameView",
     "QtSnapshotRenderer",
     "PyqtgraphSnapshotRenderer",
+    "coerce_qimage",
+    "numpy_to_qimage",
     "numpy_rgb_to_qimage",
 ]

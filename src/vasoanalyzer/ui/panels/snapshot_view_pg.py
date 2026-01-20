@@ -50,7 +50,7 @@ class SnapshotViewPG(QtWidgets.QWidget):
         self._frame_trace_time: np.ndarray | None = None
         self._rotation_deg: int = 0
         self._suppress_signals: bool = False
-        self._default_fps: float = 10.0
+        self._default_fps: float = 30.0
         self._native_controls: dict[str, _t.Any] | None = None
 
         self.image_view = pg.ImageView(view=pg.PlotItem())
@@ -227,7 +227,7 @@ class SnapshotViewPG(QtWidgets.QWidget):
         self.set_rotation(0)
 
     # playback API (canonical PyQtGraph pattern)
-    def play(self, fps: float = 10.0) -> None:
+    def play(self, fps: float = 30.0) -> None:
         """Start playback at specified frame rate using native PyQtGraph engine.
 
         Args:

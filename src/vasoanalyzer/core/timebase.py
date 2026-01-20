@@ -9,9 +9,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from collections.abc import Sequence
 from typing import Any, Mapping
 
 import logging
+import math
+import bisect
 
 import numpy as np
 import pandas as pd
@@ -70,6 +73,16 @@ class FrameTimeResult:
     fps: float | None = None
     frame_to_trace_idx: np.ndarray | None = None
     mapping_coverage: float | None = None
+
+
+@dataclass
+class TiffPageTimeResult:
+    tiff_page_times: list[float]
+    warnings: list[str] = field(default_factory=list)
+    valid: bool = False
+    page_count: int | None = None
+    median_interval_s: float | None = None
+    time_column: str | None = None
 
 
 def _normalize_name(name: str) -> str:
@@ -576,6 +589,183 @@ def _finalize_frame_times(
     )
 
 
+def derive_tiff_page_times(
+    trace_df: pd.DataFrame | None,
+    *,
+    expected_page_count: int | None = None,
+    time_columns: Sequence[str] = ("Time_s_exact", "Time (s)", "t_seconds"),
+    saved_column: str = "Saved",
+    tiff_page_column: str = "TiffPage",
+) -> TiffPageTimeResult:
+    """Derive canonical TIFF page times from trace metadata."""
+
+    warnings: list[str] = []
+    if trace_df is None or trace_df.empty:
+        warnings.append("Trace DataFrame unavailable; cannot derive TIFF page times.")
+        return TiffPageTimeResult([], warnings=warnings)
+
+    time_col = None
+    for candidate in time_columns:
+        if candidate in trace_df.columns:
+            time_col = candidate
+            break
+    if time_col is None:
+        warnings.append("No canonical time column found for TIFF page timing.")
+        return TiffPageTimeResult([], warnings=warnings)
+
+    tiff_col = tiff_page_column
+    if tiff_col not in trace_df.columns and "tiff_page" in trace_df.columns:
+        tiff_col = "tiff_page"
+    if tiff_col not in trace_df.columns:
+        warnings.append("No TiffPage column found for TIFF page timing.")
+        return TiffPageTimeResult([], warnings=warnings, time_column=time_col)
+
+    df_local = trace_df
+    if saved_column in trace_df.columns:
+        saved_series = pd.to_numeric(trace_df[saved_column], errors="coerce").fillna(0)
+        saved_mask = saved_series > 0
+        if saved_mask.any():
+            df_local = trace_df.loc[saved_mask]
+        else:
+            warnings.append("Saved column present but no saved rows; using all rows.")
+
+    pages = pd.to_numeric(df_local[tiff_col], errors="coerce")
+    times = pd.to_numeric(df_local[time_col], errors="coerce")
+    mask = pages.notna() & times.notna()
+    if not mask.any():
+        warnings.append("No valid TiffPage/time pairs found.")
+        return TiffPageTimeResult([], warnings=warnings, time_column=time_col)
+
+    pages = pages.loc[mask].astype(int)
+    times = times.loc[mask].astype(float)
+
+    mapping: dict[int, float] = {}
+    duplicates: set[int] = set()
+    for page_val, time_val in zip(pages.to_numpy(), times.to_numpy(), strict=False):
+        page_int = int(page_val)
+        if page_int in mapping:
+            duplicates.add(page_int)
+            continue
+        mapping[page_int] = float(time_val)
+
+    if duplicates:
+        warnings.append(
+            f"Duplicate TiffPage entries detected (count={len(duplicates)}); "
+            "using first occurrence."
+        )
+
+    if not mapping:
+        warnings.append("No usable TiffPage mappings after filtering.")
+        return TiffPageTimeResult([], warnings=warnings, time_column=time_col)
+
+    max_page = max(mapping.keys())
+    if expected_page_count is not None and expected_page_count > 0:
+        page_count = int(expected_page_count)
+    else:
+        page_count = int(max_page + 1)
+
+    if page_count <= 0:
+        warnings.append("Expected TIFF page count is invalid.")
+        return TiffPageTimeResult([], warnings=warnings, time_column=time_col)
+
+    times_list: list[float] = [float("nan")] * page_count
+    out_of_range = 0
+    for page_int, time_val in mapping.items():
+        if page_int < 0 or page_int >= page_count:
+            out_of_range += 1
+            continue
+        times_list[page_int] = float(time_val)
+    if out_of_range:
+        warnings.append(
+            f"TiffPage entries out of expected range: {out_of_range}."
+        )
+
+    missing_pages = [i for i, val in enumerate(times_list) if not math.isfinite(val)]
+    if missing_pages:
+        warnings.append(
+            f"Missing TIFF page time(s): {len(missing_pages)} of {page_count}."
+        )
+
+    valid = not missing_pages and out_of_range == 0
+    median_interval = None
+    if any(math.isfinite(val) for val in times_list):
+        finite_vals = np.asarray([val for val in times_list if math.isfinite(val)], dtype=float)
+        if finite_vals.size >= 2:
+            diffs = np.diff(finite_vals)
+            if np.any(diffs <= TIME_EPS_S):
+                warnings.append("TIFF page times are not strictly increasing.")
+                valid = False
+            else:
+                median_interval = float(np.median(diffs))
+
+    if min(mapping.keys()) != 0:
+        warnings.append("TiffPage indices do not start at 0.")
+        valid = False
+
+    if expected_page_count is not None and expected_page_count > 0:
+        expected_set = set(range(int(expected_page_count)))
+        if set(mapping.keys()) != expected_set:
+            warnings.append("TiffPage coverage does not match expected range.")
+            valid = False
+
+    return TiffPageTimeResult(
+        tiff_page_times=times_list,
+        warnings=warnings,
+        valid=valid,
+        page_count=page_count,
+        median_interval_s=median_interval,
+        time_column=time_col,
+    )
+
+
+def page_for_time(
+    t: float,
+    tiff_page_times: Sequence[float],
+    *,
+    mode: str = "nearest",
+) -> int | None:
+    """Return the deterministic page index for a time value."""
+
+    try:
+        if len(tiff_page_times) == 0:
+            return None
+    except Exception:
+        return None
+    try:
+        t_val = float(t)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(t_val):
+        return None
+
+    times = [float(v) for v in tiff_page_times]
+    finite_indices = [i for i, v in enumerate(times) if math.isfinite(v)]
+    if not finite_indices:
+        return None
+
+    if len(finite_indices) != len(times):
+        return min(finite_indices, key=lambda i: abs(times[i] - t_val))
+
+    for idx in range(1, len(times)):
+        if times[idx] < times[idx - 1] - TIME_EPS_S:
+            return min(range(len(times)), key=lambda i: abs(times[i] - t_val))
+
+    if mode == "floor":
+        pos = bisect.bisect_right(times, t_val) - 1
+        return max(0, min(int(pos), len(times) - 1))
+
+    pos = bisect.bisect_left(times, t_val)
+    if pos <= 0:
+        return 0
+    if pos >= len(times):
+        return len(times) - 1
+    prev_idx = pos - 1
+    next_idx = pos
+    if abs(times[next_idx] - t_val) < abs(t_val - times[prev_idx]):
+        return int(next_idx)
+    return int(prev_idx)
+
+
 __all__ = [
     "TIME_EPS_S",
     "RANGE_TOL_S",
@@ -584,7 +774,10 @@ __all__ = [
     "TimebaseResult",
     "EventTimeReport",
     "FrameTimeResult",
+    "TiffPageTimeResult",
     "resolve_trace_timebase",
     "validate_and_normalize_events",
     "resolve_tiff_frame_times",
+    "derive_tiff_page_times",
+    "page_for_time",
 ]

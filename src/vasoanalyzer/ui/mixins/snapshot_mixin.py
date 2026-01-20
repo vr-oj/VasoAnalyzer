@@ -360,7 +360,6 @@ class SnapshotMixin:
             self._set_playback_state(False)
             self.update_snapshot_size()
             self._clear_slider_markers()
-            self._configure_snapshot_timer()
             self._apply_frame_change(0)
             self.toggle_snapshot_viewer(True)
 
@@ -584,15 +583,6 @@ class SnapshotMixin:
 
         self.snapshot_speed_multiplier = speed
 
-        if not hasattr(self, "snapshot_timer"):
-            return
-
-        was_active = self.snapshot_timer.isActive()
-        self._configure_snapshot_timer()
-
-        if was_active and self.snapshot_frames:
-            self.snapshot_timer.start()
-
     def _reset_snapshot_speed(self) -> None:
         self.snapshot_speed_multiplier = 1.0
 
@@ -610,70 +600,6 @@ class SnapshotMixin:
                 self.snapshot_speed_multiplier = float(data)
             except (TypeError, ValueError):
                 self.snapshot_speed_multiplier = 1.0
-
-        if hasattr(self, "snapshot_timer"):
-            self._configure_snapshot_timer()
-
-    def _configure_snapshot_timer(self) -> None:
-        try:
-            interval = float(self.recording_interval)
-        except (TypeError, ValueError):
-            interval = 0.14
-
-        if not interval:
-            interval = 0.14
-
-        try:
-            speed = float(self.snapshot_speed_multiplier)
-        except (TypeError, ValueError):
-            speed = 1.0
-
-        if speed <= 0:
-            speed = 1.0
-
-        effective_interval = interval / speed if interval else 0.14
-        interval_ms = max(20, int(round(effective_interval * 1000)))
-        self.snapshot_timer.setInterval(interval_ms)
-
-    def _set_playback_state(self, playing: bool) -> None:
-        if not hasattr(self, "snapshot_timer"):
-            return
-
-        if not playing or not self.snapshot_frames:
-            playing = False
-            self.snapshot_timer.stop()
-        else:
-            self._configure_snapshot_timer()
-            self.snapshot_timer.start()
-
-        self.play_pause_btn.blockSignals(True)
-        self.play_pause_btn.setChecked(playing)
-        self.play_pause_btn.blockSignals(False)
-
-        icon_name = "pause.svg" if playing else "play_arrow.svg"
-        icon_path = self.icon_path(icon_name) if hasattr(self, "icon_path") else None
-        if icon_path:
-            self.play_pause_btn.setIcon(QIcon(icon_path))
-        else:
-            icon_role = QStyle.SP_MediaPause if playing else QStyle.SP_MediaPlay
-            self.play_pause_btn.setIcon(self.style().standardIcon(icon_role))
-        self.play_pause_btn.setText("Pause" if playing else "Play")
-        tooltip = "Pause snapshot playback" if playing else "Play snapshot sequence"
-        self.play_pause_btn.setToolTip(tooltip)
-
-    def toggle_snapshot_playback(self, checked: bool) -> None:
-        if checked and not self.snapshot_frames:
-            self._set_playback_state(False)
-            return
-        self._set_playback_state(bool(checked))
-
-    def advance_snapshot_frame(self) -> None:
-        if not self.snapshot_frames:
-            self._set_playback_state(False)
-            return
-
-        next_idx = (self.current_frame + 1) % len(self.snapshot_frames)
-        self.set_current_frame(next_idx)
 
     def step_previous_frame(self) -> None:
         if not self.snapshot_frames:

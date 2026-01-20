@@ -1148,7 +1148,6 @@ class SampleLoaderMixin:
             self._set_playback_state(False)
             self.update_snapshot_size()
             self._clear_slider_markers()
-            self._configure_snapshot_timer()
             self._apply_frame_change(0)
             self.toggle_snapshot_viewer(True)
 
@@ -1299,7 +1298,6 @@ class SampleLoaderMixin:
             self.snapshot_speed_label.setEnabled(True)
             self.snapshot_speed_combo.setEnabled(True)
             self._set_playback_state(False)
-            self._configure_snapshot_timer()
 
     def _handle_load_trace(self):
         # Prompt for the trace file
