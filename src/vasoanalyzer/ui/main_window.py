@@ -12235,6 +12235,10 @@ QPushButton[isGhost="true"]:pressed {{
         if not self.snapshot_frames:
             playing = False
             self._clear_snapshot_playback_clock()
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_playing(playing)
 
         # Canonical viewer: use timer-based playback to step controller time.
         if playing:

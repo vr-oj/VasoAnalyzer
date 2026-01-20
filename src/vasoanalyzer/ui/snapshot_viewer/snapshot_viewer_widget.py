@@ -78,12 +78,14 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
             if isinstance(frame, np.ndarray):
                 frame_shape = tuple(frame.shape)
                 frame_dtype = str(frame.dtype)
+            convert_ms = self._renderer.last_convert_ms
             scale_ms = self._renderer.last_scale_ms
             log_perf(
                 "render",
                 backend=self._backend_name,
                 path=self._backend_name,
                 render_ms=round(render_ms, 3),
+                convert_ms=round(convert_ms, 3) if convert_ms is not None else None,
                 scale_ms=round(scale_ms, 3) if scale_ms is not None else None,
                 frame_shape=frame_shape,
                 frame_dtype=frame_dtype,
@@ -97,6 +99,10 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
         self._rotation_deg = int(angle_deg) % 360
         with QtCore.QSignalBlocker(self._renderer.widget):
             self._renderer.set_rotation(self._rotation_deg)
+
+    def set_playing(self, playing: bool) -> None:
+        with QtCore.QSignalBlocker(self._renderer.widget):
+            self._renderer.set_playing(bool(playing))
 
     def rotate_cw_90(self) -> None:
         self.set_rotation(self._rotation_deg + 90)
