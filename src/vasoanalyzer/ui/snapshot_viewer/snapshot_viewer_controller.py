@@ -34,9 +34,10 @@ from .render_backends import coerce_qimage
 log = logging.getLogger(__name__)
 
 _DEFAULT_PREFETCH_FRAMES = 12
-_DEFAULT_PREFETCH_INTERVAL_MS = 75
+_DEFAULT_PREFETCH_INTERVAL_MS = 100
 _DEFAULT_PLAYBACK_PPS = 30.0
 _DEFAULT_PLAYBACK_TICK_HZ = 30.0
+_MAX_PLAYBACK_DT_S = 0.2
 
 
 def _prefetch_window() -> int:
@@ -54,7 +55,7 @@ def _prefetch_interval_ms() -> int:
     if not value:
         return _DEFAULT_PREFETCH_INTERVAL_MS
     try:
-        return max(50, int(value))
+        return max(100, int(value))
     except (TypeError, ValueError):
         return _DEFAULT_PREFETCH_INTERVAL_MS
 
@@ -113,10 +114,11 @@ class SnapshotViewerController(QtCore.QObject):
         self._page_float = 0.0
         self._current_page = 0
         self._sync_enabled = True
-        self._loop_enabled = False
+        self._loop_enabled = True
         self._page_times: list[float] | None = None
         self._playback_last_log_time: float | None = None
-        self._playback_elapsed_ms: int | None = None
+        self._playback_last_tick_monotonic: float | None = None
+        self._playback_ended: bool = False
         self._prefetch_window = _prefetch_window()
         self._prefetch_queue: deque[int] = deque()
         self._prefetch_pending: set[int] = set()
@@ -125,7 +127,6 @@ class SnapshotViewerController(QtCore.QObject):
         self._playback_expected_ms: float | None = None
         self._playback_last_tick_ms: float | None = None
         self._playback_pending = False
-        self._playback_clock = QtCore.QElapsedTimer()
         self._playback_timer = QtCore.QTimer(self)
         self._playback_timer.setTimerType(QtCore.Qt.PreciseTimer)
         self._playback_timer.setInterval(self._playback_interval_ms())
@@ -209,8 +210,9 @@ class SnapshotViewerController(QtCore.QObject):
         self._playback_pending = False
         self._playback_last_tick_ms = None
         self._playback_expected_ms = None
-        self._playback_elapsed_ms = None
+        self._playback_last_tick_monotonic = None
         self._playback_last_log_time = None
+        self._playback_ended = False
         self._pending_time_s = None
         self._pending_source = ""
         self._flush_scheduled = False
@@ -257,6 +259,8 @@ class SnapshotViewerController(QtCore.QObject):
                 return
         if source == "playback":
             self._playback_pending = True
+        else:
+            self._playback_ended = False
         try:
             frame = self._frame_for_index(src, idx)
             if frame is None:
@@ -302,6 +306,7 @@ class SnapshotViewerController(QtCore.QObject):
         self._page_times = self._extract_page_times(source)
         self._current_page = 0
         self._page_float = 0.0
+        self._playback_ended = False
         if perf_enabled():
             if source is None:
                 log_perf("source_set", source="none")
@@ -328,36 +333,62 @@ class SnapshotViewerController(QtCore.QObject):
             self._playback_pending = False
             self._playback_last_tick_ms = None
             self._playback_expected_ms = None
+            self._playback_last_tick_monotonic = None
             self._pending_time_s = None
             self._pending_source = ""
             self._flush_scheduled = False
             self._last_frame_index = None
+            self._playback_ended = False
             self.frame_changed.emit(None)
 
     def set_playing(self, playing: bool) -> None:
         playing = bool(playing)
         if self._playing == playing:
             return
-        self._playing = playing
         if not playing:
+            self._playing = False
             self._clear_prefetch()
             self._playback_pending = False
             self._playback_last_tick_ms = None
             self._playback_expected_ms = None
-            self._playback_elapsed_ms = None
+            self._playback_last_tick_monotonic = None
             self._playback_last_log_time = None
             if self._playback_timer.isActive():
                 self._playback_timer.stop()
+            self.playing_changed.emit(False)
+            return
+        total = self._page_count()
+        start_page = self._current_page
+        if total > 0:
+            last_page = total - 1
+            if self._playback_ended or start_page < 0 or start_page >= last_page:
+                start_page = 0
         else:
-            self._playback_last_tick_ms = None
-            self._playback_expected_ms = None
-            if self._last_frame_index is not None:
-                self._queue_prefetch(self._last_frame_index)
+            start_page = 0
+        self._playing = True
+        self._playback_pending = False
+        self._playback_last_tick_ms = None
+        self._playback_expected_ms = None
+        self._playback_last_tick_monotonic = time.perf_counter()
+        self._playback_last_log_time = None
+        self._playback_ended = False
+        if start_page != self._current_page:
+            self._page_float = float(start_page)
+            self.set_frame_index(start_page, source="playback")
+        else:
             self._page_float = float(self._current_page)
-            self._playback_clock.start()
-            self._playback_elapsed_ms = 0
-            self._playback_timer.start()
-        self.playing_changed.emit(bool(self._playing))
+        if self._last_frame_index is not None:
+            self._queue_prefetch(self._last_frame_index)
+        self._playback_timer.start()
+        if perf_enabled():
+            log_perf(
+                "playback_start",
+                pps=round(float(self._playback_pps), 3),
+                loop_enabled=bool(self._loop_enabled),
+                start_page=int(self._current_page),
+                interval_ms=int(self._playback_interval_ms()),
+            )
+        self.playing_changed.emit(True)
 
     def note_playback_tick(
         self,
@@ -459,6 +490,8 @@ class SnapshotViewerController(QtCore.QObject):
                     self._queue_prefetch(frame_index)
         if pending_source == "playback":
             self._playback_pending = False
+        else:
+            self._playback_ended = False
 
         if total_start is not None:
             total_ms = (time.perf_counter() - total_start) * 1000.0
@@ -510,6 +543,18 @@ class SnapshotViewerController(QtCore.QObject):
             return getter()
         return getattr(widget, "cache", None)
 
+    def _prefetch_cache_near_cap(self, cache) -> bool:
+        if cache is None:
+            return False
+        try:
+            max_bytes = float(cache.max_bytes)
+            current_bytes = float(cache.current_bytes)
+        except Exception:
+            return False
+        if max_bytes <= 0:
+            return False
+        return current_bytes > (0.90 * max_bytes)
+
     def _cache_key_for(self, frame_index: int) -> tuple[int, int] | None:
         widget = self._get_widget()
         rotation = getattr(widget, "rotation_deg", 0) if widget is not None else 0
@@ -533,6 +578,9 @@ class SnapshotViewerController(QtCore.QObject):
             return
         cache = self._prefetch_cache()
         if cache is None:
+            return
+        if self._prefetch_cache_near_cap(cache):
+            self._clear_prefetch()
             return
         try:
             total = len(source)
@@ -573,6 +621,9 @@ class SnapshotViewerController(QtCore.QObject):
         source = self._source
         cache = self._prefetch_cache()
         if source is None or cache is None:
+            self._clear_prefetch()
+            return
+        if self._prefetch_cache_near_cap(cache):
             self._clear_prefetch()
             return
         if self._playing and (self._playback_pending or self._playback_tick_late()):
@@ -681,13 +732,17 @@ class SnapshotViewerController(QtCore.QObject):
         if total <= 0:
             self.set_playing(False)
             return
-        elapsed_ms = int(self._playback_clock.elapsed())
-        if self._playback_elapsed_ms is None:
-            self._playback_elapsed_ms = elapsed_ms
+        now = time.perf_counter()
+        last_tick = self._playback_last_tick_monotonic
+        if last_tick is None:
+            self._playback_last_tick_monotonic = now
             return
-        dt_ms = elapsed_ms - self._playback_elapsed_ms
-        self._playback_elapsed_ms = elapsed_ms
-        dt_s = max(0.0, float(dt_ms) / 1000.0)
+        raw_dt_s = now - last_tick
+        self._playback_last_tick_monotonic = now
+        if raw_dt_s < 0:
+            raw_dt_s = 0.0
+        dt_s = min(raw_dt_s, _MAX_PLAYBACK_DT_S)
+        dt_ms = raw_dt_s * 1000.0
         tick_hz = self._playback_tick_hz()
         self.note_playback_tick(dt_ms, tick_hz)
 
@@ -696,33 +751,45 @@ class SnapshotViewerController(QtCore.QObject):
         except (TypeError, ValueError):
             page_float = float(self._current_page)
         page_float += float(self._playback_pps) * dt_s
-        max_page = total - 1
         next_page = int(page_float)
         mapped_trace_time = None
-        if next_page >= max_page:
+        if next_page >= total:
             if self._loop_enabled:
-                # Loop mode: reset to frame 0 and continue
-                self._page_float = 0.0
-                self.set_frame_index(0, source="playback")
-                mapped_trace_time = self._emit_playback_sync(0)
-                self._log_playback_tick(0, dt_ms, mapped_trace_time)
-                # Do not stop - playback continues
+                page_float = page_float % total
+                next_page = int(page_float)
+                if perf_enabled():
+                    log_perf(
+                        "playback_end",
+                        reached_end=True,
+                        loop_enabled=True,
+                        action="wrap",
+                        current_page=int(self._current_page),
+                    )
             else:
-                # Original behavior: stop at last frame
-                page_float = float(max_page)
-                self._page_float = page_float
-                if max_page != self._current_page:
-                    self.set_frame_index(max_page, source="playback")
-                    mapped_trace_time = self._emit_playback_sync(max_page)
+                last_page = total - 1
+                page_float = float(last_page)
+                if last_page != self._current_page:
+                    self.set_frame_index(last_page, source="playback")
+                    mapped_trace_time = self._emit_playback_sync(last_page)
                 else:
                     mapped_trace_time = (
-                        float(self._page_times[max_page])
+                        float(self._page_times[last_page])
                         if self._page_times is not None
                         and self._sync_enabled
-                        and 0 <= max_page < len(self._page_times)
+                        and 0 <= last_page < len(self._page_times)
                         else None
                     )
-                self._log_playback_tick(max_page, dt_ms, mapped_trace_time)
+                if perf_enabled():
+                    log_perf(
+                        "playback_end",
+                        reached_end=True,
+                        loop_enabled=False,
+                        action="stop",
+                        current_page=int(last_page),
+                    )
+                self._page_float = page_float
+                self._log_playback_tick(last_page, dt_ms, mapped_trace_time)
+                self._playback_ended = True
                 self.set_playing(False)
                 return
 

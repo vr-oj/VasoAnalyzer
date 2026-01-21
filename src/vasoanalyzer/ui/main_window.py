@@ -747,6 +747,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._snapshot_pps_default = self._resolve_snapshot_pps_default()
         self.snapshot_pps = float(self._snapshot_pps_default)
         self.snapshot_sync_enabled = True
+        self.snapshot_loop_enabled = True
         self._snapshot_play_start_wall_time: float | None = None
         self._snapshot_play_start_frame_index: int = 0
         self._snapshot_last_rendered_frame: int | None = None
@@ -3938,7 +3939,7 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "snapshot_loop_checkbox"):
             self.snapshot_loop_checkbox.setEnabled(False)
             self.snapshot_loop_checkbox.blockSignals(True)
-            self.snapshot_loop_checkbox.setChecked(False)
+            self.snapshot_loop_checkbox.setChecked(bool(self.snapshot_loop_enabled))
             self.snapshot_loop_checkbox.blockSignals(False)
         if hasattr(self, 'snapshot_timeline'):
             self.snapshot_timeline.set_frame_count(0)
@@ -12347,6 +12348,7 @@ QPushButton[isGhost="true"]:pressed {{
 
     def on_snapshot_loop_toggled(self, checked: bool) -> None:
         """Handle loop playback checkbox toggle."""
+        self.snapshot_loop_enabled = bool(checked)
         controller = getattr(self, "snapshot_controller", None)
         if controller is not None:
             with contextlib.suppress(Exception):
@@ -15680,7 +15682,7 @@ QPushButton[isGhost="true"]:pressed {{
         if hasattr(self, "snapshot_loop_checkbox"):
             self.snapshot_loop_checkbox.setEnabled(False)
             self.snapshot_loop_checkbox.blockSignals(True)
-            self.snapshot_loop_checkbox.setChecked(False)
+            self.snapshot_loop_checkbox.setChecked(bool(self.snapshot_loop_enabled))
             self.snapshot_loop_checkbox.blockSignals(False)
         if hasattr(self, 'snapshot_timeline'):
             self.snapshot_timeline.set_frame_count(0)

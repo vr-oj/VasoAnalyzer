@@ -293,7 +293,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window.snapshot_loop_checkbox = QCheckBox("Loop playback")
     window.snapshot_loop_checkbox.setObjectName("SnapshotLoopCheckbox")
-    window.snapshot_loop_checkbox.setChecked(False)
+    default_loop = bool(getattr(window, "snapshot_loop_enabled", True))
+    window.snapshot_loop_checkbox.setChecked(default_loop)
     window.snapshot_loop_checkbox.setEnabled(False)
     window.snapshot_loop_checkbox.setToolTip("Restart playback from beginning when reaching last frame")
     window.snapshot_loop_checkbox.toggled.connect(window.on_snapshot_loop_toggled)
@@ -340,6 +341,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         window.snapshot_controller.set_sync_enabled(
             bool(getattr(window, "snapshot_sync_enabled", True))
         )
+        window.snapshot_controller.set_loop_enabled(default_loop)
         window._update_snapshot_sync_label("none")
 
     window.metadata_panel = QFrame()
