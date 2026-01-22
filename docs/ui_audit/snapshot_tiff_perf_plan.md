@@ -8,8 +8,8 @@ Supporting observations (code locations):
 - `src/vasoanalyzer/ui/main_window.py:_SnapshotLoadJob._load_from_path()` loads all TIFF frames into memory; playback does not hit disk I/O per frame.
 - `src/vasoanalyzer/ui/main_window.py:advance_snapshot_frame()` is driven by a `QTimer` on the UI thread, then calls `_apply_frame_change()` and `jump_to_time()` synchronously.
 - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_controller.py:_refresh_frame()` emits `frame_changed` directly; the slot executes on the UI thread.
-- `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_widget.py:set_frame()` calls `SnapshotViewPG.set_stack()` for each frame update (rebuilds ImageView state each time).
-- `src/vasoanalyzer/ui/panels/snapshot_view_pg.py:SnapshotViewPG._normalize_stack()` performs dtype conversions (float32/uint8) on every update.
+- Qt backend: `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_widget.py:set_frame()` calls `QtSnapshotRenderer.set_frame()` for each frame update (QImage conversion + paint).
+- Experimental PyQtGraph backend: `src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py:SnapshotViewPG._normalize_stack()` performs dtype conversions (float32/uint8) on every update.
 - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_data_source.py:SnapshotStackDataSource.get_frame_at_time()` uses `np.argmin` (O(n)) for each update; cost grows with frame count.
 - `src/vasoanalyzer/ui/main_window.py:_apply_frame_change()` also drives plot updates; heavy plotting work competes with frame rendering on the same thread.
 

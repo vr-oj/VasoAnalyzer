@@ -14,7 +14,7 @@
 - `src/vasoanalyzer/ui/main_window.py:_set_snapshot_data_source()` wraps a list of numpy frames in `SnapshotStackDataSource`.
 - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_data_source.py:SnapshotStackDataSource.get_frame_at_time()` returns a single frame (numpy ndarray).
 - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_controller.py:_refresh_frame()` emits that frame.
-- `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_widget.py:set_frame()` receives a numpy array and routes to `SnapshotViewPG`.
+- `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_widget.py:set_frame()` receives a numpy array and routes to `QtSnapshotRenderer`.
 
 3) Time -> frame mapping occurs in two places:
 
@@ -25,11 +25,10 @@
   - `src/vasoanalyzer/ui/main_window.py:_frame_index_for_time_canonical()` uses `np.argmin` against `frame_trace_time` or `frame_times`.
   - `src/vasoanalyzer/ui/snapshot_viewer/snapshot_data_source.py:SnapshotStackDataSource.get_frame_at_time()` uses `np.argmin` on `frame_times`.
 
-4) Frame conversion for rendering happens in SnapshotViewPG.
+4) Frame conversion for rendering happens in the Qt snapshot renderer.
 
-- `src/vasoanalyzer/ui/panels/snapshot_view_pg.py:SnapshotViewPG._normalize_stack()` converts grayscale to `float32` and RGB/RGBA to `uint8`.
-- `src/vasoanalyzer/ui/panels/snapshot_view_pg.py:SnapshotViewPG.set_stack()` calls `ImageView.setImage()` with `autoRange/autoLevels`.
-- `src/vasoanalyzer/ui/snapshot_viewer/snapshot_viewer_widget.py:_coerce_pixmap()` (QImage/QPixmap path) is used only if the frame is not an ndarray.
+- `src/vasoanalyzer/ui/snapshot_viewer/render_backends.py:numpy_to_qimage()` normalizes grayscale/RGB to `uint8` and builds a QImage.
+- `src/vasoanalyzer/ui/snapshot_viewer/render_backends.py:QtSnapshotRenderer.set_frame()` uses the cache and passes the QImage to `QtFrameView`.
 
 5) Playback is PPS-based and runs on the UI thread.
 
@@ -66,10 +65,14 @@ SnapshotViewerController.set_trace_time(t)
    v
 SnapshotViewerWidget.set_frame(np.ndarray)
    |
-   | SnapshotViewPG.set_stack -> _normalize_stack -> ImageView.setImage
+   | QtSnapshotRenderer.set_frame -> numpy_to_qimage -> QtFrameView.paintEvent
    v
-Qt/pyqtgraph render
+Qt render (no ImageView)
 ```
+
+## Notes
+
+- Snapshot viewing is Qt-only; PyQtGraph is used for plots only.
 
 ## Conclusion (in-memory vs file-backed)
 

@@ -33,8 +33,8 @@ class SnapshotTimelineWidget(QWidget):
         self._hover = False
 
         # Visual settings
-        self.setMinimumHeight(60)
-        self.setMaximumHeight(80)
+        self.setMinimumHeight(36)
+        self.setMaximumHeight(46)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMouseTracking(True)
 
@@ -73,14 +73,7 @@ class SnapshotTimelineWidget(QWidget):
 
         # Define layout regions
         width = self.width()
-        height = self.height()
-
-        frame_label_height = 18
-        bar_height = 20
-        timestamp_height = 16
-        margin = 10
-
-        bar_y = frame_label_height + 5
+        frame_label_height, bar_height, margin, bar_y, compact = self._layout_metrics()
         bar_rect = QRect(margin, bar_y, width - 2 * margin, bar_height)
 
         # Draw progress bar background
@@ -101,19 +94,29 @@ class SnapshotTimelineWidget(QWidget):
             scrubber_y = bar_rect.center().y()
             painter.setBrush(accent_color)
             painter.setPen(QPen(text_color, 2))
-            painter.drawEllipse(scrubber_x - 6, scrubber_y - 6, 12, 12)
+            handle_radius = 5 if compact else 6
+            painter.drawEllipse(
+                scrubber_x - handle_radius,
+                scrubber_y - handle_radius,
+                handle_radius * 2,
+                handle_radius * 2,
+            )
 
         # Draw frame number labels
         painter.setPen(text_color)
-        painter.setFont(QFont("Arial", 9))
+        painter.setFont(QFont("Arial", 8 if compact else 9))
 
         if self._frame_count > 0:
             # Draw current frame number
             current_text = f"Frame {self._current_frame + 1} / {self._frame_count}"
-            painter.drawText(bar_rect.x(), 12, current_text)
+            painter.drawText(bar_rect.x(), frame_label_height, current_text)
 
             # Draw timestamp if available
-            if self._frame_times and self._current_frame < len(self._frame_times):
+            if (
+                not compact
+                and self._frame_times
+                and self._current_frame < len(self._frame_times)
+            ):
                 time_s = self._frame_times[self._current_frame]
                 time_text = self._format_time(time_s)
                 painter.setPen(text_color.darker(130))
@@ -162,7 +165,7 @@ class SnapshotTimelineWidget(QWidget):
 
     def _seek_to_position(self, x: int) -> None:
         """Convert X coordinate to frame index and emit signal."""
-        margin = 10
+        _, _, margin, _, _ = self._layout_metrics()
         bar_width = self.width() - 2 * margin
 
         if bar_width <= 0 or self._frame_count <= 0:
@@ -181,11 +184,18 @@ class SnapshotTimelineWidget(QWidget):
 
     def _is_over_bar(self, pos) -> bool:
         """Check if mouse is over the progress bar region."""
-        margin = 10
-        bar_y = 23  # frame_label_height + 5
-        bar_height = 20
+        _, bar_height, margin, bar_y, _ = self._layout_metrics()
         bar_rect = QRect(margin, bar_y, self.width() - 2 * margin, bar_height)
         return bar_rect.contains(pos)
+
+    def _layout_metrics(self) -> tuple[int, int, int, int, bool]:
+        height = self.height()
+        compact = height < 50
+        frame_label_height = 14 if compact else 18
+        bar_height = 12 if compact else 20
+        margin = 8 if compact else 10
+        bar_y = frame_label_height + (2 if compact else 5)
+        return frame_label_height, bar_height, margin, bar_y, compact
 
     # QSlider compatibility methods for backward compatibility
     def setValue(self, value: int) -> None:

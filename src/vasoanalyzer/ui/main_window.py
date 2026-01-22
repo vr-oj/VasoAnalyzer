@@ -120,6 +120,7 @@ from vasoanalyzer.export.profiles import (
     PRESSURE_CURVE_STANDARD_ID,
     get_profile,
 )
+from vasoanalyzer.ui.icons import themed_svg_icon
 from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.core.timebase import derive_tiff_page_times, page_for_time
@@ -12410,13 +12411,8 @@ QPushButton[isGhost="true"]:pressed {{
         self.play_pause_btn.setChecked(playing)
         self.play_pause_btn.blockSignals(False)
 
-        icon_name = "pause.svg" if playing else "play_arrow.svg"
-        icon_path = self.icon_path(icon_name) if hasattr(self, "icon_path") else None
-        if icon_path:
-            self.play_pause_btn.setIcon(QIcon(icon_path))
-        else:
-            icon_role = QStyle.SP_MediaPause if playing else QStyle.SP_MediaPlay
-            self.play_pause_btn.setIcon(self.style().standardIcon(icon_role))
+        with contextlib.suppress(Exception):
+            self._update_snapshot_playback_icons()
         self.play_pause_btn.setText("Pause" if playing else "Play")
         tooltip = "Pause snapshot playback" if playing else "Play snapshot sequence"
         self.play_pause_btn.setToolTip(tooltip)
@@ -16121,9 +16117,8 @@ QPushButton[isGhost="true"]:pressed {{
         #                 [0] snapshot_card (QFrame) / QVBoxLayout
         #                     [0] snapshot_stack (QStackedWidget)
         #                         - snapshot_widget (SnapshotViewerWidget)
-        #                     [1] slider
-        #                     [2] snapshot_controls
-        #                     [3] metadata_panel
+        #                     [1] snapshot_controls (transport + scrub + settings)
+        #                     [2] metadata_panel
         #                 [1] event_table_card (QFrame) / QVBoxLayout
         #                     [0] event_table
         self.snapshot_card = None
@@ -16135,8 +16130,8 @@ QPushButton[isGhost="true"]:pressed {{
                 QSizePolicy.Expanding, QSizePolicy.Expanding
             )
             snapshot_box = QVBoxLayout(self.snapshot_card)
-            snapshot_box.setContentsMargins(12, 12, 12, 12)
-            snapshot_box.setSpacing(8)
+            snapshot_box.setContentsMargins(8, 8, 8, 8)
+            snapshot_box.setSpacing(6)
             self.snapshot_stack = QStackedWidget(self.snapshot_card)
             self.snapshot_stack.setObjectName("SnapshotStack")
             self.snapshot_stack.setSizePolicy(
@@ -16146,7 +16141,6 @@ QPushButton[isGhost="true"]:pressed {{
             if self.snapshot_widget is not None:
                 self.snapshot_stack.addWidget(self.snapshot_widget)
             snapshot_box.addWidget(self.snapshot_stack, 1)
-            snapshot_box.addWidget(self.slider)
             snapshot_box.addWidget(self.snapshot_controls)
             snapshot_box.addWidget(self.metadata_panel)
             right_panel_layout.addWidget(self.snapshot_card)
@@ -16309,6 +16303,10 @@ QPushButton[isGhost="true"]:pressed {{
         border = CURRENT_THEME.get("grid_color", "#d0d0d0")
         bg = CURRENT_THEME.get("window_bg", "#ffffff")
         text = CURRENT_THEME.get("text", "#000000")
+        status = CURRENT_THEME.get("text_disabled", text)
+        radius = int(CURRENT_THEME.get("panel_radius", 6))
+        panel_bg = CURRENT_THEME.get("panel_bg", bg)
+        panel_border = CURRENT_THEME.get("panel_border", border)
         button_bg = CURRENT_THEME.get("button_bg", bg)
         button_hover = CURRENT_THEME.get("button_hover_bg", button_bg)
         button_active = CURRENT_THEME.get(
@@ -16324,6 +16322,11 @@ QPushButton[isGhost="true"]:pressed {{
             }}
             QFrame#SnapshotCard QLabel {{
                 color: {text};
+            }}
+            QFrame#SnapshotCard QWidget#SnapshotControls {{
+                background: {panel_bg};
+                border: 1px solid {panel_border};
+                border-radius: {radius}px;
             }}
             QLabel#SnapshotSpeedLabel,
             QLabel#SnapshotSpeedUnitsLabel,
@@ -16364,8 +16367,8 @@ QPushButton[isGhost="true"]:pressed {{
                 background: {button_bg};
                 border: 1px solid {border};
                 border-radius: {radius}px;
-                padding: 4px 6px;
-                min-height: 24px;
+                padding: 3px 6px;
+                min-height: 26px;
                 font-size: 10px;
             }}
             QFrame#SnapshotCard QToolButton:hover {{
@@ -16380,7 +16383,7 @@ QPushButton[isGhost="true"]:pressed {{
                 border: 1px solid {border};
                 border-radius: {radius}px;
                 padding: 2px 6px;
-                min-height: 24px;
+                min-height: 26px;
             }}
         """
         )
@@ -16418,13 +16421,22 @@ QPushButton[isGhost="true"]:pressed {{
         prev_btn = getattr(self, "prev_frame_btn", None)
         next_btn = getattr(self, "next_frame_btn", None)
         play_btn = getattr(self, "play_pause_btn", None)
-        if prev_btn is not None:
-            prev_btn.setIcon(QIcon(self.icon_path("fast_rewind.svg")))
-        if next_btn is not None:
-            next_btn.setIcon(QIcon(self.icon_path("fast_forward.svg")))
+
+        def apply_icon(button: QToolButton | None, icon_name: str) -> None:
+            if button is None:
+                return
+            icon_path = self.icon_path(icon_name) if hasattr(self, "icon_path") else ""
+            size = button.iconSize()
+            if size.width() <= 0 or size.height() <= 0:
+                size = QSize(16, 16)
+            if icon_path:
+                button.setIcon(themed_svg_icon(icon_path, button.palette(), size))
+
+        apply_icon(prev_btn, "fast_rewind.svg")
+        apply_icon(next_btn, "fast_forward.svg")
         if play_btn is not None:
             icon_name = "pause.svg" if play_btn.isChecked() else "play_arrow.svg"
-            play_btn.setIcon(QIcon(self.icon_path(icon_name)))
+            apply_icon(play_btn, icon_name)
 
     def _apply_primary_toolbar_theme(self) -> None:
         """Refresh primary toolbar styles and icons from the current theme."""

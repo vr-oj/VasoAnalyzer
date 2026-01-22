@@ -81,8 +81,8 @@
 1. **`frame_number_to_trace_idx` mapping** - Already being built in [main_window.py:7806-7811](../src/vasoanalyzer/ui/main_window.py#L7806-L7811)
 2. **Event time derivation** - Already using `_trace_time_for_frame_number()` in [main_window.py:9252](../src/vasoanalyzer/ui/main_window.py#L9252)
 3. **Frame time derivation** - Already using `TiffPage` column in [main_window.py:8925-8977](../src/vasoanalyzer/ui/main_window.py#L8925-L8977)
-4. **PyQtGraph viewer** - Already passing `xvals=frame_trace_time` in [snapshot_view_pg.py:123](../src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L123)
-5. **Video→trace sync** - Already correct via `sigTimeChanged` in [snapshot_view_pg.py:68](../src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L68)
+4. **PyQtGraph viewer** - Already passing `xvals=frame_trace_time` in [snapshot_view_pg.py:123](../src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L123)
+5. **Video→trace sync** - Already correct via `sigTimeChanged` in [snapshot_view_pg.py:68](../src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L68)
 
 ---
 

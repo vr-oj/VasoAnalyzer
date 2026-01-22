@@ -16,7 +16,6 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from vasoanalyzer.ui.snapshot_viewer.render_backends import (
     FrameData,
-    PyqtgraphSnapshotRenderer,
     QtSnapshotRenderer,
     SnapshotRenderer,
 )
@@ -43,14 +42,26 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
         self._backend_name = self._resolve_backend()
         self._renderer: SnapshotRenderer
         if self._backend_name == "pyqtgraph":
-            self._renderer = PyqtgraphSnapshotRenderer(
-                self, show_native_controls=False
-            )
+            try:
+                from vasoanalyzer.ui.snapshot_viewer.experimental.pyqtgraph_renderer import (
+                    PyqtgraphSnapshotRenderer,
+                )
+            except Exception:
+                log.warning(
+                    "Experimental snapshot renderer unavailable; forcing Qt backend",
+                    exc_info=True,
+                )
+                self._backend_name = "qt"
+                self._renderer = QtSnapshotRenderer(self)
+            else:
+                self._renderer = PyqtgraphSnapshotRenderer(
+                    self, show_native_controls=False
+                )
         else:
             self._renderer = QtSnapshotRenderer(self)
 
         self._stack = QtWidgets.QStackedLayout(self)
-        self._stack.setContentsMargins(6, 6, 6, 6)
+        self._stack.setContentsMargins(4, 4, 4, 4)
         self._stack.addWidget(self._label)
         self._stack.addWidget(self._renderer.widget)
 
@@ -142,9 +153,22 @@ class SnapshotViewerWidget(QtWidgets.QWidget):
     def _resolve_backend() -> str:
         value = os.environ.get("VA_SNAPSHOT_RENDER_BACKEND", "qt").strip().lower()
         if value in {"pyqtgraph", "pg"}:
-            return "pyqtgraph"
-        if value in {"qt", "native"}:
+            if SnapshotViewerWidget._experimental_backends_allowed():
+                log.warning(
+                    "Using experimental PyQtGraph snapshot backend (opt-in enabled)."
+                )
+                return "pyqtgraph"
+            log.warning(
+                "PyQtGraph snapshot backend requested but experimental backends are disabled; using Qt."
+            )
+            return "qt"
+        if value in {"qt", "native", ""}:
             return "qt"
         if value:
             log.warning("Unknown snapshot render backend '%s'; using qt", value)
         return "qt"
+
+    @staticmethod
+    def _experimental_backends_allowed() -> bool:
+        value = os.environ.get("VA_ALLOW_EXPERIMENTAL_SNAPSHOT_BACKENDS", "")
+        return value.strip().lower() in {"1", "true", "yes", "on"}

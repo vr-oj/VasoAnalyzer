@@ -244,7 +244,7 @@ Updated `toggle_snapshot_playback()` to:
 
 #### 2. Added Play/Stop Methods to SnapshotViewPG ✅
 
-**File:** [snapshot_view_pg.py:169-181](../src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L169-L181)
+**File:** [snapshot_view_pg.py:169-181](../src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L169-L181)
 
 Added two convenience methods:
 ```python

@@ -23,7 +23,7 @@ The VasoAnalyzer snapshot viewer has a **solid architectural foundation** with d
 
 **File Locations:**
 - **Legacy Viewer**: [main_window.py:9733-9794](src/vasoanalyzer/ui/main_window.py#L9733-L9794) (QLabel with QPixmap scaling)
-- **PyQtGraph Viewer**: [snapshot_view_pg.py](src/vasoanalyzer/ui/panels/snapshot_view_pg.py) (254 lines, ImageView wrapper)
+- **PyQtGraph Viewer**: [snapshot_view_pg.py](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py) (254 lines, ImageView wrapper)
 - **TIFF Loader**: [tiffs.py](src/vasoanalyzer/io/tiffs.py) (137 lines)
 - **UI Layout**: [init_ui.py:194-277](src/vasoanalyzer/ui/shell/init_ui.py#L194-L277)
 - **Playback Control**: [main_window.py:10010-10093](src/vasoanalyzer/ui/main_window.py#L10010-L10093)
@@ -87,7 +87,7 @@ def load_tiff(file_path, max_frames=300, metadata=True):
 - Target width calculated with fallback chain: `snapshot_stack.width()` → `snapshot_label.width()` → `event_table.viewport().width()`
 - **Issue**: Complex width calculation may cause unpredictable scaling on resize
 
-**PyQtGraph Viewer** ([snapshot_view_pg.py:50-58](src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L50-L58)):
+**PyQtGraph Viewer** ([snapshot_view_pg.py:50-58](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L50-L58)):
 - Uses `view_box.setAspectLocked(True)` - guarantees correct aspect ratio
 - `setDefaultPadding(0.0)` - removes padding for maximum image area
 - `setMouseEnabled(x=False, y=False)` - disables mouse pan/zoom for stability
@@ -95,7 +95,7 @@ def load_tiff(file_path, max_frames=300, metadata=True):
 
 **Color Handling:**
 - Both viewers convert **RGB to grayscale** using luminance weights (0.299R + 0.587G + 0.114B)
-- [snapshot_view_pg.py:198-207](src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L198-L207)
+- [snapshot_view_pg.py:198-207](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L198-L207)
 - **Lossy conversion** - color information is discarded
 - No option for native RGB/color display
 
@@ -141,7 +141,7 @@ Since TIFFs are subsampled at load time, playback **only plays the loaded subset
 ### Strengths ✅
 
 **Architecture:**
-- Clean signal/slot architecture ([snapshot_view_pg.py:35-36](src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L35-L36))
+- Clean signal/slot architecture ([snapshot_view_pg.py:35-36](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L35-L36))
 - Well-documented API (`set_stack`, `set_frame_index`, `set_current_time`)
 - Proper separation of concerns (TIFF loading, display, playback)
 - Graceful fallbacks (PyQtGraph → legacy viewer switching)
@@ -211,7 +211,7 @@ Evidence from code:
 |---|----------|----------|-------|----------|
 | 1 | **CRITICAL** | Functionality | 300 frame hard limit with silent subsampling | [tiffs.py:67-93](src/vasoanalyzer/io/tiffs.py#L67-L93) |
 | 2 | High | Completeness | PyQtGraph viewer marked "experimental" | [main_window.py](src/vasoanalyzer/ui/main_window.py) (menu action) |
-| 3 | High | Performance | RGB→grayscale conversion lossy (no color display option) | [snapshot_view_pg.py:198-207](src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L198-L207) |
+| 3 | High | Performance | RGB→grayscale conversion lossy (no color display option) | [snapshot_view_pg.py:198-207](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L198-L207) |
 | 4 | Medium | Polish | Debug `log.info()` in display hot path | [main_window.py:9763-9791](src/vasoanalyzer/ui/main_window.py#L9763-L9791) |
 | 5 | Medium | UX | No warning when frames are subsampled | [tiffs.py](src/vasoanalyzer/io/tiffs.py) |
 | 6 | Medium | UX | No UI option to adjust max_frames limit | [tiffs.py](src/vasoanalyzer/io/tiffs.py) |
@@ -242,7 +242,7 @@ Evidence from code:
 ## 7. Code Quality Observations
 
 ### Excellent Patterns ✅
-- Signal/slot architecture ([snapshot_view_pg.py:35-36](src/vasoanalyzer/ui/panels/snapshot_view_pg.py#L35-L36))
+- Signal/slot architecture ([snapshot_view_pg.py:35-36](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py#L35-L36))
 - Context manager usage (`contextlib.suppress`, `with tifffile.TiffFile(...)`)
 - Graceful error handling with logging
 - Type hints in PyQtGraph viewer (`_t.Optional[...]`)
@@ -341,7 +341,7 @@ The VasoAnalyzer snapshot viewer has a **solid technical foundation** with thoug
 
 **Key Files to Review:**
 - [tiffs.py](src/vasoanalyzer/io/tiffs.py) - Frame limit removal
-- [snapshot_view_pg.py](src/vasoanalyzer/ui/panels/snapshot_view_pg.py) - Production readiness
+- [snapshot_view_pg.py](src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py) - Production readiness
 - [main_window.py](src/vasoanalyzer/ui/main_window.py) - Debug logging cleanup
 - [init_ui.py](src/vasoanalyzer/ui/shell/init_ui.py) - UI polish
 

@@ -135,7 +135,7 @@ snapshot_frames: list[np.ndarray]   # Actual image data
 - No explicit `Frame` → `FrameNumber` → `Time (s)` mapping enforced
 - Caller must manually join events to trace to get canonical times
 
-### 2.2 Video Viewer ([snapshot_view_pg.py](../src/vasoanalyzer/ui/panels/snapshot_view_pg.py))
+### 2.2 Video Viewer ([snapshot_view_pg.py](../src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py))
 
 ✅ **GOOD (already implements canonical model!):**
 - `set_stack(stack, frame_trace_time)` accepts canonical time array

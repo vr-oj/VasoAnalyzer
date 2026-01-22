@@ -31,7 +31,7 @@
 - Legacy playback: slider/timer → `change_frame` → `_apply_frame_change` (`src/vasoanalyzer/ui/main_window.py:9458`). PG playback: `SnapshotViewPG` emits `currentTimeChanged(t)` → `_on_snapshot_time_changed` (`src/vasoanalyzer/ui/main_window.py:9320`) → `_frame_index_for_time(t)` → `set_current_frame`.
 - `_apply_frame_change` sets `current_frame`, forwards to the active viewer, derives `frame_time` from `frame_times[idx]` or `idx * recording_interval`, logs, highlights the event cursor at `frame_time`, then calls `update_slider_marker`.
 - `update_slider_marker` uses `frame_trace_indices` (if available) to map frame → trace index → `trace_data["Time (s)"]`, otherwise falls back to raw `frame_times` or `idx * recording_interval`, then updates `_time_cursor_time` and the plot cursor (`src/vasoanalyzer/ui/main_window.py:9759`).
-- `SnapshotViewPG` computes `t` for signals as `frame_times[idx]` if provided, else the index (`src/vasoanalyzer/ui/panels/snapshot_view_pg.py:437`), so the playback path stays consistent with whatever `frame_times` were seeded.
+- `SnapshotViewPG` computes `t` for signals as `frame_times[idx]` if provided, else the index (`src/vasoanalyzer/ui/snapshot_viewer/experimental/snapshot_view_pg.py:437`), so the playback path stays consistent with whatever `frame_times` were seeded.
 
 ## TIFF load path and frame-time derivation
 - `_load_snapshot_from_path` (`src/vasoanalyzer/ui/main_window.py:8880`): loads TIFF via `vasoanalyzer.io.tiffs.load_tiff`, extracts `recording_interval` from the first metadata entry using `Rec_intvl`/`FrameInterval`/`FrameTime` (divides by 1000 if >1), otherwise defaults to 0.14 s.
