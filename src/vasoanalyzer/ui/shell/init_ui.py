@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import contextlib
 import logging
 from PyQt5.QtCore import QEvent, QObject, Qt, QTimer, QSize
 from PyQt5.QtWidgets import (
@@ -374,6 +375,27 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         )
         window.snapshot_controller.set_loop_enabled(default_loop)
         window._update_snapshot_sync_label("none")
+    elif getattr(window, "_snapshot_viewer_v2_enabled", False):
+        viewer = getattr(window, "snapshot_widget", None)
+        controller = getattr(viewer, "controller", None)
+        if controller is not None:
+            controller.page_changed.connect(window._on_snapshot_page_changed_v2)
+            controller.playing_changed.connect(window._on_snapshot_playing_changed)
+            controller.mapped_time_changed.connect(
+                window._on_snapshot_playback_time_changed
+            )
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_pps(float(getattr(window, "snapshot_pps", 30.0)))
+            with contextlib.suppress(Exception):
+                viewer.set_sync_enabled(bool(getattr(window, "snapshot_sync_enabled", True)))
+            with contextlib.suppress(Exception):
+                viewer.set_loop(bool(getattr(window, "snapshot_loop_enabled", True)))
+            controls = getattr(viewer, "controls", None)
+            if controls is not None:
+                controls.pps_changed.connect(window.on_snapshot_speed_changed)
+                controls.sync_toggled.connect(window.on_snapshot_sync_toggled)
+                controls.loop_toggled.connect(window.on_snapshot_loop_toggled)
 
     window.metadata_panel = QFrame()
     window.metadata_panel.setObjectName("MetadataPanel")

@@ -73,6 +73,8 @@ class FrameTimeResult:
     fps: float | None = None
     frame_to_trace_idx: np.ndarray | None = None
     mapping_coverage: float | None = None
+    interpolated_pages: int | None = None
+    interpolated_ranges: list[tuple[int, int]] | None = None
 
 
 @dataclass
@@ -384,6 +386,120 @@ def _parse_time_value(value: Any) -> tuple[float | None, bool]:
     return numeric, True
 
 
+def _condense_ranges(values: Sequence[int]) -> list[tuple[int, int]]:
+    if not values:
+        return []
+    sorted_vals = sorted(set(int(v) for v in values))
+    ranges: list[tuple[int, int]] = []
+    start = sorted_vals[0]
+    end = start
+    for value in sorted_vals[1:]:
+        if value == end + 1:
+            end = value
+        else:
+            ranges.append((start, end))
+            start = value
+            end = value
+    ranges.append((start, end))
+    return ranges
+
+
+def _format_ranges(ranges: Sequence[tuple[int, int]]) -> str:
+    parts = []
+    for start, end in ranges:
+        if start == end:
+            parts.append(str(start))
+        else:
+            parts.append(f"{start}-{end}")
+    return ", ".join(parts)
+
+
+def _interpolate_frame_times(
+    frame_indices: Sequence[int],
+    tiff_page_to_trace_idx: Mapping[int, int],
+    trace_arr: np.ndarray,
+) -> tuple[np.ndarray, list[int], list[tuple[int, int]]] | None:
+    """Fill missing TIFF page times by interpolating in page space."""
+
+    known_pages: list[int] = []
+    known_times: list[float] = []
+    for page, trace_idx in tiff_page_to_trace_idx.items():
+        try:
+            page_int = int(page)
+        except Exception:
+            continue
+        if trace_idx is None or trace_idx < 0 or trace_idx >= len(trace_arr):
+            continue
+        time_val = float(trace_arr[int(trace_idx)])
+        if not math.isfinite(time_val):
+            continue
+        known_pages.append(page_int)
+        known_times.append(time_val)
+
+    if len(known_pages) < 2:
+        return None
+
+    order = np.argsort(np.asarray(known_pages, dtype=int))
+    known_pages = [known_pages[i] for i in order]
+    known_times = [known_times[i] for i in order]
+
+    for idx in range(1, len(known_times)):
+        if known_times[idx] <= known_times[idx - 1]:
+            return None
+
+    slopes = []
+    for idx in range(1, len(known_pages)):
+        page_delta = known_pages[idx] - known_pages[idx - 1]
+        if page_delta <= 0:
+            continue
+        slopes.append((known_times[idx] - known_times[idx - 1]) / float(page_delta))
+    if not slopes:
+        return None
+    median_slope = float(np.median(np.asarray(slopes, dtype=float)))
+    if not math.isfinite(median_slope) or median_slope <= 0:
+        return None
+
+    known_time_by_page = {p: t for p, t in zip(known_pages, known_times, strict=False)}
+    frame_times = np.full(len(frame_indices), np.nan, dtype=float)
+    missing_pages: list[int] = []
+
+    for idx, page_idx in enumerate(frame_indices):
+        try:
+            page_int = int(page_idx)
+        except Exception:
+            page_int = page_idx
+        if page_int in known_time_by_page:
+            frame_times[idx] = known_time_by_page[page_int]
+            continue
+        missing_pages.append(int(page_int))
+        insert_pos = bisect.bisect_left(known_pages, page_int)
+        prev_idx = insert_pos - 1
+        next_idx = insert_pos
+        if prev_idx >= 0 and next_idx < len(known_pages):
+            prev_page = known_pages[prev_idx]
+            next_page = known_pages[next_idx]
+            prev_time = known_times[prev_idx]
+            next_time = known_times[next_idx]
+            span = float(next_page - prev_page)
+            if span <= 0:
+                return None
+            slope = (next_time - prev_time) / span
+            frame_times[idx] = prev_time + slope * float(page_int - prev_page)
+        elif prev_idx >= 0:
+            prev_page = known_pages[prev_idx]
+            prev_time = known_times[prev_idx]
+            frame_times[idx] = prev_time + median_slope * float(page_int - prev_page)
+        elif next_idx < len(known_pages):
+            next_page = known_pages[next_idx]
+            next_time = known_times[next_idx]
+            frame_times[idx] = next_time - median_slope * float(next_page - page_int)
+        if not math.isfinite(frame_times[idx]):
+            return None
+
+    ranges = _condense_ranges(missing_pages)
+    return frame_times, missing_pages, ranges
+
+
 def resolve_tiff_frame_times(
     tiff_info: Mapping[str, Any],
     *,
@@ -468,6 +584,35 @@ def resolve_tiff_frame_times(
         )
         if not allow_fallback:
             raise ValueError("Trace TIFF mapping incomplete; fallback disabled.")
+        interpolated = _interpolate_frame_times(
+            frame_indices, mapping, trace_arr
+        )
+        if interpolated is not None:
+            filled_times, missing_pages, ranges = interpolated
+            coverage = 1.0
+            total = len(frame_indices)
+            if total > 0:
+                coverage = float(total - len(missing_pages)) / float(total)
+            warnings.append(
+                f"Interpolated {len(missing_pages)} missing TIFF page time(s)."
+            )
+            if ranges:
+                warnings.append(
+                    "Interpolated TIFF page ranges: " + _format_ranges(ranges)
+                )
+            result = _finalize_frame_times(
+                filled_times,
+                source=FrameTimeSource.TRACE_TIFF_PAGE,
+                warnings=warnings,
+                fps=fps,
+                frame_to_trace_idx=None,
+                mapping_coverage=coverage,
+                time_offset_s=time_offset_s,
+                normalize_to_zero=False,
+            )
+            result.interpolated_pages = len(missing_pages)
+            result.interpolated_ranges = ranges
+            return result
 
     if frames_metadata:
         frame_times = []
@@ -675,16 +820,25 @@ def derive_tiff_page_times(
             out_of_range += 1
             continue
         times_list[page_int] = float(time_val)
-    if out_of_range:
-        warnings.append(
-            f"TiffPage entries out of expected range: {out_of_range}."
-        )
 
     missing_pages = [i for i, val in enumerate(times_list) if not math.isfinite(val)]
-    if missing_pages:
-        warnings.append(
-            f"Missing TIFF page time(s): {len(missing_pages)} of {page_count}."
-        )
+    if expected_page_count is not None and expected_page_count > 0:
+        if missing_pages or out_of_range:
+            mapped_within = page_count - len(missing_pages)
+            warnings.append(
+                "Sync mapping: mapped "
+                f"{mapped_within}/{page_count}; missing {len(missing_pages)}; "
+                f"trace out-of-range refs {out_of_range}."
+            )
+    else:
+        if out_of_range:
+            warnings.append(
+                f"TiffPage entries out of expected range: {out_of_range}."
+            )
+        if missing_pages:
+            warnings.append(
+                f"Missing TIFF page time(s): {len(missing_pages)} of {page_count}."
+            )
 
     valid = not missing_pages and out_of_range == 0
     median_interval = None
@@ -698,14 +852,13 @@ def derive_tiff_page_times(
             else:
                 median_interval = float(np.median(diffs))
 
-    if min(mapping.keys()) != 0:
+    if min(mapping.keys()) != 0 and not (expected_page_count is not None and expected_page_count > 0):
         warnings.append("TiffPage indices do not start at 0.")
         valid = False
 
     if expected_page_count is not None and expected_page_count > 0:
         expected_set = set(range(int(expected_page_count)))
         if set(mapping.keys()) != expected_set:
-            warnings.append("TiffPage coverage does not match expected range.")
             valid = False
 
     return TiffPageTimeResult(

@@ -3,4 +3,8 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-APP_VERSION = "v3.0.0 Beta"
+"""TIFF Stack Viewer v2 (Qt-only)."""
+
+from .widget import TiffStackViewerWidget
+
+__all__ = ["TiffStackViewerWidget"]

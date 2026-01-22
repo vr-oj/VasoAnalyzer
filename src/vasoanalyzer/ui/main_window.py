@@ -176,7 +176,8 @@ from vasoanalyzer.ui.point_editor_view import PointEditorDialog
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.snapshot_viewer import (
     SnapshotViewerController,
-    SnapshotViewerWidget,
+    create_snapshot_viewer_widget,
+    snapshot_viewer_v2_enabled,
 )
 from vasoanalyzer.ui.snapshot_viewer.snapshot_data_source import SnapshotStackDataSource
 from vasoanalyzer.ui.theme import (
@@ -896,14 +897,19 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_meta: dict[str, Any] = {}
         self.data_cache: DataCache | None = None
         self._cache_root_hint: str | None = None
-        self.snapshot_widget: SnapshotViewerWidget | None = None
+        self._snapshot_viewer_v2_enabled = snapshot_viewer_v2_enabled()
+        self.snapshot_widget: QWidget | None = None
         self.snapshot_controller: SnapshotViewerController | None = None
         self.snapshot_data_source: SnapshotStackDataSource | None = None
+        self._snapshot_sync_status_text: str | None = None
+        self._snapshot_sync_partial_count: int | None = None
+        self._last_tiff_page_time_warning_key: tuple | None = None
         if not self._snapshot_panel_disabled_by_env:
-            self.snapshot_widget = SnapshotViewerWidget(self)
+            self.snapshot_widget = create_snapshot_viewer_widget(self)
             self.snapshot_widget.hide()
-            self.snapshot_controller = SnapshotViewerController(self)
-            self.snapshot_controller.bind_widget(self.snapshot_widget)
+            if not self._snapshot_viewer_v2_enabled:
+                self.snapshot_controller = SnapshotViewerController(self)
+                self.snapshot_controller.bind_widget(self.snapshot_widget)
         self._mirror_sources_enabled = False
         self._missing_assets: dict[tuple[int, str], MissingAsset] = {}
         self._relink_dialog: RelinkDialog | None = None
@@ -3952,6 +3958,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._clear_event_highlight()
         self._clear_pins()
         self._layout_log_ready = False
+        self._last_tiff_page_time_warning_key = None
         self._update_plot_empty_state()
 
     def _reset_event_table_for_loading(self) -> None:
@@ -7238,10 +7245,12 @@ class VasoAnalyzerApp(QMainWindow):
             stack.setVisible(bool(should_show))
 
         legacy_widgets = (widget,)
-        shared_widgets = (
-            getattr(self, "slider", None),
-            getattr(self, "snapshot_controls", None),
-        )
+        shared_widgets = ()
+        if not getattr(self, "_snapshot_viewer_v2_enabled", False):
+            shared_widgets = (
+                getattr(self, "slider", None),
+                getattr(self, "snapshot_controls", None),
+            )
         for widget in legacy_widgets:
             if widget is not None:
                 widget.setVisible(bool(should_show))
@@ -9445,8 +9454,11 @@ QPushButton[isGhost="true"]:pressed {{
             return
 
         sample = getattr(self, "current_sample", None)
+        page_count_hint = expected_page_count
+        if page_count_hint is None and self.snapshot_total_frames:
+            page_count_hint = int(self.snapshot_total_frames)
         result = derive_tiff_page_times(
-            self.trace_data, expected_page_count=expected_page_count
+            self.trace_data, expected_page_count=page_count_hint
         )
         self.tiff_page_times = result.tiff_page_times
         self.tiff_page_times_valid = bool(result.valid)
@@ -9466,9 +9478,19 @@ QPushButton[isGhost="true"]:pressed {{
                 if stored_median is not None:
                     self.snapshot_interval_median = float(stored_median)
 
-        if result.warnings:
+        warning_key = None
+        if page_count_hint is not None and result.warnings:
+            warning_key = (
+                tuple(result.warnings),
+                result.page_count,
+                result.time_column,
+            )
+        if warning_key and warning_key != self._last_tiff_page_time_warning_key:
             for warning in result.warnings:
                 log.warning("TIFF page time mapping: %s", warning)
+            self._last_tiff_page_time_warning_key = warning_key
+        elif page_count_hint is not None and not result.warnings:
+            self._last_tiff_page_time_warning_key = None
 
         self._update_snapshot_sync_toggle()
 
@@ -10963,6 +10985,8 @@ QPushButton[isGhost="true"]:pressed {{
         self.frame_trace_index = None
         self.frame_trace_time = None
         self.frame_times = []
+        self._snapshot_sync_status_text = None
+        self._snapshot_sync_partial_count = None
 
         if self.trace_data is None or "TiffPage" not in self.trace_data.columns:
             return None, None
@@ -11039,6 +11063,8 @@ QPushButton[isGhost="true"]:pressed {{
                     self.frame_trace_time = frame_trace_time
                     self.frame_times = frame_trace_time.tolist()
                     self.snapshot_frame_indices = frame_indices
+                    self._snapshot_sync_status_text = None
+                    self._snapshot_sync_partial_count = 0
                     return frame_trace_index, frame_trace_time
 
             trace_times = pd.to_numeric(
@@ -11050,23 +11076,34 @@ QPushButton[isGhost="true"]:pressed {{
                 frame_indices=frame_indices,
                 trace_time_s=trace_times,
                 tiff_page_to_trace_idx=mapping,
-                allow_fallback=False,
+                allow_fallback=True,
             )
             frame_trace_index = result.frame_to_trace_idx
             frame_trace_time = result.frame_times_s
-            if frame_trace_index is None:
-                return None, None
-            if (frame_trace_index < 0).any():
-                missing = np.where(frame_trace_index < 0)[0]
-                log.error(
-                    "TIFF sync mismatch: %d missing frame mappings (examples=%s)",
-                    len(missing),
-                    missing[:5],
-                )
-                return None, None
-            if np.isnan(frame_trace_time).any():
+            if frame_trace_time is None or np.isnan(frame_trace_time).any():
                 log.error("TIFF sync mismatch: NaN times when mapping TiffPage to trace")
                 return None, None
+
+            if result.warnings:
+                for warning in result.warnings:
+                    log.warning("TIFF sync warning: %s", warning)
+
+            if frame_trace_index is None or (frame_trace_index < 0).any():
+                if trace_times is None or trace_times.size == 0:
+                    return None, None
+                idx = np.searchsorted(trace_times, frame_trace_time, side="left")
+                idx = np.clip(idx, 0, len(trace_times) - 1)
+                frame_trace_index = idx
+
+            if result.interpolated_pages:
+                count = int(result.interpolated_pages)
+                self._snapshot_sync_partial_count = count
+                self._snapshot_sync_status_text = (
+                    f"Sync: Partial ({count} pages interpolated)"
+                )
+            else:
+                self._snapshot_sync_status_text = None
+                self._snapshot_sync_partial_count = 0
 
             self.frame_trace_index = frame_trace_index
             self.frame_trace_time = frame_trace_time
@@ -11282,16 +11319,19 @@ QPushButton[isGhost="true"]:pressed {{
 
             # Initialize timeline widget
             if hasattr(self, 'snapshot_timeline'):
-                self.snapshot_timeline.set_frame_count(len(self.snapshot_frames))
-                # Set frame times if available
-                frame_times = None
-                if hasattr(self, 'frame_times') and self.frame_times:
-                    frame_times = self.frame_times
-                elif hasattr(self, 'frame_trace_time') and self.frame_trace_time is not None:
-                    frame_times = list(self.frame_trace_time)
-                self.snapshot_timeline.set_frame_times(frame_times)
-                self.snapshot_timeline.set_current_frame(0)
-                self.snapshot_timeline.show()
+                if getattr(self, "_snapshot_viewer_v2_enabled", False):
+                    self.snapshot_timeline.hide()
+                else:
+                    self.snapshot_timeline.set_frame_count(len(self.snapshot_frames))
+                    # Set frame times if available
+                    frame_times = None
+                    if hasattr(self, 'frame_times') and self.frame_times:
+                        frame_times = self.frame_times
+                    elif hasattr(self, 'frame_trace_time') and self.frame_trace_time is not None:
+                        frame_times = list(self.frame_trace_time)
+                    self.snapshot_timeline.set_frame_times(frame_times)
+                    self.snapshot_timeline.set_current_frame(0)
+                    self.snapshot_timeline.show()
 
             self.prev_frame_btn.setEnabled(True)
             self.next_frame_btn.setEnabled(True)
@@ -11675,6 +11715,49 @@ QPushButton[isGhost="true"]:pressed {{
     ) -> None:
         """Bind a canonical snapshot data source for controller-driven viewing."""
 
+        if getattr(self, "_snapshot_viewer_v2_enabled", False):
+            viewer = getattr(self, "snapshot_widget", None)
+            if viewer is None:
+                return
+            try:
+                frames = list(stack) if not isinstance(stack, np.ndarray) else list(stack)
+            except Exception:
+                log.debug("Failed to coerce snapshot stack for v2 viewer", exc_info=True)
+                return
+            from vasoanalyzer.ui.tiff_viewer_v2.page_time_map import (
+                PageTimeMap,
+                derive_page_time_map_from_trace,
+            )
+
+            page_time_map: PageTimeMap
+            if frame_times is not None and len(frame_times):
+                status = getattr(self, "_snapshot_sync_status_text", None)
+                if status:
+                    page_time_map = PageTimeMap(
+                        tuple(float(v) for v in frame_times),
+                        True,
+                        status,
+                    )
+                else:
+                    page_time_map = PageTimeMap.from_times(frame_times)
+            else:
+                page_time_map = derive_page_time_map_from_trace(
+                    getattr(self, "trace_data", None),
+                    expected_page_count=len(frames),
+                )
+                if not page_time_map.valid:
+                    page_time_map = PageTimeMap.invalid(page_time_map.status)
+            if page_time_map.valid:
+                log.info("V2 sync status: %s", page_time_map.status or "Sync available")
+            else:
+                log.warning(
+                    "V2 sync status: %s", page_time_map.status or "Sync unavailable"
+                )
+            with contextlib.suppress(Exception):
+                viewer.set_stack_source(frames, page_time_map=page_time_map)
+            self.snapshot_data_source = None
+            return
+
         controller = getattr(self, "snapshot_controller", None)
         if controller is None:
             return
@@ -11929,12 +12012,18 @@ QPushButton[isGhost="true"]:pressed {{
                 )
 
         if self.snapshot_frames:
-            controller = getattr(self, "snapshot_controller", None)
-            if controller is not None:
-                if from_event:
-                    controller.set_event_time(resolved_time)
-                else:
-                    controller.set_trace_time(resolved_time)
+            if getattr(self, "_snapshot_viewer_v2_enabled", False):
+                viewer = getattr(self, "snapshot_widget", None)
+                if viewer is not None and getattr(viewer, "sync_enabled", True):
+                    with contextlib.suppress(Exception):
+                        viewer.jump_to_time(resolved_time, source=src_label or "trace")
+            else:
+                controller = getattr(self, "snapshot_controller", None)
+                if controller is not None:
+                    if from_event:
+                        controller.set_event_time(resolved_time)
+                    else:
+                        controller.set_trace_time(resolved_time)
         self._on_view_state_changed(reason="time cursor moved")
 
     def apply_style(self, style):
@@ -12337,12 +12426,22 @@ QPushButton[isGhost="true"]:pressed {{
             speed = getattr(self, "_snapshot_pps_default", 30.0)
 
         self.snapshot_pps = speed
+        if getattr(self, "_snapshot_viewer_v2_enabled", False):
+            viewer = getattr(self, "snapshot_widget", None)
+            if viewer is not None:
+                with contextlib.suppress(Exception):
+                    viewer.set_pps(speed)
         controller = getattr(self, "snapshot_controller", None)
         if controller is not None:
             controller.set_playback_pps(speed)
 
     def on_snapshot_sync_toggled(self, checked: bool) -> None:
         self.snapshot_sync_enabled = bool(checked)
+        if getattr(self, "_snapshot_viewer_v2_enabled", False):
+            viewer = getattr(self, "snapshot_widget", None)
+            if viewer is not None:
+                with contextlib.suppress(Exception):
+                    viewer.set_sync_enabled(self.snapshot_sync_enabled)
         controller = getattr(self, "snapshot_controller", None)
         if controller is not None:
             controller.set_sync_enabled(self.snapshot_sync_enabled)
@@ -12350,6 +12449,11 @@ QPushButton[isGhost="true"]:pressed {{
     def on_snapshot_loop_toggled(self, checked: bool) -> None:
         """Handle loop playback checkbox toggle."""
         self.snapshot_loop_enabled = bool(checked)
+        if getattr(self, "_snapshot_viewer_v2_enabled", False):
+            viewer = getattr(self, "snapshot_widget", None)
+            if viewer is not None:
+                with contextlib.suppress(Exception):
+                    viewer.set_loop(bool(checked))
         controller = getattr(self, "snapshot_controller", None)
         if controller is not None:
             with contextlib.suppress(Exception):
@@ -12368,6 +12472,11 @@ QPushButton[isGhost="true"]:pressed {{
         controller = getattr(self, "snapshot_controller", None)
         if controller is not None:
             controller.set_playback_pps(self.snapshot_pps)
+        if getattr(self, "_snapshot_viewer_v2_enabled", False):
+            viewer = getattr(self, "snapshot_widget", None)
+            if viewer is not None:
+                with contextlib.suppress(Exception):
+                    viewer.set_pps(self.snapshot_pps)
 
     def _resolve_snapshot_pps_default(self) -> float:
         default_pps = 30.0
@@ -12449,6 +12558,25 @@ QPushButton[isGhost="true"]:pressed {{
             self.slider.blockSignals(False)
         self.page_float = float(idx)
         self._apply_frame_change(idx, from_playback=True)
+
+    def _on_snapshot_page_changed_v2(self, page_index: int, source: str) -> None:
+        if not self.snapshot_frames:
+            return
+        try:
+            idx = int(page_index)
+        except (TypeError, ValueError):
+            return
+        idx = max(0, min(idx, len(self.snapshot_frames) - 1))
+        self.current_frame = idx
+        self.current_page = idx
+        self.page_float = float(idx)
+        if self.slider is not None:
+            self.slider.blockSignals(True)
+            self.slider.setValue(idx)
+            self.slider.blockSignals(False)
+        self.update_slider_marker()
+        self._update_snapshot_status(idx)
+        self._update_metadata_display(idx)
 
     def _on_snapshot_playback_time_changed(self, trace_time: float) -> None:
         try:
@@ -16404,6 +16532,8 @@ QPushButton[isGhost="true"]:pressed {{
             label.setText("Synced: —")
 
     def _update_snapshot_sync_toggle(self) -> None:
+        if getattr(self, "_snapshot_viewer_v2_enabled", False):
+            return
         checkbox = getattr(self, "snapshot_sync_checkbox", None)
         if checkbox is None:
             return

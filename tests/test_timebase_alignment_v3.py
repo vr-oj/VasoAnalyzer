@@ -63,6 +63,22 @@ def test_tiff_frame_timing_mapping():
     assert result.frame_times_s[-1] == pytest.approx(4.9, abs=TIME_EPS_S)
 
 
+def test_tiff_frame_timing_partial_mapping_interpolates():
+    info = {"n_frames": 10, "frames_metadata": []}
+    trace_time = np.arange(0.0, 10.0, 1.0)
+    mapping = {0: 0, 2: 2, 4: 4, 6: 6, 8: 8}
+    result = resolve_tiff_frame_times(
+        info,
+        trace_time_s=trace_time,
+        tiff_page_to_trace_idx=mapping,
+        allow_fallback=True,
+    )
+
+    assert len(result.frame_times_s) == 10
+    assert np.allclose(result.frame_times_s, np.arange(10.0), atol=TIME_EPS_S)
+    assert result.interpolated_pages == 5
+
+
 def test_end_to_end_trace_events_frame_sync(tmp_path):
     trace_df = pd.DataFrame(
         {
