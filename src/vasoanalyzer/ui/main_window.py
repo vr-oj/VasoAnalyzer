@@ -4,10 +4,10 @@
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
 # Snapshot viewer notes:
-# - Class: VasoAnalyzerApp (canonical snapshot viewer widget + controller).
-# - Created in: initUI() → vasoanalyzer.ui.shell.init_ui.init_ui builds snapshot_widget/slider/controls.
+# - Class: VasoAnalyzerApp hosts the TIFF viewer v2 widget and sync wiring.
+# - Created in: initUI() → vasoanalyzer.ui.shell.init_ui.init_ui builds snapshot_widget and wires v2 controls.
 # - Data source: Sample.snapshots numpy stack or snapshot asset/path resolved via _ensure_sample_snapshots_loaded/_SnapshotLoadJob (npz/npy or TIFF via vasoanalyzer.io.tiffs.load_tiff); manual _load_snapshot_from_path also uses load_tiff then np.stack.
-# - Sync: trace["Time (s)"] is canonical. TIFF frames are aligned via trace["TiffPage"] → frame_trace_time, and jump_to_time(t) drives the SnapshotViewerController.
+# - Sync: trace["Time (s)"] is canonical. TIFF frames are aligned via trace["TiffPage"] → frame_trace_time, and jump_to_time(t) drives the v2 viewer.
 
 # mypy: ignore-errors
 
@@ -45,7 +45,6 @@ from PyQt5.QtCore import (
     QSettings,
     QSignalBlocker,
     QSize,
-    QRectF,
     Qt,
     QThreadPool,
     QTimer,
@@ -60,7 +59,6 @@ from PyQt5.QtGui import (
     QFont,
     QFontMetrics,
     QIcon,
-    QImage,
     QKeySequence,
     QPainter,
     QPalette,
@@ -120,7 +118,7 @@ from vasoanalyzer.export.profiles import (
     PRESSURE_CURVE_STANDARD_ID,
     get_profile,
 )
-from vasoanalyzer.ui.icons import themed_svg_icon
+from vasoanalyzer.ui.icons import snapshot_icon
 from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.core.timebase import derive_tiff_page_times, page_for_time
@@ -174,12 +172,7 @@ from vasoanalyzer.ui.review_mode_controller import ReviewModeController
 from vasoanalyzer.ui.controllers.selection_sync import event_time_for_row, pick_event_row
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
 from vasoanalyzer.ui.scope_view import ScopeDock
-from vasoanalyzer.ui.snapshot_viewer import (
-    SnapshotViewerController,
-    create_snapshot_viewer_widget,
-    snapshot_viewer_v2_enabled,
-)
-from vasoanalyzer.ui.snapshot_viewer.snapshot_data_source import SnapshotStackDataSource
+from vasoanalyzer.ui.tiff_viewer_v2 import TiffStackViewerWidget
 from vasoanalyzer.ui.theme import (
     CURRENT_THEME,
     css_rgba_to_mpl,
@@ -821,7 +814,6 @@ class VasoAnalyzerApp(QMainWindow):
         )
         self._event_highlight_elapsed_ms = 0
         self._event_highlight_timer = QTimer(self)
-        self._pg_time_sync_block = False
         self._event_highlight_timer.setSingleShot(False)
         self._event_highlight_timer.setInterval(40)
         self._event_highlight_timer.timeout.connect(self._on_event_highlight_tick)
@@ -897,19 +889,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_meta: dict[str, Any] = {}
         self.data_cache: DataCache | None = None
         self._cache_root_hint: str | None = None
-        self._snapshot_viewer_v2_enabled = snapshot_viewer_v2_enabled()
-        self.snapshot_widget: QWidget | None = None
-        self.snapshot_controller: SnapshotViewerController | None = None
-        self.snapshot_data_source: SnapshotStackDataSource | None = None
+        self.snapshot_widget: TiffStackViewerWidget | None = None
+        self.slider = None
         self._snapshot_sync_status_text: str | None = None
         self._snapshot_sync_partial_count: int | None = None
         self._last_tiff_page_time_warning_key: tuple | None = None
         if not self._snapshot_panel_disabled_by_env:
-            self.snapshot_widget = create_snapshot_viewer_widget(self)
+            self.snapshot_widget = TiffStackViewerWidget(self)
             self.snapshot_widget.hide()
-            if not self._snapshot_viewer_v2_enabled:
-                self.snapshot_controller = SnapshotViewerController(self)
-                self.snapshot_controller.bind_widget(self.snapshot_widget)
         self._mirror_sources_enabled = False
         self._missing_assets: dict[tuple[int, str], MissingAsset] = {}
         self._relink_dialog: RelinkDialog | None = None
@@ -3922,37 +3909,6 @@ class VasoAnalyzerApp(QMainWindow):
         if self.snapshot_widget is not None:
             self.snapshot_widget.hide()
             self.snapshot_widget.clear()
-        if self.snapshot_controller is not None:
-            self.snapshot_controller.set_event_time(None)
-            self.snapshot_controller.set_trace_time(None)
-            self.snapshot_controller.set_stack_source(None)
-            self.snapshot_controller.set_enabled(False)
-            self.snapshot_controller.reset()
-        self.snapshot_data_source = None
-        self.slider.hide()
-        self.snapshot_controls.hide()
-        self.prev_frame_btn.setEnabled(False)
-        self.next_frame_btn.setEnabled(False)
-        self.play_pause_btn.setEnabled(False)
-        self.snapshot_speed_label.setEnabled(False)
-        self.snapshot_speed_input.setEnabled(False)
-        if hasattr(self, "snapshot_speed_units_label"):
-            self.snapshot_speed_units_label.setEnabled(False)
-        if hasattr(self, "snapshot_sync_checkbox"):
-            self.snapshot_sync_checkbox.setEnabled(False)
-            self.snapshot_sync_checkbox.blockSignals(True)
-            self.snapshot_sync_checkbox.setChecked(False)
-            self.snapshot_sync_checkbox.blockSignals(False)
-        if hasattr(self, "snapshot_loop_checkbox"):
-            self.snapshot_loop_checkbox.setEnabled(False)
-            self.snapshot_loop_checkbox.blockSignals(True)
-            self.snapshot_loop_checkbox.setChecked(bool(self.snapshot_loop_enabled))
-            self.snapshot_loop_checkbox.blockSignals(False)
-        if hasattr(self, 'snapshot_timeline'):
-            self.snapshot_timeline.set_frame_count(0)
-            self.snapshot_timeline.set_frame_times(None)
-            self.snapshot_timeline.set_current_frame(0)
-            self.snapshot_timeline.hide()
         self._reset_snapshot_speed()
         self.metadata_details_label.setText("No metadata available.")
         self._clear_event_highlight()
@@ -3973,8 +3929,6 @@ class VasoAnalyzerApp(QMainWindow):
                 selection.blockSignals(True)
                 selection.clearSelection()
                 selection.blockSignals(False)
-            if self.snapshot_controller is not None:
-                self.snapshot_controller.set_event_time(None)
 
             controller = getattr(self, "event_table_controller", None)
             if controller is not None:
@@ -4394,13 +4348,6 @@ class VasoAnalyzerApp(QMainWindow):
                 self.frames_metadata = []
                 self.frame_times = []
                 self._set_playback_state(False)
-                if self.snapshot_controller is not None:
-                    self.snapshot_controller.set_event_time(None)
-                    self.snapshot_controller.set_trace_time(None)
-                    self.snapshot_controller.set_stack_source(None)
-                    self.snapshot_controller.set_enabled(False)
-                    self.snapshot_controller.reset()
-                self.snapshot_data_source = None
                 if self.snapshot_widget is not None:
                     self.snapshot_widget.clear()
                 self.toggle_snapshot_viewer(False, source="data")
@@ -5736,16 +5683,6 @@ class VasoAnalyzerApp(QMainWindow):
         self._register_trace_nav_shortcuts()
 
         view_menu.addSeparator()
-        self.action_use_pg_snapshot = QAction(
-            "Use PyQtGraph snapshot viewer", self
-        )
-        self.action_use_pg_snapshot.setCheckable(True)
-        self.action_use_pg_snapshot.setChecked(False)
-        self.action_use_pg_snapshot.setEnabled(False)
-        self.action_use_pg_snapshot.setToolTip(
-            "Deprecated: canonical snapshot viewer is always used"
-        )
-        view_menu.addAction(self.action_use_pg_snapshot)
 
         shortcut = "Meta+M" if sys.platform == "darwin" else "Ctrl+M"
         self.action_snapshot_metadata = QAction("Metadata…", self)
@@ -7232,10 +7169,6 @@ class VasoAnalyzerApp(QMainWindow):
     def toggle_event_table(self, checked: bool):
         self._set_event_table_visible(bool(checked), source="user")
 
-    def _use_pg_snapshot_viewer(self) -> bool:
-        # Legacy toggle retained for compatibility; canonical viewer ignores it.
-        return False
-
     def _apply_snapshot_view_mode(self, should_show: bool) -> None:
         stack = getattr(self, "snapshot_stack", None)
         widget = getattr(self, "snapshot_widget", None)
@@ -7244,19 +7177,8 @@ class VasoAnalyzerApp(QMainWindow):
                 stack.setCurrentWidget(widget)
             stack.setVisible(bool(should_show))
 
-        legacy_widgets = (widget,)
-        shared_widgets = ()
-        if not getattr(self, "_snapshot_viewer_v2_enabled", False):
-            shared_widgets = (
-                getattr(self, "slider", None),
-                getattr(self, "snapshot_controls", None),
-            )
-        for widget in legacy_widgets:
-            if widget is not None:
-                widget.setVisible(bool(should_show))
-        for widget in shared_widgets:
-            if widget is not None:
-                widget.setVisible(bool(should_show))
+        if widget is not None:
+            widget.setVisible(bool(should_show))
 
         self._update_snapshot_rotation_controls()
 
@@ -7328,12 +7250,6 @@ class VasoAnalyzerApp(QMainWindow):
         self._update_metadata_button_state()
         if source == "user":
             self._on_view_state_changed(reason="snapshot viewer visibility")
-
-    def _on_toggle_pg_snapshot_viewer(self, use_pg: bool) -> None:
-        """
-        Legacy toggle retained for compatibility; canonical viewer is always used.
-        """
-        return
 
     def _outer_channel_available(self) -> bool:
         if self.trace_data is None:
@@ -11313,41 +11229,38 @@ QPushButton[isGhost="true"]:pressed {{
                 self.current_sample.import_metadata = meta
             self._set_snapshot_data_source(self.snapshot_frames, canonical_times)
 
-            self.slider.setMinimum(0)
-            self.slider.setMaximum(len(self.snapshot_frames) - 1)
-            self.slider.setValue(0)
+            if self.slider is not None:
+                self.slider.blockSignals(True)
+                self.slider.setRange(0, len(self.snapshot_frames) - 1)
+                self.slider.setValue(0)
+                self.slider.blockSignals(False)
 
-            # Initialize timeline widget
-            if hasattr(self, 'snapshot_timeline'):
-                if getattr(self, "_snapshot_viewer_v2_enabled", False):
-                    self.snapshot_timeline.hide()
-                else:
-                    self.snapshot_timeline.set_frame_count(len(self.snapshot_frames))
-                    # Set frame times if available
-                    frame_times = None
-                    if hasattr(self, 'frame_times') and self.frame_times:
-                        frame_times = self.frame_times
-                    elif hasattr(self, 'frame_trace_time') and self.frame_trace_time is not None:
-                        frame_times = list(self.frame_trace_time)
-                    self.snapshot_timeline.set_frame_times(frame_times)
-                    self.snapshot_timeline.set_current_frame(0)
-                    self.snapshot_timeline.show()
-
-            self.prev_frame_btn.setEnabled(True)
-            self.next_frame_btn.setEnabled(True)
-            self.play_pause_btn.setEnabled(True)
-            self.snapshot_speed_label.setEnabled(True)
-            self.snapshot_speed_input.setEnabled(True)
-            if hasattr(self, "snapshot_speed_units_label"):
-                self.snapshot_speed_units_label.setEnabled(True)
-            if hasattr(self, "snapshot_sync_checkbox"):
+            prev_btn = getattr(self, "prev_frame_btn", None)
+            next_btn = getattr(self, "next_frame_btn", None)
+            play_btn = getattr(self, "play_pause_btn", None)
+            speed_label = getattr(self, "snapshot_speed_label", None)
+            speed_input = getattr(self, "snapshot_speed_input", None)
+            if prev_btn is not None:
+                prev_btn.setEnabled(True)
+            if next_btn is not None:
+                next_btn.setEnabled(True)
+            if play_btn is not None:
+                play_btn.setEnabled(True)
+            if speed_label is not None:
+                speed_label.setEnabled(True)
+            if speed_input is not None:
+                speed_input.setEnabled(True)
+            speed_units = getattr(self, "snapshot_speed_units_label", None)
+            if speed_units is not None:
+                speed_units.setEnabled(True)
+            if getattr(self, "snapshot_sync_checkbox", None) is not None:
                 self._update_snapshot_sync_toggle()
-            if hasattr(self, "snapshot_loop_checkbox"):
-                self.snapshot_loop_checkbox.setEnabled(True)
+            loop_checkbox = getattr(self, "snapshot_loop_checkbox", None)
+            if loop_checkbox is not None:
+                loop_checkbox.setEnabled(True)
             self._set_playback_state(False)
             self.update_snapshot_size()
             self._clear_slider_markers()
-            self._apply_frame_change(0)
             self.toggle_snapshot_viewer(True)
             self._update_snapshot_sampling_badge()
 
@@ -11715,67 +11628,43 @@ QPushButton[isGhost="true"]:pressed {{
     ) -> None:
         """Bind a canonical snapshot data source for controller-driven viewing."""
 
-        if getattr(self, "_snapshot_viewer_v2_enabled", False):
-            viewer = getattr(self, "snapshot_widget", None)
-            if viewer is None:
-                return
-            try:
-                frames = list(stack) if not isinstance(stack, np.ndarray) else list(stack)
-            except Exception:
-                log.debug("Failed to coerce snapshot stack for v2 viewer", exc_info=True)
-                return
-            from vasoanalyzer.ui.tiff_viewer_v2.page_time_map import (
-                PageTimeMap,
-                derive_page_time_map_from_trace,
-            )
-
-            page_time_map: PageTimeMap
-            if frame_times is not None and len(frame_times):
-                status = getattr(self, "_snapshot_sync_status_text", None)
-                if status:
-                    page_time_map = PageTimeMap(
-                        tuple(float(v) for v in frame_times),
-                        True,
-                        status,
-                    )
-                else:
-                    page_time_map = PageTimeMap.from_times(frame_times)
-            else:
-                page_time_map = derive_page_time_map_from_trace(
-                    getattr(self, "trace_data", None),
-                    expected_page_count=len(frames),
-                )
-                if not page_time_map.valid:
-                    page_time_map = PageTimeMap.invalid(page_time_map.status)
-            if page_time_map.valid:
-                log.info("V2 sync status: %s", page_time_map.status or "Sync available")
-            else:
-                log.warning(
-                    "V2 sync status: %s", page_time_map.status or "Sync unavailable"
-                )
-            with contextlib.suppress(Exception):
-                viewer.set_stack_source(frames, page_time_map=page_time_map)
-            self.snapshot_data_source = None
-            return
-
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is None:
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is None:
             return
         try:
             frames = list(stack) if not isinstance(stack, np.ndarray) else list(stack)
         except Exception:
-            log.debug("Failed to coerce snapshot stack for controller", exc_info=True)
+            log.debug("Failed to coerce snapshot stack for v2 viewer", exc_info=True)
             return
-        self.snapshot_data_source = SnapshotStackDataSource(frames, frame_times)
-        controller.set_stack_source(self.snapshot_data_source)
-        controller.set_enabled(bool(frames))
+        from vasoanalyzer.ui.tiff_viewer_v2.page_time_map import (
+            PageTimeMap,
+            derive_page_time_map_from_trace,
+        )
 
-    def _update_pg_snapshot_viewer(
-        self, stack: np.ndarray | Sequence[np.ndarray], frame_times: Sequence[float] | None
-    ) -> None:
-        """Back-compat shim: mirror snapshot data into the canonical controller."""
-
-        self._set_snapshot_data_source(stack, frame_times)
+        page_time_map: PageTimeMap
+        if frame_times is not None and len(frame_times):
+            status = getattr(self, "_snapshot_sync_status_text", None)
+            if status:
+                page_time_map = PageTimeMap(
+                    tuple(float(v) for v in frame_times),
+                    True,
+                    status,
+                )
+            else:
+                page_time_map = PageTimeMap.from_times(frame_times)
+        else:
+            page_time_map = derive_page_time_map_from_trace(
+                getattr(self, "trace_data", None),
+                expected_page_count=len(frames),
+            )
+            if not page_time_map.valid:
+                page_time_map = PageTimeMap.invalid(page_time_map.status)
+        if page_time_map.valid:
+            log.info("V2 sync status: %s", page_time_map.status or "Sync available")
+        else:
+            log.warning("V2 sync status: %s", page_time_map.status or "Sync unavailable")
+        with contextlib.suppress(Exception):
+            viewer.set_stack_source(frames, page_time_map=page_time_map)
 
     def load_snapshots(self, stack):
         self.snapshot_frames = [frame for frame in stack]
@@ -11793,11 +11682,6 @@ QPushButton[isGhost="true"]:pressed {{
         else:
             self._reset_snapshot_loading_info()
             self._set_playback_state(False)
-            if self.snapshot_controller is not None:
-                self.snapshot_controller.set_stack_source(None)
-                self.snapshot_controller.set_enabled(False)
-                self.snapshot_controller.reset()
-            self.snapshot_data_source = None
             if self.snapshot_widget is not None:
                 self.snapshot_widget.clear()
         if self.snapshot_frames:
@@ -11818,21 +11702,34 @@ QPushButton[isGhost="true"]:pressed {{
             self.compute_frame_trace_indices()
             self.reset_snapshot_rotation()
             self._set_snapshot_data_source(self.snapshot_frames, canonical_times)
-            self.slider.setMinimum(0)
-            self.slider.setMaximum(len(self.snapshot_frames) - 1)
-            self.slider.setValue(0)
-            self._apply_frame_change(0)
-            self.prev_frame_btn.setEnabled(True)
-            self.next_frame_btn.setEnabled(True)
-            self.play_pause_btn.setEnabled(True)
-            self.snapshot_speed_label.setEnabled(True)
-            self.snapshot_speed_input.setEnabled(True)
-            if hasattr(self, "snapshot_speed_units_label"):
-                self.snapshot_speed_units_label.setEnabled(True)
-            if hasattr(self, "snapshot_sync_checkbox"):
+            if self.slider is not None:
+                self.slider.blockSignals(True)
+                self.slider.setRange(0, len(self.snapshot_frames) - 1)
+                self.slider.setValue(0)
+                self.slider.blockSignals(False)
+            prev_btn = getattr(self, "prev_frame_btn", None)
+            next_btn = getattr(self, "next_frame_btn", None)
+            play_btn = getattr(self, "play_pause_btn", None)
+            speed_label = getattr(self, "snapshot_speed_label", None)
+            speed_input = getattr(self, "snapshot_speed_input", None)
+            if prev_btn is not None:
+                prev_btn.setEnabled(True)
+            if next_btn is not None:
+                next_btn.setEnabled(True)
+            if play_btn is not None:
+                play_btn.setEnabled(True)
+            if speed_label is not None:
+                speed_label.setEnabled(True)
+            if speed_input is not None:
+                speed_input.setEnabled(True)
+            speed_units = getattr(self, "snapshot_speed_units_label", None)
+            if speed_units is not None:
+                speed_units.setEnabled(True)
+            if getattr(self, "snapshot_sync_checkbox", None) is not None:
                 self._update_snapshot_sync_toggle()
-            if hasattr(self, "snapshot_loop_checkbox"):
-                self.snapshot_loop_checkbox.setEnabled(True)
+            loop_checkbox = getattr(self, "snapshot_loop_checkbox", None)
+            if loop_checkbox is not None:
+                loop_checkbox.setEnabled(True)
             self._set_playback_state(False)
             self._update_snapshot_sampling_badge()
             self._update_snapshot_rotation_controls()
@@ -11857,40 +11754,6 @@ QPushButton[isGhost="true"]:pressed {{
         idx = np.clip(idx, 0, len(self.trace_time) - 1)
         self.frame_trace_index = idx
         self.frame_trace_indices = idx
-
-    def _propagate_time_to_snapshot_pg(self, time_value: float | None) -> None:
-        """Mirror the current time cursor into the canonical snapshot controller."""
-
-        if time_value is None:
-            return
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is None:
-            return
-        if self._pg_time_sync_block:
-            return
-        try:
-            self._pg_time_sync_block = True
-            controller.set_trace_time(float(time_value))
-        finally:
-            self._pg_time_sync_block = False
-
-    def _on_snapshot_time_changed(self, time_s: float) -> None:
-        """
-        User moved the PG snapshot timeline; update the main time cursor & dependent UI.
-        """
-
-        if self._pg_time_sync_block:
-            return
-        self._pg_time_sync_block = True
-        try:
-            self.jump_to_time(
-                float(time_s),
-                from_playback=True,
-                from_frame_change=True,
-                source="video",
-            )
-        finally:
-            self._pg_time_sync_block = False
 
     def _time_for_frame(self, idx: int) -> float | None:
         """Return canonical seconds for the given frame index."""
@@ -12012,18 +11875,10 @@ QPushButton[isGhost="true"]:pressed {{
                 )
 
         if self.snapshot_frames:
-            if getattr(self, "_snapshot_viewer_v2_enabled", False):
-                viewer = getattr(self, "snapshot_widget", None)
-                if viewer is not None and getattr(viewer, "sync_enabled", True):
-                    with contextlib.suppress(Exception):
-                        viewer.jump_to_time(resolved_time, source=src_label or "trace")
-            else:
-                controller = getattr(self, "snapshot_controller", None)
-                if controller is not None:
-                    if from_event:
-                        controller.set_event_time(resolved_time)
-                    else:
-                        controller.set_trace_time(resolved_time)
+            viewer = getattr(self, "snapshot_widget", None)
+            if viewer is not None and getattr(viewer, "sync_enabled", True):
+                with contextlib.suppress(Exception):
+                    viewer.jump_to_time(resolved_time, source=src_label or "trace")
         self._on_view_state_changed(reason="time cursor moved")
 
     def apply_style(self, style):
@@ -12044,88 +11899,16 @@ QPushButton[isGhost="true"]:pressed {{
         if not self.snapshot_frames:
             return
         idx = max(0, min(int(idx), len(self.snapshot_frames) - 1))
-        if self.slider.value() != idx:
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.jump_to_page(idx, source="external")
+            return
+        if self.slider is not None and self.slider.value() != idx:
             self.slider.blockSignals(True)
             self.slider.setValue(idx)
             self.slider.blockSignals(False)
         self._apply_frame_change(idx, from_playback=from_playback)
-
-    def _set_snapshot_frame(self, idx: int) -> None:
-        """Legacy entry point retained for compatibility; uses controller path."""
-        frame_time = self._time_for_frame(idx)
-        if frame_time is None:
-            return
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is None:
-            return
-        controller.set_trace_time(frame_time)
-
-    def display_frame(self, index):
-        if not self.snapshot_frames:
-            return
-        label = getattr(self, "snapshot_label", None)
-        if label is None:
-            return
-
-        # Clamp index to valid range
-        if index < 0 or index >= len(self.snapshot_frames):
-            log.warning("Frame index %s out of bounds.", index)
-            return
-
-        frame = self.snapshot_frames[index]
-
-        # Skip if frame is empty or corrupted
-        if frame is None or frame.size == 0:
-            log.warning("Skipping empty or corrupted frame at index %s", index)
-            return
-
-        try:
-            if frame.ndim == 2:
-                height, width = frame.shape
-                q_img = QImage(frame.data, width, height, QImage.Format_Grayscale8)
-            elif frame.ndim == 3:
-                height, width, channels = frame.shape
-                if channels == 3:
-                    q_img = QImage(
-                        frame.data, width, height, 3 * width, QImage.Format_RGB888
-                    )
-                else:
-                    raise ValueError(f"Unsupported TIFF frame format: {frame.shape}")
-            else:
-                raise ValueError(f"Unknown TIFF frame dimensions: {frame.shape}")
-            log.debug(
-                "LegacySnapshotView: frame shape=%s bytesPerLine=%s",
-                getattr(frame, "shape", None),
-                q_img.bytesPerLine(),
-            )
-
-            target_width = 0
-            snapshot_stack = getattr(self, "snapshot_stack", None)
-            if snapshot_stack is not None:
-                target_width = snapshot_stack.width()
-            if target_width <= 0 and label is not None:
-                target_width = label.width()
-            if target_width <= 0 and self.event_table is not None:
-                target_width = self.event_table.viewport().width()
-            pix = QPixmap.fromImage(q_img).scaledToWidth(
-                target_width, Qt.SmoothTransformation
-            )
-            if label is not None:
-                label.setFixedSize(pix.width(), pix.height())
-                label.setPixmap(pix)
-            default_rect = QRectF(0, 0, float(width), float(height))
-            log.debug(
-                "LegacySnapshotView.default_rect: frame=%d rect=%s target_width=%d orig=%dx%d scaled=%dx%d",
-                index,
-                default_rect,
-                target_width,
-                width,
-                height,
-                pix.width(),
-                pix.height(),
-            )
-        except Exception as e:
-            log.error("Error displaying frame %s: %s", index, e)
 
     def update_snapshot_size(self):
         widget = getattr(self, "snapshot_widget", None)
@@ -12143,33 +11926,6 @@ QPushButton[isGhost="true"]:pressed {{
         elif source is self.trace_file_label and event.type() == QEvent.Resize:
             QTimer.singleShot(0, self._update_status_chip)
         return super().eventFilter(source, event)
-
-    def change_frame(self):
-        if not self.snapshot_frames:
-            return
-
-        idx = self.slider.value()
-        self._apply_frame_change(idx)
-
-    def change_frame_from_timeline(self, frame_index: int) -> None:
-        """Handle seek request from timeline widget."""
-        if not self.snapshot_frames:
-            return
-
-        idx = max(0, min(int(frame_index), len(self.snapshot_frames) - 1))
-
-        # Stop playback if seeking manually
-        if self.play_pause_btn.isChecked():
-            self._set_playback_state(False)
-
-        # Block timeline signals to prevent feedback loop
-        if hasattr(self, 'snapshot_timeline'):
-            self.snapshot_timeline.blockSignals(True)
-
-        self.set_current_frame(idx)
-
-        if hasattr(self, 'snapshot_timeline'):
-            self.snapshot_timeline.blockSignals(False)
 
     def _update_snapshot_sampling_badge(self) -> None:
         """Show or hide the reduced-load badge near the snapshot controls."""
@@ -12274,27 +12030,12 @@ QPushButton[isGhost="true"]:pressed {{
                 time_exact,
             )
         if frame_time is not None and not from_playback:
-            is_playing = bool(
-                getattr(self, "play_pause_btn", None)
-                and self.play_pause_btn.isChecked()
+            self.jump_to_time(
+                float(frame_time),
+                from_playback=True,
+                from_frame_change=True,
+                source="video",
             )
-            if is_playing:
-                controller = getattr(self, "snapshot_controller", None)
-                if controller is not None:
-                    controller.set_trace_time(float(frame_time), source="playback")
-            else:
-                self.jump_to_time(
-                    float(frame_time),
-                    from_playback=True,
-                    from_frame_change=True,
-                    source="video",
-                )
-
-        # Update timeline widget
-        if hasattr(self, 'snapshot_timeline'):
-            self.snapshot_timeline.blockSignals(True)
-            self.snapshot_timeline.set_current_frame(idx)
-            self.snapshot_timeline.blockSignals(False)
 
         self.update_slider_marker()
         self._update_snapshot_status(idx)
@@ -12303,8 +12044,11 @@ QPushButton[isGhost="true"]:pressed {{
     def _update_snapshot_status(self, idx: int) -> None:
         self._update_snapshot_sampling_badge()
         total = len(self.snapshot_frames) if self.snapshot_frames else 0
+        label = getattr(self, "snapshot_time_label", None)
+        if label is None:
+            return
         if total <= 0:
-            self.snapshot_time_label.setText("Frame 0 / 0")
+            label.setText("Frame 0 / 0")
             return
 
         frame_number = idx + 1
@@ -12344,7 +12088,7 @@ QPushButton[isGhost="true"]:pressed {{
             text = f"Frame {frame_number} / {total}{suffix}"
         else:
             text = f"Frame {frame_number} / {total}{suffix} @ {timestamp:.2f} s"
-        self.snapshot_time_label.setText(text)
+        label.setText(text)
 
     def _update_metadata_display(self, idx: int) -> None:
         self._update_metadata_button_state()
@@ -12426,38 +12170,27 @@ QPushButton[isGhost="true"]:pressed {{
             speed = getattr(self, "_snapshot_pps_default", 30.0)
 
         self.snapshot_pps = speed
-        if getattr(self, "_snapshot_viewer_v2_enabled", False):
-            viewer = getattr(self, "snapshot_widget", None)
-            if viewer is not None:
-                with contextlib.suppress(Exception):
-                    viewer.set_pps(speed)
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
-            controller.set_playback_pps(speed)
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_pps(speed)
 
     def on_snapshot_sync_toggled(self, checked: bool) -> None:
         self.snapshot_sync_enabled = bool(checked)
-        if getattr(self, "_snapshot_viewer_v2_enabled", False):
-            viewer = getattr(self, "snapshot_widget", None)
-            if viewer is not None:
-                with contextlib.suppress(Exception):
-                    viewer.set_sync_enabled(self.snapshot_sync_enabled)
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
-            controller.set_sync_enabled(self.snapshot_sync_enabled)
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_sync_enabled(self.snapshot_sync_enabled)
+        with contextlib.suppress(Exception):
+            self._refresh_snapshot_sync_label()
 
     def on_snapshot_loop_toggled(self, checked: bool) -> None:
         """Handle loop playback checkbox toggle."""
         self.snapshot_loop_enabled = bool(checked)
-        if getattr(self, "_snapshot_viewer_v2_enabled", False):
-            viewer = getattr(self, "snapshot_widget", None)
-            if viewer is not None:
-                with contextlib.suppress(Exception):
-                    viewer.set_loop(bool(checked))
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
             with contextlib.suppress(Exception):
-                controller.set_loop_enabled(bool(checked))
+                viewer.set_loop(bool(checked))
 
     def _reset_snapshot_speed(self) -> None:
         self.snapshot_pps = float(getattr(self, "_snapshot_pps_default", 30.0))
@@ -12469,14 +12202,10 @@ QPushButton[isGhost="true"]:pressed {{
             )
             self.snapshot_speed_input.blockSignals(False)
 
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
-            controller.set_playback_pps(self.snapshot_pps)
-        if getattr(self, "_snapshot_viewer_v2_enabled", False):
-            viewer = getattr(self, "snapshot_widget", None)
-            if viewer is not None:
-                with contextlib.suppress(Exception):
-                    viewer.set_pps(self.snapshot_pps)
+        viewer = getattr(self, "snapshot_widget", None)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_pps(self.snapshot_pps)
 
     def _resolve_snapshot_pps_default(self) -> float:
         default_pps = 30.0
@@ -12512,52 +12241,35 @@ QPushButton[isGhost="true"]:pressed {{
             source="video",
         )
 
-    # Playback controller:
-    # - slider.valueChanged -> change_frame -> _apply_frame_change -> jump_to_time -> controller.
-    # - flipbook playback timer lives in SnapshotViewerController.
+    # Playback controller lives in the TIFF viewer v2 widget.
     def _update_playback_button_state(self, playing: bool) -> None:
-        self.play_pause_btn.blockSignals(True)
-        self.play_pause_btn.setChecked(playing)
-        self.play_pause_btn.blockSignals(False)
+        play_btn = getattr(self, "play_pause_btn", None)
+        if play_btn is None:
+            return
+        play_btn.blockSignals(True)
+        play_btn.setChecked(playing)
+        play_btn.blockSignals(False)
 
         with contextlib.suppress(Exception):
             self._update_snapshot_playback_icons()
-        self.play_pause_btn.setText("Pause" if playing else "Play")
+        # Button is icon-only, no text to update
         tooltip = "Pause snapshot playback" if playing else "Play snapshot sequence"
-        self.play_pause_btn.setToolTip(tooltip)
+        play_btn.setToolTip(tooltip)
 
     def _set_playback_state(self, playing: bool) -> None:
-        """Control playback using controller-owned flipbook stepping."""
+        """Control playback using the v2 viewer controller."""
         if not self.snapshot_frames:
             playing = False
-        was_playing = bool(self.play_pause_btn.isChecked())
+        play_btn = getattr(self, "play_pause_btn", None)
+        was_playing = bool(play_btn.isChecked()) if play_btn is not None else False
         viewer = getattr(self, "snapshot_widget", None)
         if viewer is not None:
             with contextlib.suppress(Exception):
                 viewer.set_playing(playing)
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
-            with contextlib.suppress(Exception):
-                controller.set_playing(playing)
         if not playing and was_playing and self.snapshot_frames and self.snapshot_sync_enabled:
             self._sync_time_cursor_to_snapshot()
 
         self._update_playback_button_state(playing)
-
-    def _on_snapshot_page_changed(self, page_index: int, source: str) -> None:
-        if source != "playback":
-            return
-        if not self.snapshot_frames:
-            return
-        idx = int(page_index)
-        if idx < 0 or idx >= len(self.snapshot_frames):
-            return
-        if self.slider is not None and self.slider.value() != idx:
-            self.slider.blockSignals(True)
-            self.slider.setValue(idx)
-            self.slider.blockSignals(False)
-        self.page_float = float(idx)
-        self._apply_frame_change(idx, from_playback=True)
 
     def _on_snapshot_page_changed_v2(self, page_index: int, source: str) -> None:
         if not self.snapshot_frames:
@@ -12585,6 +12297,7 @@ QPushButton[isGhost="true"]:pressed {{
             return
         if math.isfinite(time_val):
             self._sync_trace_cursor_to_time(time_val)
+            self._set_snapshot_sync_time(time_val)
 
     def _on_snapshot_playing_changed(self, playing: bool) -> None:
         viewer = getattr(self, "snapshot_widget", None)
@@ -12598,23 +12311,6 @@ QPushButton[isGhost="true"]:pressed {{
             self._set_playback_state(False)
             return
         self._set_playback_state(bool(checked))
-
-    def _render_snapshot_page(self, page_index: int) -> None:
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
-            with contextlib.suppress(Exception):
-                controller.set_frame_index(page_index, source="playback")
-                return
-
-        widget = getattr(self, "snapshot_widget", None)
-        if widget is None or not self.snapshot_frames:
-            return
-        try:
-            frame = self.snapshot_frames[int(page_index)]
-        except Exception:
-            return
-        with contextlib.suppress(Exception):
-            widget.set_frame(frame, frame_index=page_index)
 
     def _mapped_trace_time_for_page(self, page_index: int) -> float | None:
         tiff_page = self._tiff_page_for_frame(page_index)
@@ -12643,7 +12339,8 @@ QPushButton[isGhost="true"]:pressed {{
     def step_previous_frame(self) -> None:
         if not self.snapshot_frames:
             return
-        if self.play_pause_btn.isChecked():
+        play_btn = getattr(self, "play_pause_btn", None)
+        if play_btn is not None and play_btn.isChecked():
             self._set_playback_state(False)
         idx = (self.current_frame - 1) % len(self.snapshot_frames)
         self.set_current_frame(idx)
@@ -12651,7 +12348,8 @@ QPushButton[isGhost="true"]:pressed {{
     def step_next_frame(self) -> None:
         if not self.snapshot_frames:
             return
-        if self.play_pause_btn.isChecked():
+        play_btn = getattr(self, "play_pause_btn", None)
+        if play_btn is not None and play_btn.isChecked():
             self._set_playback_state(False)
         idx = (self.current_frame + 1) % len(self.snapshot_frames)
         self.set_current_frame(idx)
@@ -12660,22 +12358,28 @@ QPushButton[isGhost="true"]:pressed {{
         viewer = getattr(self, "snapshot_widget", None)
         if viewer is None:
             return
-        with contextlib.suppress(Exception):
-            viewer.rotate_ccw_90()
+        rotate = getattr(viewer, "rotate_ccw_90", None)
+        if callable(rotate):
+            with contextlib.suppress(Exception):
+                rotate()
 
     def rotate_snapshot_cw(self) -> None:
         viewer = getattr(self, "snapshot_widget", None)
         if viewer is None:
             return
-        with contextlib.suppress(Exception):
-            viewer.rotate_cw_90()
+        rotate = getattr(viewer, "rotate_cw_90", None)
+        if callable(rotate):
+            with contextlib.suppress(Exception):
+                rotate()
 
     def reset_snapshot_rotation(self) -> None:
         viewer = getattr(self, "snapshot_widget", None)
         if viewer is None:
             return
-        with contextlib.suppress(Exception):
-            viewer.reset_rotation()
+        reset = getattr(viewer, "reset_rotation", None)
+        if callable(reset):
+            with contextlib.suppress(Exception):
+                reset()
         self._update_snapshot_rotation_controls()
 
     def set_snapshot_metadata_visible(self, visible: bool) -> None:
@@ -12733,6 +12437,8 @@ QPushButton[isGhost="true"]:pressed {{
     def update_slider_marker(self):
         # Make sure we have a trace and some TIFF frames
         if self.trace_data is None or not self.snapshot_frames:
+            return
+        if self.slider is None:
             return
 
         # 1) Get the current slider index
@@ -13983,9 +13689,6 @@ QPushButton[isGhost="true"]:pressed {{
             return
         rows = self._selected_event_rows()
         if not rows:
-            controller = getattr(self, "snapshot_controller", None)
-            if controller is not None:
-                controller.set_event_time(None)
             return
         target_row = pick_event_row(rows, self.event_table_data)
         if target_row is None:
@@ -15772,50 +15475,21 @@ QPushButton[isGhost="true"]:pressed {{
         self._set_playback_state(False)
         if self.snapshot_widget is not None:
             self.snapshot_widget.clear()
-        if self.snapshot_controller is not None:
-            self.snapshot_controller.set_event_time(None)
-            self.snapshot_controller.set_trace_time(None)
-            self.snapshot_controller.set_stack_source(None)
-            self.snapshot_controller.set_enabled(False)
-            self.snapshot_controller.reset()
-        self.snapshot_data_source = None
         self.sampling_rate_hz = None
         self._set_status_source("No trace loaded", "")
         self._reset_session_dirty()
         self.toggle_snapshot_viewer(False, source="data")
-        self.slider.hide()
-        self.snapshot_controls.hide()
-        self.prev_frame_btn.setEnabled(False)
-        self.next_frame_btn.setEnabled(False)
-        self.play_pause_btn.setEnabled(False)
         if hasattr(self, "rotate_ccw_btn"):
             self.rotate_ccw_btn.setEnabled(False)
         if hasattr(self, "rotate_cw_btn"):
             self.rotate_cw_btn.setEnabled(False)
         if hasattr(self, "rotate_reset_btn"):
             self.rotate_reset_btn.setEnabled(False)
-        self.snapshot_speed_label.setEnabled(False)
-        self.snapshot_speed_input.setEnabled(False)
-        if hasattr(self, "snapshot_speed_units_label"):
-            self.snapshot_speed_units_label.setEnabled(False)
-        if hasattr(self, "snapshot_sync_checkbox"):
-            self.snapshot_sync_checkbox.setEnabled(False)
-            self.snapshot_sync_checkbox.blockSignals(True)
-            self.snapshot_sync_checkbox.setChecked(False)
-            self.snapshot_sync_checkbox.blockSignals(False)
-        if hasattr(self, "snapshot_loop_checkbox"):
-            self.snapshot_loop_checkbox.setEnabled(False)
-            self.snapshot_loop_checkbox.blockSignals(True)
-            self.snapshot_loop_checkbox.setChecked(bool(self.snapshot_loop_enabled))
-            self.snapshot_loop_checkbox.blockSignals(False)
-        if hasattr(self, 'snapshot_timeline'):
-            self.snapshot_timeline.set_frame_count(0)
-            self.snapshot_timeline.set_frame_times(None)
-            self.snapshot_timeline.set_current_frame(0)
-            self.snapshot_timeline.hide()
         self._reset_snapshot_speed()
         self.reset_snapshot_rotation()
-        self.snapshot_time_label.setText("Frame 0 / 0")
+        label = getattr(self, "snapshot_time_label", None)
+        if label is not None:
+            label.setText("Frame 0 / 0")
         if self.snapshot_widget is not None:
             self.snapshot_widget.hide()
         self._reset_snapshot_loading_info()
@@ -16173,7 +15847,6 @@ QPushButton[isGhost="true"]:pressed {{
             getattr(self, "plot_stack_widget", None),
             self.scroll_slider,
             getattr(self, "snapshot_widget", None),
-            self.slider,
             self.event_table,
         ):
             if widget is not None:
@@ -16244,9 +15917,8 @@ QPushButton[isGhost="true"]:pressed {{
         #             -> right_panel_card (QFrame) / QVBoxLayout (stretched 3:2 vs table)
         #                 [0] snapshot_card (QFrame) / QVBoxLayout
         #                     [0] snapshot_stack (QStackedWidget)
-        #                         - snapshot_widget (SnapshotViewerWidget)
-        #                     [1] snapshot_controls (transport + scrub + settings)
-        #                     [2] metadata_panel
+        #                         - snapshot_widget (TIFF viewer v2 with controls)
+        #                     [1] metadata_panel
         #                 [1] event_table_card (QFrame) / QVBoxLayout
         #                     [0] event_table
         self.snapshot_card = None
@@ -16269,7 +15941,6 @@ QPushButton[isGhost="true"]:pressed {{
             if self.snapshot_widget is not None:
                 self.snapshot_stack.addWidget(self.snapshot_widget)
             snapshot_box.addWidget(self.snapshot_stack, 1)
-            snapshot_box.addWidget(self.snapshot_controls)
             snapshot_box.addWidget(self.metadata_panel)
             right_panel_layout.addWidget(self.snapshot_card)
         self.event_table_card = QFrame()
@@ -16459,11 +16130,11 @@ QPushButton[isGhost="true"]:pressed {{
             QLabel#SnapshotSpeedLabel,
             QLabel#SnapshotSpeedUnitsLabel,
             QLabel#SnapshotSyncLabel {{
-                color: {status};
+                color: {text};
                 font-size: 10px;
             }}
             QLabel#SnapshotStatusLabel {{
-                color: {status};
+                color: {text};
                 font-size: 11px;
             }}
             QLabel#SnapshotSubsampleLabel {{
@@ -16495,9 +16166,10 @@ QPushButton[isGhost="true"]:pressed {{
                 background: {button_bg};
                 border: 1px solid {border};
                 border-radius: {radius}px;
-                padding: 3px 6px;
-                min-height: 26px;
-                font-size: 10px;
+                padding: 0px;
+                min-height: 30px;
+                min-width: 30px;
+                font-size: 12px;
             }}
             QFrame#SnapshotCard QToolButton:hover {{
                 background: {button_hover};
@@ -16506,12 +16178,18 @@ QPushButton[isGhost="true"]:pressed {{
             QFrame#SnapshotCard QToolButton:checked {{
                 background: {button_active};
             }}
+            QFrame#SnapshotCard QToolButton:disabled {{
+                background: {panel_bg};
+                border-color: {panel_border};
+                color: {status};
+            }}
             QFrame#SnapshotCard QDoubleSpinBox#SnapshotSpeedInput {{
                 background: {button_bg};
                 border: 1px solid {border};
                 border-radius: {radius}px;
                 padding: 2px 6px;
                 min-height: 26px;
+                font-size: 11px;
             }}
         """
         )
@@ -16520,10 +16198,30 @@ QPushButton[isGhost="true"]:pressed {{
             self._update_snapshot_playback_icons()
 
     def _update_snapshot_sync_label(self, mode: str) -> None:
+        mode_key = (mode or "").lower()
+        self._snapshot_sync_mode = mode_key
+        self._refresh_snapshot_sync_label()
+
+    def _set_snapshot_sync_time(self, time_value: float | None) -> None:
+        if time_value is None or not math.isfinite(time_value):
+            self._snapshot_sync_time = None
+        else:
+            self._snapshot_sync_time = float(time_value)
+        self._refresh_snapshot_sync_label()
+
+    def _refresh_snapshot_sync_label(self) -> None:
         label = getattr(self, "snapshot_sync_label", None)
         if label is None:
             return
-        mode_key = (mode or "").lower()
+        if not bool(getattr(self, "snapshot_sync_enabled", True)):
+            label.setText("Synced: —")
+            return
+        time_value = getattr(self, "_snapshot_sync_time", None)
+        if isinstance(time_value, (int, float)) and math.isfinite(time_value):
+            label.setText(f"Synced: {time_value:.3f} s")
+            return
+
+        mode_key = (getattr(self, "_snapshot_sync_mode", "") or "").lower()
         if mode_key == "event":
             label.setText("Synced: Event")
         elif mode_key == "cursor":
@@ -16532,20 +16230,20 @@ QPushButton[isGhost="true"]:pressed {{
             label.setText("Synced: —")
 
     def _update_snapshot_sync_toggle(self) -> None:
-        if getattr(self, "_snapshot_viewer_v2_enabled", False):
-            return
         checkbox = getattr(self, "snapshot_sync_checkbox", None)
         if checkbox is None:
             return
-        available = bool(self.tiff_page_times_valid and self.tiff_page_times)
+        viewer = getattr(self, "snapshot_widget", None)
+        page_map = getattr(getattr(viewer, "controller", None), "page_time_map", None)
+        available = bool(page_map and page_map.valid)
         desired = bool(self.snapshot_sync_enabled) if available else False
         checkbox.blockSignals(True)
         checkbox.setEnabled(available)
         checkbox.setChecked(desired)
         checkbox.blockSignals(False)
-        controller = getattr(self, "snapshot_controller", None)
-        if controller is not None:
-            controller.set_sync_enabled(desired)
+        if viewer is not None:
+            with contextlib.suppress(Exception):
+                viewer.set_sync_enabled(desired)
 
     def _update_snapshot_playback_icons(self) -> None:
         prev_btn = getattr(self, "prev_frame_btn", None)
@@ -16555,17 +16253,12 @@ QPushButton[isGhost="true"]:pressed {{
         def apply_icon(button: QToolButton | None, icon_name: str) -> None:
             if button is None:
                 return
-            icon_path = self.icon_path(icon_name) if hasattr(self, "icon_path") else ""
-            size = button.iconSize()
-            if size.width() <= 0 or size.height() <= 0:
-                size = QSize(16, 16)
-            if icon_path:
-                button.setIcon(themed_svg_icon(icon_path, button.palette(), size))
+            button.setIcon(snapshot_icon(icon_name))
 
-        apply_icon(prev_btn, "fast_rewind.svg")
-        apply_icon(next_btn, "fast_forward.svg")
+        apply_icon(prev_btn, "prev")
+        apply_icon(next_btn, "next")
         if play_btn is not None:
-            icon_name = "pause.svg" if play_btn.isChecked() else "play_arrow.svg"
+            icon_name = "pause" if play_btn.isChecked() else "play"
             apply_icon(play_btn, icon_name)
 
     def _apply_primary_toolbar_theme(self) -> None:

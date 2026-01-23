@@ -155,7 +155,6 @@ src/vasoanalyzer/ui/mixins/menu_mixin.py
 src/vasoanalyzer/ui/mixins/metadata_mixin.py
 src/vasoanalyzer/ui/mixins/project_mixin.py
 src/vasoanalyzer/ui/mixins/sample_loader_mixin.py
-src/vasoanalyzer/ui/mixins/snapshot_mixin.py
 src/vasoanalyzer/ui/mpl_composer/__init__.py
 src/vasoanalyzer/ui/mpl_composer/composer_window.py
 src/vasoanalyzer/ui/mpl_composer/renderer.py
@@ -166,7 +165,6 @@ src/vasoanalyzer/ui/mpl_composer/test_renderer.py
 src/vasoanalyzer/ui/panels/__init__.py
 src/vasoanalyzer/ui/panels/event_review_panel.py
 src/vasoanalyzer/ui/panels/home_page.py
-src/vasoanalyzer/ui/panels/snapshot_view_pg.py
 src/vasoanalyzer/ui/plots/__init__.py
 src/vasoanalyzer/ui/plots/abstract_renderer.py
 src/vasoanalyzer/ui/plots/canvas_compat.py

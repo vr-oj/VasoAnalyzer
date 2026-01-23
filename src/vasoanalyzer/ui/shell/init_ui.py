@@ -7,18 +7,13 @@ import logging
 from PyQt5.QtCore import QEvent, QObject, Qt, QTimer, QSize
 from PyQt5.QtWidgets import (
     QApplication,
-    QCheckBox,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
     QScrollBar,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QStackedWidget,
-    QStyle,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -30,8 +25,6 @@ from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.mpl_interactions import MplInteractionHost
 from vasoanalyzer.ui.plots.overview_strip import OverviewStrip
 from vasoanalyzer.ui.plots.renderer_factory import create_plot_host
-from vasoanalyzer.ui.snapshot_viewer import SnapshotTimelineWidget
-from vasoanalyzer.ui.icons import themed_svg_icon
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -55,18 +48,6 @@ class _PlotLeaveFilter(QObject):
             except Exception:
                 pass
         return False
-
-
-class _SnapshotPreviewLabel(QLabel):
-    """QLabel used for the legacy snapshot viewer with resize logging."""
-
-    def resizeEvent(self, event):  # noqa: N802
-        super().resizeEvent(event)
-        log.debug(
-            "LegacySnapshotView.resizeEvent: size=%dx%d",
-            self.width(),
-            self.height(),
-        )
 
 
 def init_ui(window: VasoAnalyzerApp) -> None:
@@ -205,178 +186,32 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.scroll_slider.setToolTip("Scroll timeline (X-axis)")
     window.scroll_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-    # Canonical snapshot viewer widget (replaces legacy QLabel/PG instantiation).
+    # Canonical snapshot viewer widget (TIFF viewer v2).
     if window.snapshot_widget is not None:
-        window.snapshot_widget.setObjectName("SnapshotPreview")
-        window.snapshot_widget.setSizePolicy(
-            QSizePolicy.Expanding, QSizePolicy.Expanding
-        )
-        window.snapshot_widget.hide()
-        window.snapshot_widget.setContextMenuPolicy(Qt.CustomContextMenu)
-        window.snapshot_widget.customContextMenuRequested.connect(
+        viewer = window.snapshot_widget
+        viewer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        viewer.hide()
+        viewer.setContextMenuPolicy(Qt.CustomContextMenu)
+        viewer.customContextMenuRequested.connect(
             window.show_snapshot_context_menu
         )
 
-    window.snapshot_timeline = SnapshotTimelineWidget()
-    window.snapshot_timeline.setObjectName("SnapshotTimeline")
-    window.snapshot_timeline.seek_requested.connect(window.change_frame_from_timeline)
-    window.snapshot_timeline.hide()
-    window.snapshot_timeline.setToolTip("Click or drag to navigate snapshot frames")
+        controls = getattr(viewer, "controls", None)
+        if controls is not None:
+            # Aliases for legacy attribute access in main_window.
+            window.snapshot_controls = controls
+            window.prev_frame_btn = controls.prev_button
+            window.play_pause_btn = controls.play_button
+            window.next_frame_btn = controls.next_button
+            window.slider = controls.slider
+            window.snapshot_time_label = controls.frame_label
+            window.snapshot_speed_label = controls.speed_label
+            window.snapshot_speed_input = controls.speed_input
+            window.snapshot_speed_units_label = controls.speed_units_label
+            window.snapshot_sync_checkbox = controls.sync_checkbox
+            window.snapshot_loop_checkbox = controls.loop_checkbox
+            window.snapshot_sync_label = controls.sync_label
 
-    # Legacy compatibility: some code may reference window.slider
-    window.slider = window.snapshot_timeline
-
-    window.snapshot_controls = QFrame()
-    window.snapshot_controls.setObjectName("SnapshotControls")
-    window.snapshot_controls.setSizePolicy(
-        QSizePolicy.Expanding, QSizePolicy.Minimum
-    )
-    controls_layout = QVBoxLayout(window.snapshot_controls)
-    controls_layout.setContentsMargins(6, 6, 6, 6)
-    controls_layout.setSpacing(4)
-    row1_layout = QHBoxLayout()
-    row1_layout.setContentsMargins(0, 0, 0, 0)
-    row1_layout.setSpacing(6)
-    row2_layout = QHBoxLayout()
-    row2_layout.setContentsMargins(0, 0, 0, 0)
-    row2_layout.setSpacing(6)
-    controls_layout.addLayout(row1_layout)
-    controls_layout.addLayout(row2_layout)
-
-    icon_size = QSize(16, 16)
-    icon_palette = window.snapshot_controls.palette()
-
-    window.prev_frame_btn = QToolButton(window.snapshot_controls)
-    window.prev_frame_btn.setIcon(
-        themed_svg_icon(window.icon_path("fast_rewind.svg"), icon_palette, icon_size)
-    )
-    window.prev_frame_btn.setIconSize(icon_size)
-    window.prev_frame_btn.setFixedHeight(26)
-    window.prev_frame_btn.setToolTip("Previous frame")
-    window.prev_frame_btn.clicked.connect(window.step_previous_frame)
-    window.prev_frame_btn.setEnabled(False)
-    row1_layout.addWidget(window.prev_frame_btn)
-
-    window.play_pause_btn = QToolButton(window.snapshot_controls)
-    window.play_pause_btn.setCheckable(True)
-    window.play_pause_btn.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-    window.play_pause_btn.setIcon(
-        themed_svg_icon(window.icon_path("play_arrow.svg"), icon_palette, icon_size)
-    )
-    window.play_pause_btn.setIconSize(icon_size)
-    window.play_pause_btn.setFixedHeight(26)
-    window.play_pause_btn.setText("Play")
-    window.play_pause_btn.setToolTip("Play snapshot sequence")
-    window.play_pause_btn.clicked.connect(window.toggle_snapshot_playback)
-    window.play_pause_btn.setEnabled(False)
-    row1_layout.addWidget(window.play_pause_btn)
-
-    window.next_frame_btn = QToolButton(window.snapshot_controls)
-    window.next_frame_btn.setIcon(
-        themed_svg_icon(window.icon_path("fast_forward.svg"), icon_palette, icon_size)
-    )
-    window.next_frame_btn.setIconSize(icon_size)
-    window.next_frame_btn.setFixedHeight(26)
-    window.next_frame_btn.setToolTip("Next frame")
-    window.next_frame_btn.clicked.connect(window.step_next_frame)
-    window.next_frame_btn.setEnabled(False)
-    row1_layout.addWidget(window.next_frame_btn)
-
-    window.snapshot_timeline.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-    row1_layout.addWidget(window.snapshot_timeline, 1)
-
-    window.snapshot_speed_label = QLabel("Playback:")
-    window.snapshot_speed_label.setObjectName("SnapshotSpeedLabel")
-    window.snapshot_speed_label.setEnabled(False)
-    row2_layout.addWidget(window.snapshot_speed_label)
-
-    window.snapshot_speed_input = QDoubleSpinBox(window.snapshot_controls)
-    window.snapshot_speed_input.setObjectName("SnapshotSpeedInput")
-    window.snapshot_speed_input.setDecimals(1)
-    window.snapshot_speed_input.setSingleStep(1.0)
-    window.snapshot_speed_input.setRange(1.0, 120.0)
-    default_pps = 30.0
-    try:
-        default_pps = float(getattr(window, "snapshot_pps", default_pps))
-    except (TypeError, ValueError):
-        default_pps = 30.0
-    window.snapshot_speed_input.setValue(max(1.0, min(float(default_pps), 120.0)))
-    window.snapshot_speed_input.setEnabled(False)
-    window.snapshot_speed_label.setToolTip("Adjust snapshot playback speed (pages / second)")
-    window.snapshot_speed_input.setToolTip("Adjust snapshot playback speed (pages / second)")
-    window.snapshot_speed_input.valueChanged.connect(window.on_snapshot_speed_changed)
-    row2_layout.addWidget(window.snapshot_speed_input)
-
-    window.snapshot_speed_units_label = QLabel("pages/sec")
-    window.snapshot_speed_units_label.setObjectName("SnapshotSpeedUnitsLabel")
-    window.snapshot_speed_units_label.setEnabled(False)
-    window.snapshot_speed_units_label.setToolTip("Playback speed units")
-    row2_layout.addWidget(window.snapshot_speed_units_label)
-
-    window.snapshot_sync_checkbox = QCheckBox("Sync")
-    window.snapshot_sync_checkbox.setObjectName("SnapshotSyncCheckbox")
-    window.snapshot_sync_checkbox.setChecked(True)
-    window.snapshot_sync_checkbox.setEnabled(False)
-    window.snapshot_sync_checkbox.setToolTip("Sync snapshot playback to trace cursor")
-    window.snapshot_sync_checkbox.toggled.connect(window.on_snapshot_sync_toggled)
-    window.snapshot_loop_checkbox = QCheckBox("Loop")
-    window.snapshot_loop_checkbox.setObjectName("SnapshotLoopCheckbox")
-    default_loop = bool(getattr(window, "snapshot_loop_enabled", True))
-    window.snapshot_loop_checkbox.setChecked(default_loop)
-    window.snapshot_loop_checkbox.setEnabled(False)
-    window.snapshot_loop_checkbox.setToolTip("Restart playback from beginning when reaching last frame")
-    window.snapshot_loop_checkbox.toggled.connect(window.on_snapshot_loop_toggled)
-    row2_layout.addWidget(window.snapshot_loop_checkbox)
-
-    row2_layout.addWidget(window.snapshot_sync_checkbox)
-
-    row2_layout.addStretch()
-
-    window.snapshot_sync_label = QLabel("Synced: —")
-    window.snapshot_sync_label.setObjectName("SnapshotSyncLabel")
-    window.snapshot_sync_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-    window.snapshot_sync_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-    row2_layout.addWidget(window.snapshot_sync_label)
-
-    window.snapshot_subsample_label = QLabel("")
-    window.snapshot_subsample_label.setObjectName("SnapshotSubsampleLabel")
-    window.snapshot_subsample_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-    window.snapshot_subsample_label.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-    window.snapshot_subsample_label.setVisible(False)
-    window.snapshot_subsample_label.setToolTip("Loaded a reduced subset of the TIFF stack")
-    row2_layout.addWidget(window.snapshot_subsample_label)
-
-    window.snapshot_time_label = QLabel("Frame 0 / 0")
-    window.snapshot_time_label.setObjectName("SnapshotStatusLabel")
-    window.snapshot_time_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-    row2_layout.addWidget(window.snapshot_time_label)
-    if hasattr(window, "_update_snapshot_playback_icons"):
-        window._update_snapshot_playback_icons()
-    window.snapshot_controls.hide()
-
-    if window.snapshot_controller is not None:
-        window.snapshot_controller.sync_mode_changed.connect(
-            window._update_snapshot_sync_label
-        )
-        window.snapshot_controller.page_changed.connect(
-            window._on_snapshot_page_changed
-        )
-        window.snapshot_controller.playback_time_changed.connect(
-            window._on_snapshot_playback_time_changed
-        )
-        window.snapshot_controller.playing_changed.connect(
-            window._on_snapshot_playing_changed
-        )
-        window.snapshot_controller.set_playback_pps(
-            float(getattr(window, "snapshot_pps", 30.0))
-        )
-        window.snapshot_controller.set_sync_enabled(
-            bool(getattr(window, "snapshot_sync_enabled", True))
-        )
-        window.snapshot_controller.set_loop_enabled(default_loop)
-        window._update_snapshot_sync_label("none")
-    elif getattr(window, "_snapshot_viewer_v2_enabled", False):
-        viewer = getattr(window, "snapshot_widget", None)
         controller = getattr(viewer, "controller", None)
         if controller is not None:
             controller.page_changed.connect(window._on_snapshot_page_changed_v2)
@@ -384,18 +219,16 @@ def init_ui(window: VasoAnalyzerApp) -> None:
             controller.mapped_time_changed.connect(
                 window._on_snapshot_playback_time_changed
             )
-        if viewer is not None:
-            with contextlib.suppress(Exception):
-                viewer.set_pps(float(getattr(window, "snapshot_pps", 30.0)))
-            with contextlib.suppress(Exception):
-                viewer.set_sync_enabled(bool(getattr(window, "snapshot_sync_enabled", True)))
-            with contextlib.suppress(Exception):
-                viewer.set_loop(bool(getattr(window, "snapshot_loop_enabled", True)))
-            controls = getattr(viewer, "controls", None)
-            if controls is not None:
-                controls.pps_changed.connect(window.on_snapshot_speed_changed)
-                controls.sync_toggled.connect(window.on_snapshot_sync_toggled)
-                controls.loop_toggled.connect(window.on_snapshot_loop_toggled)
+        with contextlib.suppress(Exception):
+            viewer.set_pps(float(getattr(window, "snapshot_pps", 30.0)))
+        with contextlib.suppress(Exception):
+            viewer.set_sync_enabled(bool(getattr(window, "snapshot_sync_enabled", True)))
+        with contextlib.suppress(Exception):
+            viewer.set_loop(bool(getattr(window, "snapshot_loop_enabled", True)))
+        if controls is not None:
+            controls.pps_changed.connect(window.on_snapshot_speed_changed)
+            controls.sync_toggled.connect(window.on_snapshot_sync_toggled)
+            controls.loop_toggled.connect(window.on_snapshot_loop_toggled)
 
     window.metadata_panel = QFrame()
     window.metadata_panel.setObjectName("MetadataPanel")
@@ -457,6 +290,11 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         panel_border = CURRENT_THEME.get("panel_border", border_color)
         panel_radius = int(CURRENT_THEME.get("panel_radius", 6))
         snapshot_bg = CURRENT_THEME.get("snapshot_bg", panel_bg)
+        button_bg = CURRENT_THEME.get("button_bg", panel_bg)
+        button_hover = CURRENT_THEME.get("button_hover_bg", button_bg)
+        button_active = CURRENT_THEME.get(
+            "button_active_bg", CURRENT_THEME.get("selection_bg", button_hover)
+        )
 
         def rgba_from_hex(color: str, alpha: float) -> str:
             """Return rgba string from a hex color with alpha applied."""
@@ -523,6 +361,34 @@ QWidget#SnapshotControls {{
     background: {panel_bg};
     border: 1px solid {panel_border};
     border-radius: {panel_radius}px;
+}}
+QWidget#SnapshotControls QToolButton {{
+    background: {button_bg};
+    border: 1px solid {panel_border};
+    border-radius: {panel_radius}px;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0px;
+}}
+QWidget#SnapshotControls QToolButton:hover {{
+    background: {button_hover};
+}}
+QWidget#SnapshotControls QToolButton:pressed,
+QWidget#SnapshotControls QToolButton:checked {{
+    background: {button_active};
+}}
+QWidget#SnapshotControls QToolButton:disabled {{
+    background: {panel_bg};
+    border-color: {panel_border};
+    color: {status_color};
+}}
+QWidget#SnapshotControls QDoubleSpinBox#SnapshotSpeedInput {{
+    background: {button_bg};
+    border: 1px solid {panel_border};
+    border-radius: {panel_radius}px;
+    padding: 2px 6px;
+    min-height: 26px;
+    font-size: 11px;
 }}
 QLabel#SnapshotSpeedLabel,
 QLabel#SnapshotSpeedUnitsLabel,

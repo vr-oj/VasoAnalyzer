@@ -7,35 +7,12 @@
 
 from __future__ import annotations
 
-import os
-
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-from utils import resource_path
-from vasoanalyzer.ui import theme as theme_module
-from vasoanalyzer.ui.icons import themed_svg_icon
+from vasoanalyzer.ui.icons import snapshot_icon
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 from .snapshot_timeline import SnapshotTimelineSlider
-
-
-def _icon_path(filename: str) -> str:
-    """Resolve icon path with dark-theme fallback if available."""
-
-    try:
-        current_theme = getattr(theme_module, "CURRENT_THEME", None)
-        is_dark = False
-        if isinstance(current_theme, dict):
-            is_dark = bool(current_theme.get("is_dark", False))
-        dark_theme = getattr(theme_module, "DARK_THEME", None)
-        if is_dark or (current_theme is not None and current_theme is dark_theme):
-            name, ext = os.path.splitext(filename)
-            dark_filename = f"{name}_Dark{ext}"
-            candidate = resource_path("icons", dark_filename)
-            if os.path.exists(candidate):
-                return candidate
-    except Exception:
-        pass
-    return resource_path("icons", filename)
 
 
 class ControlsStrip(QtWidgets.QFrame):
@@ -53,20 +30,20 @@ class ControlsStrip(QtWidgets.QFrame):
         super().__init__(parent)
         self.setObjectName("SnapshotControls")
         self._icon_size = QtCore.QSize(16, 16)
-        self._button_size = 28
+        self._button_size = 30
         self._page_count = 0
         self._page_index = 0
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(3)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
 
         row1 = QtWidgets.QHBoxLayout()
         row1.setContentsMargins(0, 0, 0, 0)
-        row1.setSpacing(4)
+        row1.setSpacing(6)
         row2 = QtWidgets.QHBoxLayout()
         row2.setContentsMargins(0, 0, 0, 0)
-        row2.setSpacing(4)
+        row2.setSpacing(6)
         layout.addLayout(row1)
         layout.addLayout(row2)
 
@@ -171,17 +148,10 @@ class ControlsStrip(QtWidgets.QFrame):
         self.page_changed.emit(value)
 
     def _apply_icons(self) -> None:
-        palette = self.palette()
-        self.prev_button.setIcon(
-            themed_svg_icon(_icon_path("fast_rewind.svg"), palette, self._icon_size)
-        )
-        self.next_button.setIcon(
-            themed_svg_icon(_icon_path("fast_forward.svg"), palette, self._icon_size)
-        )
-        icon_name = "pause.svg" if self.play_button.isChecked() else "play_arrow.svg"
-        self.play_button.setIcon(
-            themed_svg_icon(_icon_path(icon_name), palette, self._icon_size)
-        )
+        self.prev_button.setIcon(snapshot_icon("prev"))
+        self.next_button.setIcon(snapshot_icon("next"))
+        icon_name = "pause" if self.play_button.isChecked() else "play"
+        self.play_button.setIcon(snapshot_icon(icon_name))
 
     def _apply_control_styles(self) -> None:
         palette = self.palette()
@@ -189,15 +159,15 @@ class ControlsStrip(QtWidgets.QFrame):
         border = QtGui.QColor(palette.mid().color())
         text = QtGui.QColor(palette.windowText().color())
         track = QtGui.QColor(palette.base().color())
+        accent = QtGui.QColor(palette.highlight().color())
         is_dark = palette.window().color().lightness() < 128
         hover = button_bg.lighter(112) if is_dark else button_bg.darker(105)
         pressed = button_bg.lighter(125) if is_dark else button_bg.darker(115)
         disabled = QtGui.QColor(palette.window().color())
 
-        current_theme = getattr(theme_module, "CURRENT_THEME", None)
         radius = 6
-        if isinstance(current_theme, dict):
-            radius = int(current_theme.get("panel_radius", radius))
+        if isinstance(CURRENT_THEME, dict):
+            radius = int(CURRENT_THEME.get("panel_radius", radius))
 
         button_style = f"""
 QToolButton {{
@@ -223,17 +193,27 @@ QToolButton:disabled {{
         slider_style = f"""
 QSlider#SnapshotTimeline::groove:horizontal {{
     background: {_rgba(track)};
-    border-radius: 3px;
-    height: 6px;
+    border-radius: 4px;
+    height: 8px;
+}}
+QSlider#SnapshotTimeline::sub-page:horizontal {{
+    background: {_rgba(accent)};
+    border-radius: 4px;
+    height: 8px;
+}}
+QSlider#SnapshotTimeline::add-page:horizontal {{
+    background: {_rgba(track)};
+    border-radius: 4px;
+    height: 8px;
 }}
 QSlider#SnapshotTimeline::handle:horizontal {{
     background: transparent;
     border: none;
-    width: 12px;
-    margin: -6px 0;
+    width: 14px;
+    margin: -8px 0;
 }}
 """
-        frame_label_style = f"color: {_rgba(text)}; font-size: 10px;"
+        frame_label_style = f"color: {_rgba(text)}; font-size: 11px;"
         for button in (self.prev_button, self.play_button, self.next_button):
             button.setStyleSheet(button_style)
         self.slider.setStyleSheet(slider_style)

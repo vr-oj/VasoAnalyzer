@@ -43,7 +43,7 @@ from vasoanalyzer.core.project import (
 )
 from vasoanalyzer.core.project_context import ProjectContext
 from vasoanalyzer.io.events import find_matching_event_file, load_events
-from vasoanalyzer.io.tiffs import load_tiff, resolve_frame_times
+from vasoanalyzer.io.tiffs import load_tiff
 from vasoanalyzer.io.trace_events import load_trace_and_events
 from vasoanalyzer.io.traces import load_trace
 from vasoanalyzer.services.cache_service import DataCache, cache_dir_for_project
@@ -311,14 +311,8 @@ class SampleLoaderMixin:
         self.snapshot_frames = []
         self.frames_metadata = []
         self.toggle_snapshot_viewer(False, source="data")
-        self.snapshot_label.hide()
-        self.slider.hide()
-        self.snapshot_controls.hide()
-        self.prev_frame_btn.setEnabled(False)
-        self.next_frame_btn.setEnabled(False)
-        self.play_pause_btn.setEnabled(False)
-        self.snapshot_speed_label.setEnabled(False)
-        self.snapshot_speed_combo.setEnabled(False)
+        if getattr(self, "snapshot_widget", None) is not None:
+            self.snapshot_widget.clear()
         self._reset_snapshot_speed()
         self._set_playback_state(False)
         self.metadata_details_label.setText("No metadata available.")
@@ -1045,128 +1039,6 @@ class SampleLoaderMixin:
         self.mark_session_dirty()
         return True
 
-    def _load_snapshot_from_path(self, file_path: str) -> bool:
-        """Load a snapshot TIFF from ``file_path`` and update the viewer."""
-
-        try:
-            frames, frames_metadata, _ = load_tiff(file_path)
-            valid_frames = []
-            valid_metadata = []
-
-            for i, frame in enumerate(frames):
-                if frame is not None and frame.size > 0:
-                    valid_frames.append(frame)
-                    if i < len(frames_metadata):
-                        valid_metadata.append(frames_metadata[i])
-                    else:
-                        valid_metadata.append({})
-
-            if len(valid_frames) < len(frames):
-                QMessageBox.warning(self, "TIFF Warning", "Skipped empty or corrupted TIFF frames.")
-
-            if not valid_frames:
-                QMessageBox.warning(
-                    self,
-                    "TIFF Load Error",
-                    "No valid frames were found in the dropped TIFF file.",
-                )
-                return False
-
-            self.snapshot_frames = valid_frames
-            self.frames_metadata = valid_metadata
-
-            trace_time = None
-            tiff_map = None
-            if getattr(self, "trace_data", None) is not None:
-                with contextlib.suppress(Exception):
-                    if "Time (s)" in self.trace_data.columns:
-                        trace_time = pd.to_numeric(
-                            self.trace_data["Time (s)"], errors="coerce"
-                        ).to_numpy(dtype=float)
-                    if "TiffPage" in self.trace_data.columns:
-                        series = pd.to_numeric(
-                            self.trace_data["TiffPage"], errors="coerce"
-                        )
-                        tiff_map = {
-                            int(tp): int(i)
-                            for i, tp in enumerate(series.to_numpy())
-                            if pd.notna(tp)
-                        }
-
-            fallback_interval = 0.14
-            try:
-                frame_result = resolve_frame_times(
-                    self.frames_metadata,
-                    n_frames=len(self.snapshot_frames),
-                    trace_time_s=trace_time,
-                    tiff_page_to_trace_idx=tiff_map,
-                )
-            except ValueError:
-                frame_result = resolve_frame_times(
-                    self.frames_metadata,
-                    n_frames=len(self.snapshot_frames),
-                    fps=1.0 / fallback_interval,
-                )
-                frame_result.warnings.append(
-                    f"Frame times estimated using default interval {fallback_interval:.2f}s (no metadata)."
-                )
-
-            self.frame_times = frame_result.frame_times_s.tolist()
-            if len(self.frame_times) >= 2:
-                diffs = np.diff(np.asarray(self.frame_times, dtype=float))
-                diffs = diffs[diffs > 0]
-                self.recording_interval = float(np.median(diffs)) if diffs.size else fallback_interval
-            else:
-                self.recording_interval = fallback_interval
-            current_sample = getattr(self, "current_sample", None)
-            if current_sample is not None:
-                meta = dict(current_sample.import_metadata or {})
-                timebase_block = dict(meta.get("timebase") or {})
-                timebase_block["tiff"] = {
-                    "source": getattr(frame_result.source, "value", str(frame_result.source)),
-                    "warnings": list(frame_result.warnings),
-                    "fps": float(frame_result.fps) if frame_result.fps is not None else None,
-                    "recording_interval_s": float(self.recording_interval)
-                    if self.recording_interval is not None
-                    else None,
-                    "frame_count": int(len(self.frame_times)),
-                }
-                meta["timebase"] = timebase_block
-                current_sample.import_metadata = meta
-
-            self.compute_frame_trace_indices()
-
-            self.display_frame(0)
-            self.slider.setMinimum(0)
-            self.slider.setMaximum(len(self.snapshot_frames) - 1)
-            self.slider.setValue(0)
-            self.prev_frame_btn.setEnabled(True)
-            self.next_frame_btn.setEnabled(True)
-            self.play_pause_btn.setEnabled(True)
-            self.snapshot_speed_label.setEnabled(True)
-            self.snapshot_speed_combo.setEnabled(True)
-            self._set_playback_state(False)
-            self.update_snapshot_size()
-            self._clear_slider_markers()
-            self._apply_frame_change(0)
-            self.toggle_snapshot_viewer(True)
-
-            return True
-
-        except Exception as e:
-            QMessageBox.critical(self, "TIFF Load Error", f"Failed to load TIFF:\n{e}")
-            return False
-
-    def load_snapshot(self):
-        # 1) Prompt for TIFF
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Open Result TIFF", "", "TIFF Files (*.tif *.tiff)"
-        )
-        if not file_path:
-            return
-
-        self._load_snapshot_from_path(file_path)
-
     def load_trace(self, t, d, od=None):
         import pandas as pd
 
@@ -1280,24 +1152,6 @@ class SampleLoaderMixin:
         self._apply_event_label_mode()
         self._sync_event_controls()
         self._update_trace_controls_state()
-
-    def load_snapshots(self, stack):
-        self.snapshot_frames = [frame for frame in stack]
-        if self.snapshot_frames:
-            self.frame_times = [
-                idx * self.recording_interval for idx in range(len(self.snapshot_frames))
-            ]
-            self.compute_frame_trace_indices()
-            self.slider.setMinimum(0)
-            self.slider.setMaximum(len(self.snapshot_frames) - 1)
-            self.slider.setValue(0)
-            self.display_frame(0)
-            self.prev_frame_btn.setEnabled(True)
-            self.next_frame_btn.setEnabled(True)
-            self.play_pause_btn.setEnabled(True)
-            self.snapshot_speed_label.setEnabled(True)
-            self.snapshot_speed_combo.setEnabled(True)
-            self._set_playback_state(False)
 
     def _handle_load_trace(self):
         # Prompt for the trace file

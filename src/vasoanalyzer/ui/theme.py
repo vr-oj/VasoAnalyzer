@@ -711,6 +711,22 @@ def apply_matplotlib_style(theme: dict):
 # -----------------------------------------------------------------------------
 
 
+def get_theme_mode() -> str:
+    """Return the active theme mode: 'light' or 'dark'."""
+    theme = CURRENT_THEME if isinstance(CURRENT_THEME, dict) else {}
+    window_bg = None
+    if isinstance(theme, dict):
+        window_bg = theme.get("window_bg") or theme.get("plot_bg")
+    if window_bg:
+        color = QColor(window_bg)
+        if color.isValid():
+            return "dark" if color.lightness() < 128 else "light"
+
+    app = QApplication.instance()
+    palette = app.palette() if app else QPalette()
+    return "dark" if palette.color(QPalette.Window).lightness() < 128 else "light"
+
+
 def _apply_theme(theme: dict) -> None:
     """
     Internal helper to apply theme to Qt palette, stylesheet, and matplotlib.

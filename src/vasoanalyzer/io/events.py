@@ -104,8 +104,11 @@ def _is_numeric_or_time_series(series: pd.Series) -> bool:
     if float(numeric.notna().mean()) >= 0.8:
         return True
 
-    td = pd.to_timedelta(series, errors="coerce")
-    return float(td.notna().mean()) >= 0.8
+    values = series.dropna().astype(str).str.strip()
+    if values.empty:
+        return False
+    time_like = values.str.fullmatch(r"\d{1,2}(?::\d{1,2}){1,2}(?:\.\d+)?")
+    return float(time_like.mean()) >= 0.8
 
 
 def _find_column(

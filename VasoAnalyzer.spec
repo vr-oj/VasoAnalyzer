@@ -64,6 +64,15 @@ icon_datas = []
 if os.path.isdir(icon_dir):
     icon_datas = [(os.path.join(icon_dir, f), 'icons') for f in os.listdir(icon_dir)]
 
+# Collect snapshot icons under resources (theme-specific)
+resources_icon_dir = os.path.join(project_dir, 'resources', 'icons')
+resources_icon_datas = []
+if os.path.isdir(resources_icon_dir):
+    for root, _, files in os.walk(resources_icon_dir):
+        rel_dir = os.path.relpath(root, project_dir)
+        for filename in files:
+            resources_icon_datas.append((os.path.join(root, filename), rel_dir))
+
 doc_icon_dir = os.path.join(project_dir, 'assets', 'icons')
 doc_icon_ico = os.path.join(doc_icon_dir, 'VasoDocument.ico')
 doc_icon_icns = os.path.join(doc_icon_dir, 'VasoDocument.icns')
@@ -78,7 +87,7 @@ datas = [
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.svg'), 'vasoanalyzer'),
-] + icon_datas + qt_plugin_datas + mpl_datas
+] + icon_datas + resources_icon_datas + qt_plugin_datas + mpl_datas
 
 if os.path.isfile(doc_icon_icns):
     datas.append((doc_icon_icns, '.'))

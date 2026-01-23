@@ -16,7 +16,7 @@ class SnapshotTimelineSlider(QtWidgets.QSlider):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(QtCore.Qt.Horizontal, parent)
         self.setObjectName("SnapshotTimeline")
-        self.setFixedHeight(20)
+        self.setFixedHeight(28)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
         )
@@ -69,7 +69,7 @@ class SnapshotTimelineSlider(QtWidgets.QSlider):
             QtCore.QPointF(line_x, groove.bottom() + 1),
         )
 
-        thumb_radius = max(3, min(6, int(groove.height() / 2) + 1))
+        thumb_radius = max(6, min(7, int(groove.height() / 2) + 3))
         outline = self._outline_color(accent)
         painter.setBrush(accent)
         painter.setPen(QtGui.QPen(outline, 1))

@@ -7,7 +7,19 @@
 
 from __future__ import annotations
 
+import os
+
 from PyQt5 import QtCore, QtGui, QtSvg, QtWidgets
+
+from utils import resource_path
+from vasoanalyzer.ui.theme import get_theme_mode
+
+_SNAPSHOT_ICON_FALLBACKS = {
+    "prev": "fast_rewind.svg",
+    "next": "fast_forward.svg",
+    "play": "play_arrow.svg",
+    "pause": "pause.svg",
+}
 
 
 def themed_svg_icon(
@@ -45,6 +57,26 @@ def themed_svg_icon(
     _add_icon_state(icon, base, disabled, QtGui.QIcon.Disabled)
     _add_icon_state(icon, base, normal, QtGui.QIcon.Selected)
     return icon
+
+
+def snapshot_icon_path(name: str) -> str:
+    """Return the theme-specific snapshot control icon path."""
+    mode = get_theme_mode()
+    candidate = resource_path("resources", "icons", "snapshot", mode, f"{name}.svg")
+    if os.path.exists(candidate):
+        return candidate
+
+    fallback = _SNAPSHOT_ICON_FALLBACKS.get(name, name)
+    fallback_path = resource_path("icons", fallback)
+    if os.path.exists(fallback_path):
+        return fallback_path
+    return ""
+
+
+def snapshot_icon(name: str) -> QtGui.QIcon:
+    """Return a QIcon for snapshot transport controls (no tinting)."""
+    path = snapshot_icon_path(name)
+    return QtGui.QIcon(path) if path else QtGui.QIcon()
 
 
 def _render_svg(

@@ -178,7 +178,9 @@ class MetadataMixin:
         action = getattr(self, "action_snapshot_metadata", None)
         has_metadata = bool(getattr(self, "frames_metadata", []))
         has_frames = bool(self.snapshot_frames)
-        enabled = has_metadata and has_frames and self.snapshot_label.isVisible()
+        viewer = getattr(self, "snapshot_widget", None)
+        is_visible = bool(viewer and viewer.isVisible())
+        enabled = has_metadata and has_frames and is_visible
 
         if action is not None:
             action.setEnabled(enabled)
@@ -193,7 +195,7 @@ class MetadataMixin:
             self.metadata_details_label.setText("No metadata available.")
             return
 
-        is_visible = self.snapshot_label.isVisible()
+        is_visible = bool(viewer and viewer.isVisible())
         should_show = bool(action and action.isChecked() and enabled)
         self.metadata_panel.setVisible(should_show)
         if not should_show and not is_visible:
