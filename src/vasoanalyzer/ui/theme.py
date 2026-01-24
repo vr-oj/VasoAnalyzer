@@ -3,7 +3,10 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
+import base64
 import contextlib
+import inspect
+import logging
 import re
 import subprocess
 import sys
@@ -11,9 +14,11 @@ from pathlib import Path
 from typing import cast
 
 from matplotlib import rcParams
-from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
+
+log = logging.getLogger(__name__)
 
 try:  # Optional helper used for locating packaged resources
     from utils import resource_path
@@ -195,6 +200,20 @@ def _derive_tooltip_bg(window_bg: QColor, is_dark: bool) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
+def _pick_contrast_color(color_str: str, *, light: str = "#FFFFFF", dark: str = "#111827") -> str:
+    """Pick a high-contrast color for a given background."""
+    color = QColor(color_str)
+    if not color.isValid():
+        return light
+    return light if color.lightness() < 128 else dark
+
+
+def _svg_data_uri(svg: str) -> str:
+    """Return a data URI for an SVG payload."""
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
 # -----------------------------------------------------------------------------
 # OS Palette Extraction
 # -----------------------------------------------------------------------------
@@ -340,27 +359,7 @@ QComboBox:focus {
     border: 1px solid palette(highlight);
 }
 
-/* Checkboxes and radio buttons: clearer indicators */
-QCheckBox::indicator,
-QRadioButton::indicator {
-    width: 14px;
-    height: 14px;
-    border-radius: 2px;
-    border: 1px solid palette(mid);
-    background-color: palette(base);
-}
-
-QCheckBox::indicator:checked,
-QRadioButton::indicator:checked {
-    background-color: palette(highlight);
-    border-color: palette(highlight);
-}
-
-/* Hover state for indicators */
-QCheckBox::indicator:hover,
-QRadioButton::indicator:hover {
-    border-color: palette(dark);
-}
+/* Indicator visuals are applied in the theme-aware indicator stylesheet. */
 
 /* Group boxes: use OS palette borders */
 QGroupBox {
@@ -428,6 +427,146 @@ QPushButton:disabled,
 QToolButton:disabled {
     color: #7a7f87;
 }
+"""
+
+
+def _build_indicator_qss(theme: dict) -> str:
+    """Build theme-aware QSS for checkbox and radio indicators."""
+    indicator_size = 16
+    base_bg = theme.get("plot_bg", theme.get("table_bg", "#FFFFFF"))
+    hover_bg = theme.get("table_hover", theme.get("alternate_bg", base_bg))
+    border_color = theme.get("panel_border", theme.get("grid_color", "#D1D5DB"))
+    accent_bg = theme.get("accent_fill", theme.get("selection_bg", "#2563EB"))
+    accent_border = theme.get("accent", accent_bg)
+    disabled_bg = theme.get("grid_color", border_color)
+    disabled_border = theme.get("grid_color", border_color)
+    text_color = theme.get("text", "#111827")
+    disabled_check = theme.get("text_disabled", _pick_contrast_color(disabled_bg))
+
+    check_color = _pick_contrast_color(accent_bg)
+    check_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M12.2 4.3L6.7 11.7L3.8 8.8" fill="none" '
+        f'stroke="{check_color}" stroke-width="2.4" stroke-linecap="round" '
+        'stroke-linejoin="round"/></svg>'
+    )
+    check_disabled_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M12.2 4.3L6.7 11.7L3.8 8.8" fill="none" '
+        f'stroke="{disabled_check}" stroke-width="2.4" stroke-linecap="round" '
+        'stroke-linejoin="round"/></svg>'
+    )
+    dash_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M4 8H12" fill="none" stroke="{check_color}" '
+        'stroke-width="2.6" stroke-linecap="round"/></svg>'
+    )
+    dash_disabled_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M4 8H12" fill="none" stroke="{disabled_check}" '
+        'stroke-width="2.6" stroke-linecap="round"/></svg>'
+    )
+
+    check_url = _svg_data_uri(check_svg)
+    check_disabled_url = _svg_data_uri(check_disabled_svg)
+    dash_url = _svg_data_uri(dash_svg)
+    dash_disabled_url = _svg_data_uri(dash_disabled_svg)
+
+    return f"""
+QCheckBox,
+QRadioButton {{
+    spacing: 6px;
+    color: {text_color};
+}}
+
+QCheckBox::indicator,
+QRadioButton::indicator,
+QTreeView::indicator,
+QTableView::indicator,
+QListView::indicator {{
+    width: {indicator_size}px;
+    height: {indicator_size}px;
+    border: 2px solid {border_color};
+    background-color: {base_bg};
+}}
+
+QCheckBox::indicator {{
+    border-radius: 3px;
+}}
+
+QRadioButton::indicator {{
+    border-radius: {indicator_size // 2}px;
+}}
+
+QCheckBox::indicator:hover,
+QRadioButton::indicator:hover,
+QTreeView::indicator:hover,
+QTableView::indicator:hover,
+QListView::indicator:hover {{
+    border-color: {accent_border};
+    background-color: {hover_bg};
+}}
+
+QCheckBox::indicator:checked,
+QRadioButton::indicator:checked,
+QTreeView::indicator:checked,
+QTableView::indicator:checked,
+QListView::indicator:checked {{
+    background-color: {accent_bg};
+    border-color: {accent_border};
+    image: url("{check_url}");
+}}
+
+QCheckBox::indicator:checked:hover,
+QRadioButton::indicator:checked:hover,
+QTreeView::indicator:checked:hover,
+QTableView::indicator:checked:hover,
+QListView::indicator:checked:hover {{
+    background-color: {accent_bg};
+    border-color: {accent_border};
+    image: url("{check_url}");
+}}
+
+QCheckBox::indicator:indeterminate,
+QTreeView::indicator:indeterminate,
+QTableView::indicator:indeterminate,
+QListView::indicator:indeterminate {{
+    background-color: {accent_bg};
+    border-color: {accent_border};
+    image: url("{dash_url}");
+}}
+
+QCheckBox::indicator:disabled,
+QRadioButton::indicator:disabled,
+QTreeView::indicator:disabled,
+QTableView::indicator:disabled,
+QListView::indicator:disabled {{
+    background-color: {disabled_bg};
+    border-color: {disabled_border};
+}}
+
+QCheckBox::indicator:checked:disabled,
+QRadioButton::indicator:checked:disabled,
+QTreeView::indicator:checked:disabled,
+QTableView::indicator:checked:disabled,
+QListView::indicator:checked:disabled {{
+    background-color: {disabled_bg};
+    border-color: {disabled_border};
+    image: url("{check_disabled_url}");
+}}
+
+QCheckBox::indicator:indeterminate:disabled,
+QTreeView::indicator:indeterminate:disabled,
+QTableView::indicator:indeterminate:disabled,
+QListView::indicator:indeterminate:disabled {{
+    background-color: {disabled_bg};
+    border-color: {disabled_border};
+    image: url("{dash_disabled_url}");
+}}
 """
 
 LIGHT_THEME = {
@@ -794,6 +933,7 @@ def _build_complete_stylesheet(theme: dict) -> str:
 
     complete_qss += "\n" + DARK_WIDGET_CONTRAST_QSS
     complete_qss += "\n" + UI_INTERACTION_CONTRACT_QSS
+    complete_qss += "\n" + _build_indicator_qss(theme)
     return complete_qss
 
 
@@ -869,3 +1009,101 @@ def apply_theme_from_settings() -> str:
         refresh_theme_from_os()
         _apply_theme(CURRENT_THEME)
         return "system"
+
+
+# -----------------------------------------------------------------------------
+# Theme Broadcast + Refresh
+# -----------------------------------------------------------------------------
+
+
+class ThemeManager(QObject):
+    """Central theme broadcaster for runtime theme changes."""
+
+    themeChanged = pyqtSignal(str)
+
+
+_THEME_MANAGER: ThemeManager | None = None
+
+
+def get_theme_manager() -> ThemeManager:
+    """Return the singleton ThemeManager instance."""
+    global _THEME_MANAGER
+    if _THEME_MANAGER is None:
+        _THEME_MANAGER = ThemeManager()
+    return _THEME_MANAGER
+
+
+def _call_apply_theme_hook(widget, mode: str) -> None:
+    apply_hook = getattr(widget, "apply_theme", None)
+    if not callable(apply_hook):
+        return
+
+    try:
+        signature = inspect.signature(apply_hook)
+    except (TypeError, ValueError):
+        try:
+            apply_hook(mode)
+        except Exception:
+            with contextlib.suppress(Exception):
+                apply_hook()
+        return
+
+    params = list(signature.parameters.values())
+    try:
+        if not params:
+            apply_hook()
+            return
+
+        first = params[0]
+        if first.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            apply_hook(mode)
+        elif first.kind == inspect.Parameter.KEYWORD_ONLY:
+            if "mode" in signature.parameters:
+                apply_hook(mode=mode)
+            else:
+                apply_hook()
+        else:
+            apply_hook()
+    except Exception:
+        log.exception("Theme apply hook failed for %r", widget)
+
+
+def _refresh_top_level_widgets(mode: str) -> int:
+    app = QApplication.instance()
+    if app is None:
+        return 0
+
+    widgets = app.topLevelWidgets()
+    log.info(
+        "Theme changed: %s - refreshing %d top-level widgets",
+        mode,
+        len(widgets),
+    )
+
+    for widget in widgets:
+        with contextlib.suppress(Exception):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
+        _call_apply_theme_hook(widget, mode)
+
+    with contextlib.suppress(Exception):
+        app.processEvents()
+    return len(widgets)
+
+
+def apply_theme(mode: str, *, persist: bool = True) -> str:
+    """Apply theme mode and refresh all visible widgets."""
+    scheme = set_theme_mode(mode, persist=persist)
+
+    _refresh_top_level_widgets(scheme)
+
+    manager = get_theme_manager()
+    with contextlib.suppress(Exception):
+        manager.themeChanged.emit(scheme)
+
+    return scheme

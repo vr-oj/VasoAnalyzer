@@ -46,7 +46,7 @@ class PyQtGraphSettingsDialog(QDialog):
     - Per-track visibility and Y-axis scaling
     - Grid on/off toggle
     - Hover tooltip enable/precision
-    - Event labels enable/numbers-only
+    - Trace-embedded event text labels toggle
 
     No publication-style customization (fonts, colors, line styling, etc.)
     """
@@ -173,14 +173,13 @@ class PyQtGraphSettingsDialog(QDialog):
         group = QGroupBox("Event Labels")
         form = QFormLayout(group)
 
-        self.event_labels_enabled_cb = QCheckBox("Show Event Labels")
-        self.event_labels_enabled_cb.setChecked(True)
-        form.addRow("", self.event_labels_enabled_cb)
-
-        self.event_show_numbers_cb = QCheckBox("Show Numbers Only")
-        self.event_show_numbers_cb.setChecked(True)
-        self.event_show_numbers_cb.setToolTip("Display only event numbers instead of full text")
-        form.addRow("", self.event_show_numbers_cb)
+        self.event_text_labels_cb = QCheckBox("Show event text labels on trace")
+        self.event_text_labels_cb.setChecked(False)
+        self.event_text_labels_cb.setToolTip(
+            "Display full event labels directly on the trace as vertical text. "
+            "Event numbers in the event lane are unchanged."
+        )
+        form.addRow("", self.event_text_labels_cb)
 
         return group
 
@@ -261,12 +260,9 @@ class PyQtGraphSettingsDialog(QDialog):
             self.tooltip_enabled_cb.setChecked(tooltip_enabled)
             self.tooltip_precision.setValue(tooltip_precision)
 
-            # Event labels
+            # Event labels on trace (text only)
             event_enabled = self.plot_host.event_labels_visible()
-            options = self.plot_host.event_label_options()
-            show_numbers_only = getattr(options, "show_numbers_only", False)
-            self.event_labels_enabled_cb.setChecked(bool(event_enabled))
-            self.event_show_numbers_cb.setChecked(bool(show_numbers_only))
+            self.event_text_labels_cb.setChecked(bool(event_enabled))
 
         except Exception as e:
             log.warning(f"Could not load current settings: {e}")
@@ -303,7 +299,7 @@ class PyQtGraphSettingsDialog(QDialog):
             # Apply tooltips
             self._apply_hover_tooltips()
 
-            # Apply event labels (only enabled/numbers-only)
+            # Apply trace-embedded event text labels
             self._apply_event_label_settings()
 
             # Notify parent window
@@ -351,13 +347,10 @@ class PyQtGraphSettingsDialog(QDialog):
             log.error(f"Failed to apply tooltip settings: {e}", exc_info=True)
 
     def _apply_event_label_settings(self):
-        """Apply minimal event label settings (enabled + numbers-only)."""
+        """Apply trace-embedded event text label settings."""
         try:
-            enabled = self.event_labels_enabled_cb.isChecked()
-            show_numbers_only = self.event_show_numbers_cb.isChecked()
-
+            enabled = self.event_text_labels_cb.isChecked()
             self.plot_host.set_event_labels_visible(enabled)
-            self.plot_host.set_event_base_style(show_numbers_only=show_numbers_only)
 
         except Exception as e:
             log.error(f"Failed to apply event label settings: {e}", exc_info=True)

@@ -31,6 +31,31 @@ class PyQtGraphEventStripTrack:
         self._options: LayoutOptionsV3 | None = None
         self._last_signature: tuple | None = None
 
+        def _mute_axis(axis, *, height: float | None = None) -> None:
+            if axis is None:
+                return
+            try:
+                axis.setStyle(showValues=False, tickLength=0)
+            except Exception:
+                pass
+            try:
+                axis.setLabel("")
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                axis.setTicks([])
+            with contextlib.suppress(Exception):
+                axis.label.hide()
+                axis.showLabel(False)
+            transparent = pg.mkPen((0, 0, 0, 0))
+            with contextlib.suppress(Exception):
+                axis.setPen(transparent)
+            with contextlib.suppress(Exception):
+                axis.setTextPen(transparent)
+            if height is not None:
+                with contextlib.suppress(Exception):
+                    axis.setHeight(height)
+
         vb = self._plot_item.getViewBox()
         vb.setYRange(0.0, 1.0, padding=0.0)
         vb.disableAutoRange(axis=pg.ViewBox.XAxis)
@@ -44,8 +69,10 @@ class PyQtGraphEventStripTrack:
             pass
         self._plot_item.hideButtons()
 
-        self._plot_item.hideAxis("left")
-        self._plot_item.hideAxis("bottom")
+        self._plot_item.showAxis("left")
+        self._plot_item.showAxis("bottom")
+        _mute_axis(self._plot_item.getAxis("left"))
+        _mute_axis(self._plot_item.getAxis("bottom"), height=0)
         self._plot_item.showGrid(x=False, y=False)
         # Match app theme background - use plot_bg for white content area
         bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
@@ -103,7 +130,6 @@ class PyQtGraphEventStripTrack:
                 and theme_text.lower() != "#000000"
             ):
                 color_default = theme_text
-            show_numbers_only = bool(getattr(options, "show_numbers_only", False))
             font = None
             try:
                 from PyQt5.QtGui import QFont
@@ -126,9 +152,6 @@ class PyQtGraphEventStripTrack:
                     meta_color = entry.meta.get("color") or entry.meta.get("event_color")
                 color = meta_color or color_default
                 label_text = str(entry.index)
-                text_val = getattr(entry, "text", None)
-                if not show_numbers_only and text_val and str(text_val).strip():
-                    label_text = str(text_val)
 
                 # Short vertical tick (bottom to just below the label)
                 y_bottom = 0.0

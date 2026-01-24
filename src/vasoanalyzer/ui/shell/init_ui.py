@@ -200,17 +200,13 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         if controls is not None:
             # Aliases for legacy attribute access in main_window.
             window.snapshot_controls = controls
-            window.prev_frame_btn = controls.prev_button
+            window.prev_frame_btn = controls.start_button
             window.play_pause_btn = controls.play_button
-            window.next_frame_btn = controls.next_button
-            window.slider = controls.slider
-            window.snapshot_time_label = controls.frame_label
+            window.next_frame_btn = controls.end_button
+            window.slider = controls.scrub_bar
+            window.snapshot_time_label = controls.time_label
             window.snapshot_speed_label = controls.speed_label
-            window.snapshot_speed_input = controls.speed_input
-            window.snapshot_speed_units_label = controls.speed_units_label
-            window.snapshot_sync_checkbox = controls.sync_checkbox
-            window.snapshot_loop_checkbox = controls.loop_checkbox
-            window.snapshot_sync_label = controls.sync_label
+            window.snapshot_speed_combo = controls.speed_combo
 
         controller = getattr(viewer, "controller", None)
         if controller is not None:
@@ -225,10 +221,12 @@ def init_ui(window: VasoAnalyzerApp) -> None:
             viewer.set_sync_enabled(bool(getattr(window, "snapshot_sync_enabled", True)))
         with contextlib.suppress(Exception):
             viewer.set_loop(bool(getattr(window, "snapshot_loop_enabled", True)))
+        with contextlib.suppress(Exception):
+            viewer.set_speed_multiplier(
+                float(getattr(window, "snapshot_speed_multiplier", 1.0))
+            )
         if controls is not None:
-            controls.pps_changed.connect(window.on_snapshot_speed_changed)
-            controls.sync_toggled.connect(window.on_snapshot_sync_toggled)
-            controls.loop_toggled.connect(window.on_snapshot_loop_toggled)
+            controls.speedChanged.connect(window.on_snapshot_speed_changed)
 
     window.metadata_panel = QFrame()
     window.metadata_panel.setObjectName("MetadataPanel")
@@ -357,12 +355,16 @@ QFrame#SnapshotCard, QFrame#TableCard {{
     border: 1px solid {panel_border};
     border-radius: {panel_radius}px;
 }}
-QWidget#SnapshotControls {{
+QFrame#TiffViewerHeader {{
+    background: transparent;
+    border: none;
+}}
+QWidget#TiffTransportBar {{
     background: {panel_bg};
     border: 1px solid {panel_border};
     border-radius: {panel_radius}px;
 }}
-QWidget#SnapshotControls QToolButton {{
+QWidget#TiffTransportBar QToolButton {{
     background: {button_bg};
     border: 1px solid {panel_border};
     border-radius: {panel_radius}px;
@@ -370,35 +372,37 @@ QWidget#SnapshotControls QToolButton {{
     min-height: 30px;
     padding: 0px;
 }}
-QWidget#SnapshotControls QToolButton:hover {{
+QWidget#TiffTransportBar QToolButton:hover {{
     background: {button_hover};
 }}
-QWidget#SnapshotControls QToolButton:pressed,
-QWidget#SnapshotControls QToolButton:checked {{
+QWidget#TiffTransportBar QToolButton:pressed,
+QWidget#TiffTransportBar QToolButton:checked {{
     background: {button_active};
 }}
-QWidget#SnapshotControls QToolButton:disabled {{
+QWidget#TiffTransportBar QToolButton:disabled {{
     background: {panel_bg};
     border-color: {panel_border};
     color: {status_color};
 }}
-QWidget#SnapshotControls QDoubleSpinBox#SnapshotSpeedInput {{
-    background: {button_bg};
-    border: 1px solid {panel_border};
-    border-radius: {panel_radius}px;
-    padding: 2px 6px;
-    min-height: 26px;
+QWidget#TiffTransportBar QComboBox#SnapshotSpeedCombo {{
+    background: transparent;
+    border: none;
+    padding: 2px 4px;
+    min-height: 22px;
     font-size: 11px;
+    color: {text_color};
 }}
 QLabel#SnapshotSpeedLabel,
-QLabel#SnapshotSpeedUnitsLabel,
-QLabel#SnapshotSyncLabel {{
+QLabel#SnapshotTimeLabel {{
     color: {status_color};
     font-size: 10px;
 }}
+QLabel#SnapshotTimeLabel {{
+    font-family: Menlo, Consolas, "Courier New", monospace;
+}}
 QLabel#SnapshotStatusLabel {{
     color: {status_color};
-    font-size: 11px;
+    font-size: 10px;
 }}
 QLabel#SnapshotSubsampleLabel {{
     background: {hover_bg};

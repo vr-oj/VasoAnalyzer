@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 from typing import Protocol
 
 from PyQt5.QtCore import QSettings, Qt, pyqtSignal
@@ -21,6 +22,9 @@ from PyQt5.QtWidgets import (
 
 from utils.config import APP_VERSION
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
+
 
 class _HomeWindowProtocol(Protocol):
     def _brand_icon_path(self, extension: str) -> str: ...
@@ -707,3 +711,12 @@ QWidget#HomeRecentRow:hover {{
         # Force widget refresh to pick up new colors
         self.update()
         QApplication.processEvents()
+
+    def apply_theme(self, mode: str | None = None) -> None:
+        """Apply the current theme tokens to the Home page."""
+        log.debug(
+            "[THEME-DEBUG] HomePage.apply_theme called, mode=%r, id(self)=%s",
+            mode,
+            id(self),
+        )
+        self._apply_stylesheet()

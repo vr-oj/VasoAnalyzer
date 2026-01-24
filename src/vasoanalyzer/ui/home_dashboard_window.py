@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import TYPE_CHECKING, Callable
@@ -18,13 +19,15 @@ from PyQt5.QtWidgets import (
 
 from vasoanalyzer.ui.dialogs.welcome_dialog import WelcomeGuideDialog
 from vasoanalyzer.ui.panels.home_page import HomePage
-from vasoanalyzer.ui.theme import CURRENT_THEME
+from vasoanalyzer.ui.theme import CURRENT_THEME, get_theme_manager
 
 if TYPE_CHECKING:  # pragma: no cover
     from vasoanalyzer.app.window_manager import WindowManager
 
 ONBOARDING_SETTINGS_ORG = "VasoAnalyzer"
 ONBOARDING_SETTINGS_APP = "VasoAnalyzer"
+
+log = logging.getLogger(__name__)
 
 
 def _onboarding_needed(settings: QSettings) -> bool:
@@ -67,11 +70,27 @@ class HomeDashboardWindow(QMainWindow):
             self._window_manager.create_new_project_via_dialog
         )
         self.setCentralWidget(self.home_page)
+        theme_manager = get_theme_manager()
+        theme_manager.themeChanged.connect(self.apply_theme)
 
         self.load_recent_files()
         self.load_recent_projects()
         self.refresh_recent()
         self.update_resume_state()
+
+    def apply_theme(self, mode: str | None = None) -> None:
+        log.debug(
+            "[THEME-DEBUG] HomeDashboardWindow.apply_theme called, mode=%r, id(self)=%s",
+            mode,
+            id(self),
+        )
+        if hasattr(self, "home_page") and self.home_page is not None:
+            apply_theme = getattr(self.home_page, "apply_theme", None)
+            if callable(apply_theme):
+                apply_theme(mode)
+            else:
+                self.home_page._apply_stylesheet()
+        self.update()
 
     # ------------------------------------------------------------------
     def refresh_recent(self) -> None:

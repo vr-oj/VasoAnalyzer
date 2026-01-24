@@ -450,6 +450,11 @@ class EventMixin:
         else:
             self._clear_event_highlight()
 
+        if event_time is not None:
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "set_selected_event_index"):
+                plot_host.set_selected_event_index(row)
+
         frame_idx = self._frame_index_from_event_row(row)
         if frame_idx is None and event_time is not None:
             frame_idx = self._frame_index_for_time(event_time)
@@ -491,6 +496,8 @@ class EventMixin:
         if plot_host is not None:
             plot_host.highlight_event(None, visible=False)
             plot_host.set_event_highlight_alpha(self._event_highlight_base_alpha)
+            if hasattr(plot_host, "set_selected_event_index"):
+                plot_host.set_selected_event_index(None)
 
     def _on_event_highlight_tick(self) -> None:
         plot_host = getattr(self, "plot_host", None)

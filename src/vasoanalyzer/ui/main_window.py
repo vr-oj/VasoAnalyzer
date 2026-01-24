@@ -173,11 +173,7 @@ from vasoanalyzer.ui.controllers.selection_sync import event_time_for_row, pick_
 from vasoanalyzer.ui.point_editor_view import PointEditorDialog
 from vasoanalyzer.ui.scope_view import ScopeDock
 from vasoanalyzer.ui.tiff_viewer_v2 import TiffStackViewerWidget
-from vasoanalyzer.ui.theme import (
-    CURRENT_THEME,
-    css_rgba_to_mpl,
-    set_theme_mode,
-)
+from vasoanalyzer.ui.theme import CURRENT_THEME, css_rgba_to_mpl, get_theme_manager
 from vasoanalyzer.ui.time_scrollbar import (
     TIME_SCROLLBAR_SCALE,
     compute_scrollbar_state,
@@ -212,6 +208,7 @@ _TIME_SYNC_DEBUG = bool(os.getenv("VA_TIME_SYNC_DEBUG"))
 _TIFF_PROMPT_THRESHOLD = 1000
 _TIFF_REDUCED_TARGET_FRAMES = 400
 _CLIP_MIME = "application/x-vaso-datasets"
+DEFAULT_INITIAL_VIEW_SECONDS = 1800.0
 
 
 def _log_time_sync(label: str, **fields) -> None:
@@ -741,6 +738,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.page_float = 0.0
         self._snapshot_pps_default = self._resolve_snapshot_pps_default()
         self.snapshot_pps = float(self._snapshot_pps_default)
+        self.snapshot_speed_multiplier = 1.0
         self.snapshot_sync_enabled = True
         self.snapshot_loop_enabled = True
         self._snapshot_play_start_wall_time: float | None = None
@@ -997,6 +995,9 @@ class VasoAnalyzerApp(QMainWindow):
             and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
         ):
             self.check_for_updates_at_startup()
+
+        theme_manager = get_theme_manager()
+        theme_manager.themeChanged.connect(self.apply_theme)
 
         QTimer.singleShot(0, self._maybe_run_onboarding)
 
@@ -8112,7 +8113,7 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "excel_action"):
             self.excel_action.setIcon(QIcon(self.icon_path("excel-mapper.svg")))
 
-    def apply_theme(self, mode: str, *, persist: bool = True) -> None:
+    def apply_theme(self, mode: str, *, persist: bool = False) -> None:
         """Apply light or dark theme at runtime and refresh all UI widgets."""
         log.debug(
             "[THEME-DEBUG] App.apply_theme called with mode=%r, persist=%s, id(self)=%s",
@@ -8126,17 +8127,22 @@ class VasoAnalyzerApp(QMainWindow):
         if scheme in ("system", "auto"):
             scheme = "light"
 
-        try:
-            set_theme_mode(scheme, persist=persist)
-        except Exception:
+        if persist:
+            try:
+                from vasoanalyzer.ui import theme as theme_module
+
+                theme_module.apply_theme(scheme, persist=True)
+            except Exception:
+                return
             return
+
         self._active_theme_mode = scheme
         current_name = (
             CURRENT_THEME.get("name")
             if isinstance(CURRENT_THEME, dict)
             else CURRENT_THEME
         )
-        log.debug("[THEME-DEBUG] After set_theme_mode, CURRENT_THEME=%r", current_name)
+        log.debug("[THEME-DEBUG] CURRENT_THEME=%r", current_name)
 
         self._update_theme_action_checks(self._active_theme_mode)
         self._update_action_icons()
@@ -8146,7 +8152,11 @@ class VasoAnalyzerApp(QMainWindow):
             apply_data_page_style()
 
         if hasattr(self, "home_page") and self.home_page is not None:
-            self.home_page._apply_stylesheet()
+            apply_theme = getattr(self.home_page, "apply_theme", None)
+            if callable(apply_theme):
+                apply_theme(scheme)
+            else:
+                self.home_page._apply_stylesheet()
 
         if hasattr(self, "event_table") and self.event_table is not None:
             apply_theme = getattr(self.event_table, "apply_theme", None)
@@ -11239,7 +11249,7 @@ QPushButton[isGhost="true"]:pressed {{
             next_btn = getattr(self, "next_frame_btn", None)
             play_btn = getattr(self, "play_pause_btn", None)
             speed_label = getattr(self, "snapshot_speed_label", None)
-            speed_input = getattr(self, "snapshot_speed_input", None)
+            speed_combo = getattr(self, "snapshot_speed_combo", None)
             if prev_btn is not None:
                 prev_btn.setEnabled(True)
             if next_btn is not None:
@@ -11248,16 +11258,8 @@ QPushButton[isGhost="true"]:pressed {{
                 play_btn.setEnabled(True)
             if speed_label is not None:
                 speed_label.setEnabled(True)
-            if speed_input is not None:
-                speed_input.setEnabled(True)
-            speed_units = getattr(self, "snapshot_speed_units_label", None)
-            if speed_units is not None:
-                speed_units.setEnabled(True)
-            if getattr(self, "snapshot_sync_checkbox", None) is not None:
-                self._update_snapshot_sync_toggle()
-            loop_checkbox = getattr(self, "snapshot_loop_checkbox", None)
-            if loop_checkbox is not None:
-                loop_checkbox.setEnabled(True)
+            if speed_combo is not None:
+                speed_combo.setEnabled(True)
             self._set_playback_state(False)
             self.update_snapshot_size()
             self._clear_slider_markers()
@@ -11711,7 +11713,7 @@ QPushButton[isGhost="true"]:pressed {{
             next_btn = getattr(self, "next_frame_btn", None)
             play_btn = getattr(self, "play_pause_btn", None)
             speed_label = getattr(self, "snapshot_speed_label", None)
-            speed_input = getattr(self, "snapshot_speed_input", None)
+            speed_combo = getattr(self, "snapshot_speed_combo", None)
             if prev_btn is not None:
                 prev_btn.setEnabled(True)
             if next_btn is not None:
@@ -11720,16 +11722,8 @@ QPushButton[isGhost="true"]:pressed {{
                 play_btn.setEnabled(True)
             if speed_label is not None:
                 speed_label.setEnabled(True)
-            if speed_input is not None:
-                speed_input.setEnabled(True)
-            speed_units = getattr(self, "snapshot_speed_units_label", None)
-            if speed_units is not None:
-                speed_units.setEnabled(True)
-            if getattr(self, "snapshot_sync_checkbox", None) is not None:
-                self._update_snapshot_sync_toggle()
-            loop_checkbox = getattr(self, "snapshot_loop_checkbox", None)
-            if loop_checkbox is not None:
-                loop_checkbox.setEnabled(True)
+            if speed_combo is not None:
+                speed_combo.setEnabled(True)
             self._set_playback_state(False)
             self._update_snapshot_sampling_badge()
             self._update_snapshot_rotation_controls()
@@ -12048,7 +12042,7 @@ QPushButton[isGhost="true"]:pressed {{
         if label is None:
             return
         if total <= 0:
-            label.setText("Frame 0 / 0")
+            label.setText("No TIFF loaded")
             return
 
         frame_number = idx + 1
@@ -12068,6 +12062,22 @@ QPushButton[isGhost="true"]:pressed {{
                 timestamp = idx * float(self.recording_interval)
             except (TypeError, ValueError):
                 timestamp = None
+        total_time = None
+        if self.frame_trace_time is not None and len(self.frame_trace_time):
+            try:
+                total_time = float(self.frame_trace_time[-1])
+            except (TypeError, ValueError):
+                total_time = None
+        elif self.frame_times:
+            try:
+                total_time = float(self.frame_times[-1])
+            except (TypeError, ValueError):
+                total_time = None
+        elif self.recording_interval:
+            try:
+                total_time = float(total - 1) * float(self.recording_interval)
+            except (TypeError, ValueError):
+                total_time = None
         info = self.snapshot_loading_info or {}
         if not isinstance(info, Mapping):
             info = {}
@@ -12084,10 +12094,14 @@ QPushButton[isGhost="true"]:pressed {{
             stride_text = self._format_stride_label(int(stride))
             suffix = f" (from original {int(original_total)} frames, {stride_text})"
 
+        frame_text = f"Frame {frame_number} / {total}{suffix}"
         if timestamp is None:
-            text = f"Frame {frame_number} / {total}{suffix}"
+            text = frame_text
         else:
-            text = f"Frame {frame_number} / {total}{suffix} @ {timestamp:.2f} s"
+            if total_time is not None and math.isfinite(total_time):
+                text = f"{frame_text}   {timestamp:.2f} s / {total_time:.2f} s"
+            else:
+                text = f"{frame_text}   {timestamp:.2f} s"
         label.setText(text)
 
     def _update_metadata_display(self, idx: int) -> None:
@@ -12162,18 +12176,18 @@ QPushButton[isGhost="true"]:pressed {{
 
     def on_snapshot_speed_changed(self, value: float) -> None:
         try:
-            speed = float(value)
+            multiplier = float(value)
         except (TypeError, ValueError):
-            speed = getattr(self, "_snapshot_pps_default", 30.0)
+            multiplier = 1.0
 
-        if not math.isfinite(speed) or speed <= 0:
-            speed = getattr(self, "_snapshot_pps_default", 30.0)
+        if not math.isfinite(multiplier) or multiplier <= 0:
+            multiplier = 1.0
 
-        self.snapshot_pps = speed
+        self.snapshot_speed_multiplier = multiplier
         viewer = getattr(self, "snapshot_widget", None)
         if viewer is not None:
             with contextlib.suppress(Exception):
-                viewer.set_pps(speed)
+                viewer.set_speed_multiplier(multiplier)
 
     def on_snapshot_sync_toggled(self, checked: bool) -> None:
         self.snapshot_sync_enabled = bool(checked)
@@ -12194,18 +12208,25 @@ QPushButton[isGhost="true"]:pressed {{
 
     def _reset_snapshot_speed(self) -> None:
         self.snapshot_pps = float(getattr(self, "_snapshot_pps_default", 30.0))
+        self.snapshot_speed_multiplier = 1.0
 
-        if hasattr(self, "snapshot_speed_input"):
-            self.snapshot_speed_input.blockSignals(True)
-            self.snapshot_speed_input.setValue(
-                max(1.0, min(float(self.snapshot_pps), 120.0))
-            )
-            self.snapshot_speed_input.blockSignals(False)
+        if hasattr(self, "snapshot_speed_combo"):
+            combo = getattr(self, "snapshot_speed_combo", None)
+            if combo is not None:
+                combo.blockSignals(True)
+                for idx in range(combo.count()):
+                    data = combo.itemData(idx)
+                    if isinstance(data, (int, float)) and abs(float(data) - 1.0) < 0.01:
+                        combo.setCurrentIndex(idx)
+                        break
+                combo.blockSignals(False)
 
         viewer = getattr(self, "snapshot_widget", None)
         if viewer is not None:
             with contextlib.suppress(Exception):
                 viewer.set_pps(self.snapshot_pps)
+            with contextlib.suppress(Exception):
+                viewer.set_speed_multiplier(self.snapshot_speed_multiplier)
 
     def _resolve_snapshot_pps_default(self) -> float:
         default_pps = 30.0
@@ -12997,6 +13018,69 @@ QPushButton[isGhost="true"]:pressed {{
             return
         self._load_events_from_path(file_path)
 
+    def _initial_time_window(self) -> tuple[float, float] | None:
+        full_range = self._trace_full_range()
+        if full_range is None:
+            return None
+
+        t0 = None
+        t1 = None
+        if isinstance(self.trace_time, np.ndarray) and self.trace_time.size:
+            t0 = float(self.trace_time[0])
+            t1 = float(self.trace_time[-1])
+        elif self.trace_model is not None:
+            time_full = getattr(self.trace_model, "time_full", None)
+            if isinstance(time_full, np.ndarray) and time_full.size:
+                t0 = float(time_full[0])
+                t1 = float(time_full[-1])
+
+        if t0 is None or t1 is None or not (math.isfinite(t0) and math.isfinite(t1)):
+            t0 = float(full_range[0])
+            t1 = float(full_range[1])
+        if not (math.isfinite(t0) and math.isfinite(t1)):
+            return None
+        if t1 < t0:
+            t0, t1 = t1, t0
+
+        span = t1 - t0
+        if span <= 0:
+            return (t0, t1)
+
+        window_end = t0 + DEFAULT_INITIAL_VIEW_SECONDS
+        if window_end > t1:
+            window_end = t1
+        return (t0, window_end)
+
+    def _reset_time_scrollbar_to_start(self) -> None:
+        slider = self.scroll_slider
+        if slider is None:
+            return
+        self.update_scroll_slider()
+        self._updating_time_scrollbar = True
+        blocker = QSignalBlocker(slider)
+        try:
+            slider.setValue(slider.minimum())
+        finally:
+            self._updating_time_scrollbar = False
+            del blocker
+
+    def _force_trace_start_view(self, window: tuple[float, float]) -> None:
+        if window is None:
+            return
+        t0, t1 = float(window[0]), float(window[1])
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "force_primary_xrange"):
+            self._set_xrange_source("load.start", (t0, t1))
+            plot_host.force_primary_xrange(t0, t1)
+        elif plot_host is not None and hasattr(plot_host, "set_time_window"):
+            self._set_xrange_source("load.start", (t0, t1))
+            plot_host.set_time_window(t0, t1)
+        elif self.ax is not None:
+            self.ax.set_xlim(t0, t1)
+            self.canvas.draw_idle()
+        self._last_x_window_width_s = float(t1 - t0)
+        self._reset_time_scrollbar_to_start()
+
     # [E] ========================= PLOTTING AND EVENT SYNC ============================
     def update_plot(self, track_limits: bool = True):
         t0 = time.perf_counter()
@@ -13059,21 +13143,21 @@ QPushButton[isGhost="true"]:pressed {{
                 self.zoom_dock.set_trace_model(self.trace_model)
             if self.scope_dock:
                 self.scope_dock.set_trace_model(self.trace_model)
+            initial_window = None
             if track_limits or prev_window is None:
-                # Default initial view: first 1800 seconds (30 minutes)
-                # This provides a useful detailed view instead of showing entire trace
-                full_range = self.trace_model.full_range
-                default_window_duration = 1800.0  # seconds
-                if full_range[1] - full_range[0] > default_window_duration:
-                    target_window = (full_range[0], full_range[0] + default_window_duration)
-                    log.info(
-                        "Initial load: showing first %.0f seconds of %.0f second trace",
-                        default_window_duration,
-                        full_range[1] - full_range[0],
-                    )
+                # Default initial view: first slice of the recording (start-aligned).
+                initial_window = self._initial_time_window()
+                if initial_window is not None:
+                    target_window = initial_window
+                    full_range = self.trace_model.full_range
+                    if full_range[1] - full_range[0] > DEFAULT_INITIAL_VIEW_SECONDS:
+                        log.info(
+                            "Initial load: showing first %.0f seconds of %.0f second trace",
+                            DEFAULT_INITIAL_VIEW_SECONDS,
+                            full_range[1] - full_range[0],
+                        )
                 else:
-                    # Short recording - show full range
-                    target_window = full_range
+                    target_window = self.trace_model.full_range
             else:
                 target_window = prev_window
             self.plot_host.set_time_window(*target_window)
@@ -13085,8 +13169,6 @@ QPushButton[isGhost="true"]:pressed {{
             # This was causing 9+ second load times for multi-track datasets.
             # if track_limits and prev_window is None:
             #     self.plot_host.autoscale_all()
-            self._refresh_zoom_window()
-
             self.trace_line = None
             self.inner_line = None
             if inner_track is not None:
@@ -13129,8 +13211,9 @@ QPushButton[isGhost="true"]:pressed {{
                     labels=self.event_labels,
                     label_meta=self.event_label_meta,
                 )
-                # Enable event label rendering (critical - without this labels stay hidden!)
-                self.plot_host.set_event_labels_visible(True)
+                # Enable event label rendering for matplotlib; PyQtGraph defaults to off.
+                if not self._plot_host_is_pyqtgraph():
+                    self.plot_host.set_event_labels_visible(True)
                 annotations = self.event_annotations or []
                 self._annotation_lane_visible = True
                 self.plot_host.set_annotation_entries(annotations)
@@ -13157,6 +13240,10 @@ QPushButton[isGhost="true"]:pressed {{
             self._apply_pending_pyqtgraph_track_state()
             self._refresh_trace_navigation_data()
             self.canvas.draw_idle()
+
+            if initial_window is not None:
+                self._force_trace_start_view(initial_window)
+            self._refresh_zoom_window()
 
             # Cache the current window for this dataset to avoid re-autoscaling on next load
             sample = getattr(self, "current_sample", None)
@@ -13450,6 +13537,7 @@ QPushButton[isGhost="true"]:pressed {{
                 }
             if track_state:
                 state["pyqtgraph_track_state"] = track_state
+            state["event_text_labels_on_trace"] = bool(plot_host.event_labels_visible())
             return state
 
         if self.ax is not None:
@@ -16122,20 +16210,26 @@ QPushButton[isGhost="true"]:pressed {{
             QFrame#SnapshotCard QLabel {{
                 color: {text};
             }}
-            QFrame#SnapshotCard QWidget#SnapshotControls {{
+            QFrame#SnapshotCard QFrame#TiffViewerHeader {{
+                background: transparent;
+                border: none;
+            }}
+            QFrame#SnapshotCard QWidget#TiffTransportBar {{
                 background: {panel_bg};
                 border: 1px solid {panel_border};
                 border-radius: {radius}px;
             }}
             QLabel#SnapshotSpeedLabel,
-            QLabel#SnapshotSpeedUnitsLabel,
-            QLabel#SnapshotSyncLabel {{
+            QLabel#SnapshotTimeLabel {{
                 color: {text};
                 font-size: 10px;
             }}
+            QLabel#SnapshotTimeLabel {{
+                font-family: Menlo, Consolas, "Courier New", monospace;
+            }}
             QLabel#SnapshotStatusLabel {{
-                color: {text};
-                font-size: 11px;
+                color: {status};
+                font-size: 10px;
             }}
             QLabel#SnapshotSubsampleLabel {{
                 background: {button_hover};
@@ -16143,24 +16237,6 @@ QPushButton[isGhost="true"]:pressed {{
                 border-radius: {radius}px;
                 padding: 2px 8px;
                 font-size: 11px;
-            }}
-            QFrame#SnapshotCard QSlider::groove:horizontal {{
-                background: {CURRENT_THEME.get("grid_color", "#cccccc")};
-                height: 5px;
-                border-radius: 3px;
-            }}
-            QFrame#SnapshotCard QSlider::handle:horizontal {{
-                background: {button_bg};
-                border: 1px solid {border};
-                width: 14px;
-                margin: -5px 0;
-                border-radius: 7px;
-            }}
-            QFrame#SnapshotCard QSlider::handle:horizontal:hover {{
-                background: {button_hover};
-            }}
-            QFrame#SnapshotCard QSlider::handle:horizontal:pressed {{
-                background: {button_active};
             }}
             QFrame#SnapshotCard QToolButton {{
                 background: {button_bg};
@@ -16183,13 +16259,13 @@ QPushButton[isGhost="true"]:pressed {{
                 border-color: {panel_border};
                 color: {status};
             }}
-            QFrame#SnapshotCard QDoubleSpinBox#SnapshotSpeedInput {{
-                background: {button_bg};
-                border: 1px solid {border};
-                border-radius: {radius}px;
-                padding: 2px 6px;
-                min-height: 26px;
+            QFrame#SnapshotCard QComboBox#SnapshotSpeedCombo {{
+                background: transparent;
+                border: none;
+                padding: 2px 4px;
+                min-height: 22px;
                 font-size: 11px;
+                color: {text};
             }}
         """
         )
@@ -16847,6 +16923,10 @@ QPushButton[isGhost="true"]:pressed {{
         pyqtgraph_tracks = state.get("pyqtgraph_track_state")
         if pyqtgraph_tracks:
             self._apply_pyqtgraph_track_state(pyqtgraph_tracks)
+        if is_pg and "event_text_labels_on_trace" in state:
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None:
+                plot_host.set_event_labels_visible(bool(state["event_text_labels_on_trace"]))
         # Restore trace visibility state
         if (
             "inner_trace_visible" in state

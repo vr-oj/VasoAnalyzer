@@ -18,11 +18,12 @@ from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
 from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
-from vasoanalyzer.ui.plots.pyqtgraph_event_labels import PyQtGraphEventLabeler
+from vasoanalyzer.ui.plots.pyqtgraph_event_marker_layer import (
+    PyQtGraphEventMarkerLayer,
+)
 from vasoanalyzer.ui.plots.pyqtgraph_style import (
     apply_selection_box_style,
     get_pyqtgraph_style,
-    make_event_pen,
     PLOT_AXIS_LABELS,
 )
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
@@ -99,7 +100,6 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self.outer_curve: pg.PlotDataItem | None = None
         self.inner_band: pg.FillBetweenItem | None = None
         self.outer_band: pg.FillBetweenItem | None = None
-        self.event_lines: list[pg.InfiniteLine] = []
         self._inner_band_min_curve: pg.PlotDataItem | None = None
         self._inner_band_max_curve: pg.PlotDataItem | None = None
         self._outer_band_min_curve: pg.PlotDataItem | None = None
@@ -108,10 +108,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Band visibility
         self._show_uncertainty_bands: bool = False
 
-        # Event labeling
-        self._event_labeler: PyQtGraphEventLabeler | None = None
+        # Event markers/labels
+        self._event_layer = PyQtGraphEventMarkerLayer(self._plot_item)
         self._event_entries: list[EventEntryV3] = []
         self._event_labels_visible: bool = False
+        self._event_layer.set_labels_visible(False)
 
         # Event line styling parameters
         style = get_pyqtgraph_style()
@@ -308,14 +309,19 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             self._event_line_width = float(event_style.width)
             self._event_line_style = event_style.style
             self._event_line_alpha = float(event_style.alpha)
-            pen = make_event_pen(event_style)
-            for line in self.event_lines:
-                line.setPen(pen)
+            self._event_layer.apply_theme()
+            self._event_layer.set_line_style(
+                width=self._event_line_width,
+                style=self._event_line_style,
+                color=self._event_line_color,
+                alpha=self._event_line_alpha,
+            )
 
     def apply_theme(self) -> None:
         """Public hook to refresh colors after a theme change."""
 
         self._apply_theme()
+        self._event_layer.apply_theme()
         with contextlib.suppress(Exception):
             apply_selection_box_style(self._view_box, get_pyqtgraph_style().selection_box)
         self._init_hover_label()
@@ -405,16 +411,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         meta: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         """Set event markers to display as vertical lines."""
-        # Clear existing event lines
-        for line in self.event_lines:
-            self._plot_item.removeItem(line)
-        self.event_lines.clear()
+        # Clear existing event markers/labels
+        self._event_layer.clear()
 
         if not times:
             # Clear event entries too
             self._event_entries.clear()
-            if self._event_labeler:
-                self._event_labeler.clear()
             return
 
         # Default event color
@@ -423,7 +425,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Create EventEntryV3 objects for labeling system
         self._event_entries.clear()
 
-        # Create infinite vertical lines for each event
+        # Create event entries for the marker layer
         for i, time in enumerate(times):
             # Determine color for this event
             color = colors[i] if colors is not None and i < len(colors) else default_color
@@ -432,25 +434,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             label_text = ""
             if labels is not None and i < len(labels):
                 label_text = labels[i]
-            if not label_text:
-                label_text = str(i + 1)
 
-            # Create vertical line with configured styling
-            qcolor = QColor(self._event_line_color)
-            qcolor.setAlphaF(self._event_line_alpha)
-            line = pg.InfiniteLine(
-                pos=time,
-                angle=90,
-                pen=pg.mkPen(
-                    color=qcolor,
-                    width=self._event_line_width,
-                    style=self._event_line_style,
-                ),
-                movable=False,
-            )
-            line.setZValue(5)  # Draw above traces
-
-            # Store label for event labeler (always create entry for numeric mode)
+            # Store label metadata for the marker layer
             meta_payload: dict[str, Any] = {}
             if meta is not None and i < len(meta):
                 candidate = meta[i]
@@ -459,20 +444,18 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             meta_payload.setdefault("event_color", color)
             event_entry = EventEntryV3(
                 t=time,
-                text=label_text or "",
+                text=str(label_text or ""),
                 meta=meta_payload,
                 index=i + 1,  # 1-indexed for display
             )
             self._event_entries.append(event_entry)
 
-            self._plot_item.addItem(line)
-            self.event_lines.append(line)
+        self._event_layer.set_events(self._event_entries)
 
-        # Update event labels if labeler exists and is visible
-        if self._event_labeler and self._event_labels_visible and self._event_entries:
+        if self._event_labels_visible and self._event_entries:
             xlim = self.get_xlim()
             pixel_width = max(int(self._plot_widget.width()), 400)
-            self._event_labeler.render(self._event_entries, xlim, pixel_width)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
 
     def update_window(self, x0: float, x1: float, *, pixel_width: int | None = None) -> None:
         """Update the visible time window with LOD selection."""
@@ -497,9 +480,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Update visible event markers (hide events outside window)
         self._update_event_visibility(x0, x1)
 
-        if self._event_labeler and self._event_labels_visible and self._event_entries:
-            xlim = (x0, x1)
-            self._event_labeler.render(self._event_entries, xlim, pixel_width)
+        if self._event_labels_visible and self._event_entries:
+            self._event_layer.refresh_for_view(x0, x1, pixel_width)
 
     def _apply_window(self, window: TraceWindow) -> None:
         """Apply windowed data to plot curves."""
@@ -946,12 +928,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if alpha is not None:
             self._event_line_alpha = float(alpha)
 
-        # Update existing event lines
-        for line in self.event_lines:
-            qcolor = QColor(self._event_line_color)
-            qcolor.setAlphaF(self._event_line_alpha)
-            pen = pg.mkPen(color=qcolor, width=self._event_line_width, style=self._event_line_style)
-            line.setPen(pen)
+        self._event_layer.set_line_style(
+            width=self._event_line_width,
+            style=self._event_line_style,
+            color=self._event_line_color,
+            alpha=self._event_line_alpha,
+        )
 
     def apply_style(self, style: dict[str, Any]) -> None:
         """Apply visual styling to the renderer.
@@ -986,15 +968,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Update event line colors
         if "event_line_color" in style:
             self._event_line_color = style["event_line_color"]
-            qcolor = QColor(self._event_line_color)
-            qcolor.setAlphaF(self._event_line_alpha)
-            for line in self.event_lines:
-                pen = pg.mkPen(
-                    color=qcolor,
-                    width=self._event_line_width,
-                    style=self._event_line_style,
-                )
-                line.setPen(pen)
+            self._event_layer.set_line_style(
+                width=self._event_line_width,
+                style=self._event_line_style,
+                color=self._event_line_color,
+                alpha=self._event_line_alpha,
+            )
 
     def get_render_backend(self) -> str:
         """Get the rendering backend identifier."""
@@ -1012,32 +991,17 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             options: Layout options for event labeling
         """
         self._event_labels_visible = enabled
-
-        if enabled:
-            # Create event labeler if not exists
-            if self._event_labeler is None:
-                self._event_labeler = PyQtGraphEventLabeler(
-                    self._plot_item,
-                    options=options,
-                )
-            elif options is not None:
-                # Update options
-                self._event_labeler.options = options
-
-            # Render labels if we have events
-            if self._event_entries:
-                xlim = self.get_xlim()
-                pixel_width = max(int(self._plot_widget.width()), 1)
-                self._event_labeler.render(self._event_entries, xlim, pixel_width)
-        else:
-            # Hide labels
-            if self._event_labeler:
-                self._event_labeler.set_visible(False)
+        if not enabled:
+            self._event_layer.set_label_mode("none")
+        self._event_layer.set_labels_visible(bool(enabled))
+        if enabled and self._event_entries:
+            xlim = self.get_xlim()
+            pixel_width = max(int(self._plot_widget.width()), 1)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
 
     def set_event_labels_visible(self, visible: bool) -> None:
         """Public setter for event label visibility."""
-        opts = self._event_labeler.options if self._event_labeler is not None else None
-        self.enable_event_labels(bool(visible), options=opts)
+        self.enable_event_labels(bool(visible), options=None)
 
     def are_event_labels_visible(self) -> bool:
         """Return whether event labels are currently visible."""
@@ -1045,16 +1009,38 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def event_label_options(self) -> LayoutOptionsV3 | None:
         """Return current event labeler options if available."""
-        if self._event_labeler is None:
-            return None
-        return self._event_labeler.options
+        return None
 
     def update_event_labels(self) -> None:
         """Update event label positions after view change."""
-        if self._event_labeler and self._event_labels_visible and self._event_entries:
+        if self._event_labels_visible and self._event_entries:
             xlim = self.get_xlim()
             pixel_width = max(int(self._plot_widget.width()), 1)
-            self._event_labeler.render(self._event_entries, xlim, pixel_width)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
+
+    def set_event_label_mode(self, mode: str) -> None:
+        """Set label mode for trace markers ("label_vertical" or "none")."""
+        self._event_layer.set_label_mode(mode)
+        if self._event_entries:
+            xlim = self.get_xlim()
+            pixel_width = max(int(self._plot_widget.width()), 1)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
+
+    def set_selected_event_index(self, index: int | None) -> None:
+        """Highlight a selected event in the marker layer."""
+        self._event_layer.set_selected_event(index)
+        if self._event_entries:
+            xlim = self.get_xlim()
+            pixel_width = max(int(self._plot_widget.width()), 1)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
+
+    def refresh_event_markers(self) -> None:
+        """Refresh marker label layout for the current view."""
+        if not self._event_entries:
+            return
+        xlim = self.get_xlim()
+        pixel_width = max(int(self._plot_widget.width()), 1)
+        self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
 
     def set_uncertainty_bands_visible(self, visible: bool) -> None:
         """Show/hide min/max uncertainty bands.

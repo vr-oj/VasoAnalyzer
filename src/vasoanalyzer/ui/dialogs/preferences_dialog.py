@@ -483,15 +483,8 @@ class PreferencesDialog(QDialog):
             from vasoanalyzer.ui import theme as theme_module
 
             try:
-                theme_module.set_theme_mode(mode, persist=True)
+                theme_module.apply_theme(mode, persist=True)
             except Exception:
                 pass
-            parent = self.parent()
-            apply_theme = getattr(parent, "apply_theme", None)
-            if callable(apply_theme):
-                try:
-                    apply_theme(mode, persist=False)
-                except Exception:
-                    pass
 
         super().accept()
