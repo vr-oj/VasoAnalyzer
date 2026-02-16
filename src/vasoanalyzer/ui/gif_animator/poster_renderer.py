@@ -37,6 +37,7 @@ class PosterFigureRenderer:
         show_outer: bool,
         y_range: tuple[float, float] | None,
         vessel_frame: np.ndarray | None,
+        time_offset_s: float = 0.0,
     ) -> np.ndarray:
         trace_width = int(round(self.output_width_px * TRACE_RATIO))
         trace_width = max(1, min(self.output_width_px - 1, trace_width))
@@ -50,6 +51,7 @@ class PosterFigureRenderer:
             show_inner=show_inner,
             show_outer=show_outer,
             y_range=y_range,
+            time_offset_s=time_offset_s,
         )
         vessel_img = self._render_vessel_panel(
             vessel_frame=vessel_frame,
@@ -69,6 +71,7 @@ class PosterFigureRenderer:
         show_inner: bool,
         show_outer: bool,
         y_range: tuple[float, float] | None,
+        time_offset_s: float = 0.0,
     ) -> np.ndarray:
         dpi = 100
         fig_width_in = width_px / dpi
@@ -96,28 +99,32 @@ class PosterFigureRenderer:
             x1=end_time_s,
         )
 
+        window_time = window.time
+        if time_offset_s:
+            window_time = window_time - float(time_offset_s)
+
         series = []
         if show_inner and window.inner_mean is not None:
             ax.plot(
-                window.time,
+                window_time,
                 window.inner_mean,
                 color=TRACE_INNER_COLOR,
                 linewidth=TRACE_LINE_WIDTH,
-                antialiased=False,
+                antialiased=True,
             )
             series.append(window.inner_mean)
 
         if show_outer and window.outer_mean is not None:
             ax.plot(
-                window.time,
+                window_time,
                 window.outer_mean,
                 color=TRACE_OUTER_COLOR,
                 linewidth=TRACE_LINE_WIDTH,
-                antialiased=False,
+                antialiased=True,
             )
             series.append(window.outer_mean)
 
-        ax.set_xlim(start_time_s, end_time_s)
+        ax.set_xlim(start_time_s - time_offset_s, end_time_s - time_offset_s)
         if y_range is not None:
             ax.set_ylim(y_range)
         else:

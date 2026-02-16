@@ -8112,6 +8112,8 @@ class VasoAnalyzerApp(QMainWindow):
             self.review_events_action.setIcon(QIcon(self.icon_path("review-events.svg")))
         if hasattr(self, "excel_action"):
             self.excel_action.setIcon(QIcon(self.icon_path("excel-mapper.svg")))
+        if hasattr(self, "sync_clip_action"):
+            self.sync_clip_action.setIcon(QIcon(self.icon_path("play_arrow.svg")))
 
     def apply_theme(self, mode: str, *, persist: bool = False) -> None:
         """Apply light or dark theme at runtime and refresh all UI widgets."""
@@ -8341,6 +8343,15 @@ class VasoAnalyzerApp(QMainWindow):
 
         edit_points_action = getattr(self, "actEditPoints", None)
 
+        self.sync_clip_action = QAction(
+            QIcon(self.icon_path("play_arrow.svg")), "Export Clip…", self
+        )
+        self.sync_clip_action.setToolTip(
+            "Export a synchronized trace + TIFF animation (GIF)."
+        )
+        self.sync_clip_action.setEnabled(False)
+        self.sync_clip_action.triggered.connect(self.open_sync_clip_exporter)
+
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Import Events CSV…", self
         )
@@ -8391,7 +8402,13 @@ class VasoAnalyzerApp(QMainWindow):
         if edit_points_action is not None:
             toolbar.addAction(edit_points_action)
         toolbar.addAction(self.excel_action)
-        for action in (self.review_events_action, edit_points_action, self.excel_action):
+        toolbar.addAction(self.sync_clip_action)
+        for action in (
+            self.review_events_action,
+            edit_points_action,
+            self.excel_action,
+            self.sync_clip_action,
+        ):
             if action is None:
                 continue
             button = toolbar.widgetForAction(action)
@@ -14803,6 +14820,18 @@ QPushButton[isGhost="true"]:pressed {{
         """Enable GIF Animator menu action when sample has required data."""
         if not self.current_sample:
             self.action_gif_animator.setEnabled(False)
+            if hasattr(self, "sync_clip_action") and self.sync_clip_action is not None:
+                self.sync_clip_action.setEnabled(False)
+            prev_enabled = getattr(self, "_sync_clip_enabled", None)
+            if prev_enabled is None or prev_enabled:
+                log.info(
+                    "Export Clip enabled=%s (trace=%s, tiff=%s, events=%s)",
+                    False,
+                    False,
+                    False,
+                    False,
+                )
+            self._sync_clip_enabled = False
             return
 
         sample = self.current_sample
@@ -14817,14 +14846,58 @@ QPushButton[isGhost="true"]:pressed {{
         # Enable only if all requirements are met
         should_enable = has_trace and has_snapshots and has_events
         self.action_gif_animator.setEnabled(should_enable)
+        if hasattr(self, "sync_clip_action") and self.sync_clip_action is not None:
+            self.sync_clip_action.setEnabled(should_enable)
+        prev_enabled = getattr(self, "_sync_clip_enabled", None)
+        if prev_enabled is None or prev_enabled != should_enable:
+            log.info(
+                "Export Clip enabled=%s (trace=%s, tiff=%s, events=%s)",
+                should_enable,
+                has_trace,
+                has_snapshots,
+                has_events,
+            )
+        self._sync_clip_enabled = should_enable
 
     def show_gif_animator(self, checked: bool = False) -> None:
+        """Launch GIF Animator window."""
+        self.open_sync_clip_exporter(checked)
+
+    def open_sync_clip_exporter(self, checked: bool = False) -> None:
         """Launch GIF Animator window.
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
+        log.info(
+            "UI: Export Clip clicked (enabled=%s)",
+            (
+                getattr(self, "sync_clip_action", None).isEnabled()
+                if isinstance(getattr(self, "sync_clip_action", None), QAction)
+                else None
+            ),
+        )
+
+        def _ensure_window_on_screen(window: QWidget) -> None:
+            try:
+                frame = window.frameGeometry()
+            except Exception:
+                return
+            screens = QApplication.screens()
+            if not screens:
+                return
+            if any(frame.intersects(screen.availableGeometry()) for screen in screens):
+                return
+            parent_geom = self.geometry()
+            frame.moveCenter(parent_geom.center())
+            window.move(frame.topLeft())
+
         if not self.current_sample:
+            QMessageBox.information(
+                self,
+                "Export Clip",
+                "Load a trace and TIFF to export a synchronized clip.",
+            )
             return
 
         # Validate requirements
@@ -14837,21 +14910,16 @@ QPushButton[isGhost="true"]:pressed {{
             and len(self.current_sample.events_data) >= 2
         )
 
-        if not has_snapshots:
-            QMessageBox.warning(
+        if not has_snapshots or not has_events:
+            QMessageBox.information(
                 self,
-                "No Snapshots",
-                "Current sample does not have snapshot frames loaded.\n\n"
-                "Please load a sample with TIFF stack data to use the GIF Animator.",
+                "Export Clip",
+                "Load a trace and TIFF and define at least two events to export a synchronized clip.",
             )
-            return
-
-        if not has_events:
-            QMessageBox.warning(
-                self,
-                "Need Events",
-                "Please define at least 2 events to mark the animation start and end points.\n\n"
-                "Events can be added in the Events tab.",
+            log.info(
+                "Export Clip blocked (snapshots=%s, events=%s)",
+                has_snapshots,
+                has_events,
             )
             return
 
@@ -14865,24 +14933,75 @@ QPushButton[isGhost="true"]:pressed {{
             trace_model = self.trace_model
 
         if trace_model is None:
-            QMessageBox.warning(
+            QMessageBox.information(
                 self,
-                "No Trace Data",
-                "Current sample does not have trace data available.",
+                "Export Clip",
+                "Load a trace and TIFF to export a synchronized clip.",
             )
+            log.info("Export Clip blocked (trace_model missing)")
             return
 
-        # Launch animator window
-        from vasoanalyzer.ui.gif_animator import GifAnimatorWindow
+        try:
+            existing = getattr(self, "_sync_clip_window", None)
+            if existing is not None:
+                if (
+                    getattr(existing, "sample", None) is not self.current_sample
+                    or getattr(existing, "trace_model", None) is not trace_model
+                ):
+                    with contextlib.suppress(Exception):
+                        existing.close()
+                    self._sync_clip_window = None
 
-        animator = GifAnimatorWindow(
-            parent=self,
-            project_ctx=self.project_ctx,
-            sample=self.current_sample,
-            trace_model=trace_model,
-            events_df=self.current_sample.events_data,
-        )
-        animator.show()
+            if getattr(self, "_sync_clip_window", None) is None:
+                from vasoanalyzer.ui.gif_animator import GifAnimatorWindow
+
+                self._sync_clip_window = GifAnimatorWindow(
+                    parent=self,
+                    project_ctx=self.project_ctx,
+                    sample=self.current_sample,
+                    trace_model=trace_model,
+                    events_df=self.current_sample.events_data,
+                )
+                self._sync_clip_window.destroyed.connect(
+                    lambda *_: setattr(self, "_sync_clip_window", None)
+                )
+
+                from vasoanalyzer.ui.theme import get_theme_manager
+
+                theme_manager = get_theme_manager()
+                with contextlib.suppress(Exception):
+                    theme_manager.themeChanged.connect(
+                        self._sync_clip_window.apply_theme
+                    )
+                with contextlib.suppress(Exception):
+                    self._sync_clip_window.apply_theme(
+                        getattr(self, "_active_theme_mode", "light")
+                    )
+
+            window = self._sync_clip_window
+            window.setWindowFlag(Qt.Window, True)
+            window.show()
+            if window.isMinimized():
+                window.showNormal()
+            _ensure_window_on_screen(window)
+            window.raise_()
+            window.activateWindow()
+
+            n_frames = len(self.current_sample.snapshots) if has_snapshots else 0
+            log.info(
+                "Export Clip: context set (trace=%s, tiff=%s, frames=%s)",
+                trace_model is not None,
+                has_snapshots,
+                n_frames,
+            )
+        except Exception:
+            log.exception("Export Clip failed to open")
+            QMessageBox.information(
+                self,
+                "Export Clip",
+                "Unable to open the exporter window. Check logs for details.",
+            )
+            return
 
         log.info("GIF Animator launched")
 

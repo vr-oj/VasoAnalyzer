@@ -57,6 +57,7 @@ class TracePanelSpec:
     show_event_labels: bool = False
     fast_render: bool = False
     shape: str = "balanced"  # "balanced" or "wide"
+    antialias: bool = True
 
     # Display settings
     show_grid: bool = True
@@ -83,6 +84,7 @@ class AnimationSpec:
     end_time_s: float
     start_event_label: str | None = None
     end_event_label: str | None = None
+    display_time_zero: bool = False
 
     # Frame configuration
     fps: int = 10

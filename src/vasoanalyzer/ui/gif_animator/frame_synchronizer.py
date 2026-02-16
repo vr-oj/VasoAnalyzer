@@ -235,6 +235,60 @@ class FrameSynchronizer:
             return 1.0 / mean_interval
         return 0.0
 
+    def _median_interval_s(self) -> float:
+        intervals = np.diff(self.frame_times)
+        valid = intervals[np.isfinite(intervals) & (intervals > 0)]
+        if valid.size:
+            return float(np.median(valid))
+        return 0.0
+
+    def get_tiff_keyframe_durations_ms(
+        self,
+        timings: list[FrameTimingInfo],
+        playback_speed: float = 1.0,
+        min_duration_ms: int = 20,
+    ) -> list[int]:
+        """Compute per-frame durations (ms) for TIFF keyframes."""
+        if not timings:
+            return []
+        speed = float(playback_speed) if playback_speed is not None else 1.0
+        if speed <= 0:
+            speed = 1.0
+
+        times = np.array([t.tiff_timestamp_s for t in timings], dtype=float)
+        base_interval = self._median_interval_s()
+        if not np.isfinite(base_interval) or base_interval <= 0:
+            base_interval = 0.1
+
+        durations_s = np.zeros(len(times), dtype=float)
+        prev_delta = base_interval
+        i = 0
+        while i < len(times):
+            t0 = times[i]
+            j = i + 1
+            while j < len(times) and abs(times[j] - t0) < EPSILON:
+                j += 1
+
+            if j < len(times):
+                delta = times[j] - t0
+                if not np.isfinite(delta) or delta <= EPSILON:
+                    delta = prev_delta
+                else:
+                    prev_delta = delta
+            else:
+                delta = prev_delta
+
+            delta /= speed
+            per_frame = delta / max(1, j - i)
+            durations_s[i:j] = per_frame
+            i = j
+
+        durations_ms = [
+            max(min_duration_ms, int(round(duration * 1000.0)))
+            for duration in durations_s
+        ]
+        return durations_ms
+
     def get_frame_count_estimate(self, target_fps: int) -> int:
         """Estimate number of frames that will be generated.
 

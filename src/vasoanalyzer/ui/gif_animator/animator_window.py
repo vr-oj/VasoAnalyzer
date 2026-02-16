@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy, QDialog, QDialogButtonBox, QRubberBand,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect
-from PyQt5.QtGui import QColor, QImage, QPixmap
+from PyQt5.QtGui import QColor, QImage, QPixmap, QPalette
 
 from vasoanalyzer.io.tiffs import resolve_frame_times
 
@@ -225,6 +225,7 @@ class GifAnimatorWindow(QMainWindow):
         self.current_spec = self._create_default_spec()
         self.current_spec.vessel_crop_rect = self._load_crop_rect()
         self.rendered_frames: list[np.ndarray] = []
+        self.rendered_frame_durations_ms: list[int] | None = None
         self.is_rendering = False
         self.render_thread: RenderThread | None = None
 
@@ -253,6 +254,7 @@ class GifAnimatorWindow(QMainWindow):
         """
         n_frames = len(self.sample.snapshots)
         warnings: list[str] = []
+        trace_start_s = self._trace_start_time_s()
 
         trace_data = self.sample.trace_data
         if trace_data is not None:
@@ -281,12 +283,29 @@ class GifAnimatorWindow(QMainWindow):
                         tiff_page_to_trace_idx=mapping,
                         allow_fallback=False,
                     )
-                    return FrameTimeExtractionResult(
-                        frame_times=result.frame_times_s.tolist(),
-                        source="tiff_page",
-                        confidence="high",
-                        warnings=result.warnings,
-                        mapping_coverage=1.0,
+                    frame_times, repair_applied, repair_note = self._validate_and_repair_frame_times(
+                        result.frame_times_s.tolist(), n_frames
+                    )
+                    if repair_note:
+                        warnings.append(repair_note)
+                    if repair_applied:
+                        logger.warning(
+                            "Frame times repaired to enforce monotonicity",
+                            extra={"source": "tiff_page", "n_frames": n_frames},
+                        )
+                    if frame_times is not None:
+                        warnings.extend(result.warnings)
+                        return self._finalize_frame_time_result(
+                            frame_times=frame_times,
+                            source="tiff_page",
+                            confidence="high",
+                            warnings=warnings,
+                            mapping_coverage=1.0,
+                        )
+                    warnings.append("Frame times invalid after TiffPage sync; attempting fallback sources.")
+                    logger.warning(
+                        "Frame times invalid after TiffPage sync; attempting fallback sources",
+                        extra={"source": "tiff_page", "n_frames": n_frames},
                     )
                 except Exception as exc:
                     warnings.append(f"TiffPage sync failed: {exc}")
@@ -302,24 +321,51 @@ class GifAnimatorWindow(QMainWindow):
                     "source": "ui_state",
                     "n_frames": len(frame_times)
                 })
-                return FrameTimeExtractionResult(
-                    frame_times=frame_times,
-                    source="ui_state",
-                    confidence="medium",
-                    warnings=["Frame times loaded from saved ui_state"],
-                    mapping_coverage=1.0,
+                frame_times, repair_applied, repair_note = self._validate_and_repair_frame_times(
+                    frame_times, n_frames
+                )
+                if repair_note:
+                    warnings.append(repair_note)
+                if repair_applied:
+                    logger.warning(
+                        "Frame times repaired to enforce monotonicity",
+                        extra={"source": "ui_state", "n_frames": n_frames},
+                    )
+                if frame_times is not None:
+                    warnings.append("Frame times loaded from saved ui_state")
+                    return self._finalize_frame_time_result(
+                        frame_times=frame_times,
+                        source="ui_state",
+                        confidence="medium",
+                        warnings=warnings,
+                        mapping_coverage=1.0,
+                    )
+                warnings.append("Frame times invalid from ui_state; falling back to estimation.")
+                logger.warning(
+                    "Frame times invalid from ui_state; using estimation fallback",
+                    extra={"source": "ui_state", "n_frames": n_frames},
                 )
 
         recording_interval = 0.14
         if self.sample.ui_state:
             recording_interval = self.sample.ui_state.get("recording_interval", 0.14)
+        try:
+            recording_interval = float(recording_interval)
+        except Exception:
+            recording_interval = 0.14
+        if not np.isfinite(recording_interval) or recording_interval <= 0:
+            logger.warning(
+                "Invalid recording_interval; using default",
+                extra={"recording_interval": recording_interval},
+            )
+            recording_interval = 0.14
 
-        result = resolve_frame_times(
-            [],
-            n_frames=n_frames,
-            fps=1.0 / float(recording_interval) if recording_interval else None,
+        frame_times, estimate_warnings = self._estimate_frame_times(
+            n_frames,
+            recording_interval,
+            trace_start_s,
         )
-        warnings.extend(result.warnings)
+        warnings.extend(estimate_warnings)
         warnings.append(
             f"Frame times estimated using {recording_interval}s interval (no TiffPage or ui_state data)"
         )
@@ -329,13 +375,117 @@ class GifAnimatorWindow(QMainWindow):
             "n_frames": n_frames
         })
 
-        return FrameTimeExtractionResult(
-            frame_times=result.frame_times_s.tolist(),
+        frame_times, repair_applied, repair_note = self._validate_and_repair_frame_times(
+            frame_times, n_frames
+        )
+        if repair_note:
+            warnings.append(repair_note)
+        if repair_applied:
+            logger.warning(
+                "Frame times repaired to enforce monotonicity",
+                extra={"source": "estimation", "n_frames": n_frames},
+            )
+        if frame_times is None:
+            logger.warning(
+                "Frame times invalid after estimation; using fallback baseline",
+                extra={"n_frames": n_frames},
+            )
+            frame_times = list(trace_start_s + np.arange(n_frames, dtype=float) * float(recording_interval))
+
+        return self._finalize_frame_time_result(
+            frame_times=frame_times,
             source="estimation",
             confidence="low",
             warnings=warnings,
             mapping_coverage=0.0,
         )
+
+    def _estimate_frame_times(
+        self,
+        n_frames: int,
+        recording_interval: float,
+        trace_start_s: float,
+    ) -> tuple[list[float], list[str]]:
+        fps = None
+        if recording_interval:
+            try:
+                fps = 1.0 / float(recording_interval)
+            except Exception:
+                fps = None
+        result = resolve_frame_times(
+            [],
+            n_frames=n_frames,
+            fps=fps,
+            time_offset_s=trace_start_s,
+        )
+        return result.frame_times_s.tolist(), list(result.warnings)
+
+    def _validate_and_repair_frame_times(
+        self,
+        frame_times: list[float] | np.ndarray | None,
+        n_frames: int,
+    ) -> tuple[list[float] | None, bool, str | None]:
+        if frame_times is None:
+            return None, False, "Frame times unavailable; falling back to estimation."
+        arr = np.asarray(frame_times, dtype=float)
+        if arr.size != n_frames:
+            return None, False, f"Frame times length mismatch ({arr.size} vs {n_frames})."
+        if arr.size == 0:
+            return arr.tolist(), False, None
+        if not np.isfinite(arr).all():
+            return None, False, "Frame times contain non-finite values."
+        diffs = np.diff(arr)
+        if np.any(diffs < 0):
+            repaired = np.maximum.accumulate(arr)
+            return repaired.tolist(), True, "Frame times were not monotonic; repaired by clipping."
+        return arr.tolist(), False, None
+
+    def _finalize_frame_time_result(
+        self,
+        *,
+        frame_times: list[float],
+        source: str,
+        confidence: str,
+        warnings: list[str],
+        mapping_coverage: float,
+    ) -> FrameTimeExtractionResult:
+        monotonic_ok = True
+        start_time = None
+        end_time = None
+        if frame_times:
+            arr = np.asarray(frame_times, dtype=float)
+            if arr.size >= 2:
+                monotonic_ok = bool(np.all(np.diff(arr) >= 0))
+            start_time = float(arr[0])
+            end_time = float(arr[-1])
+        logger.info(
+            "Frame times resolved",
+            extra={
+                "n_frames": len(frame_times),
+                "source": source,
+                "monotonic_ok": monotonic_ok,
+                "coverage": mapping_coverage,
+                "start_time": start_time,
+                "end_time": end_time,
+            },
+        )
+        return FrameTimeExtractionResult(
+            frame_times=frame_times,
+            source=source,
+            confidence=confidence,
+            warnings=warnings,
+            mapping_coverage=mapping_coverage,
+        )
+
+    def _trace_start_time_s(self) -> float:
+        try:
+            times = np.asarray(self.trace_model.time_full, dtype=float)
+        except Exception:
+            return 0.0
+        finite = np.isfinite(times)
+        if finite.any():
+            return float(times[finite][0])
+        return 0.0
 
     def _create_default_spec(self) -> AnimationSpec:
         """Create default animation specification."""
@@ -735,6 +885,11 @@ class GifAnimatorWindow(QMainWindow):
         self.show_events_checkbox.stateChanged.connect(self._on_settings_changed)
         layout.addWidget(self.show_events_checkbox)
 
+        self.zero_time_checkbox = QCheckBox("Time axis starts at 0")
+        self.zero_time_checkbox.setChecked(False)
+        self.zero_time_checkbox.stateChanged.connect(self._on_settings_changed)
+        layout.addWidget(self.zero_time_checkbox)
+
         self.fast_trace_checkbox = QCheckBox("Fast trace (static)")
         self.fast_trace_checkbox.setChecked(True)
         self.fast_trace_checkbox.stateChanged.connect(self._on_settings_changed)
@@ -823,6 +978,11 @@ class GifAnimatorWindow(QMainWindow):
         self.export_btn.clicked.connect(self._export_gif)
         layout.addWidget(self.export_btn)
 
+        # Export static frame
+        self.export_frame_btn = QPushButton("Export Static Frame...")
+        self.export_frame_btn.clicked.connect(self._export_static_frame)
+        layout.addWidget(self.export_frame_btn)
+
         # Export poster figure
         self.export_poster_btn = QPushButton("Export Poster Figure...")
         self.export_poster_btn.clicked.connect(self._export_poster_figure)
@@ -872,6 +1032,19 @@ class GifAnimatorWindow(QMainWindow):
 
         self.sync_status_label.setText(display_text)
         self.sync_status_label.setToolTip(tooltip)
+
+    def apply_theme(self, mode: str | None = None) -> None:
+        """Apply the current theme to this window."""
+        from vasoanalyzer.ui.theme import CURRENT_THEME
+
+        theme = CURRENT_THEME if isinstance(CURRENT_THEME, dict) else {}
+        bg = theme.get("window_bg", "#FFFFFF")
+        text = theme.get("text", "#000000")
+        palette = self.palette()
+        palette.setColor(QPalette.Window, QColor(bg))
+        palette.setColor(QPalette.WindowText, QColor(text))
+        self.setPalette(palette)
+        self.setAutoFillBackground(True)
 
     def _on_event_selection_changed(self):
         """Handle event selection change."""
@@ -928,6 +1101,7 @@ class GifAnimatorWindow(QMainWindow):
         self.current_spec.trace_spec.show_inner = self.show_inner_checkbox.isChecked()
         self.current_spec.trace_spec.show_outer = self.show_outer_checkbox.isChecked()
         self.current_spec.trace_spec.show_events = self.show_events_checkbox.isChecked()
+        self.current_spec.display_time_zero = self.zero_time_checkbox.isChecked()
         show_time_indicator = self.time_indicator_checkbox.isChecked()
         self.current_spec.trace_spec.show_time_indicator = show_time_indicator
         self.current_spec.vessel_show_timestamp = False
@@ -1129,6 +1303,21 @@ class GifAnimatorWindow(QMainWindow):
                 self.current_spec.playback_speed,
             )
         n_frames = len(timings)
+        self.rendered_frame_durations_ms = None
+        if self.current_spec.use_tiff_frames and timings:
+            self.rendered_frame_durations_ms = synchronizer.get_tiff_keyframe_durations_ms(
+                timings,
+                playback_speed=self.current_spec.playback_speed,
+            )
+            if self.rendered_frame_durations_ms and len(self.rendered_frame_durations_ms) != n_frames:
+                logger.warning(
+                    "Frame duration count mismatch; falling back to constant duration",
+                    extra={
+                        "n_frames": n_frames,
+                        "duration_count": len(self.rendered_frame_durations_ms),
+                    },
+                )
+                self.rendered_frame_durations_ms = None
         estimated_size_mb = estimate_gif_size_mb(
             self.current_spec.output_width_px,
             self.current_spec.output_height_px,
@@ -1207,11 +1396,31 @@ class GifAnimatorWindow(QMainWindow):
                     break
 
             if time_col:
+                time_series = self.events_df[time_col]
+                time_numeric = pd.to_numeric(time_series, errors="coerce")
+                if time_numeric.isna().any():
+                    time_td = pd.to_timedelta(time_series.astype(str), errors="coerce")
+                    time_numeric = time_numeric.where(
+                        time_numeric.notna(), time_td.dt.total_seconds()
+                    )
+                dropped = 0
                 for idx, row in self.events_df.iterrows():
-                    event_time = row[time_col]
+                    event_time = time_numeric.loc[idx]
+                    if pd.isna(event_time) or not np.isfinite(event_time):
+                        dropped += 1
+                        continue
                     event_label = row.get('Label', f'Event {idx + 1}')
                     event_color = row.get('Color', '#888888')
-                    events.append(EventSpec(event_time, event_label, event_color))
+                    events.append(EventSpec(float(event_time), event_label, event_color))
+                log_fn = logger.warning if dropped else logger.info
+                log_fn(
+                    "Event time coercion complete",
+                    extra={
+                        "time_col": time_col,
+                        "events_kept": len(events),
+                        "events_dropped": dropped,
+                    },
+                )
 
         return RenderContext(
             trace_model=self.trace_model,
@@ -1324,6 +1533,16 @@ class GifAnimatorWindow(QMainWindow):
 
         try:
             # Save GIF
+            durations_ms = self.rendered_frame_durations_ms
+            if durations_ms and len(durations_ms) != len(self.rendered_frames):
+                logger.warning(
+                    "Export duration count mismatch; using constant duration",
+                    extra={
+                        "frames": len(self.rendered_frames),
+                        "durations": len(durations_ms),
+                    },
+                )
+                durations_ms = None
             save_gif(
                 self.rendered_frames,
                 file_path,
@@ -1331,6 +1550,7 @@ class GifAnimatorWindow(QMainWindow):
                 self.current_spec.loop_count,
                 optimize=self.current_spec.optimize,
                 quality=self.current_spec.quality,
+                durations_ms=durations_ms,
             )
 
             progress.setValue(100)
@@ -1348,6 +1568,80 @@ class GifAnimatorWindow(QMainWindow):
                 self,
                 "Export Error",
                 f"Failed to save GIF:\n\n{str(e)}",
+            )
+
+    def _export_static_frame(self):
+        """Export a single rendered frame as PNG."""
+        self._on_event_selection_changed()
+        self._on_settings_changed()
+
+        if self.current_spec.start_time_s >= self.current_spec.end_time_s:
+            QMessageBox.warning(self, "Time Range Error", "Start time must be before end time.")
+            return
+
+        default_name = f"{self.sample.name}_frame.png"
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Static Frame",
+            default_name,
+            "PNG Files (*.png)",
+        )
+        if not file_path:
+            return
+
+        frame = None
+        if self.rendered_frames:
+            idx = self.preview_player.get_current_frame_index()
+            if idx < 0 or idx >= len(self.rendered_frames):
+                idx = 0
+            if 0 <= idx < len(self.rendered_frames):
+                frame = self.rendered_frames[idx]
+
+        if frame is None:
+            try:
+                synchronizer = FrameSynchronizer(
+                    self.frame_times,
+                    self.trace_model.time_full,
+                    self.current_spec.start_time_s,
+                    self.current_spec.end_time_s,
+                )
+                valid, error_msg = synchronizer.validate_time_range()
+                if not valid:
+                    QMessageBox.warning(self, "Time Range Error", error_msg)
+                    return
+
+                duration = self.current_spec.duration_s
+                anim_t = max(0.0, min(duration, duration * 0.5))
+                timing = synchronizer.get_frame_for_time(anim_t)
+                ctx = self._create_render_context()
+                renderer = AnimationRenderer(self.current_spec)
+                frame = renderer.render_frame(ctx, timing)
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Export Error",
+                    f"Failed to render static frame:\n\n{str(e)}",
+                )
+                return
+
+        if frame is None:
+            QMessageBox.critical(self, "Export Error", "Unable to render static frame.")
+            return
+
+        from PIL import Image
+
+        try:
+            Image.fromarray(frame).save(file_path, format="PNG")
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Static frame saved successfully:\n{file_path}",
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Export Error",
+                f"Failed to save static frame:\n\n{str(e)}",
             )
 
     def _export_poster_figure(self):
@@ -1382,6 +1676,7 @@ class GifAnimatorWindow(QMainWindow):
             show_outer=self.current_spec.trace_spec.show_outer,
             y_range=self.current_spec.trace_spec.y_range,
             vessel_frame=frame,
+            time_offset_s=self.current_spec.start_time_s if self.current_spec.display_time_zero else 0.0,
         )
 
         from PIL import Image

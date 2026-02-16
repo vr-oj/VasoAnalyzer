@@ -53,6 +53,22 @@ class AnimationRenderer:
         """
         self.spec = spec
         self._trace_cache = None
+        self._time_offset_s = 0.0
+        if getattr(self.spec, "display_time_zero", False):
+            try:
+                self._time_offset_s = float(self.spec.start_time_s)
+            except Exception:
+                self._time_offset_s = 0.0
+
+    def _display_time(self, t_val: float) -> float:
+        if not self._time_offset_s:
+            return float(t_val)
+        return float(t_val) - self._time_offset_s
+
+    def _display_times(self, arr: np.ndarray) -> np.ndarray:
+        if not self._time_offset_s:
+            return arr
+        return arr - self._time_offset_s
 
     def render_frame(
         self,
@@ -210,7 +226,8 @@ class AnimationRenderer:
         # Build overlay text
         text_lines = []
         if self.spec.vessel_show_timestamp:
-            text_lines.append(f"t = {timing.trace_time_s:.3f}s")
+            display_time = self._display_time(timing.trace_time_s)
+            text_lines.append(f"t = {display_time:.3f}s")
         if self.spec.vessel_show_frame_number:
             text_lines.append(f"Frame {frame_idx}")
 
@@ -270,6 +287,7 @@ class AnimationRenderer:
             x0=self.spec.start_time_s,
             x1=timing.trace_time_s,
         )
+        window_time = self._display_times(window.time)
 
         active_channel = None
         if spec.show_inner and window.inner_mean is not None:
@@ -289,13 +307,13 @@ class AnimationRenderer:
                 line_width = spec.line_width * INACTIVE_LINE_SCALE
                 line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
-                window.time,
+                window_time,
                 window.inner_mean,
                 color=spec.inner_color,
                 linewidth=line_width,
                 alpha=line_alpha,
                 label="Inner Diameter",
-                antialiased=False,
+                antialiased=spec.antialias,
             )
 
         # Plot outer diameter
@@ -310,13 +328,13 @@ class AnimationRenderer:
                 line_width = spec.line_width * INACTIVE_LINE_SCALE
                 line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
-                window.time,
+                window_time,
                 window.outer_mean,
                 color=spec.outer_color,
                 linewidth=line_width,
                 alpha=line_alpha,
                 label="Outer Diameter",
-                antialiased=False,
+                antialiased=spec.antialias,
             )
 
         # Plot pressure channels (if available)
@@ -324,13 +342,13 @@ class AnimationRenderer:
             # Create second y-axis for pressure
             ax2 = ax.twinx()
             ax2.plot(
-                window.time,
+                window_time,
                 window.avg_pressure_mean,
                 color=spec.avg_pressure_color,
                 linewidth=spec.line_width,
                 label="Avg Pressure",
                 linestyle='--',
-                antialiased=False,
+                antialiased=spec.antialias,
             )
             ax2.set_ylabel(
                 "Pressure (mmHg)",
@@ -344,19 +362,20 @@ class AnimationRenderer:
         if spec.show_events:
             for event in ctx.events:
                 if event.time_s <= timing.trace_time_s:
+                    event_time = self._display_time(event.time_s)
                     ax.axvline(
-                        event.time_s,
+                        event_time,
                         color=event.color,
                         linewidth=1.0,
                         linestyle="--",
                         alpha=0.5,
                         zorder=50,
-                        antialiased=False,
+                        antialiased=spec.antialias,
                     )
                     if spec.show_event_labels:
                         y_pos = ax.get_ylim()[1] * 0.95
                         ax.text(
-                            event.time_s,
+                            event_time,
                             y_pos,
                             event.label,
                             rotation=90,
@@ -371,7 +390,8 @@ class AnimationRenderer:
             x_min, x_max = spec.x_range
             ax.set_xlim(x_min, x_max)
         else:
-            x_min, x_max = self.spec.start_time_s, self.spec.end_time_s
+            x_min = self._display_time(self.spec.start_time_s)
+            x_max = self._display_time(self.spec.end_time_s)
             ax.set_xlim(x_min, x_max)
 
         if spec.y_range is not None:
@@ -384,7 +404,7 @@ class AnimationRenderer:
                 "dashed": "--",
                 "dotted": ":",
             }
-            t_val = float(timing.trace_time_s)
+            t_val = self._display_time(timing.trace_time_s)
             if np.isfinite(t_val):
                 if t_val < x_min:
                     t_val = x_min
@@ -396,7 +416,7 @@ class AnimationRenderer:
                     linewidth=spec.indicator_width,
                     linestyle=linestyle_map.get(spec.indicator_style, "-"),
                     zorder=100,
-                    antialiased=False,
+                    antialiased=spec.antialias,
                 )
                 marker_series = None
                 if active_channel == "inner" and window.inner_mean is not None:
@@ -404,18 +424,18 @@ class AnimationRenderer:
                 elif active_channel == "outer" and window.outer_mean is not None:
                     marker_series = window.outer_mean
                 if marker_series is not None and window.time.size:
-                    idx = int(np.argmin(np.abs(window.time - t_val)))
+                    idx = int(np.argmin(np.abs(window_time - t_val)))
                     y_val = float(marker_series[idx])
                     if np.isfinite(y_val):
                         ax.scatter(
-                            [window.time[idx]],
+                            [window_time[idx]],
                             [y_val],
                             s=ACTIVE_MARKER_SIZE,
                             color=spec.indicator_color,
                             edgecolors="black",
                             linewidths=1.0,
                             zorder=200,
-                            antialiased=False,
+                            antialiaseds=spec.antialias,
                         )
 
         # Labels and styling
@@ -478,7 +498,8 @@ class AnimationRenderer:
         x0, y0, x1, y1 = bbox
         axis_width = max(1.0, x1 - x0)
         scale = axis_width / (x_max - x_min)
-        t_val = float(timing.trace_time_s)
+        t_val_abs = float(timing.trace_time_s)
+        t_val = self._display_time(t_val_abs)
         if not np.isfinite(t_val):
             return base.copy()
         if t_val < x_min:
@@ -534,15 +555,15 @@ class AnimationRenderer:
                 if marker_series is not None and marker_series.size:
                     time_full = ctx.trace_model.time_full
                     if time_full.size:
-                        idx = int(np.searchsorted(time_full, t_val))
+                        idx = int(np.searchsorted(time_full, t_val_abs))
                         if idx <= 0:
                             idx = 0
                         elif idx >= time_full.size:
                             idx = time_full.size - 1
                         else:
                             prev_idx = idx - 1
-                            if abs(time_full[prev_idx] - t_val) <= abs(
-                                time_full[idx] - t_val
+                            if abs(time_full[prev_idx] - t_val_abs) <= abs(
+                                time_full[idx] - t_val_abs
                             ):
                                 idx = prev_idx
                         y_val = float(marker_series[idx])
@@ -607,6 +628,7 @@ class AnimationRenderer:
             x0=x0,
             x1=x1,
         )
+        window_time = self._display_times(window.time)
 
         active_channel = None
         if spec.show_inner and window.inner_mean is not None:
@@ -625,13 +647,13 @@ class AnimationRenderer:
                 line_width = spec.line_width * INACTIVE_LINE_SCALE
                 line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
-                window.time,
+                window_time,
                 window.inner_mean,
                 color=spec.inner_color,
                 linewidth=line_width,
                 alpha=line_alpha,
                 label="Inner Diameter",
-                antialiased=False,
+                antialiased=spec.antialias,
             )
 
         if spec.show_outer and window.outer_mean is not None:
@@ -645,25 +667,25 @@ class AnimationRenderer:
                 line_width = spec.line_width * INACTIVE_LINE_SCALE
                 line_alpha = INACTIVE_LINE_ALPHA
             ax.plot(
-                window.time,
+                window_time,
                 window.outer_mean,
                 color=spec.outer_color,
                 linewidth=line_width,
                 alpha=line_alpha,
                 label="Outer Diameter",
-                antialiased=False,
+                antialiased=spec.antialias,
             )
 
         if spec.show_avg_pressure and window.avg_pressure_mean is not None:
             ax2 = ax.twinx()
             ax2.plot(
-                window.time,
+                window_time,
                 window.avg_pressure_mean,
                 color=spec.avg_pressure_color,
                 linewidth=spec.line_width,
                 label="Avg Pressure",
                 linestyle="--",
-                antialiased=False,
+                antialiased=spec.antialias,
             )
             ax2.set_ylabel(
                 "Pressure (mmHg)",
@@ -674,19 +696,20 @@ class AnimationRenderer:
 
         if spec.show_events:
             for event in ctx.events:
+                event_time = self._display_time(event.time_s)
                 ax.axvline(
-                    event.time_s,
+                    event_time,
                     color=event.color,
                     linewidth=1.0,
                     linestyle="--",
                     alpha=0.5,
                     zorder=50,
-                    antialiased=False,
+                    antialiased=spec.antialias,
                 )
                 if spec.show_event_labels:
                     y_pos = ax.get_ylim()[1] * 0.95
                     ax.text(
-                        event.time_s,
+                        event_time,
                         y_pos,
                         event.label,
                         rotation=90,
@@ -699,7 +722,7 @@ class AnimationRenderer:
         if spec.x_range is not None:
             ax.set_xlim(spec.x_range)
         else:
-            ax.set_xlim(self.spec.start_time_s, self.spec.end_time_s)
+            ax.set_xlim(self._display_time(self.spec.start_time_s), self._display_time(self.spec.end_time_s))
 
         if spec.y_range is not None:
             ax.set_ylim(spec.y_range)
@@ -855,6 +878,9 @@ def save_gif(
     loop_count: int = 0,
     optimize: bool = True,
     quality: int = 80,
+    durations_ms: list[int] | None = None,
+    shared_palette: bool = True,
+    dither: str = "none",
 ) -> None:
     """Save frames as animated GIF using Pillow.
 
@@ -865,23 +891,50 @@ def save_gif(
         loop_count: 0 = infinite loop, N = loop N times
         optimize: Enable GIF optimization (reduces file size)
         quality: 1-100 compression quality (not directly used by GIF)
+        durations_ms: Optional per-frame durations in milliseconds
+        shared_palette: Use a shared adaptive palette across frames for sharper output
+        dither: "none" or "floyd"
     """
     from PIL import Image
 
     if not frames:
         raise ValueError("Cannot save empty frame list")
 
-    duration_ms = int(1000 / fps)
+    duration_arg: int | list[int]
+    if durations_ms is not None:
+        if len(durations_ms) != len(frames):
+            raise ValueError("durations_ms length does not match frames")
+        duration_arg = durations_ms
+    else:
+        safe_fps = max(1, int(fps))
+        duration_arg = int(1000 / safe_fps)
 
     # Convert numpy arrays to PIL Images
     pil_frames = [Image.fromarray(frame) for frame in frames]
+
+    if shared_palette:
+        base = pil_frames[0].convert("P", palette=Image.ADAPTIVE, colors=256)
+        dither_mode = None
+        dither_name = dither.lower() if isinstance(dither, str) else ""
+        if hasattr(Image, "Dither"):
+            dither_mode = (
+                Image.Dither.NONE if dither_name == "none" else Image.Dither.FLOYDSTEINBERG
+            )
+        else:
+            none_mode = getattr(Image, "NONE", 0)
+            floyd_mode = getattr(Image, "FLOYDSTEINBERG", 3)
+            dither_mode = none_mode if dither_name == "none" else floyd_mode
+        pal_frames = [base]
+        for frame in pil_frames[1:]:
+            pal_frames.append(frame.convert("P", palette=base, dither=dither_mode))
+        pil_frames = pal_frames
 
     # Save as animated GIF
     pil_frames[0].save(
         output_path,
         save_all=True,
         append_images=pil_frames[1:],
-        duration=duration_ms,
+        duration=duration_arg,
         loop=loop_count,
         optimize=optimize,
     )
