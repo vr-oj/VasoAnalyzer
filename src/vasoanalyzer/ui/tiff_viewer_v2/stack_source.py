@@ -7,22 +7,20 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
 class StackSource(Protocol):
     """Interface for retrieving frames from a stack."""
 
-    def __len__(self) -> int:
-        ...
+    def __len__(self) -> int: ...
 
-    def get_frame(self, page_index: int):
-        ...
+    def get_frame(self, page_index: int): ...
 
     @property
-    def source_kind(self) -> str:
-        ...
+    def source_kind(self) -> str: ...
 
 
 class InMemoryStackSource:

@@ -41,7 +41,7 @@ class PyQtGraphLineCompat:
     def set_linewidth(self, width: float) -> None:
         """Set line width (matplotlib compatibility)."""
         if self._item is not None:
-            pen = self._item.opts.get('pen', pg.mkPen())
+            pen = self._item.opts.get("pen", pg.mkPen())
             if pen is not None:
                 pen = pg.mkPen(pen)
                 pen.setWidthF(width)
@@ -51,7 +51,7 @@ class PyQtGraphLineCompat:
         """Get line width (matplotlib compatibility)."""
         if self._item is None:
             return 1.0
-        pen = self._item.opts.get('pen')
+        pen = self._item.opts.get("pen")
         if pen is None:
             return 1.0
         return pen.widthF()
@@ -63,7 +63,7 @@ class PyQtGraphLineCompat:
             color: Color as hex string, RGB/RGBA tuple, or QColor object
         """
         if self._item is not None:
-            pen = self._item.opts.get('pen', pg.mkPen())
+            pen = self._item.opts.get("pen", pg.mkPen())
             if pen is not None:
                 pen = pg.mkPen(pen)
                 if isinstance(color, QColor):
@@ -73,18 +73,27 @@ class PyQtGraphLineCompat:
                 else:
                     # Assume RGB or RGBA tuple
                     if len(color) == 3:
-                        pen.setColor(QColor(int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)))
+                        pen.setColor(
+                            QColor(int(color[0] * 255), int(color[1] * 255), int(color[2] * 255))
+                        )
                     elif len(color) == 4:
-                        pen.setColor(QColor(int(color[0] * 255), int(color[1] * 255), int(color[2] * 255), int(color[3] * 255)))
+                        pen.setColor(
+                            QColor(
+                                int(color[0] * 255),
+                                int(color[1] * 255),
+                                int(color[2] * 255),
+                                int(color[3] * 255),
+                            )
+                        )
                 self._item.setPen(pen)
 
     def get_color(self) -> str:
         """Get line color (matplotlib compatibility)."""
         if self._item is None:
-            return '#000000'
-        pen = self._item.opts.get('pen')
+            return "#000000"
+        pen = self._item.opts.get("pen")
         if pen is None:
-            return '#000000'
+            return "#000000"
         color = pen.color()
         return color.name()
 
@@ -96,7 +105,7 @@ class PyQtGraphLineCompat:
                    'dashdot', 'dotted') or Qt.PenStyle enum value
         """
         if self._item is not None:
-            pen = self._item.opts.get('pen', pg.mkPen())
+            pen = self._item.opts.get("pen", pg.mkPen())
             if pen is not None:
                 pen = pg.mkPen(pen)
 
@@ -106,14 +115,14 @@ class PyQtGraphLineCompat:
                 else:
                     # Map matplotlib styles to Qt styles
                     style_map = {
-                        '-': pg.QtCore.Qt.SolidLine,
-                        'solid': pg.QtCore.Qt.SolidLine,
-                        '--': pg.QtCore.Qt.DashLine,
-                        'dashed': pg.QtCore.Qt.DashLine,
-                        '-.': pg.QtCore.Qt.DashDotLine,
-                        'dashdot': pg.QtCore.Qt.DashDotLine,
-                        ':': pg.QtCore.Qt.DotLine,
-                        'dotted': pg.QtCore.Qt.DotLine,
+                        "-": pg.QtCore.Qt.SolidLine,
+                        "solid": pg.QtCore.Qt.SolidLine,
+                        "--": pg.QtCore.Qt.DashLine,
+                        "dashed": pg.QtCore.Qt.DashLine,
+                        "-.": pg.QtCore.Qt.DashDotLine,
+                        "dashdot": pg.QtCore.Qt.DashDotLine,
+                        ":": pg.QtCore.Qt.DotLine,
+                        "dotted": pg.QtCore.Qt.DotLine,
                     }
                     qt_style = style_map.get(style, pg.QtCore.Qt.SolidLine)
                     pen.setStyle(qt_style)
@@ -122,25 +131,25 @@ class PyQtGraphLineCompat:
     def get_linestyle(self) -> str:
         """Get line style (matplotlib compatibility)."""
         if self._item is None:
-            return '-'
-        pen = self._item.opts.get('pen')
+            return "-"
+        pen = self._item.opts.get("pen")
         if pen is None:
-            return '-'
+            return "-"
 
         # Map Qt styles to matplotlib styles
         qt_style = pen.style()
         style_map = {
-            pg.QtCore.Qt.SolidLine: '-',
-            pg.QtCore.Qt.DashLine: '--',
-            pg.QtCore.Qt.DashDotLine: '-.',
-            pg.QtCore.Qt.DotLine: ':',
+            pg.QtCore.Qt.SolidLine: "-",
+            pg.QtCore.Qt.DashLine: "--",
+            pg.QtCore.Qt.DashDotLine: "-.",
+            pg.QtCore.Qt.DotLine: ":",
         }
-        return style_map.get(qt_style, '-')
+        return style_map.get(qt_style, "-")
 
     def set_alpha(self, alpha: float) -> None:
         """Set line alpha/transparency (matplotlib compatibility)."""
         if self._item is not None:
-            pen = self._item.opts.get('pen', pg.mkPen())
+            pen = self._item.opts.get("pen", pg.mkPen())
             if pen is not None:
                 pen = pg.mkPen(pen)
                 color = pen.color()
@@ -152,7 +161,7 @@ class PyQtGraphLineCompat:
         """Get line alpha/transparency (matplotlib compatibility)."""
         if self._item is None:
             return 1.0
-        pen = self._item.opts.get('pen')
+        pen = self._item.opts.get("pen")
         if pen is None:
             return 1.0
         return pen.color().alphaF()

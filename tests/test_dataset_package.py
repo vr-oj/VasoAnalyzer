@@ -1,4 +1,3 @@
-import json
 import zipfile
 from pathlib import Path
 
@@ -8,7 +7,6 @@ import pytest
 from vasoanalyzer.core.project import Experiment, Project, SampleN, save_project, load_project
 from vasoanalyzer.storage import sqlite_store
 from vasoanalyzer.storage.dataset_package import (
-    DatasetPackageError,
     DatasetPackageValidationError,
     export_dataset_package,
     import_dataset_package,
@@ -26,8 +24,12 @@ def _make_project(tmp_path: Path, name: str) -> Path:
     return vaso_path
 
 
-def _make_empty_project(tmp_path: Path, name: str, experiments: list[Experiment] | None = None) -> Path:
-    project = Project(name=name, experiments=experiments or [Experiment(name="Default", samples=[])])
+def _make_empty_project(
+    tmp_path: Path, name: str, experiments: list[Experiment] | None = None
+) -> Path:
+    project = Project(
+        name=name, experiments=experiments or [Experiment(name="Default", samples=[])]
+    )
     vaso_path = tmp_path / f"{name}.vaso"
     save_project(project, vaso_path.as_posix())
     project.close()
@@ -70,9 +72,13 @@ def test_dataset_round_trip(tmp_path: Path):
     export_dataset_package(src_project, dataset_id, package_path)
     assert package_path.exists()
 
-    dest_project = _make_empty_project(tmp_path, "ProjectB", experiments=[Experiment(name="ExpB", samples=[])])
+    dest_project = _make_empty_project(
+        tmp_path, "ProjectB", experiments=[Experiment(name="ExpB", samples=[])]
+    )
 
-    new_dataset_id = import_dataset_package(dest_project, package_path, target_experiment_name="ExpB")
+    new_dataset_id = import_dataset_package(
+        dest_project, package_path, target_experiment_name="ExpB"
+    )
     src_counts = _dataset_counts(src_project, dataset_id)
     dest_counts = _dataset_counts(dest_project, new_dataset_id)
 
@@ -85,10 +91,16 @@ def test_dataset_name_collision_suffix(tmp_path: Path):
     package_path = tmp_path / "collision.vasods"
     export_dataset_package(source_project, dataset_id, package_path)
 
-    dest_project = _make_empty_project(tmp_path, "ProjectCollisionDest", experiments=[Experiment(name="ExpA", samples=[])])
+    dest_project = _make_empty_project(
+        tmp_path, "ProjectCollisionDest", experiments=[Experiment(name="ExpA", samples=[])]
+    )
 
-    first_import_id = import_dataset_package(dest_project, package_path, target_experiment_name="ExpA")
-    second_import_id = import_dataset_package(dest_project, package_path, target_experiment_name="ExpA")
+    first_import_id = import_dataset_package(
+        dest_project, package_path, target_experiment_name="ExpA"
+    )
+    second_import_id = import_dataset_package(
+        dest_project, package_path, target_experiment_name="ExpA"
+    )
 
     store = sqlite_store.open_project(dest_project)
     try:
@@ -116,7 +128,9 @@ def test_package_checksum_validation(tmp_path: Path):
             zf.writestr(name, data)
     rebuilt.replace(package_path)
 
-    dest_project = _make_empty_project(tmp_path, "ProjectDest", experiments=[Experiment(name="ExpB", samples=[])])
+    dest_project = _make_empty_project(
+        tmp_path, "ProjectDest", experiments=[Experiment(name="ExpB", samples=[])]
+    )
 
     with pytest.raises(DatasetPackageValidationError):
         import_dataset_package(dest_project, package_path, target_experiment_name="ExpB")
@@ -125,7 +139,9 @@ def test_package_checksum_validation(tmp_path: Path):
 def _make_multi_project(tmp_path: Path, count: int = 3) -> Path:
     trace_df = pd.DataFrame({"t_seconds": [0.0, 1.0], "inner_diam": [10.0, 10.5]})
     events_df = pd.DataFrame({"t_seconds": [0.0, 1.0], "label": ["start", "stop"]})
-    samples = [SampleN(name=f"S{i}", trace_data=trace_df, events_data=events_df) for i in range(count)]
+    samples = [
+        SampleN(name=f"S{i}", trace_data=trace_df, events_data=events_df) for i in range(count)
+    ]
     project = Project(
         name="Multi",
         experiments=[Experiment(name="Exp", samples=samples)],
@@ -138,7 +154,9 @@ def _make_multi_project(tmp_path: Path, count: int = 3) -> Path:
 
 def test_best_effort_import(tmp_path: Path):
     source = _make_multi_project(tmp_path, count=3)
-    dest = _make_empty_project(tmp_path, "Dest", experiments=[Experiment(name="ExpDest", samples=[])])
+    dest = _make_empty_project(
+        tmp_path, "Dest", experiments=[Experiment(name="ExpDest", samples=[])]
+    )
 
     dataset_ids = _all_dataset_ids(source)
     packages = []

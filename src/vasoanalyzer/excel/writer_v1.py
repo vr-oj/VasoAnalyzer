@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -124,9 +124,7 @@ def build_write_plan(
 
 def validate_write_plan_or_raise(plan: WritePlan) -> None:
     if plan.missing_metrics:
-        raise ValueError(
-            "Missing metrics in template block: " + ", ".join(plan.missing_metrics)
-        )
+        raise ValueError("Missing metrics in template block: " + ", ".join(plan.missing_metrics))
 
     inspection = inspect_template(plan.template_path)
     validate_template_or_raise(inspection)

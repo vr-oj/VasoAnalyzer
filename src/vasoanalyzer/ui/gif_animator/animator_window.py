@@ -4,25 +4,41 @@ This module provides the primary UI for the GIF Animator feature,
 following the shared window layout pattern.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
+from PyQt5.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QColor, QImage, QPalette, QPixmap
 from PyQt5.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QGroupBox, QLabel, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox, QPushButton,
-    QScrollArea, QFileDialog, QMessageBox, QProgressDialog, QColorDialog,
-    QSizePolicy, QDialog, QDialogButtonBox, QRubberBand,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QRubberBand,
+    QScrollArea,
+    QSpinBox,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QPoint, QRect
-from PyQt5.QtGui import QColor, QImage, QPixmap, QPalette
 
 from vasoanalyzer.io.tiffs import resolve_frame_times
 
-from .specs import AnimationSpec, TracePanelSpec, FrameTimeExtractionResult
-from .frame_synchronizer import FrameSynchronizer, FrameTimingInfo
-from .renderer import AnimationRenderer, RenderContext, EventSpec, save_gif, estimate_gif_size_mb
-from .preview_player import PreviewPlayerWidget
+from .frame_synchronizer import FrameSynchronizer
 from .poster_renderer import PosterFigureRenderer
-import logging
+from .preview_player import PreviewPlayerWidget
+from .renderer import AnimationRenderer, EventSpec, RenderContext, estimate_gif_size_mb, save_gif
+from .specs import AnimationSpec, FrameTimeExtractionResult, TracePanelSpec
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +61,7 @@ class RenderThread(QThread):
         self.timings = timings
         self._should_stop = False
         import threading
+
         self._lock = threading.Lock()
 
     def cancel(self):
@@ -63,10 +80,10 @@ class RenderThread(QThread):
                 # Check cancellation before each frame
                 with self._lock:
                     if self._should_stop:
-                        logger.info("Render cancelled by user", extra={
-                            "frames_completed": i,
-                            "total_frames": total
-                        })
+                        logger.info(
+                            "Render cancelled by user",
+                            extra={"frames_completed": i, "total_frames": total},
+                        )
                         self.cancelled.emit()
                         return
 
@@ -78,14 +95,10 @@ class RenderThread(QThread):
                 self.progress.emit(i + 1, total)
 
             self.finished.emit(frames)
-            logger.info("Render completed successfully", extra={
-                "total_frames": len(frames)
-            })
+            logger.info("Render completed successfully", extra={"total_frames": len(frames)})
 
         except Exception as e:
-            logger.error("Render failed with exception", extra={
-                "error": str(e)
-            }, exc_info=True)
+            logger.error("Render failed with exception", extra={"error": str(e)}, exc_info=True)
             self.error.emit(str(e))
 
 
@@ -283,8 +296,10 @@ class GifAnimatorWindow(QMainWindow):
                         tiff_page_to_trace_idx=mapping,
                         allow_fallback=False,
                     )
-                    frame_times, repair_applied, repair_note = self._validate_and_repair_frame_times(
-                        result.frame_times_s.tolist(), n_frames
+                    frame_times, repair_applied, repair_note = (
+                        self._validate_and_repair_frame_times(
+                            result.frame_times_s.tolist(), n_frames
+                        )
                     )
                     if repair_note:
                         warnings.append(repair_note)
@@ -302,25 +317,27 @@ class GifAnimatorWindow(QMainWindow):
                             warnings=warnings,
                             mapping_coverage=1.0,
                         )
-                    warnings.append("Frame times invalid after TiffPage sync; attempting fallback sources.")
+                    warnings.append(
+                        "Frame times invalid after TiffPage sync; attempting fallback sources."
+                    )
                     logger.warning(
                         "Frame times invalid after TiffPage sync; attempting fallback sources",
                         extra={"source": "tiff_page", "n_frames": n_frames},
                     )
                 except Exception as exc:
                     warnings.append(f"TiffPage sync failed: {exc}")
-                    logger.warning("Frame time extraction from TiffPage failed", extra={
-                        "error": str(exc),
-                        "fallback_to": "ui_state"
-                    })
+                    logger.warning(
+                        "Frame time extraction from TiffPage failed",
+                        extra={"error": str(exc), "fallback_to": "ui_state"},
+                    )
 
         if self.sample.ui_state:
             frame_times = self.sample.ui_state.get("snapshot_frame_times")
             if frame_times and len(frame_times) == n_frames:
-                logger.info("Frame times loaded from ui_state", extra={
-                    "source": "ui_state",
-                    "n_frames": len(frame_times)
-                })
+                logger.info(
+                    "Frame times loaded from ui_state",
+                    extra={"source": "ui_state", "n_frames": len(frame_times)},
+                )
                 frame_times, repair_applied, repair_note = self._validate_and_repair_frame_times(
                     frame_times, n_frames
                 )
@@ -369,11 +386,10 @@ class GifAnimatorWindow(QMainWindow):
         warnings.append(
             f"Frame times estimated using {recording_interval}s interval (no TiffPage or ui_state data)"
         )
-        logger.warning("Frame times estimated (no data source available)", extra={
-            "source": "estimation",
-            "interval": recording_interval,
-            "n_frames": n_frames
-        })
+        logger.warning(
+            "Frame times estimated (no data source available)",
+            extra={"source": "estimation", "interval": recording_interval, "n_frames": n_frames},
+        )
 
         frame_times, repair_applied, repair_note = self._validate_and_repair_frame_times(
             frame_times, n_frames
@@ -390,7 +406,9 @@ class GifAnimatorWindow(QMainWindow):
                 "Frame times invalid after estimation; using fallback baseline",
                 extra={"n_frames": n_frames},
             )
-            frame_times = list(trace_start_s + np.arange(n_frames, dtype=float) * float(recording_interval))
+            frame_times = list(
+                trace_start_s + np.arange(n_frames, dtype=float) * float(recording_interval)
+            )
 
         return self._finalize_frame_time_result(
             frame_times=frame_times,
@@ -689,7 +707,7 @@ class GifAnimatorWindow(QMainWindow):
 
         # Check for time column - support both CSV and database column names
         time_col = None
-        for col in ['t_seconds', 'Time (s)', 'Time(s)', 'Time', 'time']:
+        for col in ["t_seconds", "Time (s)", "Time(s)", "Time", "time"]:
             if col in self.events_df.columns:
                 time_col = col
                 break
@@ -699,12 +717,12 @@ class GifAnimatorWindow(QMainWindow):
 
         # Convert time column to numeric (handles hh:mm:ss format)
         time_series = self.events_df[time_col].copy()
-        time_numeric = pd.to_numeric(time_series, errors='coerce')
+        time_numeric = pd.to_numeric(time_series, errors="coerce")
 
         # If conversion failed (all NaN), try parsing as hh:mm:ss timedelta
         if time_numeric.isna().all():
             try:
-                time_td = pd.to_timedelta(time_series.astype(str), errors='coerce')
+                time_td = pd.to_timedelta(time_series.astype(str), errors="coerce")
                 if not time_td.isna().all():
                     time_numeric = time_td.dt.total_seconds()
             except Exception:
@@ -712,18 +730,18 @@ class GifAnimatorWindow(QMainWindow):
 
         # Get TIFF time range for annotation
         tiff_start = self.frame_times[0] if self.frame_times else 0
-        tiff_end = self.frame_times[-1] if self.frame_times else float('inf')
+        tiff_end = self.frame_times[-1] if self.frame_times else float("inf")
 
         events = []
         for pos, (_, row) in enumerate(self.events_df.iterrows()):
             event_time = time_numeric.iloc[pos] if not pd.isna(time_numeric.iloc[pos]) else 0.0
-            event_label = row.get('Label', row.get('Event', f'Event {pos + 1}'))
+            event_label = row.get("Label", row.get("Event", f"Event {pos + 1}"))
             out_of_range = event_time < tiff_start or event_time > tiff_end
             suffix = " [out of TIFF range]" if out_of_range else ""
             events.append((event_time, event_label, f"{event_label} ({event_time:.2f}s){suffix}"))
 
         for event_time, event_label, display_label in events:
-            combo.addItem(display_label, userData={'time': event_time, 'label': event_label})
+            combo.addItem(display_label, userData={"time": event_time, "label": event_label})
 
     def _create_animation_settings_group(self) -> QGroupBox:
         """Create animation settings controls."""
@@ -969,7 +987,9 @@ class GifAnimatorWindow(QMainWindow):
         # Cancel button (hidden by default, shown during rendering)
         self.cancel_render_btn = QPushButton("Cancel")
         self.cancel_render_btn.clicked.connect(self._cancel_render)
-        self.cancel_render_btn.setStyleSheet("QPushButton { background-color: #ff6b6b; color: white; }")
+        self.cancel_render_btn.setStyleSheet(
+            "QPushButton { background-color: #ff6b6b; color: white; }"
+        )
         self.cancel_render_btn.setVisible(False)
         layout.addWidget(self.cancel_render_btn)
 
@@ -1005,19 +1025,15 @@ class GifAnimatorWindow(QMainWindow):
 
     def _update_sync_status(self):
         """Update the sync status label to show frame time source and confidence."""
-        if not hasattr(self, 'frame_time_metadata') or not hasattr(self, 'sync_status_label'):
+        if not hasattr(self, "frame_time_metadata") or not hasattr(self, "sync_status_label"):
             return
 
         result = self.frame_time_metadata
-        color_map = {
-            "high": "green",
-            "medium": "orange",
-            "low": "red"
-        }
+        color_map = {"high": "green", "medium": "orange", "low": "red"}
         color = color_map.get(result.confidence, "gray")
 
         # Create tooltip with detailed information
-        tooltip = f"Frame Time Synchronization\n\n"
+        tooltip = "Frame Time Synchronization\n\n"
         tooltip += f"Source: {result.source}\n"
         tooltip += f"Confidence: {result.confidence}\n"
         tooltip += f"Coverage: {result.mapping_coverage:.1%}\n"
@@ -1053,10 +1069,10 @@ class GifAnimatorWindow(QMainWindow):
         end_data = self.end_event_combo.currentData()
 
         if start_data and end_data:
-            self.current_spec.start_time_s = start_data['time']
-            self.current_spec.end_time_s = end_data['time']
-            self.current_spec.start_event_label = start_data['label']
-            self.current_spec.end_event_label = end_data['label']
+            self.current_spec.start_time_s = start_data["time"]
+            self.current_spec.end_time_s = end_data["time"]
+            self.current_spec.start_event_label = start_data["label"]
+            self.current_spec.end_event_label = end_data["label"]
 
             # Update time range display
             duration = self.current_spec.duration_s
@@ -1152,9 +1168,7 @@ class GifAnimatorWindow(QMainWindow):
             return
 
         if self.current_spec.auto_vessel_width:
-            self.current_spec.vessel_width_ratio = min(
-                self.current_spec.vessel_width_ratio, 0.3
-            )
+            self.current_spec.vessel_width_ratio = min(self.current_spec.vessel_width_ratio, 0.3)
             return
 
         min_trace_ratio = 70
@@ -1164,9 +1178,7 @@ class GifAnimatorWindow(QMainWindow):
             self.trace_width_spin.setValue(min_trace_ratio)
             self.trace_width_spin.blockSignals(False)
             trace_ratio = min_trace_ratio
-        self.current_spec.vessel_width_ratio = max(
-            0.1, min(0.9, 1.0 - trace_ratio / 100.0)
-        )
+        self.current_spec.vessel_width_ratio = max(0.1, min(0.9, 1.0 - trace_ratio / 100.0))
 
     def _apply_trace_shape_height(self) -> None:
         if self.current_spec.layout_mode != "side_by_side":
@@ -1177,7 +1189,9 @@ class GifAnimatorWindow(QMainWindow):
             return
 
         target_height = int(round(self.current_spec.output_width_px * WIDE_CANVAS_HEIGHT_RATIO))
-        target_height = max(self.height_spin.minimum(), min(self.height_spin.maximum(), target_height))
+        target_height = max(
+            self.height_spin.minimum(), min(self.height_spin.maximum(), target_height)
+        )
         if self.current_spec.output_height_px != target_height:
             self.current_spec.output_height_px = target_height
             self.height_spin.blockSignals(True)
@@ -1309,7 +1323,10 @@ class GifAnimatorWindow(QMainWindow):
                 timings,
                 playback_speed=self.current_spec.playback_speed,
             )
-            if self.rendered_frame_durations_ms and len(self.rendered_frame_durations_ms) != n_frames:
+            if (
+                self.rendered_frame_durations_ms
+                and len(self.rendered_frame_durations_ms) != n_frames
+            ):
                 logger.warning(
                     "Frame duration count mismatch; falling back to constant duration",
                     extra={
@@ -1326,17 +1343,18 @@ class GifAnimatorWindow(QMainWindow):
 
         # Estimate memory usage
         memory_mb = self._estimate_memory_mb(
-            n_frames,
-            self.current_spec.output_width_px,
-            self.current_spec.output_height_px
+            n_frames, self.current_spec.output_width_px, self.current_spec.output_height_px
         )
 
-        logger.info("Render initiated", extra={
-            "n_frames": n_frames,
-            "estimated_size_mb": estimated_size_mb,
-            "estimated_memory_mb": memory_mb,
-            "resolution": f"{self.current_spec.output_width_px}x{self.current_spec.output_height_px}"
-        })
+        logger.info(
+            "Render initiated",
+            extra={
+                "n_frames": n_frames,
+                "estimated_size_mb": estimated_size_mb,
+                "estimated_memory_mb": memory_mb,
+                "resolution": f"{self.current_spec.output_width_px}x{self.current_spec.output_height_px}",
+            },
+        )
 
         # Warn if memory usage is high
         if memory_mb > 500:  # Warn if >500MB
@@ -1350,7 +1368,7 @@ class GifAnimatorWindow(QMainWindow):
                 "resolution, or using faster playback speed.\n\n"
                 "Continue anyway?",
                 QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
+                QMessageBox.No,
             )
             if reply == QMessageBox.No:
                 logger.info("User cancelled render due to high memory warning")
@@ -1390,7 +1408,7 @@ class GifAnimatorWindow(QMainWindow):
         events = []
         if self.events_df is not None:
             time_col = None
-            for col in ['t_seconds', 'Time (s)', 'Time(s)', 'Time', 'time']:
+            for col in ["t_seconds", "Time (s)", "Time(s)", "Time", "time"]:
                 if col in self.events_df.columns:
                     time_col = col
                     break
@@ -1409,8 +1427,8 @@ class GifAnimatorWindow(QMainWindow):
                     if pd.isna(event_time) or not np.isfinite(event_time):
                         dropped += 1
                         continue
-                    event_label = row.get('Label', f'Event {idx + 1}')
-                    event_color = row.get('Color', '#888888')
+                    event_label = row.get("Label", f"Event {idx + 1}")
+                    event_color = row.get("Color", "#888888")
                     events.append(EventSpec(float(event_time), event_label, event_color))
                 log_fn = logger.warning if dropped else logger.info
                 log_fn(
@@ -1448,7 +1466,7 @@ class GifAnimatorWindow(QMainWindow):
         """Handle render error."""
         QMessageBox.critical(self, "Render Error", f"Failed to render animation:\n\n{error_msg}")
 
-        self.status_label.setText(f"✗ Render failed")
+        self.status_label.setText("✗ Render failed")
         self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
 
         # Restore UI state
@@ -1495,12 +1513,15 @@ class GifAnimatorWindow(QMainWindow):
         total_bytes = bytes_per_frame * n_frames
         memory_mb = total_bytes / (1024 * 1024)  # Convert to MB
 
-        logger.debug("Memory estimation", extra={
-            "n_frames": n_frames,
-            "resolution": f"{width}x{height}",
-            "bytes_per_frame": bytes_per_frame,
-            "total_mb": memory_mb
-        })
+        logger.debug(
+            "Memory estimation",
+            extra={
+                "n_frames": n_frames,
+                "resolution": f"{width}x{height}",
+                "bytes_per_frame": bytes_per_frame,
+                "total_mb": memory_mb,
+            },
+        )
 
         return memory_mb
 
@@ -1676,7 +1697,9 @@ class GifAnimatorWindow(QMainWindow):
             show_outer=self.current_spec.trace_spec.show_outer,
             y_range=self.current_spec.trace_spec.y_range,
             vessel_frame=frame,
-            time_offset_s=self.current_spec.start_time_s if self.current_spec.display_time_zero else 0.0,
+            time_offset_s=self.current_spec.start_time_s
+            if self.current_spec.display_time_zero
+            else 0.0,
         )
 
         from PIL import Image

@@ -7,19 +7,18 @@
 
 from __future__ import annotations
 
-from typing import Sequence
-
 import math
+from collections.abc import Sequence
 
 import numpy as np
 from PyQt5 import QtCore, QtWidgets
 
 from .controller import StackPlayerController
-from .transport_bar import TiffTransportBar
 from .frame_cache import FrameCache, qimage_cache_key
 from .frame_view import FrameView, coerce_qimage
 from .page_time_map import PageTimeMap
 from .stack_source import InMemoryStackSource, StackSource
+from .transport_bar import TiffTransportBar
 
 
 class TiffStackViewerWidget(QtWidgets.QWidget):

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import contextlib
 import logging
-from PyQt5.QtCore import QEvent, QObject, Qt, QTimer, QSize
+from typing import TYPE_CHECKING
+
+from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
-    QHBoxLayout,
     QLabel,
-    QScrollBar,
     QScrollArea,
+    QScrollBar,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -96,9 +95,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         window.canvas.toolbar = None
 
     window.overview_strip = OverviewStrip(window)
-    window.overview_strip.timeWindowRequested.connect(
-        window._on_trace_nav_window_requested
-    )
+    window.overview_strip.timeWindowRequested.connect(window._on_trace_nav_window_requested)
     window.overview_strip.setVisible(False)
     initial_specs = [
         ChannelTrackSpec(
@@ -192,9 +189,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         viewer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         viewer.hide()
         viewer.setContextMenuPolicy(Qt.CustomContextMenu)
-        viewer.customContextMenuRequested.connect(
-            window.show_snapshot_context_menu
-        )
+        viewer.customContextMenuRequested.connect(window.show_snapshot_context_menu)
 
         controls = getattr(viewer, "controls", None)
         if controls is not None:
@@ -212,9 +207,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         if controller is not None:
             controller.page_changed.connect(window._on_snapshot_page_changed_v2)
             controller.playing_changed.connect(window._on_snapshot_playing_changed)
-            controller.mapped_time_changed.connect(
-                window._on_snapshot_playback_time_changed
-            )
+            controller.mapped_time_changed.connect(window._on_snapshot_playback_time_changed)
         with contextlib.suppress(Exception):
             viewer.set_pps(float(getattr(window, "snapshot_pps", 30.0)))
         with contextlib.suppress(Exception):
@@ -222,9 +215,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         with contextlib.suppress(Exception):
             viewer.set_loop(bool(getattr(window, "snapshot_loop_enabled", True)))
         with contextlib.suppress(Exception):
-            viewer.set_speed_multiplier(
-                float(getattr(window, "snapshot_speed_multiplier", 1.0))
-            )
+            viewer.set_speed_multiplier(float(getattr(window, "snapshot_speed_multiplier", 1.0)))
         if controls is not None:
             controls.speedChanged.connect(window.on_snapshot_speed_changed)
 
@@ -455,7 +446,11 @@ QLabel#MetadataDetails {{
     window.stack.setCurrentWidget(window.data_page)
     window._set_toolbars_visible(True)
 
-    backend = window.plot_host.get_render_backend() if hasattr(window.plot_host, "get_render_backend") else ""
+    backend = (
+        window.plot_host.get_render_backend()
+        if hasattr(window.plot_host, "get_render_backend")
+        else ""
+    )
     if backend == "matplotlib":
         window.canvas.mpl_connect("draw_event", window.update_event_label_positions)
         window.canvas.mpl_connect("draw_event", window.sync_slider_with_plot)

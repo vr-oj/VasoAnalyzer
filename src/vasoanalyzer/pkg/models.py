@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid as _uuid
 from datetime import datetime, timezone
-from typing import Final, Literal, Optional
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 

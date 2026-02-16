@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QSettings, QSize, Qt
 from PyQt5.QtGui import QIcon
@@ -53,9 +54,7 @@ class HomeDashboardWindow(QMainWindow):
         super().__init__()
         self._window_manager = window_manager
         self.settings = QSettings("TykockiLab", "VasoAnalyzer")
-        self.onboarding_settings = QSettings(
-            ONBOARDING_SETTINGS_ORG, ONBOARDING_SETTINGS_APP
-        )
+        self.onboarding_settings = QSettings(ONBOARDING_SETTINGS_ORG, ONBOARDING_SETTINGS_APP)
         self.recent_files: list[str] = []
         self.recent_projects: list[str] = []
         self._welcome_dialog = None
@@ -139,9 +138,7 @@ class HomeDashboardWindow(QMainWindow):
     def home_open_data(self) -> None:
         self._window_manager.open_data_from_home(self)
 
-    def show_import_data_menu(
-        self, checked: bool = False, anchor: QWidget | None = None
-    ) -> None:
+    def show_import_data_menu(self, checked: bool = False, anchor: QWidget | None = None) -> None:
         self._window_manager.open_data_from_home(self)
 
     def show_analysis_workspace(self):
@@ -311,9 +308,7 @@ class HomeDashboardWindow(QMainWindow):
                     row = self._make_home_recent_row(
                         name,
                         path,
-                        lambda checked=False, p=path: self._window_manager.open_recent_session(
-                            p
-                        ),
+                        lambda checked=False, p=path: self._window_manager.open_recent_session(p),
                         lambda checked=False, p=path: self.remove_recent_file(p),
                     )
                     layout.addWidget(row)
@@ -322,9 +317,7 @@ class HomeDashboardWindow(QMainWindow):
         if hasattr(self, "home_recent_projects_layout"):
             layout = self.home_recent_projects_layout
             self._clear_layout(layout)
-            projects = [
-                p for p in (self.recent_projects or []) if isinstance(p, str) and p
-            ]
+            projects = [p for p in (self.recent_projects or []) if isinstance(p, str) and p]
             has_projects = bool(projects)
             if hasattr(self, "home_clear_projects_button"):
                 self.home_clear_projects_button.setVisible(has_projects)
@@ -483,13 +476,8 @@ QPushButton[isGhost="true"]:pressed {{
             if isinstance(current_theme, dict):
                 is_dark = bool(current_theme.get("is_dark", False))
             dark_theme = getattr(theme_module, "DARK_THEME", None)
-            if (
-                is_dark
-                or (
-                    current_theme is not None
-                    and dark_theme is not None
-                    and current_theme is dark_theme
-                )
+            if is_dark or (
+                current_theme is not None and dark_theme is not None and current_theme is dark_theme
             ):
                 name, ext = os.path.splitext(filename)
                 dark_filename = f"{name}_Dark{ext}"
@@ -533,9 +521,7 @@ QPushButton[isGhost="true"]:pressed {{
         hide = bool(getattr(dialog, "hide_for_version", False))
 
         self.onboarding_settings.setValue("ui/show_welcome", not hide)
-        self.onboarding_settings.setValue(
-            "general/show_onboarding", "false" if hide else "true"
-        )
+        self.onboarding_settings.setValue("general/show_onboarding", "false" if hide else "true")
 
         if getattr(self, "_welcome_dialog", None) is dialog:
             self._welcome_dialog = None

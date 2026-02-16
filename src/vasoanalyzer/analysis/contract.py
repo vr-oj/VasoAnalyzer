@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple, Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -27,7 +27,7 @@ def _validate_1d(
         raise error_type(f"{name} must be non-empty.")
 
 
-def _normalize_unit(unit: str, mapping: Dict[str, str], field_name: str) -> str:
+def _normalize_unit(unit: str, mapping: dict[str, str], field_name: str) -> str:
     if not isinstance(unit, str):
         raise AnalysisError(f"{field_name} unit must be a string.")
     normal = unit.strip()
@@ -93,9 +93,9 @@ class Event:
 
     type: EventType
     start_s: float
-    end_s: Optional[float] = None
+    end_s: float | None = None
     label: str = ""
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         try:
@@ -128,9 +128,9 @@ class TrackingMetadata:
     """
 
     algorithm: str = ""
-    rois: Tuple[Dict[str, Any], ...] = ()
-    filters: Tuple[Dict[str, Any], ...] = ()
-    rejected_frame_fraction: Optional[float] = None
+    rois: tuple[dict[str, Any], ...] = ()
+    filters: tuple[dict[str, Any], ...] = ()
+    rejected_frame_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -148,14 +148,14 @@ class MyographyDataset:
     time: TimeSeries
 
     diameter_inner_um: Trace
-    pressure_mmhg: Optional[Trace] = None
-    temperature_c: Optional[Trace] = None
-    diameter_outer_um: Optional[Trace] = None
+    pressure_mmhg: Trace | None = None
+    temperature_c: Trace | None = None
+    diameter_outer_um: Trace | None = None
 
-    events: Tuple[Event, ...] = ()
+    events: tuple[Event, ...] = ()
     tracking: TrackingMetadata = field(default_factory=TrackingMetadata)
 
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.dataset_id, str) or not self.dataset_id:
@@ -186,7 +186,7 @@ class MyographyDataset:
 
         self._normalize_units()
 
-    def _validate_trace_alignment(self, trace: Optional[Trace], name: str) -> None:
+    def _validate_trace_alignment(self, trace: Trace | None, name: str) -> None:
         if trace is None:
             return
         if not isinstance(trace, Trace):
@@ -310,11 +310,11 @@ def build_dataset_from_arrays(
     dataset_id: str,
     time_s: FloatArray,
     diameter_inner_um: FloatArray,
-    pressure_mmhg: Optional[FloatArray] = None,
-    temperature_c: Optional[FloatArray] = None,
-    diameter_outer_um: Optional[FloatArray] = None,
-    events: Optional[Tuple[Event, ...]] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    pressure_mmhg: FloatArray | None = None,
+    temperature_c: FloatArray | None = None,
+    diameter_outer_um: FloatArray | None = None,
+    events: tuple[Event, ...] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> MyographyDataset:
     """
     Minimal adapter to build a MyographyDataset from raw arrays.

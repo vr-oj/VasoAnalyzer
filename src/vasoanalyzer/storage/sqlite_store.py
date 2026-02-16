@@ -28,13 +28,13 @@ import pandas as pd
 
 log = logging.getLogger(__name__)
 
+from vasoanalyzer.storage import validation as _validation
 from vasoanalyzer.storage.sqlite import assets as _assets
 from vasoanalyzer.storage.sqlite import events as _events
 from vasoanalyzer.storage.sqlite import projects as _projects
 from vasoanalyzer.storage.sqlite import traces as _traces
-from vasoanalyzer.storage import validation as _validation
 from vasoanalyzer.storage.sqlite.db_writer import DbWriter
-from vasoanalyzer.storage.sqlite.utils import open_db, transaction
+from vasoanalyzer.storage.sqlite.utils import open_db
 
 from .sqlite_utils import backup_to_delete_mode as _sqlite_backup_to_delete_mode
 from .sqlite_utils import checkpoint_full as _sqlite_checkpoint_full
@@ -282,7 +282,8 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
 
             # Create backup before migration
             import shutil
-            backup_path = project_path.as_posix().replace('.vaso', f'.v{version}.backup.vaso')
+
+            backup_path = project_path.as_posix().replace(".vaso", f".v{version}.backup.vaso")
             conn.close()  # Close before copying
             shutil.copy2(project_path.as_posix(), backup_path)
             log.info(f"Created backup: {backup_path}")
@@ -711,51 +712,50 @@ def add_or_update_asset(
     previous_asset_id: int | None = None
 
     try:
-        with _write_conn(store) as conn:
-            with conn:
-                ref_row = _assets.get_ref_by_role(conn, dataset_id, role)
-                if ref_row:
-                    previous_asset_id = ref_row[0]
+        with _write_conn(store) as conn, conn:
+            ref_row = _assets.get_ref_by_role(conn, dataset_id, role)
+            if ref_row:
+                previous_asset_id = ref_row[0]
 
-                existing = _assets.find_asset_by_sha(conn, prepared.sha256)
-                if existing:
-                    asset_id = existing[0]
-                else:
-                    asset_id = _assets.register_asset(
-                        conn,
-                        kind=role,
-                        sha256=prepared.sha256,
-                        size_bytes=prepared.size_bytes,
-                        compressed=prepared.compressed,
-                        chunk_size=prepared.chunk_size,
-                        original_name=original_name_hint,
-                        mime=mime,
-                    )
-                    prepared.source.seek(0)
-                    _assets.write_blob_chunks_from_stream(
-                        conn,
-                        asset_id,
-                        prepared.source,
-                        chunk_size=prepared.chunk_size,
-                    )
-
-                _assets.upsert_ref(
+            existing = _assets.find_asset_by_sha(conn, prepared.sha256)
+            if existing:
+                asset_id = existing[0]
+            else:
+                asset_id = _assets.register_asset(
                     conn,
-                    asset_id=asset_id,
-                    dataset_id=dataset_id,
-                    role=role,
-                    note=note,
+                    kind=role,
+                    sha256=prepared.sha256,
+                    size_bytes=prepared.size_bytes,
+                    compressed=prepared.compressed,
+                    chunk_size=prepared.chunk_size,
+                    original_name=original_name_hint,
+                    mime=mime,
+                )
+                prepared.source.seek(0)
+                _assets.write_blob_chunks_from_stream(
+                    conn,
+                    asset_id,
+                    prepared.source,
+                    chunk_size=prepared.chunk_size,
                 )
 
-                if previous_asset_id is not None and previous_asset_id != asset_id:
-                    _assets.delete_ref(
-                        conn,
-                        asset_id=previous_asset_id,
-                        dataset_id=dataset_id,
-                        role=role,
-                    )
-                    if _assets.count_refs(conn, previous_asset_id) == 0:
-                        _assets.delete_asset(conn, previous_asset_id)
+            _assets.upsert_ref(
+                conn,
+                asset_id=asset_id,
+                dataset_id=dataset_id,
+                role=role,
+                note=note,
+            )
+
+            if previous_asset_id is not None and previous_asset_id != asset_id:
+                _assets.delete_ref(
+                    conn,
+                    asset_id=previous_asset_id,
+                    dataset_id=dataset_id,
+                    role=role,
+                )
+                if _assets.count_refs(conn, previous_asset_id) == 0:
+                    _assets.delete_asset(conn, previous_asset_id)
     finally:
         prepared.closer()
 

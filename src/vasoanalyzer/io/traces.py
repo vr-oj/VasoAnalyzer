@@ -319,9 +319,11 @@ def merge_traces(
             if idx > 0 and frame_offset is not None and np.isfinite(frame_offset):
                 frame_shift = int(frame_offset - f_start + 1)
             df["FrameNumber"] = frame_vals + frame_shift
-            frame_offset_candidate = float(np.nanmax(df["FrameNumber"])) if np.isfinite(
-                np.nanmax(df["FrameNumber"])
-            ) else None
+            frame_offset_candidate = (
+                float(np.nanmax(df["FrameNumber"]))
+                if np.isfinite(np.nanmax(df["FrameNumber"]))
+                else None
+            )
             if frame_offset_candidate is not None and np.isfinite(frame_offset_candidate):
                 frame_offset = frame_offset_candidate
 
@@ -332,15 +334,19 @@ def merge_traces(
             if idx > 0 and tiff_offset is not None and np.isfinite(tiff_offset):
                 tiff_shift = int(tiff_offset - tp_start + 1)
             df["TiffPage"] = tiff_vals + tiff_shift
-            tiff_offset_candidate = float(np.nanmax(df["TiffPage"])) if np.isfinite(
-                np.nanmax(df["TiffPage"])
-            ) else None
+            tiff_offset_candidate = (
+                float(np.nanmax(df["TiffPage"])) if np.isfinite(np.nanmax(df["TiffPage"])) else None
+            )
             if tiff_offset_candidate is not None and np.isfinite(tiff_offset_candidate):
                 tiff_offset = tiff_offset_candidate
 
         merged_frames.append(df)
 
-        t_end = float(np.nanmax(df["Time (s)"])) if np.isfinite(np.nanmax(df["Time (s)"])) else time_offset
+        t_end = (
+            float(np.nanmax(df["Time (s)"]))
+            if np.isfinite(np.nanmax(df["Time (s)"]))
+            else time_offset
+        )
         time_offset = max(time_offset, t_end)
 
         total_neg_inner += int(df.attrs.get("negative_inner_diameters", 0) or 0)

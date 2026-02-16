@@ -123,9 +123,7 @@ QLabel#GotoTimeError {{
         if self._full_range is not None:
             start, end = self._full_range
             if value < start or value > end:
-                self._set_error(
-                    f"Time must be between {start:.2f}s and {end:.2f}s."
-                )
+                self._set_error(f"Time must be between {start:.2f}s and {end:.2f}s.")
                 return
 
         self._time_value = value

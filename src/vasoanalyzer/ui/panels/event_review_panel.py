@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QDoubleValidator, QKeyEvent
 from PyQt5.QtWidgets import (
     QButtonGroup,
-    QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -17,8 +15,6 @@ from PyQt5.QtWidgets import (
     QRadioButton,
     QVBoxLayout,
     QWidget,
-    QFrame,
-    QSizePolicy,
 )
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -199,7 +195,9 @@ class EventReviewPanel(QWidget):
 
         self.sample_button = QPushButton("Sample from Trace")
         self.sample_button.setObjectName("SampleButton")
-        self.sample_button.setToolTip("Click to enter sampling mode, then click the trace to sample ID/OD values (S)")
+        self.sample_button.setToolTip(
+            "Click to enter sampling mode, then click the trace to sample ID/OD values (S)"
+        )
         self.sample_button.clicked.connect(self._on_sample_requested)
         self.sample_button.setCheckable(True)
         layout.addWidget(self.sample_button)

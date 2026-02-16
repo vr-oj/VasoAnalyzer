@@ -110,11 +110,11 @@ def load_tiff(file_path, max_frames=None, metadata=True):
 
         # Build loading info
         loading_info = {
-            'total_frames': total_frames,
-            'loaded_frames': len(indices),
-            'frame_stride': skip,
-            'frame_indices': indices,
-            'is_subsampled': skip > 1
+            "total_frames": total_frames,
+            "loaded_frames": len(indices),
+            "frame_stride": skip,
+            "frame_indices": indices,
+            "is_subsampled": skip > 1,
         }
 
         if not metadata:
@@ -124,8 +124,7 @@ def load_tiff(file_path, max_frames=None, metadata=True):
             else:
                 for frame in frames_array:
                     frames.append(np.array(frame))
-            log.info("Loaded %d frames (total: %d, stride: %d)",
-                    len(frames), total_frames, skip)
+            log.info("Loaded %d frames (total: %d, stride: %d)", len(frames), total_frames, skip)
             return frames, frames_metadata, loading_info
 
         for i in indices:

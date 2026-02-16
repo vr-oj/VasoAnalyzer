@@ -142,9 +142,7 @@ def flatten_style_defaults(style: dict[str, dict[str, Any]] | None = None) -> di
         "event_label_span_siblings": bool(
             _get(events, "span_siblings", STYLE_DEFAULTS["events"]["span_siblings"])
         ),
-        "event_labels_v3_enabled": bool(
-            _get(events, "use_v3", STYLE_DEFAULTS["events"]["use_v3"])
-        ),
+        "event_labels_v3_enabled": bool(_get(events, "use_v3", STYLE_DEFAULTS["events"]["use_v3"])),
         "event_label_mode": _get(events, "mode", STYLE_DEFAULTS["events"]["mode"]),
         "event_label_auto_mode": bool(
             _get(events, "auto_mode", STYLE_DEFAULTS["events"]["auto_mode"])

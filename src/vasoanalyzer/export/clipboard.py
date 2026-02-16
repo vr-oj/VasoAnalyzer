@@ -28,9 +28,7 @@ def _format_cell(value: object | None) -> str:
     return str(value)
 
 
-def _render_delimited(
-    table: ExportTable, *, delimiter: str, include_header: bool = True
-) -> str:
+def _render_delimited(table: ExportTable, *, delimiter: str, include_header: bool = True) -> str:
     output = StringIO()
     writer = csv.writer(output, delimiter=delimiter, lineterminator="\n")
     if include_header and table.headers:
@@ -48,8 +46,6 @@ def render_csv(table: ExportTable, *, include_header: bool = True) -> str:
     return _render_delimited(table, delimiter=",", include_header=include_header)
 
 
-def write_csv(
-    path: str | Path, table: ExportTable, *, include_header: bool = True
-) -> None:
+def write_csv(path: str | Path, table: ExportTable, *, include_header: bool = True) -> None:
     text = render_csv(table, include_header=include_header)
     Path(path).write_text(text, encoding="utf-8")

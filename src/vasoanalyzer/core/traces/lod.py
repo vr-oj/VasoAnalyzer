@@ -45,12 +45,24 @@ class LODLevel:
             outer_mean=None if self.outer_mean is None else self.outer_mean[lo:hi],
             outer_min=None if self.outer_min is None else self.outer_min[lo:hi],
             outer_max=None if self.outer_max is None else self.outer_max[lo:hi],
-            avg_pressure_mean=None if self.avg_pressure_mean is None else self.avg_pressure_mean[lo:hi],
-            avg_pressure_min=None if self.avg_pressure_min is None else self.avg_pressure_min[lo:hi],
-            avg_pressure_max=None if self.avg_pressure_max is None else self.avg_pressure_max[lo:hi],
-            set_pressure_mean=None if self.set_pressure_mean is None else self.set_pressure_mean[lo:hi],
-            set_pressure_min=None if self.set_pressure_min is None else self.set_pressure_min[lo:hi],
-            set_pressure_max=None if self.set_pressure_max is None else self.set_pressure_max[lo:hi],
+            avg_pressure_mean=None
+            if self.avg_pressure_mean is None
+            else self.avg_pressure_mean[lo:hi],
+            avg_pressure_min=None
+            if self.avg_pressure_min is None
+            else self.avg_pressure_min[lo:hi],
+            avg_pressure_max=None
+            if self.avg_pressure_max is None
+            else self.avg_pressure_max[lo:hi],
+            set_pressure_mean=None
+            if self.set_pressure_mean is None
+            else self.set_pressure_mean[lo:hi],
+            set_pressure_min=None
+            if self.set_pressure_min is None
+            else self.set_pressure_min[lo:hi],
+            set_pressure_max=None
+            if self.set_pressure_max is None
+            else self.set_pressure_max[lo:hi],
         )
 
     def count_in_range(self, x0: float, x1: float) -> int:

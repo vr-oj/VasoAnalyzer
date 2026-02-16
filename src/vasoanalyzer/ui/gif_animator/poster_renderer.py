@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 import numpy as np
-from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
 from PIL import Image
-
 
 TRACE_RATIO = 0.8
 TRACE_LINE_WIDTH = 3.6

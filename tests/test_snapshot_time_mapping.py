@@ -22,9 +22,7 @@ def test_tiff_page_time_mapping_from_trace():
     assert 99.0 <= float(result.median_interval_s) <= 101.0
     assert page_for_time(98.7, result.tiff_page_times, mode="nearest") == 1
     assert page_for_time(0.0, result.tiff_page_times, mode="nearest") == 0
-    assert page_for_time(times[-1], result.tiff_page_times, mode="nearest") == (
-        n_pages - 1
-    )
+    assert page_for_time(times[-1], result.tiff_page_times, mode="nearest") == (n_pages - 1)
     for idx, time_val in enumerate(result.tiff_page_times):
         assert page_for_time(time_val, result.tiff_page_times, mode="nearest") == idx
 

@@ -16,16 +16,16 @@ from PyQt5.QtWidgets import QApplication
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
-from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_marker_layer import (
     PyQtGraphEventMarkerLayer,
 )
 from vasoanalyzer.ui.plots.pyqtgraph_style import (
+    PLOT_AXIS_LABELS,
     apply_selection_box_style,
     get_pyqtgraph_style,
-    PLOT_AXIS_LABELS,
 )
+from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
@@ -720,9 +720,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             y_max,
         )
 
-    def _set_ylim_internal(
-        self, y_min: float, y_max: float, *, preserve_autoscale: bool
-    ) -> None:
+    def _set_ylim_internal(self, y_min: float, y_max: float, *, preserve_autoscale: bool) -> None:
         vb = self._view_box
         if preserve_autoscale:
             vb.setRange(

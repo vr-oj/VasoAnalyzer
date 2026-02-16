@@ -8,9 +8,9 @@ Main entry point:
 """
 
 from .animator_window import GifAnimatorWindow
-from .specs import AnimationSpec, TracePanelSpec
-from .renderer import AnimationRenderer, save_gif, estimate_gif_size_mb
 from .frame_synchronizer import FrameSynchronizer, FrameTimingInfo
+from .renderer import AnimationRenderer, estimate_gif_size_mb, save_gif
+from .specs import AnimationSpec, TracePanelSpec
 
 __all__ = [
     "GifAnimatorWindow",

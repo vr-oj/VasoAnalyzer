@@ -22,6 +22,7 @@ class FrameTimeExtractionResult:
         warnings: List of issues encountered during extraction
         mapping_coverage: Fraction of frames with actual data (vs estimated) in range [0.0, 1.0]
     """
+
     frame_times: list[float]
     source: str
     confidence: str

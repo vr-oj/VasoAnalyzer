@@ -25,11 +25,9 @@ from typing import Any
 
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import MouseEvent
-from matplotlib.patches import FancyArrow, FancyBboxPatch, Rectangle
-from matplotlib.text import Text
-from PyQt5.QtWidgets import QColorDialog, QInputDialog, QMenu
-from PyQt5.QtCore import Qt
+from matplotlib.patches import FancyArrow, FancyBboxPatch
 from PyQt5.QtGui import QColor
+from PyQt5.QtWidgets import QColorDialog, QInputDialog, QMenu
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +36,7 @@ __all__ = ["AnnotationTool", "AnnotationShape", "ShapeType"]
 
 class ShapeType(Enum):
     """Types of annotation shapes."""
+
     BOX = "box"  # Rectangle with text
     LINE = "line"  # Simple line
     ARROW = "arrow"  # Arrow pointing right
@@ -206,7 +205,7 @@ class AnnotationTool:
             None,
             "Edit Label",
             f"Enter label for {self._selected_shape.shape_type.value}:",
-            text=current_label
+            text=current_label,
         )
 
         if ok:
@@ -276,6 +275,7 @@ class AnnotationTool:
             return
 
         import time
+
         current_time = time.time()
         is_double_click = (current_time - self._last_click_time) < 0.3
         self._last_click_time = current_time
@@ -321,7 +321,11 @@ class AnnotationTool:
             return
 
         # Moving a selected shape
-        if self._dragging_shape and self._selected_shape is not None and self._drag_start is not None:
+        if (
+            self._dragging_shape
+            and self._selected_shape is not None
+            and self._drag_start is not None
+        ):
             dx = event.xdata - self._drag_start[0]
             self._selected_shape.x_start += dx
             if self._selected_shape.x_end is not None:
@@ -360,9 +364,7 @@ class AnnotationTool:
         # Prompt for label if it's a box or text
         if self._drawing_shape.shape_type in {ShapeType.BOX, ShapeType.TEXT}:
             label, ok = QInputDialog.getText(
-                None,
-                "Add Label",
-                f"Enter label for {self._drawing_shape.shape_type.value}:"
+                None, "Add Label", f"Enter label for {self._drawing_shape.shape_type.value}:"
             )
             if ok and label:
                 self._drawing_shape.label = label
@@ -454,7 +456,9 @@ class AnnotationTool:
         elif shape.shape_type == ShapeType.TEXT:
             self._render_text(shape, y, transform)
 
-    def _render_box(self, shape: AnnotationShape, y: float, transform: Any, linewidth: float) -> None:
+    def _render_box(
+        self, shape: AnnotationShape, y: float, transform: Any, linewidth: float
+    ) -> None:
         """Render a box shape."""
         if shape.x_end is None:
             return
@@ -492,7 +496,9 @@ class AnnotationTool:
             )
             shape._artists.append(text)
 
-    def _render_line(self, shape: AnnotationShape, y: float, transform: Any, linewidth: float) -> None:
+    def _render_line(
+        self, shape: AnnotationShape, y: float, transform: Any, linewidth: float
+    ) -> None:
         """Render a line shape."""
         if shape.x_end is None:
             return
@@ -508,7 +514,9 @@ class AnnotationTool:
         )[0]
         shape._artists.append(line)
 
-    def _render_arrow(self, shape: AnnotationShape, y: float, transform: Any, linewidth: float) -> None:
+    def _render_arrow(
+        self, shape: AnnotationShape, y: float, transform: Any, linewidth: float
+    ) -> None:
         """Render an arrow shape."""
         if shape.x_end is None:
             return

@@ -78,8 +78,12 @@ class TraceModel:
             self._outer_clean = self._outer_raw.copy()
 
         # Store pressure data (not editable, so no raw/clean distinction needed)
-        self._avg_pressure = None if avg_pressure is None else ensure_float_array(avg_pressure)[order]
-        self._set_pressure = None if set_pressure is None else ensure_float_array(set_pressure)[order]
+        self._avg_pressure = (
+            None if avg_pressure is None else ensure_float_array(avg_pressure)[order]
+        )
+        self._set_pressure = (
+            None if set_pressure is None else ensure_float_array(set_pressure)[order]
+        )
 
         self._base_factor = max(int(base_factor), 2)
         self._max_points_per_level = max(int(max_points_per_level), 64)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -22,16 +22,16 @@ class StepResult:
     step_index: int
     start_s: float
     end_s: float
-    target_mmhg: Optional[float]
+    target_mmhg: float | None
     mean_diameter_inner_um: float
-    mean_pressure_mmhg: Optional[float]
+    mean_pressure_mmhg: float | None
 
 
 def compute_step_steady_state(
     dataset: MyographyDataset,
     steps: Sequence[StepSegment],
     params: AnalysisParamsV1,
-) -> Tuple[StepResult, ...]:
+) -> tuple[StepResult, ...]:
     results: list[StepResult] = []
     transient_exclude = params.step_windows.transient_exclude_s
     steady_window = params.step_windows.steady_state_window_s
@@ -45,7 +45,7 @@ def compute_step_steady_state(
                 f"Empty steady-state window for step {step.index} ({step.start_s}-{step.end_s}s)."
             )
         mean_diameter = float(np.mean(dataset.diameter_inner_um.values[mask]))
-        mean_pressure: Optional[float] = None
+        mean_pressure: float | None = None
         if dataset.pressure_mmhg is not None:
             mean_pressure = float(np.mean(dataset.pressure_mmhg.values[mask]))
 
@@ -126,10 +126,10 @@ def compute_myogenic_tone_percent(
 @dataclass(frozen=True)
 class AnalysisResultsV1:
     provenance: Provenance
-    steps: Tuple[StepSegment, ...]
-    step_results: Tuple[StepResult, ...]
-    passive_diameter_um: Tuple[float, ...]
-    tone_percent: Tuple[float, ...]
+    steps: tuple[StepSegment, ...]
+    step_results: tuple[StepResult, ...]
+    passive_diameter_um: tuple[float, ...]
+    tone_percent: tuple[float, ...]
 
 
 def analyze_pressure_myography_v1(

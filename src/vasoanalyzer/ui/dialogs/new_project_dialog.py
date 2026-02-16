@@ -200,9 +200,7 @@ class NewProjectDialog(QDialog):
         full_text = f"Will create: {self._preview_path}"
         if self.preview_label.width() > 0:
             metrics = QFontMetrics(self.preview_label.font())
-            display = metrics.elidedText(
-                full_text, Qt.ElideMiddle, self.preview_label.width()
-            )
+            display = metrics.elidedText(full_text, Qt.ElideMiddle, self.preview_label.width())
         else:
             display = full_text
         self.preview_label.setText(display)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import logging
+from collections.abc import Callable
 from typing import Protocol
 
 from PyQt5.QtCore import QSettings, Qt, pyqtSignal
@@ -95,9 +95,7 @@ class HomePage(QWidget):
         content_layout.addWidget(self._build_hero_section(), stretch=0)
         content_layout.addWidget(self._build_cards_row(), stretch=0)
 
-        scroll_layout.addWidget(
-            self._content, 0, Qt.AlignHCenter | Qt.AlignTop
-        )
+        scroll_layout.addWidget(self._content, 0, Qt.AlignHCenter | Qt.AlignTop)
 
         self._banner_container = QFrame(self)
         self._banner_container.setObjectName("HomeBannerContainer")
@@ -413,9 +411,7 @@ class HomePage(QWidget):
         total += spacing * max(len(visible) - 1, 0)
         return total > available_width
 
-    def _set_action_button_policy(
-        self, buttons: list[QWidget], *, expand: bool
-    ) -> None:
+    def _set_action_button_policy(self, buttons: list[QWidget], *, expand: bool) -> None:
         policy = QSizePolicy.Expanding if expand else QSizePolicy.Preferred
         for button in buttons:
             button.setSizePolicy(policy, QSizePolicy.Fixed)
@@ -467,9 +463,7 @@ class HomePage(QWidget):
 
         if hasattr(self, "_cards_layout"):
             available_width = self._cards_widget.contentsRect().width()
-            stack = self._needs_stack(
-                self._cards, self._cards_layout.spacing(), available_width
-            )
+            stack = self._needs_stack(self._cards, self._cards_layout.spacing(), available_width)
             direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
             self._cards_layout.setDirection(direction)
             self._cards_layout.setSpacing(16 if stack else 24)

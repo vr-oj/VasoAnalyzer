@@ -8,7 +8,6 @@ import pyqtgraph as pg
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
 
-
 log = logging.getLogger(__name__)
 
 

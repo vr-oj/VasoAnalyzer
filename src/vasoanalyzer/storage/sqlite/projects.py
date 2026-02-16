@@ -38,7 +38,7 @@ def apply_default_pragmas(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA synchronous = NORMAL;")  # Changed from FULL - safe with WAL
     conn.execute("PRAGMA temp_store = MEMORY;")
     conn.execute("PRAGMA mmap_size = 268435456;")  # 256MB memory mapping
-    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+    conn.execute("PRAGMA cache_size = -131072;")  # 128MB cache
 
 
 def apply_cloud_safe_pragmas(conn: sqlite3.Connection) -> None:
@@ -56,9 +56,9 @@ def apply_cloud_safe_pragmas(conn: sqlite3.Connection) -> None:
     """
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = DELETE;")  # Cloud-safe mode
-    conn.execute("PRAGMA synchronous = FULL;")      # Ensure durability
+    conn.execute("PRAGMA synchronous = FULL;")  # Ensure durability
     conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+    conn.execute("PRAGMA cache_size = -131072;")  # 128MB cache
     # NOTE: No mmap_size for cloud storage - can cause issues with sync
 
 
@@ -346,9 +346,7 @@ def run_migrations(
             version = 6
 
         else:
-            raise RuntimeError(
-                f"Unknown schema version {version}. Cannot migrate."
-            )
+            raise RuntimeError(f"Unknown schema version {version}. Cannot migrate.")
     set_user_version(conn, target)
     conn.commit()
 

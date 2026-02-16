@@ -139,9 +139,7 @@ def has_vaso_metadata(wb: Workbook, sheet_name: str | None = None) -> bool:
     return False
 
 
-def read_template_metadata(
-    path: str | Path, wb: Workbook | None = None
-) -> TemplateMetadata | None:
+def read_template_metadata(path: str | Path, wb: Workbook | None = None) -> TemplateMetadata | None:
     """
     Read template metadata from an Excel file.
 
@@ -302,9 +300,7 @@ def _read_from_named_ranges(wb: Workbook, ws: Worksheet) -> TemplateMetadata | N
         )
 
         # Detect event rows
-        metadata.event_rows = _detect_event_rows(
-            ws, v_min_row, v_max_row, label_column=1
-        )
+        metadata.event_rows = _detect_event_rows(ws, v_min_row, v_max_row, label_column=1)
 
         # Detect date columns
         metadata.date_columns = _detect_date_columns(
@@ -331,11 +327,7 @@ def _infer_from_structure(wb: Workbook, ws: Worksheet) -> TemplateMetadata | Non
         # Find date row (first row with multiple populated cells)
         date_row = None
         for row_idx in range(1, min(10, ws.max_row + 1)):
-            non_empty = sum(
-                1
-                for cell in ws[row_idx]
-                if cell.value not in (None, "")
-            )
+            non_empty = sum(1 for cell in ws[row_idx] if cell.value not in (None, ""))
             if non_empty >= 2:
                 date_row = row_idx
                 break
@@ -404,9 +396,7 @@ def _detect_event_rows(
                 if cell.fill.patternType and cell.fill.patternType != "none":
                     is_header = True
 
-        rows.append(
-            EventRowMetadata(row=row_idx, label=label, is_header=is_header)
-        )
+        rows.append(EventRowMetadata(row=row_idx, label=label, is_header=is_header))
 
     return rows
 
@@ -498,9 +488,7 @@ def invoke_export_metadata(path: str | Path) -> bool:
         return False
 
 
-def read_sheet_specific_metadata(
-    wb: Workbook, sheet_name: str
-) -> TemplateMetadata | None:
+def read_sheet_specific_metadata(wb: Workbook, sheet_name: str) -> TemplateMetadata | None:
     """
     Read metadata for a specific worksheet.
 

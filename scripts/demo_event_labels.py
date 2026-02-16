@@ -15,6 +15,7 @@ for entry in (SRC, ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
+
 def _make_events():
     return [
         (2.5, "System check"),
@@ -44,9 +45,7 @@ def _make_signal():
     rng = np.random.default_rng(42)
     times = np.linspace(0, 60, 600)
     signal = (
-        0.8 * np.sin(times / 3.0)
-        + 0.2 * np.cos(times / 5.0)
-        + 0.15 * rng.normal(size=times.size)
+        0.8 * np.sin(times / 3.0) + 0.2 * np.cos(times / 5.0) + 0.15 * rng.normal(size=times.size)
     )
     return times, signal
 

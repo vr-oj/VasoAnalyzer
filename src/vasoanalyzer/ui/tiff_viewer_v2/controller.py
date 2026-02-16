@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 from PyQt5 import QtCore
 
@@ -23,7 +22,7 @@ class StackPlayerController(QtCore.QObject):
     playing_changed = QtCore.pyqtSignal(bool)
     mapped_time_changed = QtCore.pyqtSignal(object)
 
-    def __init__(self, parent: Optional[QtCore.QObject] = None) -> None:
+    def __init__(self, parent: QtCore.QObject | None = None) -> None:
         super().__init__(parent)
         self._source: StackSource | None = None
         self._page_time_map: PageTimeMap | None = None

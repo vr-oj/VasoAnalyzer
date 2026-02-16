@@ -27,10 +27,11 @@ from pathlib import Path
 
 from utils.config import APP_VERSION
 from vasoanalyzer.core import project_format
+
 from .migration import auto_migrate_if_needed, detect_project_format
-from .sqlite_store import SCHEMA_VERSION
 from .snapshots import (
     BundleInfo,
+    atomic_write_text,
     cleanup_staging_dbs,
     create_bundle,
     create_snapshot,
@@ -39,8 +40,8 @@ from .snapshots import (
     open_staging_db,
     prune_old_snapshots,
     release_lock,
-    atomic_write_text,
 )
+from .sqlite_store import SCHEMA_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -472,7 +473,9 @@ def create_project_handle(
         # Initialize schema (this is normally done by the ProjectRepository)
         from ..storage.sqlite import projects as _projects
 
-        pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud_path else _projects.apply_default_pragmas
+        pragma_fn = (
+            _projects.apply_cloud_safe_pragmas if is_cloud_path else _projects.apply_default_pragmas
+        )
         pragma_fn(conn)
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
 
@@ -625,12 +628,16 @@ def _open_legacy_handle(
     if readonly:
         conn = sqlite3.connect(f"file:{vaso_path}?mode=ro", uri=True, timeout=10.0)
         journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
-        journal_mode_val = str(journal_mode[0]).upper() if journal_mode and journal_mode[0] else None
+        journal_mode_val = (
+            str(journal_mode[0]).upper() if journal_mode and journal_mode[0] else None
+        )
     else:
         conn = sqlite3.connect(vaso_path, timeout=30.0)
         from ..storage.sqlite import projects as _projects
 
-        pragma_fn = _projects.apply_cloud_safe_pragmas if is_cloud_path else _projects.apply_default_pragmas
+        pragma_fn = (
+            _projects.apply_cloud_safe_pragmas if is_cloud_path else _projects.apply_default_pragmas
+        )
         pragma_fn(conn)
         journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
         journal_mode_val = (
@@ -755,7 +762,10 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
                     try:
                         _set_write_in_progress(handle.path, False)
                     except Exception:
-                        log.debug("Could not clear write_in_progress after snapshot failure", exc_info=True)
+                        log.debug(
+                            "Could not clear write_in_progress after snapshot failure",
+                            exc_info=True,
+                        )
                 raise
             log.info(
                 f"Snapshot created: {snapshot_info.number} "
@@ -795,7 +805,9 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
                         try:
                             _set_write_in_progress(handle.path, False)
                         except Exception:
-                            log.debug("Could not clear write_in_progress after commit", exc_info=True)
+                            log.debug(
+                                "Could not clear write_in_progress after commit", exc_info=True
+                            )
             else:
                 log.warning("No staging connection to commit for bundle")
 

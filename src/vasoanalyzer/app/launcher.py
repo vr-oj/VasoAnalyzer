@@ -12,16 +12,16 @@ from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
 from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from utils.config import APP_VERSION
+from vasoanalyzer.app.window_manager import WindowManager
 from vasoanalyzer.core.single_instance import (
+    consume_ipc_warning,
     dispatch_pending_open_requests,
     has_pending_open_requests,
-    consume_ipc_warning,
     open_project_from_path,
     queue_open_requests,
     register_window_manager,
 )
 from vasoanalyzer.ui import theme
-from vasoanalyzer.app.window_manager import WindowManager
 
 try:  # Optional helper used for locating packaged resources
     from utils import resource_path
@@ -96,6 +96,7 @@ class VasoAnalyzerLauncher:
         try:
             # Load user's theme preference from settings
             from PyQt5.QtCore import QSettings
+
             settings = QSettings("TykockiLab", "VasoAnalyzer")
             mode = settings.value("appearance/themeMode", "light", type=str)
 

@@ -18,9 +18,7 @@ class PlotEmptyState(QFrame):
         self.title_label.setObjectName("PlotEmptyStateTitle")
         self.title_label.setAlignment(Qt.AlignCenter)
 
-        self.body_label = QLabel(
-            "Open data for a quick look, or import into this project.", self
-        )
+        self.body_label = QLabel("Open data for a quick look, or import into this project.", self)
         self.body_label.setObjectName("PlotEmptyStateBody")
         self.body_label.setWordWrap(True)
         self.body_label.setAlignment(Qt.AlignCenter)

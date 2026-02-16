@@ -115,8 +115,6 @@ def test_end_to_end_trace_events_frame_sync(tmp_path):
         allow_fallback=False,
     )
 
-    synchronizer = FrameSynchronizer(
-        frame_result.frame_times_s, trace_model.time_full, 0.0, 4.9
-    )
+    synchronizer = FrameSynchronizer(frame_result.frame_times_s, trace_model.time_full, 0.0, 4.9)
     timing = synchronizer.get_frame_for_time(2.0)
     assert timing.tiff_frame_index == 20

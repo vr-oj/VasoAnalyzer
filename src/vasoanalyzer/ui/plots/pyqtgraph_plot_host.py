@@ -21,22 +21,22 @@ from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
-from vasoanalyzer.ui.plots.plot_host import LayoutState
 from vasoanalyzer.ui.plots.interactions_base import (
     ClickContext,
     InteractionHost,
     MoveContext,
     ScrollContext,
 )
+from vasoanalyzer.ui.plots.plot_host import LayoutState
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
 from vasoanalyzer.ui.plots.pyqtgraph_event_strip import PyQtGraphEventStripTrack
-from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
-    PyQtGraphEventHighlightOverlay,
-    PyQtGraphTimeCursorOverlay,
-)
 from vasoanalyzer.ui.plots.pyqtgraph_nav_math import (
     tick_style_for_trace_count,
     zoomed_range,
+)
+from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
+    PyQtGraphEventHighlightOverlay,
+    PyQtGraphTimeCursorOverlay,
 )
 from vasoanalyzer.ui.plots.pyqtgraph_style import (
     PLOT_AXIS_LABELS,
@@ -296,7 +296,9 @@ class PyQtGraphPlotHost(InteractionHost):
         if hasattr(self, "_event_highlight_overlay"):
             self._event_highlight_overlay.set_animated(enabled)
 
-    def show_sampling_crosshair(self, time_sec: float, id_val: float | None = None, od_val: float | None = None) -> None:
+    def show_sampling_crosshair(
+        self, time_sec: float, id_val: float | None = None, od_val: float | None = None
+    ) -> None:
         """Display sampling crosshair at the given time and values.
 
         Args:
@@ -324,7 +326,9 @@ class PyQtGraphPlotHost(InteractionHost):
         for track in self._tracks.values():
             self._hide_track_crosshair(track)
 
-    def _show_track_crosshair(self, track: PyQtGraphChannelTrack, time_sec: float, value: float) -> None:
+    def _show_track_crosshair(
+        self, track: PyQtGraphChannelTrack, time_sec: float, value: float
+    ) -> None:
         """Show crosshair lines on a specific track.
 
         Args:
@@ -676,7 +680,7 @@ class PyQtGraphPlotHost(InteractionHost):
             plot_item = track.view.get_widget().getPlotItem()
             with contextlib.suppress(Exception):
                 plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
-            setattr(track, "_range_bound", False)
+            track._range_bound = False
         if primary_track is not None:
             self._connect_track_signals(primary_track, bind_range=True)
 
@@ -695,7 +699,7 @@ class PyQtGraphPlotHost(InteractionHost):
         if bind_range and not getattr(track, "_range_bound", False):
             plot_item = track.view.get_widget().getPlotItem()
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
-            setattr(track, "_range_bound", True)
+            track._range_bound = True
         self._bind_interaction_signals(track)
 
     def _bind_interaction_signals(self, track: PyQtGraphChannelTrack) -> None:
@@ -708,9 +712,7 @@ class PyQtGraphPlotHost(InteractionHost):
         view_box = track.view.view_box()
 
         if scene is not None:
-            scene.sigMouseMoved.connect(
-                lambda pos, t=track: self._handle_track_mouse_moved(t, pos)
-            )
+            scene.sigMouseMoved.connect(lambda pos, t=track: self._handle_track_mouse_moved(t, pos))
         if hasattr(view_box, "sigMousePressEvent"):
             view_box.sigMousePressEvent.connect(
                 lambda ev, t=track: self._handle_track_mouse_pressed(t, ev)
@@ -720,7 +722,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 lambda ev, t=track: self._handle_track_mouse_released(t, ev)
             )
 
-        setattr(track, "_interaction_bound", True)
+        track._interaction_bound = True
 
     def _handle_track_mouse_moved(self, track: PyQtGraphChannelTrack, scene_pos: QPointF) -> None:
         ctx = self._build_move_context(track, scene_pos)
@@ -799,9 +801,7 @@ class PyQtGraphPlotHost(InteractionHost):
             ctx.buttons = None  # type: ignore[attr-defined]
         return ctx
 
-    def _build_scroll_context(
-        self, track: PyQtGraphChannelTrack, event
-    ) -> ScrollContext | None:
+    def _build_scroll_context(self, track: PyQtGraphChannelTrack, event) -> ScrollContext | None:
         try:
             scene_pos = event.scenePos()
         except Exception:
@@ -916,7 +916,6 @@ class PyQtGraphPlotHost(InteractionHost):
         if button == Qt.RightButton:
             return "right"
         return str(button)
-
 
     def _configure_track_defaults(
         self, track: PyQtGraphChannelTrack, is_top_track: bool = False
@@ -2296,14 +2295,10 @@ class PyQtGraphPlotHost(InteractionHost):
         for idx, view_box in enumerate(view_boxes):
             try:
                 if hasattr(view_box, "sigRangeChanged"):
-                    view_box.sigRangeChanged.connect(
-                        lambda *_args, _idx=idx: _handler(_idx=_idx)
-                    )
+                    view_box.sigRangeChanged.connect(lambda *_args, _idx=idx: _handler(_idx=_idx))
                     attached += 1
                 elif hasattr(view_box, "sigXRangeChanged"):
-                    view_box.sigXRangeChanged.connect(
-                        lambda *_args, _idx=idx: _handler(_idx=_idx)
-                    )
+                    view_box.sigXRangeChanged.connect(lambda *_args, _idx=idx: _handler(_idx=_idx))
                     attached += 1
             except Exception as exc:
                 log.warning("[XRANGE WATCH] failed to attach vb[%d]: %s", idx, exc)
@@ -2327,6 +2322,7 @@ class PyQtGraphPlotHost(InteractionHost):
                     with contextlib.suppress(Exception):
                         view_box.set_xrange_source_callback(set_source_callable)
                 elif hasattr(view_box, "sigWheelEvent"):
+
                     def _wheel_tag(ev) -> None:
                         try:
                             modifiers = ev.modifiers()
@@ -2335,6 +2331,7 @@ class PyQtGraphPlotHost(InteractionHost):
                         ctrl_or_cmd = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
                         if ctrl_or_cmd:
                             set_source_callable("wheel.ctrl_zoom", None)
+
                     view_box.sigWheelEvent.connect(_wheel_tag)
 
         self._xrange_debug_getter = get_source_callable

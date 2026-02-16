@@ -150,9 +150,7 @@ class TiffScrubBar(QtWidgets.QSlider):
             self._dragging = True
             self.setSliderDown(True)
             self.setValue(self._value_from_pos(event.localPos()))
-        self._hovering = self._handle_rect().adjusted(-4, -4, 4, 4).contains(
-            event.localPos()
-        )
+        self._hovering = self._handle_rect().adjusted(-4, -4, 4, 4).contains(event.localPos())
         self._update_cursor(event.localPos())
         self.update()
         super().mouseMoveEvent(event)
@@ -247,9 +245,7 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
         self.speed_pill = QtWidgets.QFrame(self)
         self.speed_pill.setObjectName("SnapshotSpeedPill")
-        self.speed_pill.setSizePolicy(
-            QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed
-        )
+        self.speed_pill.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
         speed_layout = QtWidgets.QHBoxLayout(self.speed_pill)
         speed_layout.setContentsMargins(8, 4, 8, 4)
         speed_layout.setSpacing(6)
@@ -259,9 +255,7 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.time_label = QtWidgets.QLabel("Frame 0 / 0")
         self.time_label.setObjectName("SnapshotTimeLabel")
         self.time_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.time_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed
-        )
+        self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
         row.addWidget(self.time_label)
         layout.addLayout(row)
 

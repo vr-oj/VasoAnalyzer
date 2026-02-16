@@ -4,18 +4,19 @@ This module provides the core rendering logic for creating animated GIFs,
 following the spec-based architecture pattern used across the UI.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
-import numpy as np
+
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+import numpy as np
+
+matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.ticker import MaxNLocator
-import pandas as pd
 
-from .specs import AnimationSpec, TracePanelSpec
 from .frame_synchronizer import FrameTimingInfo
+from .specs import AnimationSpec
 
 ACTIVE_LINE_SCALE = 1.25
 INACTIVE_LINE_SCALE = 0.85
@@ -27,6 +28,7 @@ ACTIVE_MARKER_RADIUS_PX = 7
 @dataclass
 class EventSpec:
     """Event marker specification for rendering."""
+
     time_s: float
     label: str
     color: str
@@ -153,6 +155,7 @@ class AnimationRenderer:
 
         # Resize to target dimensions (preserve aspect ratio)
         from PIL import Image
+
         pil_img = Image.fromarray(vessel_frame)
 
         # Map interpolation mode to PIL
@@ -267,6 +270,7 @@ class AnimationRenderer:
         ax = fig.add_subplot(111)
         # Attach an Agg canvas so buffer methods are available.
         from matplotlib.backends.backend_agg import FigureCanvasAgg
+
         canvas = FigureCanvasAgg(fig)
         fig.patch.set_facecolor("white")
         ax.set_facecolor("white")
@@ -347,7 +351,7 @@ class AnimationRenderer:
                 color=spec.avg_pressure_color,
                 linewidth=spec.line_width,
                 label="Avg Pressure",
-                linestyle='--',
+                linestyle="--",
                 antialiased=spec.antialias,
             )
             ax2.set_ylabel(
@@ -356,7 +360,6 @@ class AnimationRenderer:
                 color="black",
                 fontweight="bold",
             )
-
 
         # Add event markers
         if spec.show_events:
@@ -722,7 +725,9 @@ class AnimationRenderer:
         if spec.x_range is not None:
             ax.set_xlim(spec.x_range)
         else:
-            ax.set_xlim(self._display_time(self.spec.start_time_s), self._display_time(self.spec.end_time_s))
+            ax.set_xlim(
+                self._display_time(self.spec.start_time_s), self._display_time(self.spec.end_time_s)
+            )
 
         if spec.y_range is not None:
             ax.set_ylim(spec.y_range)
@@ -841,8 +846,8 @@ class AnimationRenderer:
     @staticmethod
     def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
         """Convert hex color to RGB tuple."""
-        hex_color = hex_color.lstrip('#')
-        return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        hex_color = hex_color.lstrip("#")
+        return tuple(int(hex_color[i : i + 2], 16) for i in (0, 2, 4))
 
     def _pad_to_height(self, img: np.ndarray, target_h: int) -> np.ndarray:
         if img.shape[0] == target_h:

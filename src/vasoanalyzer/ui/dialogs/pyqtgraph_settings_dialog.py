@@ -16,7 +16,6 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QScrollArea,
     QSpinBox,
@@ -212,9 +211,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
         auto_scale_cb = QCheckBox()
         auto_scale_cb.setToolTip("Enable automatic Y scaling for this track")
-        auto_scale_cb.setChecked(
-            track.view.is_autoscale_enabled() if track is not None else True
-        )
+        auto_scale_cb.setChecked(track.view.is_autoscale_enabled() if track is not None else True)
 
         visible_cb = QCheckBox()
         visible_cb.setToolTip("Show or hide this track")

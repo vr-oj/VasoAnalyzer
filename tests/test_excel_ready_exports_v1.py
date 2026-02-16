@@ -23,11 +23,7 @@ def test_deterministic_row_per_event():
     table = build_export_table(EVENT_TABLE_ROW_PER_EVENT, events)
 
     tsv = render_tsv(table, include_header=True)
-    expected = (
-        "Time (s)\tEvent Label\tValue\n"
-        "1.00\tA\t100.50\n"
-        "2.00\tB\t110.12\n"
-    )
+    expected = "Time (s)\tEvent Label\tValue\n1.00\tA\t100.50\n2.00\tB\t110.12\n"
     assert tsv == expected
 
 
@@ -58,17 +54,13 @@ def test_pressure_curve_profile_order_and_missing():
 
     present = {row[0] for row in rows}
     expected_labels = [
-        label
-        for label in PRESSURE_CURVE_STANDARD.requires_event_labels
-        if label in present
+        label for label in PRESSURE_CURVE_STANDARD.requires_event_labels if label in present
     ]
     output_labels = [row[0] for row in table.rows]
     assert output_labels == expected_labels
 
     missing = [
-        label
-        for label in PRESSURE_CURVE_STANDARD.requires_event_labels
-        if label not in present
+        label for label in PRESSURE_CURVE_STANDARD.requires_event_labels if label not in present
     ]
     if missing:
         warning_text = "\n".join(table.warnings)

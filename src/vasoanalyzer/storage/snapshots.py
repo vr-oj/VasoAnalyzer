@@ -245,11 +245,7 @@ def open_bundle(bundle_path: Path, *, readonly: bool = False) -> BundleInfo:
             try:
                 # ATOMIC: Open with O_CREAT | O_EXCL - succeeds only if file doesn't exist
                 # This prevents TOCTOU race where two processes both see no lock and both create one
-                fd = os.open(
-                    str(lock_path),
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                    0o644
-                )
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                 try:
                     os.write(fd, lock_json.encode("utf-8"))
                     os.fsync(fd)
@@ -275,9 +271,7 @@ def open_bundle(bundle_path: Path, *, readonly: bool = False) -> BundleInfo:
                         # Retry lock acquisition (only once to avoid infinite loop)
                         try:
                             fd = os.open(
-                                str(lock_path),
-                                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-                                0o644
+                                str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644
                             )
                             try:
                                 os.write(fd, lock_json.encode("utf-8"))
@@ -289,7 +283,9 @@ def open_bundle(bundle_path: Path, *, readonly: bool = False) -> BundleInfo:
 
                         except FileExistsError:
                             # Another process created lock between unlink and retry
-                            log.warning("Lock acquired by another process during retry (opened read-only)")
+                            log.warning(
+                                "Lock acquired by another process during retry (opened read-only)"
+                            )
                             readonly = True
 
                 except Exception as e:
@@ -662,7 +658,9 @@ def open_staging_db(
     staging_path = staging_dir / f"{staging_id}.sqlite"
 
     mode_label = "cloud-safe" if use_cloud_safe else "fast"
-    log.info(f"Creating staging database: {staging_path} mode={mode_label} cloud_service={cloud_service}")
+    log.info(
+        f"Creating staging database: {staging_path} mode={mode_label} cloud_service={cloud_service}"
+    )
 
     # CRITICAL FIX (Vulnerability #5): Hold read lock during copy to prevent deletion
     if initialize_from and initialize_from.exists():
@@ -670,22 +668,18 @@ def open_staging_db(
 
         try:
             # Open source snapshot with read lock to prevent it from being deleted mid-copy
-            src_conn = sqlite3.connect(
-                f"file:{initialize_from}?mode=ro",
-                uri=True,
-                timeout=10.0
-            )
+            src_conn = sqlite3.connect(f"file:{initialize_from}?mode=ro", uri=True, timeout=10.0)
             try:
                 # Verify source is valid before copying
                 result = src_conn.execute("PRAGMA quick_check").fetchone()
                 if result[0] != "ok":
-                    raise RuntimeError(
-                        f"Source snapshot failed integrity check: {initialize_from}"
-                    )
+                    raise RuntimeError(f"Source snapshot failed integrity check: {initialize_from}")
 
                 # Copy while holding read lock (this prevents pruning from deleting it)
                 shutil.copy2(initialize_from, staging_path)
-                log.debug(f"Staging DB initialized from snapshot (size: {staging_path.stat().st_size} bytes)")
+                log.debug(
+                    f"Staging DB initialized from snapshot (size: {staging_path.stat().st_size} bytes)"
+                )
 
             finally:
                 src_conn.close()
@@ -695,21 +689,25 @@ def open_staging_db(
             # Clean up partial copy
             if staging_path.exists():
                 staging_path.unlink()
-            raise RuntimeError(
-                f"Staging DB initialization failed: {e}"
-            ) from e
+            raise RuntimeError(f"Staging DB initialization failed: {e}") from e
 
     # Open with optimal settings for staging
     conn = sqlite3.connect(staging_path, timeout=30.0)
     from .sqlite import projects as _projects
 
-    pragma_fn = _projects.apply_cloud_safe_pragmas if use_cloud_safe else _projects.apply_default_pragmas
+    pragma_fn = (
+        _projects.apply_cloud_safe_pragmas if use_cloud_safe else _projects.apply_default_pragmas
+    )
     pragma_fn(conn)
-    if not use_cloud_safe and hasattr(os, "F_FULLFSYNC"):  # macOS full fsync is only helpful for WAL
+    if not use_cloud_safe and hasattr(
+        os, "F_FULLFSYNC"
+    ):  # macOS full fsync is only helpful for WAL
         conn.execute("PRAGMA fullfsync=ON")
 
     journal_mode_row = conn.execute("PRAGMA journal_mode").fetchone()
-    journal_mode = str(journal_mode_row[0]).upper() if journal_mode_row and journal_mode_row[0] else None
+    journal_mode = (
+        str(journal_mode_row[0]).upper() if journal_mode_row and journal_mode_row[0] else None
+    )
 
     log.info(
         f"Staging database ready: {staging_path} journal_mode={journal_mode} "

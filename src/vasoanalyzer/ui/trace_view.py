@@ -203,11 +203,19 @@ class TraceView:
                 return None
             return window.outer_mean, window.outer_min, window.outer_max
         elif self._mode == "avg_pressure":
-            if window.avg_pressure_mean is None or window.avg_pressure_min is None or window.avg_pressure_max is None:
+            if (
+                window.avg_pressure_mean is None
+                or window.avg_pressure_min is None
+                or window.avg_pressure_max is None
+            ):
                 return None
             return window.avg_pressure_mean, window.avg_pressure_min, window.avg_pressure_max
         elif self._mode == "set_pressure":
-            if window.set_pressure_mean is None or window.set_pressure_min is None or window.set_pressure_max is None:
+            if (
+                window.set_pressure_mean is None
+                or window.set_pressure_min is None
+                or window.set_pressure_max is None
+            ):
                 return None
             return window.set_pressure_mean, window.set_pressure_min, window.set_pressure_max
         return window.inner_mean, window.inner_min, window.inner_max

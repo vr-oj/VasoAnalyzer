@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterable, Sequence
 import time
+from collections.abc import Iterable, Sequence
 
 import pandas as pd
 
@@ -178,9 +178,14 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     # If everything is NaN but the original column looks like hh:mm:ss, try parsing to seconds.
     if df_local["t_seconds"].isna().all():
         original_time_col = df_local.get("t_seconds")
-        if isinstance(original_time_col, pd.Series) and original_time_col.astype(str).str.contains(":").any():
+        if (
+            isinstance(original_time_col, pd.Series)
+            and original_time_col.astype(str).str.contains(":").any()
+        ):
             try:
-                parsed = pd.to_timedelta(original_time_col.astype(str), errors="coerce").dt.total_seconds()
+                parsed = pd.to_timedelta(
+                    original_time_col.astype(str), errors="coerce"
+                ).dt.total_seconds()
                 df_local["t_seconds"] = parsed
                 log.info(
                     "TRACE-SAVE: parsed hh:mm:ss time column to seconds for dataset_id=%s (non_null=%d of %d)",
@@ -189,7 +194,11 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
                     len(parsed),
                 )
             except Exception:
-                log.debug("Failed to parse hh:mm:ss time column for dataset_id=%s", dataset_id, exc_info=True)
+                log.debug(
+                    "Failed to parse hh:mm:ss time column for dataset_id=%s",
+                    dataset_id,
+                    exc_info=True,
+                )
     for col in ("inner_diam", "outer_diam", "p_avg", "p1", "p2"):
         if col in df_local.columns:
             df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
@@ -266,9 +275,7 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     tiff_values = df_local["tiff_page"].to_numpy() if "tiff_page" in df_local else None
     temp_values = df_local["temp"].to_numpy() if "temp" in df_local else None
     marker_values = df_local["table_marker"].to_numpy() if "table_marker" in df_local else None
-    caliper_values = (
-        df_local["caliper_length"].to_numpy() if "caliper_length" in df_local else None
-    )
+    caliper_values = df_local["caliper_length"].to_numpy() if "caliper_length" in df_local else None
 
     row_build_start = time.perf_counter()
     try:

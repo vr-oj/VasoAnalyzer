@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
 
-from PyQt5.QtCore import QObject, QTimer, Qt, QUrl, pyqtSignal
+from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtNetwork import (
     QNetworkAccessManager,
     QNetworkReply,
@@ -32,9 +31,9 @@ class UpdateChecker(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._nam = QNetworkAccessManager(self)
-        self._reply: Optional[QNetworkReply] = None
-        self._timer: Optional[QTimer] = None
-        self._dialog: Optional[QDialog] = None
+        self._reply: QNetworkReply | None = None
+        self._timer: QTimer | None = None
+        self._dialog: QDialog | None = None
         self._in_progress = False
         self._current_version: str | None = None
         self._current_silent = False

@@ -20,9 +20,10 @@ from __future__ import annotations
 import queue
 import sqlite3
 import threading
+from collections.abc import Callable
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 __all__ = ["DbWriter", "WriterClosed"]
 
@@ -42,7 +43,7 @@ class DbWriter:
         connection: sqlite3.Connection | None = None,
     ) -> None:
         self.db_path = Path(db_path)
-        self._queue: "queue.Queue[tuple[Future, Callable[[sqlite3.Connection], Any]]]" = queue.Queue()
+        self._queue: queue.Queue[tuple[Future, Callable[[sqlite3.Connection], Any]]] = queue.Queue()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._worker, name="DbWriter", daemon=True)
         self._lock = threading.RLock()
@@ -148,7 +149,7 @@ class DbWriter:
     # ------------------------------------------------------------------ #
     # Context manager helpers                                            #
     # ------------------------------------------------------------------ #
-    def __enter__(self) -> "DbWriter":
+    def __enter__(self) -> DbWriter:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

@@ -19,7 +19,6 @@ from vasoanalyzer.ui.plots.pyqtgraph_nav_math import (
 )
 from vasoanalyzer.ui.plots.pyqtgraph_style import apply_selection_box_style, get_pyqtgraph_style
 
-
 log = logging.getLogger(__name__)
 
 
@@ -130,9 +129,7 @@ class SmoothPanViewBox(PanOnlyViewBox):
         self.setYRange(new_y_min, new_y_max, padding=0.0, update=True)
         return True
 
-    def _push_zoom_history(
-        self, x_min: float, x_max: float, y_min: float, y_max: float
-    ) -> None:
+    def _push_zoom_history(self, x_min: float, x_max: float, y_min: float, y_max: float) -> None:
         try:
             span_x = max(float(x_max) - float(x_min), 1e-9)
             span_y = max(float(y_max) - float(y_min), 1e-9)
@@ -142,9 +139,7 @@ class SmoothPanViewBox(PanOnlyViewBox):
                 (cur_x_min, cur_x_max), (cur_y_min, cur_y_max) = self.viewRange()
                 cur_span_x = max(float(cur_x_max) - float(cur_x_min), 1e-9)
                 cur_span_y = max(float(cur_y_max) - float(cur_y_min), 1e-9)
-                current_rect = QRectF(
-                    float(cur_x_min), float(cur_y_min), cur_span_x, cur_span_y
-                )
+                current_rect = QRectF(float(cur_x_min), float(cur_y_min), cur_span_x, cur_span_y)
                 self.axHistory = [current_rect]
                 self.axHistoryPointer = 0
 

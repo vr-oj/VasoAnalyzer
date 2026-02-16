@@ -364,4 +364,9 @@ def find_matching_trace_file(reference_file: str) -> str | None:
     return None
 
 
-__all__ = ["load_events", "find_matching_event_file", "find_matching_tiff_file", "find_matching_trace_file"]
+__all__ = [
+    "load_events",
+    "find_matching_event_file",
+    "find_matching_tiff_file",
+    "find_matching_trace_file",
+]

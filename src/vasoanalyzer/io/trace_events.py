@@ -8,8 +8,8 @@ from __future__ import annotations
 import csv
 import logging
 import os
-from pathlib import Path
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -138,9 +138,7 @@ def load_trace_and_events(
         extras["merge_warnings"] = df.attrs.get("merge_warnings", [])
         extras["merged_skipped_paths"] = df.attrs.get("merged_skipped_paths", [])
         extras["merged_from_paths"] = df.attrs.get("merged_from_paths", multi_paths)
-        extras["merged_requested_paths"] = df.attrs.get(
-            "merged_requested_paths", multi_paths
-        )
+        extras["merged_requested_paths"] = df.attrs.get("merged_requested_paths", multi_paths)
 
     # Segment map for merge-aware offsets
     segment_map: dict[str, dict[str, object]] = {}
@@ -165,7 +163,7 @@ def load_trace_and_events(
     elif isinstance(events_path, Sequence) and not isinstance(events_path, (str, os.PathLike)):
         user_paths = [str(p) for p in events_path]
         if multi_paths and len(user_paths) == len(multi_paths):
-            candidate_event_paths = list(zip(user_paths, multi_paths))
+            candidate_event_paths = list(zip(user_paths, multi_paths, strict=False))
         else:
             candidate_event_paths = [(p, None) for p in user_paths]
     else:
@@ -226,9 +224,7 @@ def load_trace_and_events(
             ev_path = event_files[0]
 
     if events_df is None:
-        log.info(
-            "Import: No separate events file for %s (using trace-only)", primary_trace_path
-        )
+        log.info("Import: No separate events file for %s (using trace-only)", primary_trace_path)
         return df, [], [], None, [], [], extras
 
     if event_files and not ev_path:
@@ -236,9 +232,7 @@ def load_trace_and_events(
 
     extras["event_file"] = ev_path if isinstance(ev_path, str) else None
     extras["event_files"] = event_files or ([ev_path] if ev_path else [])
-    extras["events_original_filename"] = (
-        Path(ev_path).name if isinstance(ev_path, str) else None
-    )
+    extras["events_original_filename"] = Path(ev_path).name if isinstance(ev_path, str) else None
     extras["event_merge_warnings"] = event_merge_warnings
     extras["event_skipped_paths"] = event_skipped
 
@@ -265,9 +259,7 @@ def load_trace_and_events(
         # FrameNumber values in the trace CSV align with the events CSV "Frame" column.
         frame_numbers = pd.to_numeric(df["FrameNumber"], errors="coerce")
         frame_number_to_trace_idx = {
-            int(fn): int(i)
-            for i, fn in enumerate(frame_numbers.to_numpy())
-            if pd.notna(fn)
+            int(fn): int(i) for i, fn in enumerate(frame_numbers.to_numpy()) if pd.notna(fn)
         }
         log.info(
             "Import: Prepared %d frame→trace index mappings from trace CSV",
@@ -280,9 +272,7 @@ def load_trace_and_events(
             saved_mask = pd.to_numeric(df["Saved"], errors="coerce").fillna(0) > 0
             tiff_pages = tiff_pages.where(saved_mask)
         tiff_page_to_trace_idx = {
-            int(tp): int(i)
-            for i, tp in enumerate(tiff_pages.to_numpy())
-            if pd.notna(tp)
+            int(tp): int(i) for i, tp in enumerate(tiff_pages.to_numpy()) if pd.notna(tp)
         }
         log.info(
             "Import: Prepared %d TIFF-page→trace index mappings from trace CSV",
@@ -385,11 +375,7 @@ def load_trace_and_events(
     )
     trace_t0_s = None
     if isinstance(df.attrs, dict):
-        trace_t0_s = (
-            df.attrs.get("timebase", {})
-            .get("trace", {})
-            .get("t0_s")
-        )
+        trace_t0_s = df.attrs.get("timebase", {}).get("trace", {}).get("t0_s")
     if trace_t0_s is not None and time_col:
         try:
             trace_t0_s = float(trace_t0_s)

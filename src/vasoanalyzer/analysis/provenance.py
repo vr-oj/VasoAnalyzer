@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
 import hashlib
 import json
+from dataclasses import dataclass, fields, is_dataclass
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from typing import Any
-
-from importlib.metadata import PackageNotFoundError, version as pkg_version
 
 from .contract import AnalysisParamsV1
 

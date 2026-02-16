@@ -9,9 +9,7 @@ VasoAnalyzer icon to produce platform-specific icon files:
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -57,7 +55,7 @@ def _render_badge(base: Image.Image, version: str) -> Image.Image:
     return img
 
 
-def generate_versioned_icons() -> Tuple[Path, Path]:
+def generate_versioned_icons() -> tuple[Path, Path]:
     version = _load_version()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -55,8 +55,6 @@ from PyQt5.QtWidgets import (
 import vasoanalyzer.ui.theme as theme
 from vasoanalyzer.excel import (
     TemplateMetadata,
-    has_vaso_metadata,
-    read_template_metadata,
 )
 
 __all__ = ["ExcelMapWizard"]
@@ -68,6 +66,7 @@ SESSION_EVENT_MIME = "application/vnd.vaso.session-event"
 
 # UI Design Tokens
 # ---------------------------------------------------------------------------
+
 
 def get_semantic_colors() -> dict[str, str]:
     """Get semantic colors from theme."""
@@ -86,19 +85,19 @@ def get_semantic_colors() -> dict[str, str]:
 
 
 SPACING = {
-    "xs": 4,   # Between tightly related items
-    "sm": 8,   # Between form elements
+    "xs": 4,  # Between tightly related items
+    "sm": 8,  # Between form elements
     "md": 16,  # Between subsections
     "lg": 24,  # Between major sections
     "xl": 32,  # Between page sections
-    "2xl": 48, # Between distinct areas
+    "2xl": 48,  # Between distinct areas
 }
 
 # Modern UI design tokens
 BORDER_RADIUS = {
-    "sm": 4,   # Form controls
-    "md": 6,   # Buttons
-    "lg": 8,   # Cards
+    "sm": 4,  # Form controls
+    "md": 6,  # Buttons
+    "lg": 8,  # Cards
 }
 
 BUTTON_HEIGHT = 36  # Consistent button height
@@ -122,12 +121,12 @@ def get_fonts() -> dict[str, QFont]:
     system_font.setFamily("-apple-system")
 
     fonts = {
-        "h1": QFont(system_font),      # Page titles
-        "h2": QFont(system_font),      # Section headers
-        "h3": QFont(system_font),      # Subsection headers
-        "body": QFont(system_font),    # Normal text
-        "small": QFont(system_font),   # Helper text
-        "mono": QFont("SF Mono"),      # Code/numbers
+        "h1": QFont(system_font),  # Page titles
+        "h2": QFont(system_font),  # Section headers
+        "h3": QFont(system_font),  # Subsection headers
+        "body": QFont(system_font),  # Normal text
+        "small": QFont(system_font),  # Helper text
+        "mono": QFont("SF Mono"),  # Code/numbers
     }
 
     # Configure sizes and weights
@@ -346,6 +345,7 @@ def get_modern_button_stylesheet() -> str:
 
 # Wizard Classes
 # ---------------------------------------------------------------------------
+
 
 class _WizardUnavailableError(RuntimeError):
     """Raised when a wizard page cannot resolve its hosting wizard."""
@@ -566,9 +566,7 @@ class TemplatePage(WizardPageBase):
         self.setTitle("Step 1: Load Template & CSV")
         layout = QVBoxLayout(self)
         layout.setSpacing(SPACING["md"])
-        layout.setContentsMargins(
-            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
-        )
+        layout.setContentsMargins(SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"])
 
         self._templatePath = ""
         self._csvPath = ""
@@ -913,7 +911,6 @@ class TemplatePage(WizardPageBase):
     # ------------------------------------------------------
     def _populate_sheet_selector(self, wb) -> None:
         """Populate sheet selector with workbook sheets."""
-        from openpyxl import Workbook
 
         self.combo_sheet.blockSignals(True)
         self.combo_sheet.clear()
@@ -924,7 +921,7 @@ class TemplatePage(WizardPageBase):
                 continue
             # Skip hidden sheets
             sheet = wb[sheet_name]
-            if hasattr(sheet, 'sheet_state') and sheet.sheet_state == "hidden":
+            if hasattr(sheet, "sheet_state") and sheet.sheet_state == "hidden":
                 continue
             self.combo_sheet.addItem(sheet_name)
 
@@ -969,6 +966,7 @@ class TemplatePage(WizardPageBase):
 
         # Update UI label
         from pathlib import Path
+
         self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name})")
         self.lbl_excel.setStyleSheet("")
 
@@ -988,20 +986,24 @@ class TemplatePage(WizardPageBase):
             if metadata:
                 wiz.template_metadata = metadata
                 from pathlib import Path
+
                 template_path = self.field("templatePath")
-                status_msg = f"✓ Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata detected)"
+                status_msg = (
+                    f"✓ Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata detected)"
+                )
                 self.lbl_excel.setText(status_msg)
                 colors = get_semantic_colors()
                 self.lbl_excel.setStyleSheet(f"color: {colors['success']};")
         except Exception as exc:
             from pathlib import Path
+
             template_path = self.field("templatePath")
             QMessageBox.warning(
-                self,
-                "Metadata Error",
-                f"Could not load metadata for sheet '{sheet_name}':\n{exc}"
+                self, "Metadata Error", f"Could not load metadata for sheet '{sheet_name}':\n{exc}"
             )
-            self.lbl_excel.setText(f"Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata error)")
+            self.lbl_excel.setText(
+                f"Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata error)"
+            )
             colors = get_semantic_colors()
             self.lbl_excel.setStyleSheet(f"color: {colors['warning']};")
 
@@ -1120,9 +1122,7 @@ class RowMappingPage(WizardPageBase):
 
         root = QVBoxLayout(self)
         root.setSpacing(SPACING["md"])
-        root.setContentsMargins(
-            SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"]
-        )
+        root.setContentsMargins(SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"])
 
         self.info_label = QLabel()
         self.info_label.setWordWrap(True)
@@ -1132,9 +1132,7 @@ class RowMappingPage(WizardPageBase):
 
         control_row = QHBoxLayout()
         control_row.setSpacing(SPACING["md"])
-        control_row.setContentsMargins(
-            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
-        )
+        control_row.setContentsMargins(SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"])
         control_row.addWidget(QLabel("Measurement:"))
         self.measurement_combo = QComboBox()
         self.measurement_combo.setStyleSheet(get_modern_combobox_stylesheet())
@@ -1811,7 +1809,9 @@ class ExcelMapWizard(QWizard):
         self.resize(1200, 750)
 
         # Apply modern dialog styling
-        combined_stylesheet = get_modern_button_stylesheet() + "\n" + get_modern_combobox_stylesheet()
+        combined_stylesheet = (
+            get_modern_button_stylesheet() + "\n" + get_modern_combobox_stylesheet()
+        )
         self.setStyleSheet(combined_stylesheet)
 
         # Workbook/session state

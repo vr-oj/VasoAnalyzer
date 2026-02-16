@@ -4,7 +4,7 @@ import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries
 
-from vasoanalyzer.excel.template_v1 import inspect_template, validate_template_or_raise
+from vasoanalyzer.excel.template_v1 import inspect_template
 from vasoanalyzer.excel.writer_v1 import (
     apply_write_plan,
     build_write_plan,
@@ -81,7 +81,9 @@ def test_apply_write_plan_writes_values_and_preserves_formulas(tmp_path):
     wb = load_workbook(output_path, data_only=False)
     ws = wb[block.sheet_name]
     table = next(
-        table for table in ws.tables.values() if (table.displayName or table.name) == block.table_name
+        table
+        for table in ws.tables.values()
+        if (table.displayName or table.name) == block.table_name
     )
     min_col, min_row, max_col, max_row = range_boundaries(table.ref)
     col_names = [col.name for col in table.tableColumns]

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import logging
+from collections.abc import Sequence
 
 import pandas as pd
 from PyQt5.QtCore import (
@@ -14,7 +14,15 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QHelpEvent, QKeySequence, QPainter, QPalette, QPen, QPixmap, QResizeEvent
+from PyQt5.QtGui import (
+    QColor,
+    QHelpEvent,
+    QKeySequence,
+    QPainter,
+    QPalette,
+    QPixmap,
+    QResizeEvent,
+)
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -175,7 +183,7 @@ class NumericCellDelegate(QStyledItemDelegate):
         value = index.data(Qt.EditRole)
         try:
             # Parse display value, removing formatting
-            value_str = str(value).replace(',', '').replace('—', '')
+            value_str = str(value).replace(",", "").replace("—", "")
             editor.setValue(float(value_str))
         except (TypeError, ValueError):
             editor.setValue(0.0)
@@ -188,9 +196,10 @@ class NumericCellDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
         """Custom painting with hover states for editable cells."""
         # Hover state for editable cells
-        if (option.state & QStyle.State_MouseOver and
-            index.flags() & Qt.ItemIsEditable):
-            hover = CURRENT_THEME.get("table_editable_hover", CURRENT_THEME.get("table_hover", "#E5E7EB"))
+        if option.state & QStyle.State_MouseOver and index.flags() & Qt.ItemIsEditable:
+            hover = CURRENT_THEME.get(
+                "table_editable_hover", CURRENT_THEME.get("table_hover", "#E5E7EB")
+            )
             painter.fillRect(option.rect, QColor(hover))
 
         # Draw the default content
@@ -650,19 +659,25 @@ class EventTableWidget(QTableView):
     def apply_theme(self) -> None:
         log.debug("[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)=%s", id(self))
         palette = self.palette()
-        header_bg = CURRENT_THEME.get("panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name()))
+        header_bg = CURRENT_THEME.get(
+            "panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
+        )
         header_text = CURRENT_THEME.get("text", palette.color(QPalette.Text).name())
         hover = CURRENT_THEME.get("table_hover", CURRENT_THEME.get("button_hover_bg", header_bg))
 
         base = CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
         alt = CURRENT_THEME.get("alternate_bg", base)
         selection = CURRENT_THEME.get("selection_bg", palette.color(QPalette.Highlight).name())
-        selection_text = CURRENT_THEME.get("highlighted_text", palette.color(QPalette.HighlightedText).name())
+        selection_text = CURRENT_THEME.get(
+            "highlighted_text", palette.color(QPalette.HighlightedText).name()
+        )
         grid_base = palette.color(QPalette.Mid)
-        grid = QColor(
-            grid_base.red(), grid_base.green(), grid_base.blue(), int(0.35 * 255)
-        ).name(QColor.HexArgb)
-        header_border = CURRENT_THEME.get("panel_border", CURRENT_THEME.get("table_header_border", grid_base.name()))
+        grid = QColor(grid_base.red(), grid_base.green(), grid_base.blue(), int(0.35 * 255)).name(
+            QColor.HexArgb
+        )
+        header_border = CURRENT_THEME.get(
+            "panel_border", CURRENT_THEME.get("table_header_border", grid_base.name())
+        )
         row_hover = CURRENT_THEME.get("table_hover", base)
 
         header = self.horizontalHeader()
@@ -1016,7 +1031,6 @@ class EventTableWidget(QTableView):
                 # Wrap to start of next row
                 next_row += 1
                 next_col = 0
-
 
     def _cycle_review_status(self, row: int) -> None:
         """Cycle through status states."""

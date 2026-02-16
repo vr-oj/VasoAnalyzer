@@ -57,9 +57,7 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
         _build_matplotlib_plot_toolbar(window, canvas, plot_host, toolbar)
 
     _add_shared_plot_actions(window, toolbar, is_pyqtgraph=is_pyqtgraph, add_to_toolbar=False)
-    promoted_actions = _add_quick_view_actions(
-        window, toolbar, is_pyqtgraph=is_pyqtgraph
-    )
+    promoted_actions = _add_quick_view_actions(window, toolbar, is_pyqtgraph=is_pyqtgraph)
     _add_view_overflow_menu(
         window, toolbar, is_pyqtgraph=is_pyqtgraph, promoted_actions=promoted_actions
     )
@@ -166,9 +164,7 @@ def _build_matplotlib_plot_toolbar(
     if window.actZoom:
         toolbar.addAction(window.actZoom)
 
-    window._nav_mode_actions = [
-        act for act in (window.actPan, window.actZoom) if act is not None
-    ]
+    window._nav_mode_actions = [act for act in (window.actPan, window.actZoom) if act is not None]
     for action in window._nav_mode_actions:
         with contextlib.suppress(Exception):
             action.toggled.disconnect(window._handle_nav_mode_toggled)

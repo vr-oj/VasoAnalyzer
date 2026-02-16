@@ -1,7 +1,13 @@
 import numpy as np
 import pytest
 
-from vasoanalyzer.analysis.contract import AnalysisParamsV1, Event, MyographyDataset, TimeSeries, Trace
+from vasoanalyzer.analysis.contract import (
+    AnalysisParamsV1,
+    Event,
+    MyographyDataset,
+    TimeSeries,
+    Trace,
+)
 from vasoanalyzer.analysis.errors import InvalidEventError, MissingPassiveDiameterError
 from vasoanalyzer.analysis.metrics import (
     analyze_pressure_myography_v1,

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries
@@ -160,21 +160,16 @@ def inspect_template(path: str) -> TemplateInspection:
 def validate_template_or_raise(inspection: TemplateInspection) -> None:
     if not inspection.signature_ok:
         raise ValueError(
-            "Template signature missing or invalid. Expected "
-            f"{SIGNATURE_NAME} = {SIGNATURE_VALUE}."
+            f"Template signature missing or invalid. Expected {SIGNATURE_NAME} = {SIGNATURE_VALUE}."
         )
     if not inspection.blocks:
         raise ValueError("No VasoAnalyzer data blocks found (VA_Block_* tables).")
 
     for block in inspection.blocks:
         if block.metric_col != "Metric":
-            raise ValueError(
-                f"Block '{block.block_id}' is missing required 'Metric' column."
-            )
+            raise ValueError(f"Block '{block.block_id}' is missing required 'Metric' column.")
         if "Replicate_1" not in block.replicate_cols:
-            raise ValueError(
-                f"Block '{block.block_id}' is missing required 'Replicate_1' column."
-            )
+            raise ValueError(f"Block '{block.block_id}' is missing required 'Replicate_1' column.")
         missing_summary = [name for name in ("MEAN", "SEM", "N") if name not in block.summary_cols]
         if missing_summary:
             raise ValueError(

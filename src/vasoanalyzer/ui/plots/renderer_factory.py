@@ -67,9 +67,7 @@ def create_plot_host(
 
         return PlotHost(dpi=dpi)
     else:
-        raise ValueError(
-            f"Invalid renderer type: {renderer}. " f"Must be 'matplotlib' or 'pyqtgraph'"
-        )
+        raise ValueError(f"Invalid renderer type: {renderer}. Must be 'matplotlib' or 'pyqtgraph'")
 
 
 def supports_export(plot_host: PlotHost | PyQtGraphPlotHost) -> bool:

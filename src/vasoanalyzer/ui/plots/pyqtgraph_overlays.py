@@ -5,10 +5,9 @@ from __future__ import annotations
 import contextlib
 import math
 import time
-from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QColor
 
 from vasoanalyzer.ui.theme import CURRENT_THEME

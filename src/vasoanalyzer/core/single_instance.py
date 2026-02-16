@@ -7,8 +7,8 @@ import logging
 import os
 import sys
 import weakref
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 from PyQt5.QtCore import QObject, QTimer
 from PyQt5.QtNetwork import QLocalServer, QLocalSocket

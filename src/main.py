@@ -7,8 +7,8 @@
 
 from __future__ import annotations
 
-import os
 import logging
+import os
 import sys
 
 if os.environ.get("VA_FAULTHANDLER", "1") != "0":
@@ -37,13 +37,13 @@ def _configure_sip_exit_behavior() -> None:
 def main(argv: list[str] | None = None) -> None:
     """Bootstrap the Qt application and block until it exits."""
     _configure_sip_exit_behavior()
+    from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
     from vasoanalyzer.core.logging_config import setup_production_logging
     from vasoanalyzer.core.single_instance import (
         SingleInstanceManager,
         collect_vaso_paths,
         queue_open_requests,
     )
-    from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
 
     argv = list(sys.argv if argv is None else argv)
     vaso_paths = collect_vaso_paths(argv)

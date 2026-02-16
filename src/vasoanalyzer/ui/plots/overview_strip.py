@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import math
 from collections.abc import Sequence
 
 import pyqtgraph as pg

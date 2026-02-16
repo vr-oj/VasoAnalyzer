@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 import math
 import os
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from vasoanalyzer.core.timebase import page_for_time
 
@@ -27,11 +27,11 @@ class PageTimeMap:
     status: str
 
     @classmethod
-    def invalid(cls, reason: str) -> "PageTimeMap":
+    def invalid(cls, reason: str) -> PageTimeMap:
         return cls(tuple(), False, reason)
 
     @classmethod
-    def from_times(cls, times: Iterable[float]) -> "PageTimeMap":
+    def from_times(cls, times: Iterable[float]) -> PageTimeMap:
         page_times = tuple(float(v) for v in times)
         if not page_times:
             return cls.invalid("Sync unavailable: no mapped pages")
@@ -166,9 +166,7 @@ def derive_page_time_map_from_trace(
     df = df.sort_values("_v2_time")
     duplicates = df[tiff_col].duplicated(keep="first")
     if duplicates.any():
-        dup_pages = sorted(
-            df.loc[duplicates, tiff_col].astype(int).unique().tolist()
-        )
+        dup_pages = sorted(df.loc[duplicates, tiff_col].astype(int).unique().tolist())
         log.warning(
             "Duplicate TiffPage values found; keeping earliest time for pages: %s",
             dup_pages,
@@ -194,9 +192,7 @@ def derive_page_time_map_from_trace(
         missing_pages = sorted(set(expected) - set(pages))
         if missing_pages:
             log.warning("Missing TIFF pages in trace mapping: %s", missing_pages)
-        return PageTimeMap.invalid(
-            "Sync unavailable: TiffPage coverage mismatch (expected 0..N-1)"
-        )
+        return PageTimeMap.invalid("Sync unavailable: TiffPage coverage mismatch (expected 0..N-1)")
 
     for idx in range(1, len(times)):
         if not math.isfinite(times[idx]):

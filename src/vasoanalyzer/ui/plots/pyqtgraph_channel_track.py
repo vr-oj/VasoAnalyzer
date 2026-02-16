@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
 import pyqtgraph as pg
@@ -14,8 +13,8 @@ from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_axes_compat import PyQtGraphAxesCompat
 from vasoanalyzer.ui.plots.pyqtgraph_line_compat import PyQtGraphLineCompat
-from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
 from vasoanalyzer.ui.plots.pyqtgraph_style import PLOT_AXIS_LABELS
+from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
 
 __all__ = ["PyQtGraphChannelTrack"]
 

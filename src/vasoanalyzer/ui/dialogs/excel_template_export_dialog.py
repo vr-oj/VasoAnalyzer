@@ -23,10 +23,10 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
 )
 
-from vasoanalyzer.export.generator import build_export_table, events_from_rows
-from vasoanalyzer.export.profiles import PRESSURE_CURVE_STANDARD
 from vasoanalyzer.excel.template_v1 import inspect_template, validate_template_or_raise
 from vasoanalyzer.excel.writer_v1 import apply_write_plan, build_write_plan
+from vasoanalyzer.export.generator import build_export_table, events_from_rows
+from vasoanalyzer.export.profiles import PRESSURE_CURVE_STANDARD
 
 
 class ExcelTemplateExportDialog(QDialog):

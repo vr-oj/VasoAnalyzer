@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 from .contract import MyographyDataset
 from .errors import InvalidEventError
@@ -12,11 +11,11 @@ class StepSegment:
     index: int
     start_s: float
     end_s: float
-    target_mmhg: Optional[float] = None
+    target_mmhg: float | None = None
     label: str = ""
 
 
-def extract_pressure_steps(dataset: MyographyDataset) -> Tuple[StepSegment, ...]:
+def extract_pressure_steps(dataset: MyographyDataset) -> tuple[StepSegment, ...]:
     """
     Uses dataset.events of type PressureStep.
     Requires each PressureStep to have end_s (step is an interval).
@@ -25,8 +24,8 @@ def extract_pressure_steps(dataset: MyographyDataset) -> Tuple[StepSegment, ...]
 
     pressure_events = [event for event in dataset.events if event.type == "PressureStep"]
     steps: list[StepSegment] = []
-    prev_start: Optional[float] = None
-    prev_end: Optional[float] = None
+    prev_start: float | None = None
+    prev_end: float | None = None
 
     for index, event in enumerate(pressure_events):
         if event.end_s is None:

@@ -14,7 +14,6 @@ import logging
 import shutil
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 from vasoanalyzer.core import project_format
 
@@ -123,9 +122,9 @@ def list_recovery_options(project_path: str | Path) -> dict:
                 )
 
             # Check for autosave in bundle
-            autosave_candidates = list((path / ".staging").glob("*.sqlite")) if (
-                path / ".staging"
-            ).exists() else []
+            autosave_candidates = (
+                list((path / ".staging").glob("*.sqlite")) if (path / ".staging").exists() else []
+            )
             if autosave_candidates:
                 options.append(
                     {
@@ -229,9 +228,9 @@ def _recover_bundle(bundle_path: Path) -> tuple[bool, str, list[Path]]:
         best_snapshot = valid_snapshots[0]
 
         # Update HEAD to point to it
-        from vasoanalyzer.storage.snapshots import atomic_write_text
         import json
-        import time
+
+        from vasoanalyzer.storage.snapshots import atomic_write_text
 
         existing_head = None
         try:

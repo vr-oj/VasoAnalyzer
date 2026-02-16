@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from collections import OrderedDict
-from typing import Hashable
+from collections.abc import Hashable
 
 from PyQt5 import QtGui
 
@@ -61,7 +61,7 @@ class FrameCache:
         self._items: OrderedDict[Hashable, tuple[QtGui.QImage, int]] = OrderedDict()
 
     @classmethod
-    def from_env(cls) -> "FrameCache | None":
+    def from_env(cls) -> FrameCache | None:
         budget = qimage_cache_budget_bytes()
         if budget <= 0:
             return None

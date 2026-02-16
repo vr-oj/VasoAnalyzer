@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QEvent, QObject
-from PyQt5.QtWidgets import QApplication, QMessageBox, QWidget, QDialog
+from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 
 from vasoanalyzer.ui.dialogs.new_project_dialog import NewProjectDialog
 from vasoanalyzer.ui.home_dashboard_window import HomeDashboardWindow
@@ -273,9 +273,7 @@ class WindowManager(QObject):
         return getattr(window, "current_project", None) is not None
 
     def _create_main_window(self) -> VasoAnalyzerApp:
-        should_check = (
-            self._check_updates_on_first_window and not self._update_check_consumed
-        )
+        should_check = self._check_updates_on_first_window and not self._update_check_consumed
         window = VasoAnalyzerApp(check_updates=should_check, window_manager=self)
         if should_check:
             self._update_check_consumed = True

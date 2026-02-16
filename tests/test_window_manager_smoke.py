@@ -33,9 +33,7 @@ def test_window_manager_retains_windows(qt_app, tmp_path, monkeypatch) -> None:
     home.close()
 
 
-def test_window_manager_dashboard_visibility_and_dedupe(
-    qt_app, tmp_path, monkeypatch
-) -> None:
+def test_window_manager_dashboard_visibility_and_dedupe(qt_app, tmp_path, monkeypatch) -> None:
     manager = WindowManager(app=qt_app, check_updates_on_first_window=False)
 
     home = manager.show_dashboard()

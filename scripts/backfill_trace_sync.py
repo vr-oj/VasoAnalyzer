@@ -42,19 +42,14 @@ def _read_trace_csv(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, delimiter=delimiter, encoding="utf-8-sig", header=0)
 
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [
-            " ".join(str(part) for part in col if pd.notna(part))
-            for col in df.columns
-        ]
+        df.columns = [" ".join(str(part) for part in col if pd.notna(part)) for col in df.columns]
 
     df = df.dropna(axis=1, how="all")
 
     if len(df) > 1:
         numeric_preview = df.apply(pd.to_numeric, errors="coerce")
         header_row = df.iloc[0]
-        textual_mask = header_row.apply(
-            lambda v: isinstance(v, str) and v.strip() != ""
-        )
+        textual_mask = header_row.apply(lambda v: isinstance(v, str) and v.strip() != "")
         if numeric_preview.iloc[0].isna().all() and numeric_preview.iloc[1:].notna().any().any():
             if textual_mask.any():
                 new_columns = []
@@ -129,11 +124,11 @@ def main() -> int:
     parser.add_argument("--trace-csv", required=True, help="Original trace CSV path")
     parser.add_argument("--dataset-id", type=int, help="Dataset id to update")
     parser.add_argument("--sample-name", help="Sample name (matches dataset.name)")
-    parser.add_argument(
-        "--precision", type=int, default=6, help="Rounding decimals for time match"
-    )
+    parser.add_argument("--precision", type=int, default=6, help="Rounding decimals for time match")
     parser.add_argument("--min-match", type=float, default=0.9, help="Minimum match ratio required")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing non-null values")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing non-null values"
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show summary without writing")
     parser.add_argument("--list", action="store_true", help="List datasets and exit")
     parser.add_argument(

@@ -62,9 +62,7 @@ class ProjectExplorerWidget(QDockWidget):
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(14)
 
-        self.empty_state_label = QLabel(
-            "No datasets yet. Open Data… or Import Folder…", card
-        )
+        self.empty_state_label = QLabel("No datasets yet. Open Data… or Import Folder…", card)
         self.empty_state_label.setObjectName("ProjectEmptyState")
         self.empty_state_label.setWordWrap(True)
         self.empty_state_label.setVisible(False)

@@ -567,7 +567,9 @@ class SQLiteProjectRepository(ProjectRepository):
         return self._store
 
     # Internal helpers -------------------------------------------------
-    def _run_with_fresh_store(self, func: Callable[[sqlite_store.ProjectStore], Any], *, commit: bool = False) -> Any:
+    def _run_with_fresh_store(
+        self, func: Callable[[sqlite_store.ProjectStore], Any], *, commit: bool = False
+    ) -> Any:
         """
         Run ``func`` with a fresh ProjectStore (new sqlite connection) when a path is available.
         Falls back to the cached store if no path is set.

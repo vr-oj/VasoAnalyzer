@@ -152,9 +152,7 @@ class FrameView(QtWidgets.QWidget):
             max(1, int(size.width() * dpr)),
             max(1, int(size.height() * dpr)),
         )
-        scaled = self._frame_qimage.scaled(
-            target, QtCore.Qt.KeepAspectRatio, self._transform_mode
-        )
+        scaled = self._frame_qimage.scaled(target, QtCore.Qt.KeepAspectRatio, self._transform_mode)
         scaled.setDevicePixelRatio(dpr)
         self._scaled_qimage = scaled
         self._scaled_for_size = size

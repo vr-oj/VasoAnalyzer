@@ -1392,7 +1392,6 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
     OPTIMIZATION: Reuses existing store if available to avoid redundant unpack/pack cycles.
     """
     from ..storage.project_storage import (
-        USE_BUNDLE_FORMAT_BY_DEFAULT,
         create_unified_project,
         open_unified_project,
     )
@@ -1403,7 +1402,7 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
     use_container_format = dest.suffix == ".vaso"
 
     # Ensure proper extension
-    if not dest.suffix in (".vaso", ".vasopack"):
+    if dest.suffix not in (".vaso", ".vasopack"):
         # Default to container format (.vaso)
         dest = dest.with_suffix(".vaso")
         use_container_format = True
@@ -2823,7 +2822,7 @@ def _is_cloud_storage_path(path: str) -> tuple[bool, str | None]:
     # macOS iCloud Drive (multiple possible formats)
     icloud_patterns = [
         "library/mobile documents/com~apple~clouddocs",  # Fixed typo
-        "library/mobile documents/com~apple~",           # More general
+        "library/mobile documents/com~apple~",  # More general
         "/icloud drive/",
         "/icloud/",
     ]
@@ -3329,7 +3328,11 @@ def _dataset_to_sample(
     _populate_link_metadata(sample, "events", events_path, events_link_meta, base_dir)
 
     experiment = extra.get("experiment") or "Default"
-    experiment_id = _normalize_experiment_id_value(extra.get("experiment_id")) if isinstance(extra, dict) else None
+    experiment_id = (
+        _normalize_experiment_id_value(extra.get("experiment_id"))
+        if isinstance(extra, dict)
+        else None
+    )
     if experiment_id:
         sample.experiment_id = experiment_id
     return sample, experiment, experiment_id
@@ -3370,7 +3373,7 @@ def _format_trace_df(
 
     log.info("Trace format raw columns=%s for sample=%s", list(df.columns), sample_label)
     log.info(
-        "Trace format labels: t_seconds=%r inner_diam=%r outer_diam=%r " "p_avg=%r p1=%r p2=%r",
+        "Trace format labels: t_seconds=%r inner_diam=%r outer_diam=%r p_avg=%r p1=%r p2=%r",
         time_label,
         inner_label,
         outer_label,

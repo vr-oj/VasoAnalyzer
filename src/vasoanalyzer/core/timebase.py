@@ -7,14 +7,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
-from collections.abc import Sequence
-from typing import Any, Mapping
-
+import bisect
 import logging
 import math
-import bisect
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -140,8 +139,6 @@ def resolve_trace_timebase(
         "timeinsecs",
         "tseconds",
         "tsec",
-        "tseconds",
-        "tseconds",
     }
     seconds_col = None
     for col, norm in normalized.items():
@@ -548,7 +545,9 @@ def resolve_tiff_frame_times(
 
     trace_time = trace_time_s if trace_time_s is not None else tiff_info.get("trace_time_s")
     mapping = (
-        tiff_page_to_trace_idx if tiff_page_to_trace_idx is not None else tiff_info.get("tiff_page_to_trace_idx")
+        tiff_page_to_trace_idx
+        if tiff_page_to_trace_idx is not None
+        else tiff_info.get("tiff_page_to_trace_idx")
     )
 
     if trace_time is not None and mapping:
@@ -584,22 +583,16 @@ def resolve_tiff_frame_times(
         )
         if not allow_fallback:
             raise ValueError("Trace TIFF mapping incomplete; fallback disabled.")
-        interpolated = _interpolate_frame_times(
-            frame_indices, mapping, trace_arr
-        )
+        interpolated = _interpolate_frame_times(frame_indices, mapping, trace_arr)
         if interpolated is not None:
             filled_times, missing_pages, ranges = interpolated
             coverage = 1.0
             total = len(frame_indices)
             if total > 0:
                 coverage = float(total - len(missing_pages)) / float(total)
-            warnings.append(
-                f"Interpolated {len(missing_pages)} missing TIFF page time(s)."
-            )
+            warnings.append(f"Interpolated {len(missing_pages)} missing TIFF page time(s).")
             if ranges:
-                warnings.append(
-                    "Interpolated TIFF page ranges: " + _format_ranges(ranges)
-                )
+                warnings.append("Interpolated TIFF page ranges: " + _format_ranges(ranges))
             result = _finalize_frame_times(
                 filled_times,
                 source=FrameTimeSource.TRACE_TIFF_PAGE,
@@ -620,9 +613,7 @@ def resolve_tiff_frame_times(
         for meta in frames_metadata:
             value = None
             if isinstance(meta, Mapping):
-                if "FrameTime" in meta:
-                    value = meta.get("FrameTime")
-                elif "FrameTime" in meta.keys():
+                if "FrameTime" in meta or "FrameTime" in meta.keys():
                     value = meta.get("FrameTime")
             seconds, assumed = _parse_time_value(value)
             if seconds is None:
@@ -653,17 +644,17 @@ def resolve_tiff_frame_times(
                     interval_s, assumed = _parse_time_value(frames_metadata[0].get(key))
                     if interval_s is not None:
                         if assumed:
-                            warnings.append(
-                                f"Assumed seconds for '{key}' interval without units."
-                            )
+                            warnings.append(f"Assumed seconds for '{key}' interval without units.")
                         break
         if interval_s is not None and interval_s > 0:
-            first_idx = int(np.flatnonzero(np.isfinite(frame_times))[0]) if np.isfinite(frame_times).any() else 0
+            first_idx = (
+                int(np.flatnonzero(np.isfinite(frame_times))[0])
+                if np.isfinite(frame_times).any()
+                else 0
+            )
             first_val = float(frame_times[first_idx]) if np.isfinite(frame_times).any() else 0.0
             filled = first_val + interval_s * (np.arange(n_frames) - first_idx)
-            warnings.append(
-                "Filled missing FrameTime values using explicit interval metadata."
-            )
+            warnings.append("Filled missing FrameTime values using explicit interval metadata.")
             return _finalize_frame_times(
                 filled,
                 source=FrameTimeSource.TIFF_METADATA,
@@ -832,13 +823,9 @@ def derive_tiff_page_times(
             )
     else:
         if out_of_range:
-            warnings.append(
-                f"TiffPage entries out of expected range: {out_of_range}."
-            )
+            warnings.append(f"TiffPage entries out of expected range: {out_of_range}.")
         if missing_pages:
-            warnings.append(
-                f"Missing TIFF page time(s): {len(missing_pages)} of {page_count}."
-            )
+            warnings.append(f"Missing TIFF page time(s): {len(missing_pages)} of {page_count}.")
 
     valid = not missing_pages and out_of_range == 0
     median_interval = None
@@ -852,7 +839,9 @@ def derive_tiff_page_times(
             else:
                 median_interval = float(np.median(diffs))
 
-    if min(mapping.keys()) != 0 and not (expected_page_count is not None and expected_page_count > 0):
+    if min(mapping.keys()) != 0 and not (
+        expected_page_count is not None and expected_page_count > 0
+    ):
         warnings.append("TiffPage indices do not start at 0.")
         valid = False
 

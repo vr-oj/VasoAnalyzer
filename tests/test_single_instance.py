@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from vasoanalyzer.core.single_instance import collect_vaso_paths, parse_ipc_message
 

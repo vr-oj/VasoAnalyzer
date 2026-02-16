@@ -16,9 +16,7 @@ from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 log = logging.getLogger(__name__)
 
 
-def bind_project_dataset_to_plot_host(
-    project: Project, dataset_id: int, plot_host: Any
-) -> SampleN:
+def bind_project_dataset_to_plot_host(project: Project, dataset_id: int, plot_host: Any) -> SampleN:
     """Materialize trace/events for ``dataset_id`` and bind to ``plot_host``."""
 
     sample = _find_sample_by_dataset_id(project, dataset_id)

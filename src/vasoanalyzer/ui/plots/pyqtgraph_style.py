@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QBrush, QPen
+from PyQt5.QtGui import QBrush, QColor, QPen
 
 from vasoanalyzer.ui.theme import CURRENT_THEME, FONTS
 

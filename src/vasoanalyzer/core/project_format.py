@@ -59,12 +59,7 @@ class ValidationResult:
 def iso_utc_now() -> str:
     """Return current UTC time as ISO8601 string without microseconds."""
 
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _load_json_dict(path: Path) -> dict[str, Any]:
@@ -247,7 +242,9 @@ def validate_bundle_tree(
 
     needs_upgrade = meta_info.needs_upgrade or head_info.needs_upgrade
     if head_info.data.get("write_in_progress"):
-        log.warning("Bundle opened with write_in_progress flag set; a previous save may have failed.")
+        log.warning(
+            "Bundle opened with write_in_progress flag set; a previous save may have failed."
+        )
         needs_upgrade = True
     return ValidationResult(
         meta=meta_info,

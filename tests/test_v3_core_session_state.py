@@ -114,9 +114,7 @@ def test_save_reopen_restores_core_state_nonembedded(tmp_path: Path, qt_app):
         assert ui_state.get("last_dataset_id") == dataset_id
 
         plot_host = create_plot_host(renderer="matplotlib", dpi=96)
-        bound_sample = bind_project_dataset_to_plot_host(
-            project_reopen, dataset_id, plot_host
-        )
+        bound_sample = bind_project_dataset_to_plot_host(project_reopen, dataset_id, plot_host)
         restored = bound_sample.ui_state or {}
 
         xlim = restored.get("axis_xlim")
@@ -157,9 +155,7 @@ def test_save_reopen_restores_minimal_state_embedded(tmp_path: Path, qt_app):
         assert ui_state.get("last_dataset_id") == dataset_id
 
         plot_host = create_plot_host(renderer="matplotlib", dpi=96)
-        bound_sample = bind_project_dataset_to_plot_host(
-            project_reopen, dataset_id, plot_host
-        )
+        bound_sample = bind_project_dataset_to_plot_host(project_reopen, dataset_id, plot_host)
         restored = bound_sample.ui_state or {}
 
         xlim = restored.get("axis_xlim")

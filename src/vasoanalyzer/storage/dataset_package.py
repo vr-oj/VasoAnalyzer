@@ -8,16 +8,16 @@ import json
 import tempfile
 import uuid
 import zipfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import pandas as pd
 
 from utils.config import APP_VERSION
-from vasoanalyzer.storage import bundle_adapter
-from vasoanalyzer.storage import sqlite_store
+from vasoanalyzer.storage import bundle_adapter, sqlite_store
 from vasoanalyzer.storage.sqlite import projects as _projects
 
 PACKAGE_FORMAT = "vasods-v1"
@@ -51,12 +51,7 @@ class DatasetPackageManifest:
 
 
 def _utc_now_iso() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _sha256_bytes(payload: bytes) -> str:
@@ -83,7 +78,9 @@ def _prepare_events_for_export(df: pd.DataFrame | None) -> pd.DataFrame | None:
     df_local = df.copy()
     if "extra" in df_local.columns:
         df_local["extra"] = df_local["extra"].apply(
-            lambda payload: json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else payload
+            lambda payload: json.dumps(payload, ensure_ascii=False)
+            if isinstance(payload, dict)
+            else payload
         )
     return df_local
 

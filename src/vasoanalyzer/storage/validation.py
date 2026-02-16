@@ -133,7 +133,7 @@ def compute_trace_signature(conn: sqlite3.Connection, dataset_id: int, *, sample
     sample_suffix = t_us[-sample_k:] if n > sample_k else []
 
     if n > 1:
-        deltas = [b - a for a, b in zip(t_us[:-1], t_us[1:])]
+        deltas = [b - a for a, b in zip(t_us[:-1], t_us[1:], strict=False)]
         median_dt = sorted(deltas)[len(deltas) // 2]
         min_dt = min(deltas)
         max_dt = max(deltas)
@@ -193,9 +193,7 @@ def _duplicate_signature_issues(conn: sqlite3.Connection) -> list[dict[str, Any]
     for sig, datasets in sig_map.items():
         if len(datasets) < 2:
             continue
-        fingerprints = {
-            (d[2] or "", d[3] or "") for d in datasets
-        }
+        fingerprints = {(d[2] or "", d[3] or "") for d in datasets}
         if len(fingerprints) > 1:
             issues.append(
                 {

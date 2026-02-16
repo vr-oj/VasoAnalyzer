@@ -55,7 +55,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B011", "I", "B", "UP", "SIM"]
+"tests/**" = ["B011", "I", "B", "UP", "SIM", "E501"]
 "src/vasoanalyzer/legacy/**" = ["I", "B", "UP", "SIM"]
 
 [tool.ruff.format]

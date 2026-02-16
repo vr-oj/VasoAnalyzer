@@ -5,12 +5,17 @@ play/pause, scrubbing, and frame navigation controls.
 """
 
 import numpy as np
-from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider,
-    QToolButton, QSizePolicy,
-)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QPixmap, QImage, QIcon
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QSlider,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 
 class PreviewPlayerWidget(QWidget):

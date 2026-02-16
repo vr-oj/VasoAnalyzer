@@ -22,9 +22,7 @@ _SNAPSHOT_ICON_FALLBACKS = {
 }
 
 
-def themed_svg_icon(
-    svg_path: str, palette: QtGui.QPalette, size: QtCore.QSize
-) -> QtGui.QIcon:
+def themed_svg_icon(svg_path: str, palette: QtGui.QPalette, size: QtCore.QSize) -> QtGui.QIcon:
     """
     Load an SVG and tint it to match palette colors.
 
@@ -79,9 +77,7 @@ def snapshot_icon(name: str) -> QtGui.QIcon:
     return QtGui.QIcon(path) if path else QtGui.QIcon()
 
 
-def _render_svg(
-    renderer: QtSvg.QSvgRenderer, size: QtCore.QSize
-) -> QtGui.QImage | None:
+def _render_svg(renderer: QtSvg.QSvgRenderer, size: QtCore.QSize) -> QtGui.QImage | None:
     if size.width() <= 0 or size.height() <= 0:
         size = QtCore.QSize(16, 16)
 

@@ -17,9 +17,7 @@ class SnapshotTimelineSlider(QtWidgets.QSlider):
         super().__init__(QtCore.Qt.Horizontal, parent)
         self.setObjectName("SnapshotTimeline")
         self.setFixedHeight(28)
-        self.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
-        )
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
         self.setRange(0, 0)
 
     def _accent_color(self) -> QtGui.QColor:

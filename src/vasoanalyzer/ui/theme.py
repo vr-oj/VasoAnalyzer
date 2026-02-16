@@ -8,8 +8,6 @@ import contextlib
 import inspect
 import logging
 import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import cast
 
@@ -33,33 +31,28 @@ except Exception:  # pragma: no cover - resource helper missing or not packaged
 LIGHT_THEME = {
     # Surfaces
     "window_bg": "#F3F4F6",  # Gray chrome (toolbars, status bar)
-    "plot_bg": "#FFFFFF",     # White content area
+    "plot_bg": "#FFFFFF",  # White content area
     "toolbar_bg": "#F3F4F6",
     "table_bg": "#FFFFFF",
     "alternate_bg": "#F9FAFB",
     "panel_bg": "#FFFFFF",
-
     # Text
     "text": "#111827",
     "text_disabled": "#9CA3AF",
     "table_text": "#111827",
-
     # Buttons
     "button_bg": "#F3F4F6",
     "button_hover_bg": "#E5E7EB",
     "button_active_bg": "#3B82F6",
-
     # Grids and borders
     "grid_color": "#E5E7EB",
     "table_header_border": "#D1D5DB",
     "panel_border": "#D1D5DB",
     "hover_label_bg": "rgba(243, 244, 246, 0.9)",
     "hover_label_border": "#D1D5DB",
-
     # Selection
     "selection_bg": "#3B82F6",
     "highlighted_text": "#FFFFFF",
-
     # Lines / cursors / semantic colors
     "cursor_a": "#3366FF",
     "cursor_b": "#FF6B3D",
@@ -73,12 +66,10 @@ LIGHT_THEME = {
     "time_cursor": "#FF6B3D",
     "trace_color": "#111827",
     "trace_color_secondary": "#FF6B3D",
-
     # Warnings
     "warning_bg": "#FEF3C7",
     "warning_border": "#F59E0B",
     "warning_text": "#78350F",
-
     # Snapshot
     "snapshot_bg": "#F3F4F6",
     "table_hover": "#F3F4F6",
@@ -90,33 +81,28 @@ LIGHT_THEME = {
 DARK_THEME = {
     # Surfaces
     "window_bg": "#1E242D",  # Dark gray chrome
-    "plot_bg": "#0D1117",    # Dark content area
+    "plot_bg": "#0D1117",  # Dark content area
     "toolbar_bg": "#1E242D",
     "table_bg": "#0D1117",
     "alternate_bg": "#161B22",
     "panel_bg": "#0D1117",
-
     # Text
     "text": "#E6EDF3",
     "text_disabled": "#7D8590",
     "table_text": "#E6EDF3",
-
     # Buttons
     "button_bg": "#21262D",
     "button_hover_bg": "#30363D",
     "button_active_bg": "#388BFD",
-
     # Grids and borders
     "grid_color": "#30363D",
     "table_header_border": "#373E47",
     "panel_border": "#373E47",
     "hover_label_bg": "rgba(30, 36, 45, 0.9)",
     "hover_label_border": "#30363D",
-
     # Selection
     "selection_bg": "#1F6FEB",
     "highlighted_text": "#FFFFFF",
-
     # Lines / cursors / semantic colors
     "cursor_a": "#58A6FF",
     "cursor_b": "#F97316",
@@ -130,12 +116,10 @@ DARK_THEME = {
     "time_cursor": "#F97316",
     "trace_color": "#E6EDF3",
     "trace_color_secondary": "#F97316",
-
     # Warnings
     "warning_bg": "#451A03",
     "warning_border": "#F97316",
     "warning_text": "#FDE68A",
-
     # Snapshot
     "snapshot_bg": "#0D1117",
     "table_hover": "#21262D",
@@ -255,33 +239,27 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "plot_bg": base.name(),  # Use Base for plot backgrounds
         "toolbar_bg": window_bg.name(),
         "is_dark": bool(is_dark),
-
         # Text
         "text": window_text.name(),
         "text_disabled": mid.name(),  # Mid palette role for disabled text
-
         # Tables
         "table_bg": base.name(),
         "table_text": window_text.name(),
         "alternate_bg": alternate_base.name(),
         "selection_bg": highlight.name(),
-
         # Buttons
         "button_bg": button.name(),
         "button_hover_bg": _derive_hover_color(button, is_dark),
         "button_active_bg": highlight.name(),
-
         # Overlays / tooltips
         "hover_label_bg": _derive_tooltip_bg(window_bg, is_dark),
         "hover_label_border": mid.name(),
-
         # Lines / grids / cursors
         "grid_color": _derive_grid_color(base, is_dark),
         "cursor_a": "#38BDF8" if is_dark else "#3366FF",  # Blue - semantic
         "cursor_b": "#F97316" if is_dark else "#FF6B3D",  # Orange - semantic
         "cursor_text": window_text.name(),
         "cursor_line": "#38BDF8" if is_dark else "#3366FF",
-
         # Accents (semantic colors for data visualization)
         "accent": "#38BDF8" if is_dark else "#3366FF",
         "accent_fill": "#0EA5E9" if is_dark else "#2563EB",
@@ -289,19 +267,15 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "event_line": mid.name(),
         "event_highlight": highlight.name(),
         "time_cursor": "#F97316" if is_dark else "#FF6B3D",
-
         # Trace defaults (semantic)
         "trace_color": window_text.name(),
         "trace_color_secondary": "#F97316" if is_dark else "#FF6B3D",
-
         # Warnings (semantic - keep consistent)
         "warning_bg": "#451A03" if is_dark else "#FEF3C7",
         "warning_border": "#F97316" if is_dark else "#F59E0B",
         "warning_text": "#FDE68A" if is_dark else "#78350F",
-
         # Snapshot (for matplotlib snapshots)
         "snapshot_bg": "#0F141B" if is_dark else "#F3F4F6",
-
         # Table-specific
         "table_hover": _derive_hover_color(base, is_dark),
         "table_editable_hover": _derive_hover_color(highlight, is_dark),
@@ -336,6 +310,7 @@ def refresh_theme_from_os() -> None:
 
     # Apply to matplotlib
     apply_matplotlib_style(CURRENT_THEME)
+
 
 # Extra contrast styling using OS palette
 # No longer uses hardcoded colors - adapts to OS theme automatically
@@ -568,6 +543,7 @@ QListView::indicator:indeterminate:disabled {{
     image: url("{dash_disabled_url}");
 }}
 """
+
 
 LIGHT_THEME = {
     # Surfaces

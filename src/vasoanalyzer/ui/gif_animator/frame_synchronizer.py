@@ -5,9 +5,10 @@ and trace data timestamps, ensuring proper synchronization across different
 sampling rates.
 """
 
-from dataclasses import dataclass
-import numpy as np
 import logging
+from dataclasses import dataclass
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -72,20 +73,22 @@ class FrameSynchronizer:
         # Find valid frame range for the animation window
         self._compute_valid_frame_range()
 
-        logger.debug("FrameSynchronizer created", extra={
-            "n_frames": len(frame_times),
-            "animation_start": animation_start,
-            "animation_end": animation_end,
-            "duration": self.duration,
-            "valid_frames": len(self.valid_frame_indices)
-        })
+        logger.debug(
+            "FrameSynchronizer created",
+            extra={
+                "n_frames": len(frame_times),
+                "animation_start": animation_start,
+                "animation_end": animation_end,
+                "duration": self.duration,
+                "valid_frames": len(self.valid_frame_indices),
+            },
+        )
 
     def _compute_valid_frame_range(self):
         """Compute the range of TIFF frames that fall within animation window."""
         # Find frames within the animation time range
         self.valid_frame_indices = np.where(
-            (self.frame_times >= self.animation_start)
-            & (self.frame_times <= self.animation_end)
+            (self.frame_times >= self.animation_start) & (self.frame_times <= self.animation_end)
         )[0]
 
         if len(self.valid_frame_indices) == 0:
@@ -126,12 +129,15 @@ class FrameSynchronizer:
             # Deterministic tie-breaking: prefer earlier frame if within epsilon
             if abs(dist_prev - dist_curr) < EPSILON:
                 idx = idx - 1  # Tie: use earlier frame
-                logger.debug("Frame selection tie (within epsilon)", extra={
-                    "absolute_time": absolute_time,
-                    "prev_frame": idx,
-                    "curr_frame": idx + 1,
-                    "dist_diff": abs(dist_prev - dist_curr)
-                })
+                logger.debug(
+                    "Frame selection tie (within epsilon)",
+                    extra={
+                        "absolute_time": absolute_time,
+                        "prev_frame": idx,
+                        "curr_frame": idx + 1,
+                        "dist_diff": abs(dist_prev - dist_curr),
+                    },
+                )
             elif dist_prev < dist_curr:
                 idx = idx - 1
 
@@ -284,8 +290,7 @@ class FrameSynchronizer:
             i = j
 
         durations_ms = [
-            max(min_duration_ms, int(round(duration * 1000.0)))
-            for duration in durations_s
+            max(min_duration_ms, int(round(duration * 1000.0))) for duration in durations_s
         ]
         return durations_ms
 
@@ -311,10 +316,16 @@ class FrameSynchronizer:
         tiff_end = self.frame_times[-1]
 
         if self.animation_end < tiff_start:
-            return False, f"Animation end ({self.animation_end:.2f}s) is before first TIFF frame ({tiff_start:.2f}s)"
+            return (
+                False,
+                f"Animation end ({self.animation_end:.2f}s) is before first TIFF frame ({tiff_start:.2f}s)",
+            )
 
         if self.animation_start > tiff_end:
-            return False, f"Animation start ({self.animation_start:.2f}s) is after last TIFF frame ({tiff_end:.2f}s)"
+            return (
+                False,
+                f"Animation start ({self.animation_start:.2f}s) is after last TIFF frame ({tiff_end:.2f}s)",
+            )
 
         # Check if range is too short
         if self.duration < 0.1:
