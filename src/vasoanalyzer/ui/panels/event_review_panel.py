@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QDoubleValidator, QKeyEvent
+from PyQt5.QtGui import QDoubleValidator, QKeyEvent, QKeySequence
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QFormLayout,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QShortcut,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +26,7 @@ REVIEW_UNREVIEWED = "UNREVIEWED"
 REVIEW_CONFIRMED = "CONFIRMED"
 REVIEW_EDITED = "EDITED"
 REVIEW_NEEDS_FOLLOWUP = "NEEDS_FOLLOWUP"
+DEFAULT_THEME_ACCENT = "#1D5CFF"
 
 
 class EventReviewPanel(QWidget):
@@ -47,14 +50,21 @@ class EventReviewPanel(QWidget):
     confirm_all_requested = pyqtSignal()  # Request to confirm all unreviewed events
     review_completed = pyqtSignal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, controller: object | None = None, parent: QWidget | None = None) -> None:
         """Initialize the event review panel.
 
         Args:
+            controller: Optional review controller for direct edit actions
             parent: Parent widget (typically MainWindow)
         """
+        # Backward compatibility: EventReviewPanel(parent)
+        if parent is None and isinstance(controller, QWidget):
+            parent = controller
+            controller = None
+
         super().__init__(parent)
         self.setObjectName("EventReviewPanel")
+        self._controller = controller
 
         # State
         self._current_index: int = 0
@@ -64,6 +74,7 @@ class EventReviewPanel(QWidget):
 
         # Build UI
         self._build_ui()
+        self._install_shortcuts()
         self._apply_theme()
 
     def _build_ui(self) -> None:
@@ -113,6 +124,25 @@ class EventReviewPanel(QWidget):
 
         # Stretch to push everything to top
         layout.addStretch()
+
+    def _install_shortcuts(self) -> None:
+        """Install panel-scoped shortcuts that work for child widgets."""
+        self._shortcuts: list[QShortcut] = []
+        bindings: tuple[tuple[QKeySequence, object], ...] = (
+            (QKeySequence(Qt.Key_Left), self._on_previous),
+            (QKeySequence(Qt.Key_Right), self._on_next),
+            (QKeySequence(Qt.Key_S), self._on_sample_requested),
+            (QKeySequence(Qt.Key_Delete), self._delete_current_event),
+            (QKeySequence(Qt.Key_Backspace), self._delete_current_event),
+            (QKeySequence(Qt.Key_E), self._edit_current_label),
+            (QKeySequence(Qt.Key_T), self._edit_current_time),
+        )
+
+        for sequence, handler in bindings:
+            shortcut = QShortcut(sequence, self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(handler)
+            self._shortcuts.append(shortcut)
 
     def _build_header(self) -> QWidget:
         """Build header with title and progress."""
@@ -288,26 +318,36 @@ class EventReviewPanel(QWidget):
 
     def _apply_theme(self) -> None:
         """Apply theme styling to panel."""
-        accent = CURRENT_THEME.get("accent", "#1D5CFF")
+        accent = CURRENT_THEME.get("accent", DEFAULT_THEME_ACCENT)
+        accent_fill = CURRENT_THEME.get("accent_fill", accent)
+        highlighted_text = CURRENT_THEME.get("highlighted_text", "#FFFFFF")
+        button_bg = CURRENT_THEME.get("button_bg", "#CCCCCC")
+        text_disabled = CURRENT_THEME.get("text_disabled", "#666666")
 
         # Style confirm button with accent color
         self.confirm_button.setStyleSheet(f"""
             QPushButton#ConfirmButton {{
-                background-color: {accent};
-                color: white;
+                background-color: {accent_fill};
+                color: {highlighted_text};
                 font-weight: bold;
                 padding: 8px;
                 border-radius: 4px;
             }}
             QPushButton#ConfirmButton:hover {{
                 background-color: {accent};
-                opacity: 0.9;
             }}
             QPushButton#ConfirmButton:disabled {{
-                background-color: #CCCCCC;
-                color: #666666;
+                background-color: {button_bg};
+                color: {text_disabled};
             }}
         """)
+
+        # Keep sampling state style in sync with active theme.
+        self.set_sampling_mode(self._sampling_mode)
+
+    def apply_theme(self) -> None:
+        """Public theme hook used by MainWindow/theme refresh."""
+        self._apply_theme()
 
     # ---- Public API --------------------------------------------------------
 
@@ -418,11 +458,15 @@ class EventReviewPanel(QWidget):
         self.sample_button.setChecked(enabled)
 
         if enabled:
+            accent = CURRENT_THEME.get("accent", DEFAULT_THEME_ACCENT)
+            accent_fill = CURRENT_THEME.get("accent_fill", accent)
+            highlighted_text = CURRENT_THEME.get("highlighted_text", "#FFFFFF")
             self.sample_button.setText("Sampling... (click trace)")
-            self.sample_button.setStyleSheet("""
+            self.sample_button.setStyleSheet(f"""
                 QPushButton {
-                    background-color: #1D5CFF;
-                    color: white;
+                    background-color: {accent_fill};
+                    border: 1px solid {accent};
+                    color: {highlighted_text};
                     font-weight: bold;
                 }
             """)
@@ -448,6 +492,65 @@ class EventReviewPanel(QWidget):
             self.state_followup.setChecked(True)
         else:
             self.state_unreviewed.setChecked(True)
+
+    def _resolve_main_window(self) -> object | None:
+        parent = self.parent()
+        while parent is not None:
+            if hasattr(parent, "event_table_data"):
+                return parent
+            parent = parent.parent()
+        return None
+
+    def _resolve_review_controller(self) -> object | None:
+        controller = getattr(self, "_controller", None)
+        if controller is not None:
+            return controller
+        main_window = self._resolve_main_window()
+        if main_window is None:
+            return None
+        return getattr(main_window, "review_controller", None)
+
+    def _refresh_after_row_mutation(self) -> None:
+        main_window = self._resolve_main_window()
+        if main_window is None:
+            return
+
+        table_data = getattr(main_window, "event_table_data", None)
+        if not isinstance(table_data, list):
+            return
+
+        total = len(table_data)
+        self._total_events = total
+        if total <= 0:
+            self._current_index = 0
+            self._current_event_data = None
+            self.progress_label.setText("Event 0/0")
+            self.label_value.setText("—")
+            self.time_value.setText("—")
+            return
+
+        self._current_index = max(0, min(self._current_index, total - 1))
+        controller = self._resolve_review_controller()
+
+        if controller is not None:
+            if hasattr(controller, "_events"):
+                controller._events = [tuple(row) for row in table_data]
+            if hasattr(controller, "_review_states"):
+                load_states = getattr(controller, "_load_review_states", None)
+                if callable(load_states):
+                    try:
+                        controller._review_states = list(load_states())
+                    except Exception:
+                        pass
+            is_active = getattr(controller, "is_active", None)
+            controller_active = bool(is_active()) if callable(is_active) else True
+            navigate_to_event = getattr(controller, "navigate_to_event", None)
+            if controller_active and callable(navigate_to_event):
+                navigate_to_event(self._current_index)
+                return
+
+        row = tuple(table_data[self._current_index])
+        self.set_event(self._current_index, row, self.get_review_state(), total)
 
     # ---- Event handlers ----------------------------------------------------
 
@@ -513,6 +616,157 @@ class EventReviewPanel(QWidget):
         # Fallback: emit signal if dock not found
         self.review_completed.emit()
 
+    def _delete_current_event(self) -> None:
+        controller = self._resolve_review_controller()
+        delete_current = getattr(controller, "delete_current_event", None)
+        if callable(delete_current):
+            delete_current()
+            self._refresh_after_row_mutation()
+            return
+
+        main_window = self._resolve_main_window()
+        if main_window is None:
+            return
+
+        table_data = getattr(main_window, "event_table_data", None)
+        if not isinstance(table_data, list):
+            return
+        if not (0 <= self._current_index < len(table_data)):
+            return
+
+        delete_events = getattr(main_window, "delete_selected_events", None)
+        if not callable(delete_events):
+            return
+
+        before = len(table_data)
+        delete_events(indices=[self._current_index])
+        after_table = getattr(main_window, "event_table_data", None)
+        after = len(after_table) if isinstance(after_table, list) else before
+        if after < before:
+            if after > 0:
+                self._current_index = min(self._current_index, after - 1)
+            self._refresh_after_row_mutation()
+
+    def _edit_current_label(self) -> None:
+        index = self._current_index
+        main_window = self._resolve_main_window()
+        if main_window is None:
+            return
+        table_data = getattr(main_window, "event_table_data", None)
+        if not isinstance(table_data, list) or not (0 <= index < len(table_data)):
+            return
+
+        row = table_data[index]
+        current_label = str(row[0]) if len(row) > 0 and row[0] is not None else ""
+        new_label, ok = QInputDialog.getText(
+            self,
+            "Edit Label",
+            "Label:",
+            text=current_label,
+        )
+        if not ok:
+            return
+
+        controller = self._resolve_review_controller()
+        update_label = getattr(controller, "update_label", None)
+        if callable(update_label):
+            update_label(index, new_label)
+            self._refresh_after_row_mutation()
+            return
+
+        handle_label_edit = getattr(main_window, "handle_event_label_edit", None)
+        if callable(handle_label_edit):
+            handle_label_edit(index, new_label, current_label)
+        else:
+            row_data = list(row)
+            if not row_data:
+                return
+            row_data[0] = new_label
+            table_data[index] = tuple(row_data)
+
+        self._refresh_after_row_mutation()
+
+    def _edit_current_time(self) -> None:
+        """Prompt for and update the current event time."""
+        index = self._current_index
+        current_time = 0.0
+        if self._current_event_data and len(self._current_event_data) > 1:
+            try:
+                current_time = float(self._current_event_data[1])
+            except (TypeError, ValueError):
+                current_time = 0.0
+
+        controller = self._resolve_review_controller()
+        times = getattr(controller, "_times", None)
+
+        if isinstance(times, (list, tuple)):
+            if 0 <= index < len(times):
+                try:
+                    current_time = float(times[index])
+                except (TypeError, ValueError):
+                    current_time = 0.0
+        elif isinstance(times, dict):
+            try:
+                current_time = float(times.get(index, 0.0))
+            except (TypeError, ValueError):
+                current_time = 0.0
+
+        new_time, ok = QInputDialog.getDouble(
+            self,
+            "Edit Time",
+            "Time (s):",
+            current_time,
+            0,
+            1e6,
+            2,
+        )
+        if not ok:
+            return
+
+        update_time = getattr(controller, "update_time", None)
+        if callable(update_time):
+            update_time(index, new_time)
+            self._refresh_after_row_mutation()
+            return
+
+        main_window = self._resolve_main_window()
+        if main_window is None:
+            return
+        table_data = getattr(main_window, "event_table_data", None)
+        if not isinstance(table_data, list) or not (0 <= index < len(table_data)):
+            return
+
+        row_data = list(table_data[index])
+        if len(row_data) < 2:
+            return
+        row_data[1] = float(new_time)
+        table_data[index] = tuple(row_data)
+
+        event_times = getattr(main_window, "event_times", None)
+        if isinstance(event_times, list):
+            while len(event_times) <= index:
+                event_times.append(0.0)
+            event_times[index] = float(new_time)
+
+        table_controller = getattr(main_window, "event_table_controller", None)
+        update_row = getattr(table_controller, "update_row", None)
+        if callable(update_row):
+            update_row(index, table_data[index])
+
+        mark_row_edited = getattr(main_window, "_mark_row_edited", None)
+        if callable(mark_row_edited):
+            mark_row_edited(index)
+
+        update_plot = getattr(main_window, "update_plot", None)
+        if callable(update_plot):
+            update_plot()
+
+        mark_session_dirty = getattr(main_window, "mark_session_dirty", None)
+        if callable(mark_session_dirty):
+            mark_session_dirty()
+
+        self._refresh_after_row_mutation()
+
     # ---- Keyboard shortcuts ------------------------------------------------
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
@@ -534,6 +788,14 @@ class EventReviewPanel(QWidget):
         # Sample mode toggle
         elif key == Qt.Key_S:
             self._on_sample_requested()
+        # Edit current event fields
+        elif key == Qt.Key_E:
+            self._edit_current_label()
+        elif key == Qt.Key_T:
+            self._edit_current_time()
+        # Delete current event (with confirm)
+        elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
+            self._delete_current_event()
         # Exit sampling mode or close panel
         elif key == Qt.Key_Escape:
             if self._sampling_mode:

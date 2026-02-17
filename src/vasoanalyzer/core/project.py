@@ -236,10 +236,11 @@ class SampleN:
     VasoTracker import provenance metadata:
     {
         "trace_original_filename": "20251202_Exp01.csv",
+        "trace_original_filenames": ["20251202_Exp01.csv", "20251202_Exp01_part2.csv"],
         "events_original_filename": "20251202_Exp01_table.csv",
         "tiff_original_filename": "20251202_Exp01_Result.tiff",
-        "trace_original_directory": "/path/to/RawFiles",
         "import_timestamp": "2025-12-04T10:30:00Z",
+        "import_source": "file_dialog",
         "canonical_time_source": "Time_s_exact",
         "schema_version": 3,
     }

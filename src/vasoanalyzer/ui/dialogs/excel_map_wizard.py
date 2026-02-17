@@ -16,8 +16,10 @@ The wizard is largely based on the implementation plan documented in the
 project repository.
 """
 
+import contextlib
 import csv
 import os
+import tempfile
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from numbers import Real
@@ -53,9 +55,7 @@ from PyQt5.QtWidgets import (
 )
 
 import vasoanalyzer.ui.theme as theme
-from vasoanalyzer.excel import (
-    TemplateMetadata,
-)
+from vasoanalyzer.excel import TemplateMetadata
 
 __all__ = ["ExcelMapWizard"]
 
@@ -152,25 +152,26 @@ def get_fonts() -> dict[str, QFont]:
 
 def get_modern_table_stylesheet() -> str:
     """Generate modern table stylesheet with theme awareness."""
-    colors = get_semantic_colors()
-    is_dark = theme.CURRENT_THEME.get("is_dark", False)
-
-    if is_dark:
-        # Dark mode colors
-        base_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
-        alt_bg = theme.CURRENT_THEME.get("alternate_bg", "#0B1120")
-        border = COLORS["border_dark"]
-        hover = COLORS["hover_dark"]
-        text = theme.CURRENT_THEME.get("table_text", "#E5E7EB")
-        header_bg = theme.CURRENT_THEME.get("button_hover_bg", "#111827")
-    else:
-        # Light mode colors
-        base_bg = "#ffffff"
-        alt_bg = "#f9f9f9"
-        border = COLORS["border_light"]
-        hover = COLORS["hover_light"]
-        text = "#000000"
-        header_bg = "#f5f5f5"
+    base_bg = theme.CURRENT_THEME.get("table_bg", theme.CURRENT_THEME.get("panel_bg", "#FFFFFF"))
+    alt_bg = theme.CURRENT_THEME.get("alternate_bg", base_bg)
+    border = theme.CURRENT_THEME.get(
+        "panel_border",
+        theme.CURRENT_THEME.get("table_header_border", "#D1D5DB"),
+    )
+    hover = theme.CURRENT_THEME.get(
+        "table_hover",
+        theme.CURRENT_THEME.get("button_hover_bg", alt_bg),
+    )
+    text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#111827"))
+    header_bg = theme.CURRENT_THEME.get(
+        "table_header_bg",
+        theme.CURRENT_THEME.get("button_bg", theme.CURRENT_THEME.get("panel_bg", base_bg)),
+    )
+    selection_bg = theme.CURRENT_THEME.get(
+        "selection_bg",
+        theme.CURRENT_THEME.get("accent_fill", theme.CURRENT_THEME.get("accent", "#2563EB")),
+    )
+    selection_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
 
     return f"""
         QTableWidget, QTableView {{
@@ -180,7 +181,8 @@ def get_modern_table_stylesheet() -> str:
             color: {text};
             border: 1px solid {border};
             border-radius: {BORDER_RADIUS["sm"]}px;
-            selection-background-color: {theme.CURRENT_THEME.get("selection_bg", "#E6F0FF")};
+            selection-background-color: {selection_bg};
+            selection-color: {selection_text};
         }}
 
         QTableWidget::item, QTableView::item {{
@@ -211,25 +213,36 @@ def get_modern_table_stylesheet() -> str:
             border-top-right-radius: {BORDER_RADIUS["sm"]}px;
             border-right: none;
         }}
+
+        QTableCornerButton::section {{
+            background: {header_bg};
+            border: 1px solid {border};
+        }}
     """
 
 
 def get_modern_combobox_stylesheet() -> str:
     """Generate modern combobox stylesheet."""
-    is_dark = theme.CURRENT_THEME.get("is_dark", False)
-
-    if is_dark:
-        bg = "#1b212d"
-        border = "#4a5368"
-        border_focus = "#3B82F6"
-        text = "#E5E7EB"
-        hover_bg = "#252b3a"
-    else:
-        bg = "#ffffff"
-        border = COLORS["border_light"]
-        border_focus = COLORS["primary"]
-        text = "#000000"
-        hover_bg = "#f5f5f5"
+    bg = theme.CURRENT_THEME.get("panel_bg", theme.CURRENT_THEME.get("button_bg", "#FFFFFF"))
+    border = theme.CURRENT_THEME.get(
+        "panel_border",
+        theme.CURRENT_THEME.get("table_header_border", "#D1D5DB"),
+    )
+    border_focus = theme.CURRENT_THEME.get(
+        "accent",
+        theme.CURRENT_THEME.get("accent_fill", "#3B82F6"),
+    )
+    text = theme.CURRENT_THEME.get("text", "#111827")
+    hover_bg = theme.CURRENT_THEME.get(
+        "table_hover",
+        theme.CURRENT_THEME.get("button_hover_bg", bg),
+    )
+    popup_bg = theme.CURRENT_THEME.get("table_bg", bg)
+    selection_bg = theme.CURRENT_THEME.get(
+        "selection_bg",
+        theme.CURRENT_THEME.get("accent_fill", "#2563EB"),
+    )
+    selection_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
 
     return f"""
         QComboBox {{
@@ -264,31 +277,41 @@ def get_modern_combobox_stylesheet() -> str:
         QComboBox:editable {{
             background-color: {bg};
         }}
+
+        QComboBox QAbstractItemView {{
+            background-color: {popup_bg};
+            border: 1px solid {border};
+            color: {text};
+            selection-background-color: {selection_bg};
+            selection-color: {selection_text};
+        }}
     """
 
 
 def get_modern_button_stylesheet() -> str:
     """Generate modern button stylesheet with flat design."""
-    is_dark = theme.CURRENT_THEME.get("is_dark", False)
-
-    if is_dark:
-        primary_bg = "#3B82F6"
-        primary_hover = "#2563EB"
-        primary_active = "#1D4ED8"
-        secondary_bg = "#1b212d"
-        secondary_hover = "#252b3a"
-        secondary_border = "#4a5368"
-        text_primary = "#FFFFFF"
-        text_secondary = "#E5E7EB"
-    else:
-        primary_bg = COLORS["primary"]
-        primary_hover = "#0052a3"
-        primary_active = "#003d7a"
-        secondary_bg = "#ffffff"
-        secondary_hover = "#f5f5f5"
-        secondary_border = COLORS["border_light"]
-        text_primary = "#ffffff"
-        text_secondary = "#000000"
+    primary_bg = theme.CURRENT_THEME.get(
+        "accent_fill",
+        theme.CURRENT_THEME.get("accent", "#2563EB"),
+    )
+    primary_hover = theme.CURRENT_THEME.get("accent", primary_bg)
+    primary_active = theme.CURRENT_THEME.get("button_active_bg", primary_hover)
+    secondary_bg = theme.CURRENT_THEME.get(
+        "panel_bg",
+        theme.CURRENT_THEME.get("button_bg", "#FFFFFF"),
+    )
+    secondary_hover = theme.CURRENT_THEME.get(
+        "table_hover",
+        theme.CURRENT_THEME.get("button_hover_bg", secondary_bg),
+    )
+    secondary_active = theme.CURRENT_THEME.get("button_hover_bg", secondary_hover)
+    secondary_border = theme.CURRENT_THEME.get(
+        "panel_border",
+        theme.CURRENT_THEME.get("table_header_border", "#D1D5DB"),
+    )
+    text_primary = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
+    text_secondary = theme.CURRENT_THEME.get("text", "#111827")
+    text_disabled = theme.CURRENT_THEME.get("text_disabled", "#9CA3AF")
 
     return f"""
         QPushButton {{
@@ -307,17 +330,18 @@ def get_modern_button_stylesheet() -> str:
         }}
 
         QPushButton:pressed {{
-            background-color: {primary_active};
+            background-color: {secondary_active};
         }}
 
         QPushButton:disabled {{
-            opacity: 0.5;
+            color: {text_disabled};
+            border-color: {secondary_border};
         }}
 
         QPushButton#PrimaryButton {{
             background-color: {primary_bg};
             color: {text_primary};
-            border: none;
+            border: 1px solid {primary_hover};
         }}
 
         QPushButton#PrimaryButton:hover {{
@@ -339,6 +363,29 @@ def get_modern_button_stylesheet() -> str:
 
         QToolButton:hover {{
             background-color: {secondary_hover};
+        }}
+
+        QToolButton:pressed {{
+            background-color: {secondary_active};
+        }}
+
+        QToolButton:disabled {{
+            color: {text_disabled};
+            border-color: {secondary_border};
+        }}
+
+        QToolButton#PrimaryButton {{
+            background-color: {primary_bg};
+            color: {text_primary};
+            border: 1px solid {primary_hover};
+        }}
+
+        QToolButton#PrimaryButton:hover {{
+            background-color: {primary_hover};
+        }}
+
+        QToolButton#PrimaryButton:pressed {{
+            background-color: {primary_active};
         }}
     """
 
@@ -369,7 +416,8 @@ class WizardPageBase(QWizardPage):
 def load_workbook_preserve(path: str):
     """Load an Excel workbook preserving formulas."""
 
-    return load_workbook(path, data_only=False)
+    keep_vba = Path(path).suffix.lower() == ".xlsm"
+    return load_workbook(path, keep_vba=keep_vba, data_only=False)
 
 
 def load_events_csv(path: str) -> pd.DataFrame:
@@ -392,9 +440,24 @@ def load_events_csv(path: str) -> pd.DataFrame:
 
 
 def save_workbook(wb, path: str) -> None:
-    """Save an Excel workbook to ``path``."""
+    """Atomically save an Excel workbook to ``path``."""
 
-    wb.save(path)
+    target_path = Path(path)
+    temp_fd, temp_name = tempfile.mkstemp(
+        prefix=f".{target_path.stem}.",
+        suffix=target_path.suffix,
+        dir=str(target_path.parent),
+    )
+    os.close(temp_fd)
+
+    temp_path = Path(temp_name)
+    try:
+        wb.save(str(temp_path))
+        os.replace(str(temp_path), str(target_path))
+    finally:
+        if temp_path.exists():
+            with contextlib.suppress(OSError):
+                temp_path.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +596,7 @@ class TemplatePreviewTable(QTableWidget):
         alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
         text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        highlighted_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
 
         palette.setColor(self.backgroundRole(), QColor(table_bg))
         palette.setColor(self.foregroundRole(), QColor(text))
@@ -541,7 +605,7 @@ class TemplatePreviewTable(QTableWidget):
         palette.setColor(QPalette.Text, QColor(text))
         palette.setColor(QPalette.WindowText, QColor(text))
         palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(text))
+        palette.setColor(QPalette.HighlightedText, QColor(highlighted_text))
 
         self.setPalette(palette)
         # Use the new modern table stylesheet
@@ -600,37 +664,7 @@ class TemplatePage(WizardPageBase):
         self.recent_templates_list.setAlternatingRowColors(True)
         self.recent_templates_list.setUniformItemSizes(True)
         self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
-        # Apply modern list styling
-        is_dark = theme.CURRENT_THEME.get("is_dark", False)
-        if is_dark:
-            list_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
-            list_border = COLORS["border_dark"]
-            list_hover = COLORS["hover_dark"]
-            list_text = theme.CURRENT_THEME.get("table_text", "#E5E7EB")
-        else:
-            list_bg = "#ffffff"
-            list_border = COLORS["border_light"]
-            list_hover = COLORS["hover_light"]
-            list_text = "#000000"
-        self.recent_templates_list.setStyleSheet(f"""
-            QListWidget {{
-                border: 1px solid {list_border};
-                border-radius: {BORDER_RADIUS["sm"]}px;
-                background-color: {list_bg};
-                padding: 4px;
-                color: {list_text};
-            }}
-            QListWidget::item {{
-                padding: 8px 12px;
-                border-radius: {BORDER_RADIUS["sm"]}px;
-            }}
-            QListWidget::item:hover {{
-                background-color: {list_hover};
-            }}
-            QListWidget::item:selected {{
-                background-color: {theme.CURRENT_THEME.get("selection_bg", "#E6F0FF")};
-            }}
-        """)
+        self._apply_recent_templates_style()
         self.remove_recent_button = QPushButton("Remove selected")
         self.remove_recent_button.setMinimumHeight(BUTTON_HEIGHT)
         self.remove_recent_button.setStyleSheet(get_modern_button_stylesheet())
@@ -665,6 +699,57 @@ class TemplatePage(WizardPageBase):
         layout.addWidget(self.lbl_csv)
 
         self._update_recent_templates_list()
+
+    def _apply_recent_templates_style(self) -> None:
+        list_bg = theme.CURRENT_THEME.get(
+            "table_bg",
+            theme.CURRENT_THEME.get("panel_bg", "#FFFFFF"),
+        )
+        list_border = theme.CURRENT_THEME.get(
+            "panel_border",
+            theme.CURRENT_THEME.get("table_header_border", "#D1D5DB"),
+        )
+        list_hover = theme.CURRENT_THEME.get(
+            "table_hover",
+            theme.CURRENT_THEME.get("button_hover_bg", list_bg),
+        )
+        list_text = theme.CURRENT_THEME.get(
+            "table_text",
+            theme.CURRENT_THEME.get("text", "#111827"),
+        )
+        selection_bg = theme.CURRENT_THEME.get(
+            "selection_bg",
+            theme.CURRENT_THEME.get("accent_fill", "#2563EB"),
+        )
+        selection_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
+        self.recent_templates_list.setStyleSheet(f"""
+            QListWidget {{
+                border: 1px solid {list_border};
+                border-radius: {BORDER_RADIUS["sm"]}px;
+                background-color: {list_bg};
+                padding: 4px;
+                color: {list_text};
+            }}
+            QListWidget::item {{
+                padding: 8px 12px;
+                border-radius: {BORDER_RADIUS["sm"]}px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {list_hover};
+            }}
+            QListWidget::item:selected {{
+                background-color: {selection_bg};
+                color: {selection_text};
+            }}
+        """)
+
+    def apply_theme(self) -> None:
+        self.btn_excel.setStyleSheet(get_modern_button_stylesheet())
+        self.btn_csv.setStyleSheet(get_modern_button_stylesheet())
+        self.combo_sheet.setStyleSheet(get_modern_combobox_stylesheet())
+        self.remove_recent_button.setStyleSheet(get_modern_button_stylesheet())
+        self.clear_recent_button.setStyleSheet(get_modern_button_stylesheet())
+        self._apply_recent_templates_style()
 
     # Properties exposed as wizard fields
     def get_templatePath(self) -> str:
@@ -1240,17 +1325,27 @@ class RowMappingPage(WizardPageBase):
         alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
         text = theme.CURRENT_THEME.get("table_text", theme.CURRENT_THEME.get("text", "#FFFFFF"))
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
+        highlighted_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
 
         palette.setColor(QPalette.Base, QColor(table_bg))
         palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
         palette.setColor(QPalette.Text, QColor(text))
         palette.setColor(QPalette.WindowText, QColor(text))
         palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(text))
+        palette.setColor(QPalette.HighlightedText, QColor(highlighted_text))
 
         table.setPalette(palette)
         # Use the new modern table stylesheet
         table.setStyleSheet(get_modern_table_stylesheet())
+
+    def apply_theme(self) -> None:
+        self.measurement_combo.setStyleSheet(get_modern_combobox_stylesheet())
+        self.pick_date_combo.setStyleSheet(get_modern_combobox_stylesheet())
+        self.redetect_btn.setStyleSheet(get_modern_button_stylesheet())
+        self.select_unmapped_btn.setStyleSheet(get_modern_button_stylesheet())
+        self._apply_table_theme(self.preview_table)
+        self._apply_table_theme(self.mapping_table)
+        self._apply_table_theme(self.session_values_table)
 
     # --------------------------------------------------
     def initializePage(self) -> None:
@@ -1743,6 +1838,7 @@ class PreviewPage(WizardPageBase):
         wiz.apply_mapping()
         preview_df = wiz.get_preview_dataframe()
         self.preview_view.setModel(PandasModel(preview_df))
+        self.preview_view.setStyleSheet(get_modern_table_stylesheet())
         has_mappings = any(value is not None for value in wiz.row_assignments.values())
         self.btn_save.setEnabled(has_mappings)
 
@@ -1778,6 +1874,16 @@ class PreviewPage(WizardPageBase):
 
         try:
             save_workbook(wiz.wb, str(target_path))
+        except PermissionError:  # pragma: no cover - GUI feedback
+            QMessageBox.warning(
+                self,
+                "File In Use",
+                (
+                    f"Could not update {target_path.name} because it appears to be open in Excel"
+                    " or another program.\n\nPlease close the file and try again."
+                ),
+            )
+            return
         except Exception as exc:  # pragma: no cover - GUI feedback
             QMessageBox.critical(self, "Save Failed", str(exc))
             return
@@ -1788,6 +1894,10 @@ class PreviewPage(WizardPageBase):
     # ------------------------------------------------------
     def isComplete(self) -> bool:
         return self._wizard().wb is not None
+
+    def apply_theme(self) -> None:
+        self.btn_save.setStyleSheet(get_modern_button_stylesheet())
+        self.preview_view.setStyleSheet(get_modern_table_stylesheet())
 
 
 # ---------------------------------------------------------------------------
@@ -1853,9 +1963,34 @@ class ExcelMapWizard(QWizard):
         self.addPage(TemplatePage())
         self.addPage(RowMappingPage())
         self.addPage(PreviewPage())
+        self.apply_theme()
 
         if events_df is not None:
             self.set_events_dataframe(events_df, source="session")
+
+    def apply_theme(self) -> None:
+        """Re-apply dialog styles after a theme change."""
+        combined_stylesheet = (
+            get_modern_button_stylesheet() + "\n" + get_modern_combobox_stylesheet()
+        )
+        self.setStyleSheet(combined_stylesheet)
+
+        for page in self.findChildren(QWizardPage):
+            apply_method = getattr(page, "apply_theme", None)
+            if callable(apply_method):
+                with contextlib.suppress(Exception):
+                    apply_method()
+
+        for table in self.findChildren((QTableWidget, QTableView)):
+            apply_method = getattr(table, "apply_theme", None)
+            if callable(apply_method):
+                with contextlib.suppress(Exception):
+                    apply_method()
+            else:
+                with contextlib.suppress(Exception):
+                    table.setStyleSheet(get_modern_table_stylesheet())
+
+        self.update()
 
     # --------------------------------------------------
     def set_events_dataframe(self, df: pd.DataFrame, *, source: str = "session") -> None:

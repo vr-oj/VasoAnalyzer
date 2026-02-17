@@ -13,7 +13,7 @@ from typing import Any, cast
 import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont
+from PyQt5.QtGui import QColor, QFont, QPen
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
@@ -48,6 +48,7 @@ from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 __all__ = ["PyQtGraphPlotHost"]
 
 log = logging.getLogger(__name__)
+DEFAULT_THEME_ACCENT = "#1D5CFF"
 
 
 def _xrange_debug_enabled() -> bool:
@@ -232,6 +233,8 @@ class PyQtGraphPlotHost(InteractionHost):
             if callable(apply_method):
                 with contextlib.suppress(Exception):
                     apply_method()
+
+        self._refresh_sampling_crosshair_theme()
         style = self._widget.styleSheet() if hasattr(self, "_widget") else ""
         log.debug(
             "[THEME-DEBUG] PyQtGraphPlotHost styleSheet length=%s",
@@ -337,19 +340,21 @@ class PyQtGraphPlotHost(InteractionHost):
             value: Value position for horizontal line
         """
         plot_item = track.view.get_widget().getPlotItem()
+        crosshair_pen = self._sampling_crosshair_pen()
 
         # Create or update vertical line
         if not hasattr(track, "_sampling_vline"):
             track._sampling_vline = pg.InfiniteLine(
                 pos=time_sec,
                 angle=90,
-                pen=pg.mkPen(color="#1D5CFF", width=1, style=Qt.DashLine),
+                pen=crosshair_pen,
                 movable=False,
             )
             track._sampling_vline.setZValue(10)
             plot_item.addItem(track._sampling_vline)
         else:
             track._sampling_vline.setPos(time_sec)
+            track._sampling_vline.setPen(crosshair_pen)
             track._sampling_vline.show()
 
         # Create or update horizontal line
@@ -357,14 +362,29 @@ class PyQtGraphPlotHost(InteractionHost):
             track._sampling_hline = pg.InfiniteLine(
                 pos=value,
                 angle=0,
-                pen=pg.mkPen(color="#1D5CFF", width=1, style=Qt.DashLine),
+                pen=crosshair_pen,
                 movable=False,
             )
             track._sampling_hline.setZValue(10)
             plot_item.addItem(track._sampling_hline)
         else:
             track._sampling_hline.setPos(value)
+            track._sampling_hline.setPen(crosshair_pen)
             track._sampling_hline.show()
+
+    def _sampling_crosshair_pen(self) -> QPen:
+        accent = CURRENT_THEME.get("accent", DEFAULT_THEME_ACCENT)
+        return pg.mkPen(color=accent, width=1, style=Qt.DashLine)
+
+    def _refresh_sampling_crosshair_theme(self) -> None:
+        crosshair_pen = self._sampling_crosshair_pen()
+        for track in self._tracks.values():
+            if hasattr(track, "_sampling_vline"):
+                with contextlib.suppress(Exception):
+                    track._sampling_vline.setPen(crosshair_pen)
+            if hasattr(track, "_sampling_hline"):
+                with contextlib.suppress(Exception):
+                    track._sampling_hline.setPen(crosshair_pen)
 
     def _hide_track_crosshair(self, track: PyQtGraphChannelTrack) -> None:
         """Hide crosshair lines on a specific track.

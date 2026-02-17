@@ -354,36 +354,36 @@ QGroupBox::title {
 UI_INTERACTION_CONTRACT_QSS = """
 /* UI interaction contract: menus, tooltips, disabled, focus */
 QMenu {
-    background-color: #1f232a;
-    border: 1px solid #2c313a;
+    background-color: palette(base);
+    border: 1px solid palette(mid);
     padding: 4px;
 }
 
 QMenu::item {
     padding: 6px 18px 6px 24px;
-    color: #e6e6e6;
+    color: palette(text);
     border-radius: 4px;
 }
 
 QMenu::item:selected {
-    background-color: #2f3b4a;
-    color: #ffffff;
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
 }
 
 QMenu::item:disabled {
-    color: #7a7f87;
+    color: palette(mid);
 }
 
 QMenu::separator {
     height: 1px;
-    background: #2c313a;
+    background: palette(mid);
     margin: 6px 6px;
 }
 
 QToolTip {
-    background-color: #2b2b2b;
-    color: #ffffff;
-    border: 1px solid #3a3a3a;
+    background-color: palette(tool-tip-base);
+    color: palette(tool-tip-text);
+    border: 1px solid palette(mid);
     padding: 6px 8px;
     border-radius: 4px;
 }
@@ -395,12 +395,12 @@ QComboBox:focus,
 QTreeWidget:focus,
 QTableWidget:focus {
     outline: none;
-    border: 1px solid #3d556e;
+    border: 1px solid palette(highlight);
 }
 
 QPushButton:disabled,
 QToolButton:disabled {
-    color: #7a7f87;
+    color: palette(mid);
 }
 """
 
@@ -720,10 +720,15 @@ def apply_qt_palette(theme: dict):
 
     # Highlight colors
     highlight_bg = parse_color(theme.get("selection_bg", "#3B82F6"))
-    highlight_text = parse_color(theme.get("text", "#FFFFFF"))
+    highlight_text = parse_color(theme.get("highlighted_text", "#FFFFFF"))
 
     # Mid/border colors
     mid_color = parse_color(theme.get("grid_color", "#D1D5DB"))
+    is_dark = bool(theme.get("is_dark", window_bg.lightness() < 128))
+
+    # Tooltip colors for palette(tool-tip-base) / palette(tool-tip-text)
+    tooltip_bg = window_bg.lighter(115) if is_dark else window_bg.darker(105)
+    tooltip_text = window_text
 
     # Apply to all color groups (Active, Inactive, Disabled)
     for group in [QPalette.Active, QPalette.Inactive, QPalette.Disabled]:
@@ -743,6 +748,8 @@ def apply_qt_palette(theme: dict):
         # Highlight (selections)
         palette.setColor(group, QPalette.Highlight, highlight_bg)
         palette.setColor(group, QPalette.HighlightedText, highlight_text)
+        palette.setColor(group, QPalette.ToolTipBase, tooltip_bg)
+        palette.setColor(group, QPalette.ToolTipText, tooltip_text)
 
         # Mid/borders
         palette.setColor(group, QPalette.Mid, mid_color)

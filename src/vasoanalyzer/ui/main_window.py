@@ -29,7 +29,7 @@ import tempfile
 import time
 import webbrowser
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -591,7 +591,19 @@ def _collect_missing_assets(project: Project) -> tuple[list[MissingAsset], list[
 
     for experiment in project.experiments:
         for sample in experiment.samples:
+            has_embedded_trace = (
+                getattr(sample, "dataset_id", None) is not None
+                or getattr(sample, "trace_data", None) is not None
+            )
+            has_embedded_events = (
+                getattr(sample, "dataset_id", None) is not None
+                or getattr(sample, "events_data", None) is not None
+            )
             for kind, label in (("trace", "Trace"), ("events", "Events")):
+                if kind == "trace" and has_embedded_trace:
+                    continue
+                if kind == "events" and has_embedded_events:
+                    continue
                 current_path = getattr(sample, f"{kind}_path", None)
                 resolved = _resolve(current_path)
                 if current_path and (resolved is None or not resolved.exists()):
@@ -3158,15 +3170,16 @@ class VasoAnalyzerApp(QMainWindow):
         summary = "\n".join(f"• {entry}" for entry in entries[:6])
         if len(entries) > 6:
             summary += f"\n… and {len(entries) - 6} more."
-        QMessageBox.warning(
-            self,
-            "Missing Linked Files",
-            (
-                "Some linked resources could not be found. "
-                "You may need to relink them before continuing.\n\n"
-                f"{summary}"
-            ),
+        log.warning(
+            "Some linked resources could not be found. Use Tools → Relink Missing Files… if needed.\n%s",
+            summary,
         )
+        status_bar = self.statusBar()
+        if status_bar is not None:
+            status_bar.showMessage(
+                "Some linked files are missing (see Relink Missing Files…)",
+                5000,
+            )
 
     def on_tree_item_clicked(self, item, _):
         obj = item.data(0, Qt.UserRole)
@@ -7879,6 +7892,12 @@ class VasoAnalyzerApp(QMainWindow):
             if callable(apply_theme):
                 apply_theme()
 
+        review_panel = getattr(self, "review_panel", None)
+        apply_review_theme = getattr(review_panel, "apply_theme", None)
+        if callable(apply_review_theme):
+            with contextlib.suppress(Exception):
+                apply_review_theme()
+
         if hasattr(self, "_apply_event_table_card_theme"):
             with contextlib.suppress(Exception):
                 self._apply_event_table_card_theme()
@@ -10052,6 +10071,98 @@ QPushButton[isGhost="true"]:pressed {{
         self.statusBar().showMessage("Frame metadata copied to clipboard", 2000)
 
     # [D] ========================= FILE LOADERS: TRACE / EVENTS / TIFF =====================
+    @staticmethod
+    def _utc_iso_timestamp() -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    @staticmethod
+    def _basename(value: Any) -> str | None:
+        if isinstance(value, os.PathLike):
+            value = os.fspath(value)
+        if not isinstance(value, str):
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        return os.path.basename(stripped)
+
+    @classmethod
+    def _basename_list(cls, values: Any) -> list[str]:
+        if not isinstance(values, list | tuple):
+            return []
+        names: list[str] = []
+        for value in values:
+            name = cls._basename(value)
+            if name:
+                names.append(name)
+        return names
+
+    @classmethod
+    def _sanitize_import_metadata(cls, metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+        clean = dict(metadata or {})
+
+        trace_name = cls._basename(clean.get("trace_original_filename"))
+        if trace_name:
+            clean["trace_original_filename"] = trace_name
+
+        trace_names = cls._basename_list(clean.get("trace_original_filenames"))
+        if trace_names:
+            clean["trace_original_filenames"] = trace_names
+        else:
+            clean.pop("trace_original_filenames", None)
+
+        events_name = cls._basename(clean.get("events_original_filename"))
+        if events_name:
+            clean["events_original_filename"] = events_name
+
+        tiff_name = cls._basename(clean.get("tiff_original_filename"))
+        if tiff_name:
+            clean["tiff_original_filename"] = tiff_name
+
+        event_file_name = cls._basename(clean.pop("event_file", None))
+        if event_file_name and not clean.get("events_original_filename"):
+            clean["events_original_filename"] = event_file_name
+
+        for key in ("event_files", "merged_traces", "merged_from_paths", "merged_requested_paths"):
+            names = cls._basename_list(clean.get(key))
+            if names:
+                clean[key] = names
+            else:
+                clean.pop(key, None)
+
+        for key in ("merged_skipped_paths", "event_skipped_paths"):
+            entries = clean.get(key)
+            if not isinstance(entries, list):
+                continue
+            normalised: list[Any] = []
+            for entry in entries:
+                if not isinstance(entry, Mapping):
+                    normalised.append(entry)
+                    continue
+                entry_copy = dict(entry)
+                path_name = cls._basename(entry_copy.get("path"))
+                if path_name:
+                    entry_copy["path"] = path_name
+                normalised.append(entry_copy)
+            clean[key] = normalised
+
+        segments = clean.get("merged_segments")
+        if isinstance(segments, list):
+            normalised_segments: list[Any] = []
+            for segment in segments:
+                if not isinstance(segment, Mapping):
+                    normalised_segments.append(segment)
+                    continue
+                segment_copy = dict(segment)
+                path_name = cls._basename(segment_copy.get("path"))
+                if path_name:
+                    segment_copy["path"] = path_name
+                normalised_segments.append(segment_copy)
+            clean["merged_segments"] = normalised_segments
+
+        clean.pop("trace_original_directory", None)
+        return clean
+
     def load_trace_and_event_files(self, trace_path):
         """Load a trace file (or multiple) and matching events if available."""
         if isinstance(trace_path, (list, tuple)):
@@ -10083,7 +10194,7 @@ QPushButton[isGhost="true"]:pressed {{
         self.trace_data = self._prepare_trace_dataframe(df)
         self._update_trace_sync_state()
         self._reset_channel_view_defaults()
-        self._last_event_import = import_meta or {}
+        self._last_event_import = self._sanitize_import_metadata(import_meta or {})
         self.trace_file_path = primary_trace
         trace_filename = os.path.basename(primary_trace)
         if len(trace_paths) > 1:
@@ -10255,13 +10366,33 @@ QPushButton[isGhost="true"]:pressed {{
             if isinstance(self.trace_data, pd.DataFrame) and not self.trace_data.empty:
                 with contextlib.suppress(Exception):
                     sample.trace_data = self.trace_data.copy(deep=True)
+            meta = dict(sample.import_metadata or {})
             if isinstance(self._last_event_import, dict) and self._last_event_import:
-                sample.import_metadata = dict(self._last_event_import)
+                meta.update(self._sanitize_import_metadata(self._last_event_import))
+            trace_paths = (
+                list(dict.fromkeys(file_path))
+                if isinstance(file_path, list | tuple)
+                else [primary_trace_path]
+            )
+            trace_names = [name for name in (self._basename(path) for path in trace_paths) if name]
+            if trace_names:
+                meta["trace_original_filename"] = trace_names[0]
+                if len(trace_names) > 1:
+                    meta["trace_original_filenames"] = trace_names
+                else:
+                    meta.pop("trace_original_filenames", None)
 
             event_path = find_matching_event_file(primary_trace_path)
             if event_path and os.path.exists(event_path):
                 event_obj = Path(event_path).expanduser().resolve(strict=False)
                 self._update_sample_link_metadata(sample, "events", event_obj)
+                meta["events_original_filename"] = os.path.basename(event_path)
+
+            if tiff_path:
+                meta["tiff_original_filename"] = os.path.basename(tiff_path)
+            meta["import_timestamp"] = self._utc_iso_timestamp()
+            meta["import_source"] = source
+            sample.import_metadata = self._sanitize_import_metadata(meta)
 
             if snapshots is not None:
                 try:
@@ -10316,7 +10447,18 @@ QPushButton[isGhost="true"]:pressed {{
             frames = [0] * len(labels)
 
         self.load_project_events(labels, times, frames, None, None, auto_export=True)
-        self._last_event_import = {"event_file": file_path, "manual": True}
+        self._last_event_import = self._sanitize_import_metadata(
+            {
+                "events_original_filename": os.path.basename(file_path),
+                "manual": True,
+                "import_timestamp": self._utc_iso_timestamp(),
+                "import_source": "file_dialog",
+            }
+        )
+        if self.current_sample is not None:
+            meta = dict(self.current_sample.import_metadata or {})
+            meta.update(self._last_event_import)
+            self.current_sample.import_metadata = self._sanitize_import_metadata(meta)
         self._event_table_path = str(file_path)
         self.statusBar().showMessage(f"{len(labels)} events loaded", 3000)
         self.mark_session_dirty()

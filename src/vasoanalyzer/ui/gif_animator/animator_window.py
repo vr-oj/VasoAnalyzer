@@ -241,6 +241,7 @@ class GifAnimatorWindow(QMainWindow):
         self.rendered_frame_durations_ms: list[int] | None = None
         self.is_rendering = False
         self.render_thread: RenderThread | None = None
+        self._status_tone: str = "neutral"
 
         # Extract frame times with metadata
         frame_time_result = self._extract_frame_times()
@@ -255,6 +256,7 @@ class GifAnimatorWindow(QMainWindow):
         self._sync_trace_width_controls()
         self._sync_y_range_controls()
         self._seed_y_range_controls()
+        self.apply_theme()
 
     def _extract_frame_times(self) -> FrameTimeExtractionResult:
         """Extract frame timestamps using TiffPage synchronization logic with full auditability.
@@ -987,9 +989,6 @@ class GifAnimatorWindow(QMainWindow):
         # Cancel button (hidden by default, shown during rendering)
         self.cancel_render_btn = QPushButton("Cancel")
         self.cancel_render_btn.clicked.connect(self._cancel_render)
-        self.cancel_render_btn.setStyleSheet(
-            "QPushButton { background-color: #ff6b6b; color: white; }"
-        )
         self.cancel_render_btn.setVisible(False)
         layout.addWidget(self.cancel_render_btn)
 
@@ -1011,17 +1010,61 @@ class GifAnimatorWindow(QMainWindow):
         # Status label
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setStyleSheet("QLabel { color: #666; font-size: 10px; }")
         layout.addWidget(self.status_label)
 
         # Sync status label (shows frame time source)
         self.sync_status_label = QLabel()
-        self.sync_status_label.setStyleSheet("color: gray; font-size: 9pt;")
         layout.addWidget(self.sync_status_label)
+        self._set_status_message("", tone="neutral")
         self._update_sync_status()  # Initialize with current metadata
 
         group.setLayout(layout)
         return group
+
+    def _theme_colors(self) -> dict[str, str]:
+        from vasoanalyzer.ui.theme import CURRENT_THEME
+
+        theme = CURRENT_THEME if isinstance(CURRENT_THEME, dict) else {}
+        return {
+            "info": theme.get("accent_fill", theme.get("accent", "#4a9eff")),
+            "success": theme.get("success_text", theme.get("accent", "#51cf66")),
+            "error": theme.get("error_text", theme.get("warning_border", "#ff6b6b")),
+            "warning": theme.get("warning_text", theme.get("warning_border", "#f59e0b")),
+            "muted": theme.get("text_disabled", "#666666"),
+            "highlighted_text": theme.get("highlighted_text", "#ffffff"),
+            "panel_border": theme.get("panel_border", "#666666"),
+        }
+
+    def _set_status_message(self, text: str, *, tone: str = "neutral") -> None:
+        colors = self._theme_colors()
+        tone_map = {
+            "info": colors["info"],
+            "success": colors["success"],
+            "error": colors["error"],
+            "warning": colors["warning"],
+            "neutral": colors["muted"],
+        }
+        color = tone_map.get(tone, colors["muted"])
+        self._status_tone = tone
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f"QLabel {{ color: {color}; font-size: 10px; }}")
+
+    def _apply_cancel_button_style(self) -> None:
+        colors = self._theme_colors()
+        cancel_color = colors["error"]
+        self.cancel_render_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                background-color: {cancel_color};
+                color: {colors["highlighted_text"]};
+                border: 1px solid {cancel_color};
+            }}
+            QPushButton:disabled {{
+                color: {colors["muted"]};
+                border: 1px solid {colors["panel_border"]};
+            }}
+            """
+        )
 
     def _update_sync_status(self):
         """Update the sync status label to show frame time source and confidence."""
@@ -1029,8 +1072,9 @@ class GifAnimatorWindow(QMainWindow):
             return
 
         result = self.frame_time_metadata
-        color_map = {"high": "green", "medium": "orange", "low": "red"}
-        color = color_map.get(result.confidence, "gray")
+        colors = self._theme_colors()
+        color_map = {"high": colors["info"], "medium": colors["warning"], "low": colors["error"]}
+        color = color_map.get(result.confidence, colors["muted"])
 
         # Create tooltip with detailed information
         tooltip = "Frame Time Synchronization\n\n"
@@ -1044,7 +1088,11 @@ class GifAnimatorWindow(QMainWindow):
                 tooltip += f"  • {warning}\n"
 
         # Create display text
-        display_text = f'<span style="color: {color};">● Sync: {result.source} ({result.confidence} confidence)</span>'
+        display_text = (
+            f'<span style="color: {color};">'
+            f"● Sync: {result.source} ({result.confidence} confidence)"
+            "</span>"
+        )
 
         self.sync_status_label.setText(display_text)
         self.sync_status_label.setToolTip(tooltip)
@@ -1061,6 +1109,10 @@ class GifAnimatorWindow(QMainWindow):
         palette.setColor(QPalette.WindowText, QColor(text))
         self.setPalette(palette)
         self.setAutoFillBackground(True)
+        self._apply_cancel_button_style()
+        current_text = self.status_label.text() if hasattr(self, "status_label") else ""
+        self._set_status_message(current_text, tone=self._status_tone)
+        self._update_sync_status()
 
     def _on_event_selection_changed(self):
         """Handle event selection change."""
@@ -1083,10 +1135,9 @@ class GifAnimatorWindow(QMainWindow):
 
             # Validate time range
             if self.current_spec.start_time_s >= self.current_spec.end_time_s:
-                self.status_label.setText("⚠ Start time must be before end time")
-                self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
+                self._set_status_message("⚠ Start time must be before end time", tone="error")
             else:
-                self.status_label.setText("")
+                self._set_status_message("", tone="neutral")
             self._update_trace_y_range()
 
     def _on_settings_changed(self):
@@ -1377,10 +1428,10 @@ class GifAnimatorWindow(QMainWindow):
         # Clear old frames before rendering to free memory
         self.rendered_frames.clear()
 
-        self.status_label.setText(
-            f"Rendering {n_frames} frames... (estimated size: {estimated_size_mb:.1f} MB)"
+        self._set_status_message(
+            f"Rendering {n_frames} frames... (estimated size: {estimated_size_mb:.1f} MB)",
+            tone="info",
         )
-        self.status_label.setStyleSheet("QLabel { color: #4a9eff; }")
 
         # Create render context
         ctx = self._create_render_context()
@@ -1449,15 +1500,14 @@ class GifAnimatorWindow(QMainWindow):
 
     def _on_render_progress(self, current: int, total: int):
         """Handle render progress update."""
-        self.status_label.setText(f"Rendering frame {current} / {total}...")
+        self._set_status_message(f"Rendering frame {current} / {total}...", tone="info")
 
     def _on_render_finished(self, frames: list[np.ndarray]):
         """Handle render completion."""
         self.rendered_frames = frames
         self.preview_player.load_frames(frames, self.current_spec.fps)
 
-        self.status_label.setText(f"✓ Rendered {len(frames)} frames successfully")
-        self.status_label.setStyleSheet("QLabel { color: #51cf66; }")
+        self._set_status_message(f"✓ Rendered {len(frames)} frames successfully", tone="success")
 
         # Restore UI state
         self._restore_ui_after_render()
@@ -1466,16 +1516,14 @@ class GifAnimatorWindow(QMainWindow):
         """Handle render error."""
         QMessageBox.critical(self, "Render Error", f"Failed to render animation:\n\n{error_msg}")
 
-        self.status_label.setText("✗ Render failed")
-        self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
+        self._set_status_message("✗ Render failed", tone="error")
 
         # Restore UI state
         self._restore_ui_after_render()
 
     def _on_render_cancelled(self):
         """Handle render cancellation."""
-        self.status_label.setText("⊗ Render cancelled by user")
-        self.status_label.setStyleSheet("QLabel { color: #ff6b6b; }")
+        self._set_status_message("⊗ Render cancelled by user", tone="error")
 
         logger.info("Render cancelled, UI restored")
 
@@ -1487,7 +1535,7 @@ class GifAnimatorWindow(QMainWindow):
         if self.render_thread and self.render_thread.isRunning():
             self.render_thread.cancel()
             self.cancel_render_btn.setEnabled(False)  # Prevent multiple clicks
-            self.status_label.setText("Cancelling render...")
+            self._set_status_message("Cancelling render...", tone="info")
 
     def _restore_ui_after_render(self):
         """Restore UI controls to normal state after rendering completes/fails/cancels."""
