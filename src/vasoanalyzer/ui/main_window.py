@@ -120,6 +120,13 @@ from vasoanalyzer.export.profiles import (
     get_profile,
 )
 from vasoanalyzer.io.events import find_matching_event_file, load_events
+from vasoanalyzer.io.importers import (
+    event_rows_to_legacy_payload,
+    guess_table_csv_for_trace as guess_vasotracker_table_csv_for_trace,
+    import_vasotracker_v1,
+    import_vasotracker_v2,
+    trace_frames_to_dataframe,
+)
 from vasoanalyzer.io.tiffs import load_tiff, resolve_frame_times
 from vasoanalyzer.io.trace_events import load_trace_and_events
 from vasoanalyzer.io.traces import load_trace
@@ -5239,6 +5246,16 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_open_trace.triggered.connect(self._handle_load_trace)
         import_menu.addAction(self.action_open_trace)
 
+        self.action_import_vasotracker_v1 = QAction("VasoTracker v1 (CSV + Table)…", self)
+        self.action_import_vasotracker_v1.triggered.connect(self._handle_load_vasotracker_v1)
+        import_menu.addAction(self.action_import_vasotracker_v1)
+
+        self.action_import_vasotracker_v2 = QAction("VasoTracker v2 (CSV + table.csv)…", self)
+        self.action_import_vasotracker_v2.triggered.connect(self._handle_load_vasotracker_v2)
+        import_menu.addAction(self.action_import_vasotracker_v2)
+
+        import_menu.addSeparator()
+
         self.action_import_events = QAction("Import Events CSV…", self)
         self.action_import_events.triggered.connect(self._handle_load_events)
         self.action_import_events.setEnabled(False)
@@ -8098,6 +8115,11 @@ class VasoAnalyzerApp(QMainWindow):
             import_button.setIcon(self.load_trace_action.icon())
         import_menu = QMenu(import_button)
         import_menu.addAction(self.load_trace_action)
+        if hasattr(self, "action_import_vasotracker_v1"):
+            import_menu.addAction(self.action_import_vasotracker_v1)
+        if hasattr(self, "action_import_vasotracker_v2"):
+            import_menu.addAction(self.action_import_vasotracker_v2)
+        import_menu.addSeparator()
         import_menu.addAction(self.load_events_action)
         import_menu.addAction(self.load_snapshot_action)
         import_menu.addAction(self.action_import_folder)
@@ -10163,6 +10185,138 @@ QPushButton[isGhost="true"]:pressed {{
         clean.pop("trace_original_directory", None)
         return clean
 
+    def _apply_loaded_trace_event_payload(
+        self,
+        *,
+        df: pd.DataFrame,
+        labels: Sequence[str] | None,
+        times: Sequence[float] | None,
+        frames: Sequence[int | None] | None,
+        diam: Sequence[float | None] | None,
+        od_diam: Sequence[float | None] | None,
+        import_meta: Mapping[str, Any] | None,
+        primary_trace: str,
+        trace_paths: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        labels_list = list(labels or [])
+        times_list = list(times or [])
+        frames_list = list(frames or [])
+        diam_list = list(diam or []) if diam is not None else None
+        od_diam_list = list(od_diam or []) if od_diam is not None else None
+        trace_path_list = list(trace_paths or [primary_trace])
+
+        self.trace_data = self._prepare_trace_dataframe(df)
+        self._update_trace_sync_state()
+        self._reset_channel_view_defaults()
+        self._last_event_import = self._sanitize_import_metadata(import_meta or {})
+        self.trace_file_path = primary_trace
+        trace_filename = os.path.basename(primary_trace)
+        if len(trace_path_list) > 1:
+            trace_filename = f"{trace_filename} (+{len(trace_path_list) - 1})"
+        self.sampling_rate_hz = self._compute_sampling_rate(self.trace_data)
+        self._set_status_source(f"Trace · {trace_filename}", primary_trace)
+        self._reset_session_dirty()
+        self.show_analysis_workspace()
+
+        if labels_list:
+            self.load_project_events(
+                labels_list,
+                times_list,
+                frames_list,
+                diam_list,
+                od_diam_list,
+                auto_export=True,
+            )
+            event_file = import_meta.get("event_file") if import_meta else None
+            if event_file:
+                self._event_table_path = str(event_file)
+        else:
+            self.event_labels = []
+            self.event_times = []
+            self.event_frames = []
+            self.event_table_data = []
+            self.event_label_meta = []
+            self._event_table_path = None
+            self.populate_table()
+            self.xlim_full = None
+            self.ylim_full = None
+            self.update_plot()
+
+        status_notes: list[str] = []
+        if import_meta and import_meta.get("merged_traces"):
+            merged_count = len(import_meta.get("merged_traces") or [])
+            if merged_count > 1:
+                status_notes.append(f"Merged {merged_count} trace files")
+            merge_warnings = import_meta.get("merge_warnings") or []
+            skipped = import_meta.get("merged_skipped_paths") or []
+            for warn in merge_warnings:
+                status_notes.append(str(warn))
+            for skip in skipped:
+                path = os.path.basename(skip.get("path", "unknown"))
+                reason = skip.get("reason", "missing required columns")
+                status_notes.append(f"Skipped {path}: {reason}")
+        neg_inner = int(self.trace_data.attrs.get("negative_inner_diameters", 0) or 0)
+        neg_outer = int(self.trace_data.attrs.get("negative_outer_diameters", 0) or 0)
+        neg_sanitized = bool(self.trace_data.attrs.get("negative_diameters_sanitized", True))
+        neg_verb = "Ignored" if neg_sanitized else "Detected"
+        if neg_inner:
+            status_notes.append(f"{neg_verb} {neg_inner} negative inner-diameter samples")
+        if neg_outer:
+            status_notes.append(f"{neg_verb} {neg_outer} negative outer-diameter samples")
+
+        if import_meta:
+            event_file = import_meta.get("event_file")
+            if import_meta.get("auto_detected") and event_file:
+                event_name = os.path.basename(str(event_file))
+                if "_table" in event_name.lower():
+                    status_notes.append(f"Matched events: {event_name}")
+            for warn in import_meta.get("event_merge_warnings") or []:
+                status_notes.append(str(warn))
+            for skip in import_meta.get("event_skipped_paths") or []:
+                path = os.path.basename(skip.get("path", "events.csv"))
+                reason = skip.get("reason", "invalid")
+                status_notes.append(f"Skipped events {path}: {reason}")
+            for warn in import_meta.get("import_warnings") or []:
+                status_notes.append(str(warn))
+            for err in import_meta.get("import_errors") or []:
+                status_notes.append(str(err))
+
+            stats_payload = import_meta.get("import_stats")
+            if isinstance(stats_payload, Mapping):
+                unplaced = int(stats_payload.get("unplaced_event_count", 0) or 0)
+                if unplaced:
+                    status_notes.append(f"{unplaced} event(s) could not be placed")
+
+            ignored = int(import_meta.get("ignored_out_of_range", 0) or 0)
+            if ignored:
+                status_notes.append(f"{ignored} events ignored (time out of range)")
+
+            dropped = int(import_meta.get("dropped_missing_time", 0) or 0)
+            if dropped:
+                status_notes.append(f"{dropped} events skipped (missing time/frame)")
+
+            if import_meta.get("frame_fallback_used"):
+                count = int(import_meta.get("frame_fallback_rows", 0) or 0)
+                detail = f"{count} events" if count else "events"
+                status_notes.append(f"Aligned {detail} by frame order (no timestamps)")
+
+        self.compute_frame_trace_indices()
+        self.update_scroll_slider()
+        self.event_table.apply_theme()
+
+        if status_notes:
+            self.statusBar().showMessage(" · ".join(status_notes), 5000)
+
+        log.debug("Trace import complete with %d events", len(labels_list))
+
+        if hasattr(self, "load_events_action") and self.load_events_action is not None:
+            self.load_events_action.setEnabled(True)
+        if hasattr(self, "action_import_events") and self.action_import_events is not None:
+            self.action_import_events.setEnabled(True)
+
+        self._update_home_resume_button()
+        return self.trace_data
+
     def load_trace_and_event_files(self, trace_path):
         """Load a trace file (or multiple) and matching events if available."""
         if isinstance(trace_path, (list, tuple)):
@@ -10190,102 +10344,35 @@ QPushButton[isGhost="true"]:pressed {{
         ) = load_trace_and_events(
             trace_paths if len(trace_paths) > 1 else primary_trace, cache=cache
         )
+        return self._apply_loaded_trace_event_payload(
+            df=df,
+            labels=labels,
+            times=times,
+            frames=frames,
+            diam=diam,
+            od_diam=od_diam,
+            import_meta=import_meta,
+            primary_trace=primary_trace,
+            trace_paths=trace_paths,
+        )
 
-        self.trace_data = self._prepare_trace_dataframe(df)
-        self._update_trace_sync_state()
-        self._reset_channel_view_defaults()
-        self._last_event_import = self._sanitize_import_metadata(import_meta or {})
-        self.trace_file_path = primary_trace
-        trace_filename = os.path.basename(primary_trace)
-        if len(trace_paths) > 1:
-            trace_filename = f"{trace_filename} (+{len(trace_paths) - 1})"
-        self.sampling_rate_hz = self._compute_sampling_rate(self.trace_data)
-        self._set_status_source(f"Trace · {trace_filename}", primary_trace)
-        self._reset_session_dirty()
-        self.show_analysis_workspace()
-
-        if labels:
-            self.load_project_events(labels, times, frames, diam, od_diam, auto_export=True)
-            event_file = import_meta.get("event_file") if import_meta else None
-            if event_file:
-                self._event_table_path = str(event_file)
-        else:
-            self.event_labels = []
-            self.event_times = []
-            self.event_frames = []
-            self.event_table_data = []
-            self.event_label_meta = []
-            self._event_table_path = None
-            self.populate_table()
-            self.xlim_full = None
-            self.ylim_full = None
-            self.update_plot()
-
-        status_notes: list[str] = []
-        if import_meta and import_meta.get("merged_traces"):
-            merged_count = len(import_meta.get("merged_traces") or [])
-            if merged_count > 1:
-                status_notes.append(f"Merged {merged_count} trace files")
-            merge_warnings = import_meta.get("merge_warnings") or []
-            skipped = import_meta.get("merged_skipped_paths") or []
-            for warn in merge_warnings:
-                status_notes.append(warn)
-            for skip in skipped:
-                path = os.path.basename(skip.get("path", "unknown"))
-                reason = skip.get("reason", "missing required columns")
-                status_notes.append(f"Skipped {path}: {reason}")
-        neg_inner = int(self.trace_data.attrs.get("negative_inner_diameters", 0) or 0)
-        if neg_inner:
-            status_notes.append(f"Ignored {neg_inner} negative inner-diameter samples")
-        neg_outer = int(self.trace_data.attrs.get("negative_outer_diameters", 0) or 0)
-        if neg_outer:
-            status_notes.append(f"Ignored {neg_outer} negative outer-diameter samples")
-
-        if import_meta:
-            event_file = import_meta.get("event_file")
-            if import_meta.get("auto_detected") and event_file:
-                event_name = os.path.basename(str(event_file))
-                if "_table" in event_name.lower():
-                    status_notes.append(f"Matched events: {event_name}")
-            for warn in import_meta.get("event_merge_warnings") or []:
-                status_notes.append(warn)
-            for skip in import_meta.get("event_skipped_paths") or []:
-                path = os.path.basename(skip.get("path", "events.csv"))
-                reason = skip.get("reason", "invalid")
-                status_notes.append(f"Skipped events {path}: {reason}")
-
-            ignored = int(import_meta.get("ignored_out_of_range", 0) or 0)
-            if ignored:
-                status_notes.append(f"{ignored} events ignored (time out of range)")
-
-            dropped = int(import_meta.get("dropped_missing_time", 0) or 0)
-            if dropped:
-                status_notes.append(f"{dropped} events skipped (missing time/frame)")
-
-            if import_meta.get("frame_fallback_used"):
-                count = int(import_meta.get("frame_fallback_rows", 0) or 0)
-                detail = f"{count} events" if count else "events"
-                status_notes.append(f"Aligned {detail} by frame order (no timestamps)")
-
-        self.compute_frame_trace_indices()
-        self.update_scroll_slider()
-        self.event_table.apply_theme()
-
-        if status_notes:
-            self.statusBar().showMessage(" · ".join(status_notes), 5000)
-
-        log.debug("Trace import complete with %d events", len(labels))
-
-        if hasattr(self, "load_events_action") and self.load_events_action is not None:
-            self.load_events_action.setEnabled(True)
-        if hasattr(self, "action_import_events") and self.action_import_events is not None:
-            self.action_import_events.setEnabled(True)
-
-        self._update_home_resume_button()
-
-        return self.trace_data
-
-    def load_trace_and_events(self, file_path=None, tiff_path=None, *, source: str = "manual"):
+    def load_trace_and_events(
+        self,
+        file_path=None,
+        tiff_path=None,
+        *,
+        source: str = "manual",
+        prefetched_payload: tuple[
+            pd.DataFrame,
+            list[str],
+            list[float],
+            list[int | None] | None,
+            list[float | None] | None,
+            list[float | None] | None,
+            Mapping[str, Any] | None,
+        ]
+        | None = None,
+    ):
         # --- Prep ---
         snapshots = None
         self._clear_canvas_and_table()
@@ -10307,7 +10394,34 @@ QPushButton[isGhost="true"]:pressed {{
 
         # 2) Load trace and events using helper
         try:
-            self.load_trace_and_event_files(file_path)
+            if prefetched_payload is None:
+                self.load_trace_and_event_files(file_path)
+            else:
+                (
+                    df,
+                    labels,
+                    times,
+                    frames,
+                    diam,
+                    od_diam,
+                    import_meta,
+                ) = prefetched_payload
+                trace_paths = (
+                    list(dict.fromkeys(file_path))
+                    if isinstance(file_path, list | tuple)
+                    else [primary_trace_path]
+                )
+                self._apply_loaded_trace_event_payload(
+                    df=df,
+                    labels=labels,
+                    times=times,
+                    frames=frames,
+                    diam=diam,
+                    od_diam=od_diam,
+                    import_meta=import_meta,
+                    primary_trace=primary_trace_path,
+                    trace_paths=trace_paths,
+                )
         except Exception as e:
             QMessageBox.critical(self, "Trace Load Error", f"Failed to load trace file:\n{e}")
             return
@@ -12677,6 +12791,133 @@ QPushButton[isGhost="true"]:pressed {{
             trace_source = file_paths[0]
         self._import_trace_events_from_paths(trace_source, source="file_dialog")
 
+    def _build_vasotracker_prefetched_payload(
+        self,
+        trace_path: str,
+        *,
+        source_format: str,
+    ) -> tuple[
+        pd.DataFrame,
+        list[str],
+        list[float],
+        list[int | None],
+        list[float | None],
+        list[float | None],
+        dict[str, Any],
+    ]:
+        trace_path_obj = Path(trace_path)
+        table_path = guess_vasotracker_table_csv_for_trace(trace_path_obj)
+
+        if source_format == "vasotracker_v1":
+            frames, events, report = import_vasotracker_v1(
+                trace_path_obj,
+                table_csv_path=table_path,
+                normalize_time_to_zero=True,
+                generate_frame_numbers="row_index",
+                set_table_markers=True,
+            )
+        elif source_format == "vasotracker_v2":
+            frames, events, report = import_vasotracker_v2(
+                trace_path_obj,
+                table_csv_path=table_path,
+                normalize_time_to_zero=False,
+            )
+        else:
+            raise ValueError(f"Unsupported source format: {source_format}")
+
+        trace_df = trace_frames_to_dataframe(frames)
+        trace_df.attrs["negative_inner_diameters"] = int(
+            report.stats.get("negative_inner_diameter_count", 0) or 0
+        )
+        trace_df.attrs["negative_outer_diameters"] = int(
+            report.stats.get("negative_outer_diameter_count", 0) or 0
+        )
+        trace_df.attrs["negative_diameters_sanitized"] = False
+
+        labels, times, frame_numbers, diam, od_diam = event_rows_to_legacy_payload(events)
+        import_meta: dict[str, Any] = {
+            "trace_original_filename": trace_path_obj.name,
+            "event_file": str(table_path) if table_path is not None else None,
+            "auto_detected": table_path is not None,
+            "import_source_format": report.source_format,
+            "import_warnings": list(report.warnings),
+            "import_errors": list(report.errors),
+            "import_stats": dict(report.stats),
+            "import_timestamp": self._utc_iso_timestamp(),
+        }
+        if table_path is not None:
+            import_meta["events_original_filename"] = table_path.name
+        if report.errors:
+            import_meta["event_merge_warnings"] = list(report.errors)
+
+        return (
+            trace_df,
+            labels,
+            times,
+            frame_numbers,
+            diam,
+            od_diam,
+            import_meta,
+        )
+
+    def _handle_load_vasotracker_v1(self, checked: bool = False) -> None:
+        """Import a VasoTracker v1 trace/table pair through the normalized pipeline."""
+
+        trace_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select VasoTracker v1 trace CSV",
+            "",
+            "CSV Files (*.csv)",
+        )
+        if not trace_path:
+            return
+        try:
+            payload = self._build_vasotracker_prefetched_payload(
+                trace_path,
+                source_format="vasotracker_v1",
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "VasoTracker v1 Import Error",
+                f"Could not import VasoTracker v1 files:\n{exc}",
+            )
+            return
+        self._import_trace_events_from_paths(
+            trace_path,
+            source="vasotracker_v1",
+            prefetched_payload=payload,
+        )
+
+    def _handle_load_vasotracker_v2(self, checked: bool = False) -> None:
+        """Import a VasoTracker v2 trace/table pair through the normalized pipeline."""
+
+        trace_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select VasoTracker v2 trace CSV",
+            "",
+            "CSV Files (*.csv)",
+        )
+        if not trace_path:
+            return
+        try:
+            payload = self._build_vasotracker_prefetched_payload(
+                trace_path,
+                source_format="vasotracker_v2",
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "VasoTracker v2 Import Error",
+                f"Could not import VasoTracker v2 files:\n{exc}",
+            )
+            return
+        self._import_trace_events_from_paths(
+            trace_path,
+            source="vasotracker_v2",
+            prefetched_payload=payload,
+        )
+
     def _prompt_merge_traces(self, paths: list[str]) -> str:
         """Ask the user whether to merge multiple trace CSVs."""
         box = QMessageBox(self)
@@ -12702,6 +12943,16 @@ QPushButton[isGhost="true"]:pressed {{
         *,
         tiff_path: str | None = None,
         source: str = "manual",
+        prefetched_payload: tuple[
+            pd.DataFrame,
+            list[str],
+            list[float],
+            list[int | None] | None,
+            list[float | None] | None,
+            list[float | None] | None,
+            Mapping[str, Any] | None,
+        ]
+        | None = None,
     ) -> None:
         """Shared entry point for importing trace/events data from any UI path."""
         if not trace_path:
@@ -12712,7 +12963,12 @@ QPushButton[isGhost="true"]:pressed {{
             trace_path,
             tiff_path or "auto-prompt",
         )
-        self.load_trace_and_events(file_path=trace_path, tiff_path=tiff_path, source=source)
+        self.load_trace_and_events(
+            file_path=trace_path,
+            tiff_path=tiff_path,
+            source=source,
+            prefetched_payload=prefetched_payload,
+        )
 
     def _handle_load_events(self):
         if self.trace_data is None:
