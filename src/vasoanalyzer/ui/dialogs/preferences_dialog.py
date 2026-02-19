@@ -146,7 +146,7 @@ class PreferencesDialog(QDialog):
         help_label = QLabel(
             "<small><b>Recommended (default):</b> Single-file format (.vaso) is crash-proof, "
             "works safely with cloud storage (Dropbox, iCloud, Google Drive), and is easy to "
-            "share and backup like LabChart or Prism files. Uses snapshot-based saves internally.</small>"
+            "share and backup like other analysis project files. Uses snapshot-based saves internally.</small>"
         )
         help_label.setWordWrap(True)
         help_label.setStyleSheet("color: #666;")

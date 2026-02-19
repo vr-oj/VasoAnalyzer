@@ -3,7 +3,7 @@ Single-file ZIP container format for VasoAnalyzer projects.
 
 This module implements a container layer that wraps the existing .vasopack
 bundle format into a single ZIP file, providing a user-friendly "single file"
-project format similar to LabChart (.adicht) or Prism projects.
+project format similar to other analysis tools (.adicht, Prism, etc.).
 
 Container Structure:
     MyProject.vaso (ZIP file)

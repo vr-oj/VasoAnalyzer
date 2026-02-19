@@ -41,6 +41,17 @@ class PyQtGraphAxesCompat:
         _, y_range = self._viewbox.viewRange()
         return (float(y_range[0]), float(y_range[1]))
 
+    def _set_xlim_with_routing(self, left: float, right: float) -> None:
+        """Route X window changes through host requesters when available."""
+        requester = getattr(self._viewbox, "request_set_window", None)
+        if callable(requester):
+            try:
+                if requester(float(left), float(right), "axes_compat"):
+                    return
+            except Exception:
+                pass
+        self._viewbox.setXRange(float(left), float(right), padding=0)
+
     def set_xlim(
         self,
         left: float | tuple[float, float] | list[float] | None = None,
@@ -59,7 +70,7 @@ class PyQtGraphAxesCompat:
                 raise ValueError(msg)
             left_val = float(left[0])
             right_val = float(left[1])
-            self._viewbox.setXRange(left_val, right_val, padding=0)
+            self._set_xlim_with_routing(left_val, right_val)
             return
 
         left_value = float(left) if left is not None else None
@@ -67,13 +78,13 @@ class PyQtGraphAxesCompat:
 
         # Handle two separate arguments: ax.set_xlim(left, right)
         if left_value is not None and right_value is not None:
-            self._viewbox.setXRange(left_value, right_value, padding=0)
+            self._set_xlim_with_routing(left_value, right_value)
         elif left_value is not None:
             current_right = self.get_xlim()[1]
-            self._viewbox.setXRange(left_value, current_right, padding=0)
+            self._set_xlim_with_routing(left_value, current_right)
         elif right_value is not None:
             current_left = self.get_xlim()[0]
-            self._viewbox.setXRange(current_left, right_value, padding=0)
+            self._set_xlim_with_routing(current_left, right_value)
 
     def set_ylim(
         self,

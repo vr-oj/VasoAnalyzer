@@ -116,6 +116,9 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
         empty_map = PageTimeMap.invalid("Sync unavailable: no data")
         self.set_source(None, page_time_map=empty_map)
 
+    def has_image(self) -> bool:
+        return bool(self.controller.page_count > 0)
+
     @property
     def sync_enabled(self) -> bool:
         return bool(self.controller.sync_enabled)

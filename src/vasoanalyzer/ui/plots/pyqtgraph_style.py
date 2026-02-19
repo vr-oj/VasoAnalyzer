@@ -33,8 +33,8 @@ PLOT_TICK_FONT_SIZE = 9.0
 PLOT_AXIS_LABELS = {
     "inner": "ID (µm)",
     "outer": "OD (µm)",
-    "avg_pressure": "P (mmHg)",
-    "set_pressure": "SP (mmHg)",
+    "avg_pressure": "Avg P (mmHg)",
+    "set_pressure": "Set P (mmHg)",
     "dual": "ID (µm)",
 }
 PLOT_AXIS_TOOLTIPS = {
@@ -77,9 +77,9 @@ def get_pyqtgraph_style() -> PyQtGraphStyleTokens:
     event_color = CURRENT_THEME.get("event_line", "#8A8A8A")
     event_marker = EventMarkerStyle(
         color=event_color,
-        width=2.0,
+        width=1.0,
         style=Qt.DashLine,
-        alpha=1.0,
+        alpha=120.0 / 255.0,
     )
 
     selection_color = CURRENT_THEME.get("selection_bg", "#3B82F6")

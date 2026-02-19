@@ -10,6 +10,11 @@ from vasoanalyzer.ui.time_scrollbar import TIME_SCROLLBAR_SCALE
 def test_scrollbar_drag_freezes_width(qt_app) -> None:
     window = VasoAnalyzerApp(check_updates=False)
     try:
+        if window._plot_host_is_pyqtgraph() and getattr(window, "trace_nav_bar", None) is not None:
+            pytest.skip(
+                "Legacy scrollbar hidden under pyqtgraph; trace nav bar replaces it"
+            )
+
         df = pd.DataFrame(
             {
                 "Time (s)": np.linspace(0.0, 1000.0, 1001),

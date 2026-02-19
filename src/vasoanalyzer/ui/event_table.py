@@ -38,6 +38,7 @@ from PyQt5.QtWidgets import (
     QToolTip,
 )
 
+from vasoanalyzer.ui.formatting.time_format import TimeFormatter, TimeMode, coerce_time_mode
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 log = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ COLUMN_LABELS = {
 }
 
 COLUMN_KEY_FOR_LABEL = {label: key for key, label in COLUMN_LABELS.items()}
+COLUMN_KEY_FOR_LABEL["Time"] = "time"
 
 
 def build_event_table_column_contract(
@@ -220,6 +222,29 @@ class EventTableModel(QAbstractTableModel):
         self._headers: list[str] = []
         self._review_states: list[str] = []
         self._status_icons: dict[str, QPixmap] = {}
+        self._time_formatter = TimeFormatter(TimeMode.SECONDS)
+        self._time_mode = TimeMode.SECONDS
+
+    def set_time_mode(self, mode: TimeMode | str) -> None:
+        resolved = coerce_time_mode(mode)
+        if resolved == self._time_mode:
+            return
+        self._time_mode = resolved
+        self._time_formatter.set_mode(resolved)
+        if self.rowCount() > 0 and self.columnCount() > TIME_COLUMN_INDEX:
+            top_left = self.index(0, TIME_COLUMN_INDEX)
+            bottom_right = self.index(self.rowCount() - 1, TIME_COLUMN_INDEX)
+            self.dataChanged.emit(top_left, bottom_right, [Qt.DisplayRole])
+        if self.columnCount() > TIME_COLUMN_INDEX:
+            self.headerDataChanged.emit(Qt.Horizontal, TIME_COLUMN_INDEX, TIME_COLUMN_INDEX)
+
+    def time_mode(self) -> TimeMode:
+        return self._time_mode
+
+    def _display_header(self, header: str) -> str:
+        if header == "Time (s)" and self._time_mode != TimeMode.SECONDS:
+            return "Time"
+        return header
 
     # Qt model API -----------------------------------------------------
     def rowCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
@@ -248,7 +273,7 @@ class EventTableModel(QAbstractTableModel):
             if 0 <= data_idx < len(self._headers):
                 header = self._headers[data_idx]
                 if role == Qt.DisplayRole:
-                    return header
+                    return self._display_header(header)
                 if role == Qt.ToolTipRole:
                     return HEADER_TOOLTIPS.get(header)
                 if role == Qt.TextAlignmentRole:
@@ -557,7 +582,7 @@ class EventTableModel(QAbstractTableModel):
             return value
 
         if header_label == "Time (s)" or column == TIME_COLUMN_INDEX:
-            return f"{num:,.3f}"
+            return self._time_formatter.format(num)
         if column >= TIME_COLUMN_INDEX:  # All numeric columns except status/event label
             return f"{num:,.2f}"
 

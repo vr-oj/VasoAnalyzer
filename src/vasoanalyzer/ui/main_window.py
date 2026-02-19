@@ -164,6 +164,7 @@ from vasoanalyzer.ui.dialogs.unified_settings_dialog import (
     UnifiedPlotSettingsDialog,
 )
 from vasoanalyzer.ui.event_table import build_event_table_column_contract
+from vasoanalyzer.ui.formatting.time_format import TimeMode, coerce_time_mode
 from vasoanalyzer.ui.icons import snapshot_icon
 from vasoanalyzer.ui.panels.event_review_panel import EventReviewPanel
 from vasoanalyzer.ui.panels.plot_empty_state import PlotEmptyState
@@ -830,9 +831,17 @@ class VasoAnalyzerApp(QMainWindow):
         self.excel_auto_column = None  # Column letter to use for auto-update
         self.grid_visible = True  # Track grid visibility
         self.snapshot_card = None
+        self._right_panel_layout = None
         self.snapshot_viewer_action = None
         self.recent_files = []
+        self._event_label_mode: str = "indices"
+        self._time_mode: str = "auto"
         self.settings = QSettings("TykockiLab", "VasoAnalyzer")
+        self._time_mode = str(self.settings.value("plot/timeMode", self._time_mode, type=str) or "auto")
+        self._event_label_mode = str(
+            self.settings.value("plot/eventLabelMode", self._event_label_mode, type=str)
+            or self._event_label_mode
+        )
         self.onboarding_settings = QSettings(ONBOARDING_SETTINGS_ORG, ONBOARDING_SETTINGS_APP)
         self._syncing_time_window = False
         self._axis_source_axis = None
@@ -902,16 +911,18 @@ class VasoAnalyzerApp(QMainWindow):
         self.actOverviewStrip: QAction | None = None
         self._nav_mode_actions: list[QAction] = []
         self.actEventLines: QAction | None = None
+        self.actEventLabelsOff: QAction | None = None
         self.actEventLabelsVertical: QAction | None = None
         self.actEventLabelsHorizontal: QAction | None = None
         self.actEventLabelsOutside: QAction | None = None
-        self._event_label_mode: str = "vertical"
         self._event_lines_visible: bool = True
         self._event_label_gap_default: int = 22
         self._event_label_action_group: QActionGroup | None = None
         self.event_label_button: QToolButton | None = None
         self._overview_strip_enabled = False
         self._trace_navigation_available = False
+        self._space_pan_active: bool = False
+        self._space_pan_prev_mode: str | None = None
 
         self._deferred_autosave_timer = QTimer(self)
         self._deferred_autosave_timer.setSingleShot(True)
@@ -3837,6 +3848,10 @@ class VasoAnalyzerApp(QMainWindow):
                 self.event_table_data = []
                 self._sync_event_data_from_table()
                 self._update_event_table_presence_state(False)
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "set_selected_event_index"):
+                with contextlib.suppress(Exception):
+                    plot_host.set_selected_event_index(None)
             self._clear_event_highlight()
         finally:
             self._event_table_updating = False
@@ -5500,6 +5515,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         self._ensure_event_label_actions()
         label_modes_menu = anno_menu.addMenu("Label Mode")
+        label_modes_menu.addAction(self.actEventLabelsOff)
         label_modes_menu.addAction(self.actEventLabelsVertical)
         label_modes_menu.addAction(self.actEventLabelsHorizontal)
         label_modes_menu.addAction(self.actEventLabelsOutside)
@@ -6451,7 +6467,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self._toggle_event_lines_legacy(new_state)
             self._sync_event_controls()
         elif kind == "evt_labels":
-            order = ["vertical", "horizontal", "horizontal_outside"]
+            order = ["off", "indices", "names_on_hover", "names_always"]
             try:
                 idx = order.index(self._event_label_mode)
             except ValueError:
@@ -6960,7 +6976,37 @@ class VasoAnalyzerApp(QMainWindow):
         if widget is not None:
             widget.setVisible(bool(should_show))
 
+        self._update_snapshot_panel_layout()
         self._update_snapshot_rotation_controls()
+
+    def _snapshot_has_image(self) -> bool:
+        widget = getattr(self, "snapshot_widget", None)
+        if widget is not None and hasattr(widget, "has_image"):
+            with contextlib.suppress(Exception):
+                return bool(widget.has_image())
+        return bool(self.snapshot_frames)
+
+    def _update_snapshot_panel_layout(self) -> None:
+        layout = getattr(self, "_right_panel_layout", None)
+        snapshot_card = getattr(self, "snapshot_card", None)
+        table_card = getattr(self, "event_table_card", None)
+        if layout is None or snapshot_card is None or table_card is None:
+            return
+
+        has_image = self._snapshot_has_image()
+        viewer_enabled = bool(
+            getattr(self, "snapshot_viewer_action", None)
+            and self.snapshot_viewer_action.isChecked()
+        )
+        show_snapshot = bool(has_image and viewer_enabled)
+        snapshot_card.setVisible(show_snapshot)
+
+        if show_snapshot:
+            layout.setStretch(0, 3)
+            layout.setStretch(1, 2)
+        else:
+            layout.setStretch(0, 0)
+            layout.setStretch(1, 1)
 
     def _update_snapshot_rotation_controls(self) -> None:
         """Enable or disable rotation buttons based on viewer state."""
@@ -7014,9 +7060,6 @@ class VasoAnalyzerApp(QMainWindow):
             self.snapshot_viewer_action.blockSignals(True)
             self.snapshot_viewer_action.setChecked(desired_action_state)
             self.snapshot_viewer_action.blockSignals(False)
-
-        if self.snapshot_card:
-            self.snapshot_card.setVisible(should_show)
 
         self._apply_snapshot_view_mode(should_show)
 
@@ -7932,6 +7975,10 @@ class VasoAnalyzerApp(QMainWindow):
         if overview is not None and hasattr(overview, "apply_theme"):
             with contextlib.suppress(Exception):
                 overview.apply_theme()
+        nav_bar = getattr(self, "trace_nav_bar", None)
+        if nav_bar is not None and hasattr(nav_bar, "apply_theme"):
+            with contextlib.suppress(Exception):
+                nav_bar.apply_theme()
 
         for dock_name in (
             "layout_dock",
@@ -9526,6 +9573,66 @@ QPushButton[isGhost="true"]:pressed {{
                 action.blockSignals(True)
                 action.setChecked(False)
                 action.blockSignals(False)
+        mode = "pan"
+        if sender is getattr(self, "actBoxZoom", None) or sender is getattr(self, "actZoom", None):
+            mode = "rect"
+        self._update_nav_mode_indicator(mode)
+
+    def _set_plot_cursor_for_mode(self, mode: str) -> None:
+        target = None
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "widget"):
+            with contextlib.suppress(Exception):
+                target = plot_host.widget()
+        if target is None:
+            target = getattr(self, "canvas", None)
+        if target is None:
+            return
+        cursor = Qt.OpenHandCursor if mode == "pan" else Qt.CrossCursor
+        with contextlib.suppress(Exception):
+            target.setCursor(QCursor(cursor))
+
+    def _update_nav_mode_indicator(self, mode: str) -> None:
+        normalized = "rect" if str(mode).lower() == "rect" else "pan"
+        label = "Select" if normalized == "rect" else "Pan"
+        review_controller = getattr(self, "review_controller", None)
+        review_active = bool(
+            review_controller is not None
+            and hasattr(review_controller, "is_active")
+            and review_controller.is_active()
+        )
+        if review_active:
+            label = f"{label} · Review"
+        with contextlib.suppress(Exception):
+            self.statusBar().showMessage(f"Mode: {label}", 2500)
+        self._set_plot_cursor_for_mode(normalized)
+
+    def _set_nav_actions_for_mode(self, mode: str) -> None:
+        normalized = "rect" if str(mode).lower() == "rect" else "pan"
+        pan_action = getattr(self, "actPgPan", None) or getattr(self, "actPan", None)
+        select_action = getattr(self, "actBoxZoom", None) or getattr(self, "actZoom", None)
+        if pan_action is not None:
+            pan_action.blockSignals(True)
+            pan_action.setChecked(normalized == "pan")
+            pan_action.blockSignals(False)
+        if select_action is not None:
+            select_action.blockSignals(True)
+            select_action.setChecked(normalized == "rect")
+            select_action.blockSignals(False)
+
+    def _focus_is_plot_widget(self) -> bool:
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is None or not hasattr(plot_host, "widget"):
+            return False
+        with contextlib.suppress(Exception):
+            host_widget = plot_host.widget()
+            focus_widget = QApplication.focusWidget()
+            if focus_widget is None:
+                return True
+            if focus_widget is host_widget:
+                return True
+            return bool(host_widget.isAncestorOf(focus_widget))
+        return False
 
     def _on_grid_action_triggered(self) -> None:
         self.toggle_grid()
@@ -9764,6 +9871,7 @@ QPushButton[isGhost="true"]:pressed {{
         if hasattr(plot_host, "set_mouse_mode"):
             mode = "rect" if checked else "pan"
             plot_host.set_mouse_mode(mode)
+            self._update_nav_mode_indicator(mode)
 
     def _on_autoscale_triggered(self) -> None:
         """Handle autoscale button click - one-shot Y autoscale."""
@@ -9778,7 +9886,11 @@ QPushButton[isGhost="true"]:pressed {{
             and plot_host.get_render_backend() == "pyqtgraph"
         )
         if is_pyqtgraph:
-            plot_host.autoscale_all()
+            autoscale_once_all = getattr(plot_host, "autoscale_all_y_once", None)
+            if callable(autoscale_once_all):
+                autoscale_once_all()
+            else:
+                plot_host.autoscale_all()
             return
 
         # Legacy backend: reset to full range + autoscale Y
@@ -9824,6 +9936,7 @@ QPushButton[isGhost="true"]:pressed {{
             return
         if hasattr(plot_host, "set_mouse_mode"):
             plot_host.set_mouse_mode("pan")
+            self._update_nav_mode_indicator("pan")
 
     def _sync_autoscale_y_action_from_host(self) -> None:
         """Align the Y-autoscale toggle with the current renderer state."""
@@ -9858,9 +9971,10 @@ QPushButton[isGhost="true"]:pressed {{
             action.toggled.connect(_on_toggled)
             return action
 
-        self.actEventLabelsVertical = make_action("Vertical", "vertical")
-        self.actEventLabelsHorizontal = make_action("Horizontal", "horizontal")
-        self.actEventLabelsOutside = make_action("Outside Belt", "horizontal_outside")
+        self.actEventLabelsOff = make_action("Off", "off")
+        self.actEventLabelsVertical = make_action("Indices", "indices")
+        self.actEventLabelsHorizontal = make_action("Names on Hover", "names_on_hover")
+        self.actEventLabelsOutside = make_action("Names Always", "names_always")
 
         self._sync_event_controls()
 
@@ -9885,23 +9999,25 @@ QPushButton[isGhost="true"]:pressed {{
 
     def _on_event_label_mode_auto(self, checked: bool) -> None:
         if checked:
-            self._set_event_label_mode("vertical")
+            self._set_event_label_mode("indices")
 
     def _on_event_label_mode_all(self, checked: bool) -> None:
         if checked:
-            self._set_event_label_mode("horizontal_outside")
+            self._set_event_label_mode("names_always")
 
     def _set_event_label_mode(self, mode: str) -> None:
         normalized = mode.lower()
         alias = {
-            "auto": "vertical",
-            "all": "horizontal_outside",
+            "auto": "indices",
+            "all": "names_always",
+            "vertical": "indices",
+            "horizontal_outside": "indices",
+            "horizontal": "names_always",
+            "none": "off",
         }
         normalized = alias.get(normalized, normalized)
-        if normalized not in {"vertical", "horizontal", "horizontal_outside"}:
-            normalized = "vertical"
-        if self._plot_host_is_pyqtgraph():
-            normalized = "vertical"
+        if normalized not in {"off", "indices", "names_on_hover", "names_always"}:
+            normalized = "indices"
         if normalized == self._event_label_mode:
             return
         self._apply_event_label_mode(normalized)
@@ -9912,8 +10028,16 @@ QPushButton[isGhost="true"]:pressed {{
         Ensures legacy lane is disabled when helper is active.
         """
         incoming = mode if mode is not None else self._event_label_mode
-        mapped = {"auto": "vertical", "all": "horizontal_outside"}.get(incoming, incoming)
+        mapped = {
+            "auto": "indices",
+            "all": "names_always",
+            "vertical": "indices",
+            "horizontal_outside": "indices",
+            "horizontal": "names_always",
+        }.get(incoming, incoming)
         self._event_label_mode = mapped
+        with contextlib.suppress(Exception):
+            self.settings.setValue("plot/eventLabelMode", self._event_label_mode)
 
         # Always tear down the legacy annotation lane FIRST
         self._annotation_lane_visible = False
@@ -9931,18 +10055,17 @@ QPushButton[isGhost="true"]:pressed {{
 
         # Using the new helper: ensure per-track lines are *disabled* (helper draws its own)
         plot_host.use_track_event_lines(False)
-        plot_host.set_event_label_mode(self._event_label_mode)  # rebuilds helper & xlim callbacks
+        set_display_mode = getattr(plot_host, "set_event_display_mode", None)
+        if callable(set_display_mode):
+            set_display_mode(self._event_label_mode)
+        else:
+            plot_host.set_event_label_mode(self._event_label_mode)  # fallback
         self._refresh_event_annotation_artists()
         self.canvas.draw_idle()
         self._sync_event_controls()
         self._on_view_state_changed(reason="event label mode")
 
     def _sync_event_controls(self) -> None:
-        is_pyqtgraph = self._plot_host_is_pyqtgraph()
-        for action in (self.actEventLabelsHorizontal, self.actEventLabelsOutside):
-            if action is not None:
-                action.setEnabled(not is_pyqtgraph)
-
         if (
             self.actEventLines is not None
             and self.actEventLines.isChecked() != self._event_lines_visible
@@ -9961,9 +10084,10 @@ QPushButton[isGhost="true"]:pressed {{
 
         mode = self._event_label_mode
         mapping = {
-            "vertical": self.actEventLabelsVertical,
-            "horizontal": self.actEventLabelsHorizontal,
-            "horizontal_outside": self.actEventLabelsOutside,
+            "off": self.actEventLabelsOff,
+            "indices": self.actEventLabelsVertical,
+            "names_on_hover": self.actEventLabelsHorizontal,
+            "names_always": self.actEventLabelsOutside,
         }
         for key, action in mapping.items():
             if action is None:
@@ -9976,11 +10100,40 @@ QPushButton[isGhost="true"]:pressed {{
 
         if self.event_label_button is not None:
             labels = {
-                "vertical": "Labels: Vertical",
-                "horizontal": "Labels: Horizontal",
-                "horizontal_outside": "Labels: Belt",
+                "off": "Labels: Off",
+                "indices": "Labels: Indices",
+                "names_on_hover": "Labels: Hover",
+                "names_always": "Labels: Always",
             }
             self.event_label_button.setText(labels.get(mode, "Labels"))
+
+    def _apply_time_mode(self, mode: TimeMode | str, *, persist: bool = True) -> None:
+        resolved = coerce_time_mode(mode)
+        self._time_mode = str(resolved.value)
+
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "set_time_mode"):
+            with contextlib.suppress(Exception):
+                plot_host.set_time_mode(self._time_mode)
+
+        controller = getattr(self, "event_table_controller", None)
+        if controller is not None and hasattr(controller, "set_time_mode"):
+            with contextlib.suppress(Exception):
+                controller.set_time_mode(self._time_mode)
+
+        nav_bar = getattr(self, "trace_nav_bar", None)
+        if nav_bar is not None and hasattr(nav_bar, "set_time_mode"):
+            with contextlib.suppress(Exception):
+                nav_bar.set_time_mode(self._time_mode, emit_signal=False)
+
+        self._set_shared_xlabel("Time (s)" if resolved == TimeMode.SECONDS else "Time")
+        if persist:
+            with contextlib.suppress(Exception):
+                self.settings.setValue("plot/timeMode", self._time_mode)
+                self.settings.sync()
+
+    def _on_time_mode_changed(self, mode: str) -> None:
+        self._apply_time_mode(mode, persist=True)
 
     def _update_trace_controls_state(self) -> None:
         has_trace = (
@@ -11778,6 +11931,47 @@ QPushButton[isGhost="true"]:pressed {{
         if widget is not None:
             widget.update()
 
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if (
+            event.key() == Qt.Key_Space
+            and not event.isAutoRepeat()
+            and self._plot_host_is_pyqtgraph()
+            and self._focus_is_plot_widget()
+        ):
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "mouse_mode"):
+                current_mode = "pan"
+                with contextlib.suppress(Exception):
+                    current_mode = str(plot_host.mouse_mode()).lower()
+                current_mode = "rect" if current_mode == "rect" else "pan"
+                if not self._space_pan_active:
+                    self._space_pan_active = True
+                    self._space_pan_prev_mode = current_mode
+                    if current_mode != "pan":
+                        if hasattr(plot_host, "set_mouse_mode"):
+                            with contextlib.suppress(Exception):
+                                plot_host.set_mouse_mode("pan")
+                        self._set_nav_actions_for_mode("pan")
+                        self._update_nav_mode_indicator("pan")
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.key() == Qt.Key_Space and not event.isAutoRepeat() and self._space_pan_active:
+            previous_mode = self._space_pan_prev_mode or "pan"
+            self._space_pan_active = False
+            self._space_pan_prev_mode = None
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "set_mouse_mode"):
+                with contextlib.suppress(Exception):
+                    plot_host.set_mouse_mode(previous_mode)
+            self._set_nav_actions_for_mode(previous_mode)
+            self._update_nav_mode_indicator(previous_mode)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
     def eventFilter(self, source, event):
         event_table = getattr(self, "event_table", None)
         if event_table is not None and source is event_table and event.type() == QEvent.Resize:
@@ -13040,12 +13234,17 @@ QPushButton[isGhost="true"]:pressed {{
             return
         t0, t1 = float(window[0]), float(window[1])
         plot_host = getattr(self, "plot_host", None)
-        if plot_host is not None and hasattr(plot_host, "force_primary_xrange"):
-            self._set_xrange_source("load.start", (t0, t1))
-            plot_host.force_primary_xrange(t0, t1)
-        elif plot_host is not None and hasattr(plot_host, "set_time_window"):
+        if plot_host is not None and hasattr(plot_host, "set_time_window"):
             self._set_xrange_source("load.start", (t0, t1))
             plot_host.set_time_window(t0, t1)
+            if hasattr(plot_host, "force_primary_xrange"):
+                plot_host.force_primary_xrange()
+        elif plot_host is not None and hasattr(plot_host, "force_primary_xrange"):
+            self._set_xrange_source("load.start", (t0, t1))
+            try:
+                plot_host.force_primary_xrange()
+            except TypeError:
+                plot_host.force_primary_xrange(t0, t1)
         elif self.ax is not None:
             self.ax.set_xlim(t0, t1)
             self.canvas.draw_idle()
@@ -13348,6 +13547,10 @@ QPushButton[isGhost="true"]:pressed {{
     def _set_trace_navigation_visible(self, visible: bool) -> None:
         self._trace_navigation_available = bool(visible)
         self._apply_overview_strip_visibility()
+        nav_bar = getattr(self, "trace_nav_bar", None)
+        if nav_bar is not None:
+            nav_bar.setVisible(bool(visible))
+            nav_bar.setEnabled(bool(visible))
 
     def _apply_overview_strip_visibility(self) -> None:
         overview = getattr(self, "overview_strip", None)
@@ -13737,6 +13940,10 @@ QPushButton[isGhost="true"]:pressed {{
             return
         rows = self._selected_event_rows()
         if not rows:
+            plot_host = getattr(self, "plot_host", None)
+            if plot_host is not None and hasattr(plot_host, "set_selected_event_index"):
+                with contextlib.suppress(Exception):
+                    plot_host.set_selected_event_index(None)
             return
         target_row = pick_event_row(rows, self.event_table_data)
         if target_row is None:
@@ -13765,6 +13972,10 @@ QPushButton[isGhost="true"]:pressed {{
     def _focus_event_row(self, row: int, *, source: str) -> None:
         if not self.event_table_data or not (0 <= row < len(self.event_table_data)):
             return
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "set_selected_event_index"):
+            with contextlib.suppress(Exception):
+                plot_host.set_selected_event_index(int(row))
 
         # Sync review panel if active (unless source is already review_controller)
         if hasattr(self, "review_controller") and source != "review_controller":
@@ -14548,6 +14759,9 @@ QPushButton[isGhost="true"]:pressed {{
 
     def update_scroll_slider(self):
         if self.scroll_slider is None:
+            return
+        if getattr(self, "trace_nav_bar", None) is not None and self._plot_host_is_pyqtgraph():
+            self.scroll_slider.hide()
             return
         if getattr(self, "_scrolling_from_scrollbar", False):
             return
@@ -15632,7 +15846,7 @@ QPushButton[isGhost="true"]:pressed {{
         if hasattr(self, "action_import_events") and self.action_import_events is not None:
             self.action_import_events.setEnabled(False)
         self._event_lines_visible = True
-        self._event_label_mode = "vertical"
+        self._event_label_mode = "indices"
         self._sync_event_controls()
         self._apply_toggle_state(True, False, outer_supported=False)
         self._update_trace_controls_state()
@@ -15910,6 +16124,7 @@ QPushButton[isGhost="true"]:pressed {{
         for widget in (
             getattr(self, "trace_widget", None),
             getattr(self, "overview_strip", None),
+            getattr(self, "trace_nav_bar", None),
             getattr(self, "plot_stack_widget", None),
             self.scroll_slider,
             getattr(self, "snapshot_widget", None),
@@ -15941,6 +16156,8 @@ QPushButton[isGhost="true"]:pressed {{
         plot_content_layout.setContentsMargins(0, 0, 0, 0)
         plot_content_layout.setSpacing(6)
         plot_content_layout.addWidget(self.trace_widget, 1)
+        if getattr(self, "trace_nav_bar", None) is not None:
+            plot_content_layout.addWidget(self.trace_nav_bar)
         plot_content_layout.addWidget(self.scroll_slider)
         self.plot_stack_layout.addWidget(self.plot_content_page)
 
@@ -15971,6 +16188,7 @@ QPushButton[isGhost="true"]:pressed {{
         right_panel_card.setObjectName("PlotContainer")
         self.right_panel_card = right_panel_card
         right_panel_layout = QVBoxLayout(right_panel_card)
+        self._right_panel_layout = right_panel_layout
         right_panel_layout.setContentsMargins(14, 14, 14, 14)
         right_panel_layout.setSpacing(6)
         side_layout.addWidget(right_panel_card)
@@ -16035,6 +16253,7 @@ QPushButton[isGhost="true"]:pressed {{
         if self.snapshot_card is not None:
             right_panel_layout.setStretch(0, 3)
             right_panel_layout.setStretch(1, 2)
+        self._update_snapshot_panel_layout()
         self._update_review_notice_visibility()
 
         splitter = QSplitter(Qt.Horizontal)
@@ -16804,7 +17023,7 @@ QPushButton[isGhost="true"]:pressed {{
                 },
                 "focused_event_row": focused_row,
                 "event_lines_visible": bool(self._event_lines_visible),
-                "event_label_mode": str(self._event_label_mode or "vertical"),
+                "event_label_mode": str(self._event_label_mode or "indices"),
                 "snapshot_viewer_visible": (
                     bool(self.snapshot_viewer_action.isChecked())
                     if getattr(self, "snapshot_viewer_action", None) is not None
@@ -17199,6 +17418,7 @@ QPushButton[isGhost="true"]:pressed {{
                     self.ax.set_ylabel(y_label)
                 if y_outer_label and self.ax2 is not None:
                     self.ax2.set_ylabel(y_outer_label)
+            self._apply_time_mode(self._time_mode, persist=False)
             t_layout = time.perf_counter()
             self._apply_pending_plot_layout()
             t_pyqtgraph = time.perf_counter()

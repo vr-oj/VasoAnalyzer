@@ -30,6 +30,6 @@ def test_pyqtgraph_style_ignores_theme_size_overrides() -> None:
 def test_pyqtgraph_axis_label_mapping() -> None:
     assert PLOT_AXIS_LABELS["inner"] == "ID (µm)"
     assert PLOT_AXIS_LABELS["outer"] == "OD (µm)"
-    assert PLOT_AXIS_LABELS["avg_pressure"] == "P (mmHg)"
-    assert PLOT_AXIS_LABELS["set_pressure"] == "SP (mmHg)"
+    assert PLOT_AXIS_LABELS["avg_pressure"] == "Avg P (mmHg)"
+    assert PLOT_AXIS_LABELS["set_pressure"] == "Set P (mmHg)"
     assert PLOT_AXIS_TOOLTIPS["inner"] == "Inner Diameter"

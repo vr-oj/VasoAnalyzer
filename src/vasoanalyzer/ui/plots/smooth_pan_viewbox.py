@@ -6,6 +6,7 @@ import contextlib
 import logging
 import math
 import time
+from collections.abc import Callable
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt5.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
@@ -20,6 +21,7 @@ from vasoanalyzer.ui.plots.pyqtgraph_nav_math import (
 from vasoanalyzer.ui.plots.pyqtgraph_style import apply_selection_box_style, get_pyqtgraph_style
 
 log = logging.getLogger(__name__)
+DEFAULT_WHEEL_PAN_FRACTION = 0.05
 
 
 class SmoothPanViewBox(PanOnlyViewBox):
@@ -28,6 +30,10 @@ class SmoothPanViewBox(PanOnlyViewBox):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._xrange_source_callback = None
+        self._request_pan_x: Callable[[float, str], None] | None = None
+        self._request_zoom_x: Callable[[float, float | None, str], None] | None = None
+        self._request_window: Callable[[float, float, str], None] | None = None
+        self._get_current_xrange: Callable[[], tuple[float, float]] | None = None
         self._momentum_timer = QTimer()
         self._momentum_timer.setInterval(16)
         self._momentum_timer.timeout.connect(self._on_momentum_tick)
@@ -38,6 +44,7 @@ class SmoothPanViewBox(PanOnlyViewBox):
         self._drag_active = False
         self._last_drag_ts: float | None = None
         self._last_drag_center: float | None = None
+        self._drag_last_pos: QPointF | None = None
 
         self._friction = 6.0
         self._min_velocity = 1e-4
@@ -50,11 +57,47 @@ class SmoothPanViewBox(PanOnlyViewBox):
         """Register a callback to tag x-range updates for debugging."""
         self._xrange_source_callback = callback
 
+    def set_time_window_requesters(
+        self,
+        *,
+        pan_x: Callable[[float, str], None] | None = None,
+        zoom_x: Callable[[float, float | None, str], None] | None = None,
+        set_window: Callable[[float, float, str], None] | None = None,
+        get_window: Callable[[], tuple[float, float]] | None = None,
+    ) -> None:
+        """Attach host-driven navigation callbacks.
+
+        - pan_x(dt_seconds, reason): request pan by dt seconds
+        - zoom_x(factor, anchor_x, reason): request zoom by factor anchored at x (seconds)
+        - set_window(x0, x1, reason): request absolute window
+        """
+        self._request_pan_x = pan_x
+        self._request_zoom_x = zoom_x
+        self._request_window = set_window
+        self._get_current_xrange = get_window
+
+    def request_set_window(self, x0: float, x1: float, reason: str = "external") -> bool:
+        """Request a host-controlled X window set."""
+        if self._request_window is None:
+            return False
+        self._request_window(float(x0), float(x1), str(reason))
+        return True
+
+    def _is_host_driven_xmode(self) -> bool:
+        return (
+            self._request_pan_x is not None
+            or self._request_zoom_x is not None
+            or self._request_window is not None
+        )
+
     def _current_center(self) -> float:
         (x_min, x_max), _ = self.viewRange()
         return 0.5 * (x_min + x_max)
 
     def _apply_pan(self, shift: float) -> bool:
+        if self._is_host_driven_xmode():
+            log.warning("Blocked direct X-range mutation in host-driven mode.")
+            return False
         (x_min, x_max), _ = self.viewRange()
         span = x_max - x_min
         if span <= 0:
@@ -83,6 +126,9 @@ class SmoothPanViewBox(PanOnlyViewBox):
         return True
 
     def _zoom_x_at(self, anchor_x: float | None, factor: float) -> bool:
+        if self._is_host_driven_xmode():
+            log.warning("Blocked direct X-range mutation in host-driven mode.")
+            return False
         (x_min, x_max), (y_min, y_max) = self.viewRange()
         new_x_min, new_x_max = zoomed_range(
             x_min,
@@ -108,6 +154,9 @@ class SmoothPanViewBox(PanOnlyViewBox):
 
     def set_x_range_with_history(self, x_min: float, x_max: float) -> None:
         """Set X range while pushing a zoom history entry."""
+        if self._is_host_driven_xmode():
+            log.warning("Blocked direct X-range mutation in host-driven mode.")
+            return
         _, (y_min, y_max) = self.viewRange()
         self._push_zoom_history(x_min, x_max, y_min, y_max)
         self.setXRange(float(x_min), float(x_max), padding=0.0, update=True)
@@ -247,7 +296,14 @@ class SmoothPanViewBox(PanOnlyViewBox):
             if self._xrange_source_callback is not None:
                 with contextlib.suppress(Exception):
                     self._xrange_source_callback("wheel.ctrl_zoom", None)
-            self._zoom_x_at(anchor_x, factor)
+            if self._request_zoom_x is not None:
+                self._request_zoom_x(
+                    float(factor),
+                    float(anchor_x) if anchor_x is not None else None,
+                    "wheel.ctrl_zoom",
+                )
+            else:
+                self._zoom_x_at(anchor_x, factor)
         elif alt:
             factor = (ZOOM_STEP_IN ** abs(steps)) if steps > 0 else (ZOOM_STEP_OUT ** abs(steps))
             anchor = self._anchor_from_event(ev)
@@ -261,12 +317,23 @@ class SmoothPanViewBox(PanOnlyViewBox):
                 shift_amount = direction * pan_step(span, 0.10) * abs(steps)
                 self._apply_y_pan(shift_amount)
         else:
-            (x_min, x_max), _ = self.viewRange()
+            x_min: float
+            x_max: float
+            if self._request_pan_x is not None and self._get_current_xrange is not None:
+                try:
+                    x_min, x_max = self._get_current_xrange()
+                except Exception:
+                    (x_min, x_max), _ = self.viewRange()
+            else:
+                (x_min, x_max), _ = self.viewRange()
             span = x_max - x_min
             if span > 0:
                 direction = -1 if steps > 0 else 1
-                shift = direction * pan_step(span, 0.10) * abs(steps)
-                self._apply_pan(shift)
+                shift = direction * pan_step(span, DEFAULT_WHEEL_PAN_FRACTION) * abs(steps)
+                if self._request_pan_x is not None:
+                    self._request_pan_x(float(shift), "wheel.pan")
+                else:
+                    self._apply_pan(shift)
 
         try:
             self.sigWheelEvent.emit(ev)
@@ -292,8 +359,62 @@ class SmoothPanViewBox(PanOnlyViewBox):
                     with contextlib.suppress(Exception):
                         self._xrange_source_callback("box_zoom", None)
             super().mouseDragEvent(ev, axis=axis)
+            if ev.isFinish() and self._request_window is not None:
+                (x_min, x_max), _ = self.viewRange()
+                with contextlib.suppress(Exception):
+                    self._request_window(float(x_min), float(x_max), "box_zoom.finish")
             if ev.isFinish():
                 self._drag_active = False
+            return
+
+        if self._request_pan_x is not None:
+            self._stop_momentum()
+            self._drag_active = False
+            self._velocity = 0.0
+            if ev.isStart():
+                try:
+                    self._drag_last_pos = ev.lastPos()
+                except Exception:
+                    self._drag_last_pos = None
+                ev.accept()
+                return
+
+            if self._drag_last_pos is None:
+                try:
+                    self._drag_last_pos = ev.lastPos()
+                except Exception:
+                    self._drag_last_pos = None
+                ev.accept()
+                return
+
+            try:
+                cur = ev.pos()
+                last = self._drag_last_pos
+                dx = float(cur.x() - last.x())
+                self._drag_last_pos = cur
+            except Exception:
+                dx = 0.0
+
+            if self._get_current_xrange is not None:
+                try:
+                    x_min, x_max = self._get_current_xrange()
+                except Exception:
+                    (x_min, x_max), _ = self.viewRange()
+            else:
+                (x_min, x_max), _ = self.viewRange()
+            span = float(x_max - x_min)
+            width = float(self.boundingRect().width())
+            if width > 0.0 and span > 0.0:
+                seconds_per_px = span / width
+                dt = -dx * seconds_per_px
+                if self._xrange_source_callback is not None:
+                    with contextlib.suppress(Exception):
+                        self._xrange_source_callback("drag.pan", None)
+                self._request_pan_x(float(dt), "drag.pan")
+
+            ev.accept()
+            if ev.isFinish():
+                self._drag_last_pos = None
             return
 
         if ev.isStart():

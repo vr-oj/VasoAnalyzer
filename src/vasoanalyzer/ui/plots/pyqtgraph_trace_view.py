@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt
+from PyQt5.QtGui import QColor, QCursor
+from PyQt5.QtWidgets import QApplication, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
+from vasoanalyzer.ui.formatting.time_format import TimeMode, coerce_time_mode
 from vasoanalyzer.ui.plots.abstract_renderer import AbstractTraceRenderer
+from vasoanalyzer.ui.plots.event_display_mode import (
+    EventDisplayMode,
+    coerce_event_display_mode,
+)
 from vasoanalyzer.ui.plots.pinch_blocker import PinchBlocker
 from vasoanalyzer.ui.plots.pyqtgraph_event_marker_layer import (
     PyQtGraphEventMarkerLayer,
@@ -26,9 +32,55 @@ from vasoanalyzer.ui.plots.pyqtgraph_style import (
     get_pyqtgraph_style,
 )
 from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
+from vasoanalyzer.ui.plots.time_axis_item import TimeAxisItem
+from vasoanalyzer.ui.plots.y_axis_controls import required_outer_gutter_px
+from vasoanalyzer.ui.parity_flags import chart_view_parity_v1_enabled
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
+
+TOP_PAD = 3
+BOTTOM_PAD = 3
+INTER_TRACK_GAP_MIN = 6
+
+
+def axis_controls_top_left_for_viewbox(
+    *,
+    viewbox_rect: QRect,
+    controls_width: int,
+    controls_height: int,
+    widget_width: int,
+    widget_height: int,
+    margin: int = 2,
+) -> tuple[int, int]:
+    """Compute axis-control top-left anchored just left of the ViewBox."""
+    width = max(int(controls_width), 0)
+    height = max(int(controls_height), 0)
+    max_x = max(int(widget_width) - width, 0)
+    max_y = max(int(widget_height) - height, 0)
+    x = int(viewbox_rect.left()) - width - int(margin)
+    y = int(viewbox_rect.top()) + int(margin)
+    return max(0, min(x, max_x)), max(0, min(y, max_y))
+
+
+def _clamp_overlay_position(
+    *,
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    widget_width: int,
+    widget_height: int,
+) -> tuple[int, int]:
+    """Clamp an overlay widget position to the plot widget bounds."""
+    clamped_x = max(0, min(int(x), max(int(widget_width) - max(int(width), 0), 0)))
+    clamped_y = max(0, min(int(y), max(int(widget_height) - max(int(height), 0), 0)))
+    return clamped_x, clamped_y
+
+
+def y_axis_scale_factor_for_drag_delta(dy_px: float, *, gain: float = 0.006) -> float:
+    """Convert axis drag delta (pixels) into multiplicative Y span factor."""
+    return float(math.exp(float(dy_px) * float(gain)))
 
 
 class PyQtGraphTraceView(AbstractTraceRenderer):
@@ -58,6 +110,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._mode = mode
         self._explicit_ylabel = y_label
         self._enable_opengl = enable_opengl
+        self._chart_parity_v1 = chart_view_parity_v1_enabled()
 
         # Create custom ViewBox that handles smooth horizontal pan (not zoom)
         # This is the single source of truth for scroll behavior
@@ -65,11 +118,28 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         view_box.setMouseEnabled(x=True, y=False)  # Horizontal interactions only
         view_box.setMouseMode(view_box.PanMode)  # Default: grab to pan horizontally
         self._mouse_mode: str = "pan"
+        self._time_axis = TimeAxisItem(orientation="bottom")
+        self._left_outer_gutter_px = int(required_outer_gutter_px())
+        self._bottom_axis_visible = True
 
         # Create plot widget with our custom ViewBox
-        self._plot_widget = pg.PlotWidget(viewBox=view_box)
+        self._plot_widget = pg.PlotWidget(viewBox=view_box, axisItems={"bottom": self._time_axis})
         self._plot_item = self._plot_widget.getPlotItem()
+        self._apply_plot_item_layout()
         self._view_box = view_box
+        with contextlib.suppress(Exception):
+            self._view_box.setDefaultPadding(0.0)
+        self._disable_plot_title()
+        self._y_axis_controls_clamped_left_logged = False
+        self.set_bottom_axis_visible(True)
+
+        # Suppress pyqtgraph's built-in hover buttons and context menu.
+        with contextlib.suppress(Exception):
+            self._plot_item.hideButtons()
+        with contextlib.suppress(Exception):
+            self._plot_item.setMenuEnabled(False)
+        with contextlib.suppress(Exception):
+            self._plot_item.getViewBox().setMenuEnabled(False)
 
         # Install pinch blocker on the viewport to prevent trackpad pinch-to-zoom
         pinch_blocker = PinchBlocker(self._plot_widget)
@@ -83,7 +153,6 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         # Configure plot appearance
         self._plot_item.showGrid(x=True, y=True, alpha=0.10)
-        self._plot_item.setMenuEnabled(False)  # Disable right-click menu
 
         # Connect ViewBox range changes to sync with time window management
         # This ensures native PyQtGraph interactions (pan/rectangle-zoom) sync with our PlotHost
@@ -94,6 +163,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self.model: TraceModel | None = None
         self._current_window: TraceWindow | None = None
         self._autoscale_y = False  # Default: fixed Y-axis (user can enable in Plot Settings)
+        self._host_driven_xrange = False
 
         # Plot items
         self.inner_curve: pg.PlotDataItem | None = None
@@ -111,8 +181,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Event markers/labels
         self._event_layer = PyQtGraphEventMarkerLayer(self._plot_item)
         self._event_entries: list[EventEntryV3] = []
+        self._event_times_np = np.empty(0, dtype=float)
         self._event_labels_visible: bool = False
         self._event_layer.set_labels_visible(False)
+        self._event_display_mode = EventDisplayMode.NAMES_ON_HOVER
+        self._event_layer.set_display_mode(self._event_display_mode)
+        self._event_hover_handler: Callable[[int | None], None] | None = None
+        self._hovered_event_index: int | None = None
 
         # Event line styling parameters
         style = get_pyqtgraph_style()
@@ -130,6 +205,23 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Click handling
         self._click_handler: Callable[[float, float, int, str, Any], None] | None = None
         self._pin_items: list[tuple[pg.ScatterPlotItem, pg.TextItem]] = []
+        self._y_axis_controls: QWidget | None = None
+        self._y_axis_menu_control_widget: QWidget | None = None
+        self._y_axis_scale_control_widget: QWidget | None = None
+        self._y_axis_autoscale_once_handler: Callable[[], None] | None = None
+        self._y_axis_menu_handler: Callable[[QPoint], None] | None = None
+        self._y_axis_scale_about_handler: Callable[[float | None, float], None] | None = None
+        self._y_axis_drag_started_handler: Callable[[], None] | None = None
+        self._y_axis_drag_finished_handler: Callable[[], None] | None = None
+        self._y_axis_drag_active = False
+        self._y_axis_drag_last_pos: QPoint | None = None
+        self._y_axis_cursor_forced = False
+        self._y_axis_saved_cursor_explicit = False
+        self._y_axis_saved_cursor = QCursor()
+        self._y_axis_controls_filter = _YAxisControlsFilter(self, parent=self._plot_widget)
+        self._plot_widget.installEventFilter(self._y_axis_controls_filter)
+        with contextlib.suppress(Exception):
+            self._plot_widget.viewport().installEventFilter(self._y_axis_controls_filter)
 
         # Initialize persistent hover label
         self._hover_text_item: pg.TextItem | None = None
@@ -151,6 +243,83 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if scene is not None:
             scene.sigMouseClicked.connect(self._handle_mouse_clicked)
 
+    def _disable_plot_title(self) -> None:
+        """Remove PlotItem title text and reclaim the title row height."""
+        with contextlib.suppress(Exception):
+            self._plot_item.setTitle("")
+
+        label = getattr(self._plot_item, "titleLabel", None)
+        if label is not None:
+            with contextlib.suppress(Exception):
+                label.setText("")
+            with contextlib.suppress(Exception):
+                label.hide()
+
+        layout = getattr(self._plot_item, "layout", None)
+        if layout is not None:
+            with contextlib.suppress(Exception):
+                layout.setRowFixedHeight(0, 0)
+
+    def _apply_plot_item_layout(self) -> None:
+        """Tighten PlotItem layout while reserving a fixed left gutter for controls."""
+        layout = getattr(self._plot_item, "layout", None)
+        if layout is None:
+            return
+        with contextlib.suppress(Exception):
+            layout.setContentsMargins(int(self._left_outer_gutter_px), 0, 0, 0)
+        with contextlib.suppress(Exception):
+            layout.setHorizontalSpacing(0)
+        with contextlib.suppress(Exception):
+            layout.setVerticalSpacing(0)
+
+    def set_left_outer_gutter_px(self, width_px: int) -> None:
+        """Set reserved left-side gutter in pixels for Y-axis controls."""
+        value = max(int(width_px), 0)
+        if value == int(self._left_outer_gutter_px):
+            return
+        self._left_outer_gutter_px = value
+        self._apply_plot_item_layout()
+        self._reposition_y_axis_controls()
+
+    def set_bottom_axis_visible(self, visible: bool) -> None:
+        """Show/hide bottom axis and collapse hidden-axis height."""
+        self._bottom_axis_visible = bool(visible)
+        axis = self._plot_item.getAxis("bottom")
+        if axis is None:
+            return
+        if self._bottom_axis_visible:
+            self._plot_item.showAxis("bottom")
+            with contextlib.suppress(AttributeError):
+                axis.enableAutoSIPrefix(False)
+            axis.setVisible(True)
+            axis.setStyle(showValues=True)
+            axis.setLabel(self._time_axis_label())
+            with contextlib.suppress(AttributeError):
+                axis.setTickLength(5, 0)
+            with contextlib.suppress(Exception):
+                axis.setHeight(None)
+            with contextlib.suppress(AttributeError):
+                axis.label.show()
+                axis.showLabel(True)
+            return
+
+        with contextlib.suppress(Exception):
+            self._plot_item.hideAxis("bottom")
+        axis.setVisible(False)
+        with contextlib.suppress(Exception):
+            axis.setStyle(showValues=False, tickLength=0)
+        with contextlib.suppress(Exception):
+            axis.setLabel("")
+        with contextlib.suppress(Exception):
+            axis.setHeight(0)
+        with contextlib.suppress(AttributeError):
+            axis.label.hide()
+            axis.showLabel(False)
+
+    def bottom_axis_visible(self) -> bool:
+        """Return whether the bottom axis is currently visible."""
+        return bool(self._bottom_axis_visible)
+
     def view_box(self) -> SmoothPanViewBox:
         """Return the underlying ViewBox for this trace view."""
         return self._view_box
@@ -170,6 +339,20 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def mouse_mode(self) -> str:
         """Return current mouse interaction mode ("pan" or "rect")."""
         return getattr(self, "_mouse_mode", "pan")
+
+    def _time_axis_label(self) -> str:
+        mode = self.time_mode()
+        if mode == TimeMode.SECONDS:
+            return "Time (s)"
+        return "Time"
+
+    def set_time_mode(self, mode: TimeMode | str) -> None:
+        resolved = coerce_time_mode(mode)
+        self._time_axis.set_time_mode(resolved)
+        self.set_bottom_axis_visible(self._bottom_axis_visible)
+
+    def time_mode(self) -> TimeMode:
+        return self._time_axis.time_mode()
 
     def _init_hover_label(self) -> None:
         """Create a persistent hover label anchored to the plot."""
@@ -244,7 +427,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self.inner_curve = self._plot_item.plot(
             pen=pg.mkPen(color=theme_color, width=1.5),
             antialias=False,
-            name=trace_name,
+            name=None,
         )
         if hasattr(self.inner_curve, "setClipToView"):
             with contextlib.suppress(Exception):
@@ -259,7 +442,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             self.outer_curve = self._plot_item.plot(
                 pen=pg.mkPen(color=outer_color, width=1.2),
                 antialias=False,
-                name="Outer Diameter",
+                name=None,
             )
             if hasattr(self.outer_curve, "setClipToView"):
                 with contextlib.suppress(Exception):
@@ -325,6 +508,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         with contextlib.suppress(Exception):
             apply_selection_box_style(self._view_box, get_pyqtgraph_style().selection_box)
         self._init_hover_label()
+        self._reposition_y_axis_controls()
 
         # Force immediate visual update
         self._plot_widget.repaint()
@@ -333,6 +517,449 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def get_widget(self) -> pg.PlotWidget:
         """Return the PyQtGraph PlotWidget for embedding."""
         return self._plot_widget
+
+    def install_y_axis_controls(self, controls: QWidget) -> None:
+        """Attach compact Y-axis controls as a PlotWidget overlay."""
+        if self._y_axis_controls is not None and self._y_axis_controls is not controls:
+            with contextlib.suppress(Exception):
+                self._y_axis_controls.hide()
+                self._y_axis_controls.setParent(None)
+            self._detach_y_axis_control_widgets()
+
+        controls.setParent(self._plot_widget)
+        controls.hide()
+        self._y_axis_controls = controls
+
+        menu_widget = getattr(controls, "menu_button_widget", None)
+        scale_widget = getattr(controls, "scale_buttons_widget", None)
+
+        self._y_axis_menu_control_widget = menu_widget if isinstance(menu_widget, QWidget) else None
+        self._y_axis_scale_control_widget = (
+            scale_widget if isinstance(scale_widget, QWidget) else None
+        )
+
+        if self._y_axis_menu_control_widget is not None:
+            self._y_axis_menu_control_widget.setParent(self._plot_widget)
+            self._y_axis_menu_control_widget.show()
+            self._y_axis_menu_control_widget.raise_()
+
+        if self._y_axis_scale_control_widget is not None:
+            self._y_axis_scale_control_widget.setParent(self._plot_widget)
+            self._y_axis_scale_control_widget.show()
+            self._y_axis_scale_control_widget.raise_()
+
+        if self._y_axis_menu_control_widget is None and self._y_axis_scale_control_widget is None:
+            controls.show()
+            controls.raise_()
+        self.refresh_y_axis_controls()
+        self._reposition_y_axis_controls()
+
+    def set_y_axis_interaction_handlers(
+        self,
+        *,
+        autoscale_once: Callable[[], None] | None = None,
+        open_menu: Callable[[QPoint], None] | None = None,
+        scale_about: Callable[[float | None, float], None] | None = None,
+        drag_started: Callable[[], None] | None = None,
+        drag_finished: Callable[[], None] | None = None,
+    ) -> None:
+        """Set callbacks used by left-axis gestures."""
+        self._y_axis_autoscale_once_handler = autoscale_once
+        self._y_axis_menu_handler = open_menu
+        self._y_axis_scale_about_handler = scale_about
+        self._y_axis_drag_started_handler = drag_started
+        self._y_axis_drag_finished_handler = drag_finished
+
+    def refresh_y_axis_controls(self) -> None:
+        """Refresh the axis controls state from current autoscale settings."""
+        controls = self._y_axis_controls
+        if controls is None:
+            return
+        refresh_state = getattr(controls, "refresh_state", None)
+        if callable(refresh_state):
+            with contextlib.suppress(Exception):
+                refresh_state()
+        self._reposition_y_axis_controls()
+
+    def _detach_y_axis_control_widgets(self) -> None:
+        for widget in (self._y_axis_menu_control_widget, self._y_axis_scale_control_widget):
+            if widget is None:
+                continue
+            with contextlib.suppress(Exception):
+                widget.hide()
+                widget.setParent(None)
+        self._y_axis_menu_control_widget = None
+        self._y_axis_scale_control_widget = None
+
+    def _left_axis_rect_in_widget(self) -> QRect | None:
+        axis = self._plot_item.getAxis("left")
+        if axis is None:
+            return None
+        with contextlib.suppress(Exception):
+            rect = axis.sceneBoundingRect()
+            if rect is None or not rect.isValid() or rect.isEmpty():
+                return None
+            top_left = self._plot_widget.mapFromScene(rect.topLeft())
+            bottom_right = self._plot_widget.mapFromScene(rect.bottomRight())
+            mapped = QRect(top_left, bottom_right).normalized()
+            if mapped.isEmpty():
+                return None
+            return mapped
+        return None
+
+    def _viewbox_rect_in_widget(self) -> QRect | None:
+        view_box = self._plot_item.getViewBox()
+        if view_box is None:
+            return None
+        with contextlib.suppress(Exception):
+            rect = view_box.sceneBoundingRect()
+            if rect is None or not rect.isValid() or rect.isEmpty():
+                return None
+            top_left = self._plot_widget.mapFromScene(rect.topLeft())
+            bottom_right = self._plot_widget.mapFromScene(rect.bottomRight())
+            mapped = QRect(top_left, bottom_right).normalized()
+            if mapped.isEmpty():
+                return None
+            return mapped
+        return None
+
+    def _point_in_left_axis(self, pos: QPoint) -> bool:
+        axis_rect = self._left_axis_rect_in_widget()
+        if axis_rect is None:
+            return False
+        return axis_rect.adjusted(-2, -2, 2, 2).contains(pos)
+
+    def _event_pos_in_plot_widget(self, obj, event) -> QPoint | None:
+        if not hasattr(event, "pos"):
+            return None
+        try:
+            pos = event.pos()
+        except Exception:
+            return None
+        viewport = self._plot_widget.viewport()
+        if obj is self._plot_widget or obj is viewport:
+            return QPoint(pos)
+        return None
+
+    def _event_global_pos(self, obj, event) -> QPoint:
+        if hasattr(event, "globalPos"):
+            with contextlib.suppress(Exception):
+                return event.globalPos()
+        local_pos = self._event_pos_in_plot_widget(obj, event)
+        if local_pos is None:
+            return QCursor.pos()
+        return self._plot_widget.mapToGlobal(local_pos)
+
+    def _data_y_for_widget_pos(self, pos: QPoint) -> float | None:
+        view_box = self._plot_item.getViewBox()
+        if view_box is None:
+            return None
+        with contextlib.suppress(Exception):
+            scene_pos = self._plot_widget.mapToScene(pos)
+            view_pos = view_box.mapSceneToView(scene_pos)
+            y_value = float(view_pos.y())
+            if np.isfinite(y_value):
+                return y_value
+        return None
+
+    def _set_y_axis_cursor_feedback(self, enabled: bool) -> None:
+        enabled_flag = bool(enabled)
+        if enabled_flag:
+            if not self._y_axis_cursor_forced:
+                self._y_axis_saved_cursor_explicit = bool(
+                    self._plot_widget.testAttribute(Qt.WA_SetCursor)
+                )
+                self._y_axis_saved_cursor = QCursor(self._plot_widget.cursor())
+            cursor = QCursor(Qt.SizeVerCursor)
+            self._plot_widget.setCursor(cursor)
+            with contextlib.suppress(Exception):
+                self._plot_widget.viewport().setCursor(cursor)
+            self._y_axis_cursor_forced = True
+            return
+
+        if not self._y_axis_cursor_forced:
+            return
+        if self._y_axis_saved_cursor_explicit:
+            self._plot_widget.setCursor(self._y_axis_saved_cursor)
+            with contextlib.suppress(Exception):
+                self._plot_widget.viewport().setCursor(self._y_axis_saved_cursor)
+        else:
+            self._plot_widget.unsetCursor()
+            with contextlib.suppress(Exception):
+                self._plot_widget.viewport().unsetCursor()
+        self._y_axis_cursor_forced = False
+        self._y_axis_saved_cursor_explicit = False
+
+    def _reposition_y_axis_controls(self) -> None:
+        controls = self._y_axis_controls
+        if controls is None:
+            return
+        axis = self._plot_item.getAxis("left")
+        view_box = self._plot_item.getViewBox()
+        if axis is None or view_box is None:
+            return
+        try:
+            axis_scene = axis.sceneBoundingRect()
+            vb_scene = view_box.sceneBoundingRect()
+            if axis_scene is None or not axis_scene.isValid() or axis_scene.isEmpty():
+                return
+            if vb_scene is None or not vb_scene.isValid() or vb_scene.isEmpty():
+                return
+            axis_left_px = int(self._plot_widget.mapFromScene(axis_scene.topLeft()).x())
+            vb_top_px = int(self._plot_widget.mapFromScene(vb_scene.topLeft()).y())
+            vb_bottom_px = int(self._plot_widget.mapFromScene(vb_scene.bottomLeft()).y())
+        except Exception:
+            return
+
+        menu_widget = self._y_axis_menu_control_widget
+        scale_widget = self._y_axis_scale_control_widget
+
+        if menu_widget is None and scale_widget is None:
+            viewbox_rect = self._viewbox_rect_in_widget()
+            if viewbox_rect is None:
+                return
+            controls.adjustSize()
+            width = max(controls.width(), controls.sizeHint().width())
+            height = max(controls.height(), controls.sizeHint().height())
+            if width <= 0 or height <= 0:
+                return
+            margin = 2
+            proposed_x = int(viewbox_rect.left()) - width - margin
+            x, y = axis_controls_top_left_for_viewbox(
+                viewbox_rect=viewbox_rect,
+                controls_width=width,
+                controls_height=height,
+                widget_width=self._plot_widget.width(),
+                widget_height=self._plot_widget.height(),
+                margin=margin,
+            )
+            if proposed_x < 0 and not self._y_axis_controls_clamped_left_logged:
+                self._y_axis_controls_clamped_left_logged = True
+                log.debug(
+                    "Y-axis controls clamped to x=0 (left gutter too narrow): view_left=%s width=%s",
+                    viewbox_rect.left(),
+                    width,
+                )
+            controls.move(x, y)
+            controls.raise_()
+            return
+
+        margin = 2
+        widget_width = max(int(self._plot_widget.width()), 0)
+        widget_height = max(int(self._plot_widget.height()), 0)
+        menu_h = 0
+        scale_h = 0
+
+        if menu_widget is not None:
+            menu_widget.adjustSize()
+            menu_w = max(menu_widget.width(), menu_widget.sizeHint().width())
+            menu_h = max(menu_widget.height(), menu_widget.sizeHint().height())
+            proposed_menu_x = int(axis_left_px) - int(menu_w) - margin
+            proposed_menu_y = int(vb_top_px) + int(TOP_PAD)
+            menu_x, menu_y = _clamp_overlay_position(
+                x=proposed_menu_x,
+                y=proposed_menu_y,
+                width=menu_w,
+                height=menu_h,
+                widget_width=widget_width,
+                widget_height=widget_height,
+            )
+            if proposed_menu_x < 0 and not self._y_axis_controls_clamped_left_logged:
+                self._y_axis_controls_clamped_left_logged = True
+                log.debug(
+                    "Y-axis controls clamped to x=0 (left gutter too narrow): view_left=%s width=%s",
+                    axis_left_px,
+                    menu_w,
+                )
+            menu_widget.move(menu_x, menu_y)
+            menu_widget.raise_()
+
+        if scale_widget is not None:
+            scale_widget.adjustSize()
+            scale_w = max(scale_widget.width(), scale_widget.sizeHint().width())
+            scale_h = max(scale_widget.height(), scale_widget.sizeHint().height())
+            vb_height = max(int(vb_bottom_px) - int(vb_top_px), 0)
+            show_scale_widget = True
+            if menu_widget is not None:
+                min_required = (
+                    int(menu_h)
+                    + int(scale_h)
+                    + int(TOP_PAD)
+                    + int(BOTTOM_PAD)
+                    + int(INTER_TRACK_GAP_MIN)
+                )
+                show_scale_widget = vb_height >= min_required
+
+            if not show_scale_widget:
+                scale_widget.hide()
+                return
+
+            scale_widget.show()
+            proposed_scale_x = int(axis_left_px) - int(scale_w) - margin
+            proposed_scale_y = int(vb_bottom_px) - int(scale_h) - int(BOTTOM_PAD)
+            scale_x, scale_y = _clamp_overlay_position(
+                x=proposed_scale_x,
+                y=proposed_scale_y,
+                width=scale_w,
+                height=scale_h,
+                widget_width=widget_width,
+                widget_height=widget_height,
+            )
+            if proposed_scale_x < 0 and not self._y_axis_controls_clamped_left_logged:
+                self._y_axis_controls_clamped_left_logged = True
+                log.debug(
+                    "Y-axis controls clamped to x=0 (left gutter too narrow): view_left=%s width=%s",
+                    axis_left_px,
+                    scale_w,
+                )
+            scale_widget.move(scale_x, scale_y)
+            scale_widget.raise_()
+
+    def _trigger_y_axis_autoscale_once(self) -> bool:
+        handler = self._y_axis_autoscale_once_handler
+        if not callable(handler):
+            return False
+        with contextlib.suppress(Exception):
+            handler()
+            self.refresh_y_axis_controls()
+            return True
+        return False
+
+    def _show_y_axis_menu(self, global_pos: QPoint) -> bool:
+        handler = self._y_axis_menu_handler
+        if callable(handler):
+            with contextlib.suppress(Exception):
+                handler(global_pos)
+                self.refresh_y_axis_controls()
+                return True
+        controls = self._y_axis_controls
+        if controls is not None:
+            popup_menu = getattr(controls, "popup_menu", None)
+            if callable(popup_menu):
+                with contextlib.suppress(Exception):
+                    popup_menu(global_pos)
+                    return True
+        return False
+
+    def _end_y_axis_drag(self) -> None:
+        if self._y_axis_drag_active:
+            handler = self._y_axis_drag_finished_handler
+            if callable(handler):
+                with contextlib.suppress(Exception):
+                    handler()
+        self._y_axis_drag_active = False
+        self._y_axis_drag_last_pos = None
+        self._set_y_axis_cursor_feedback(False)
+
+    def _apply_y_axis_drag_scale(self, dy_px: float, center_y: float | None) -> bool:
+        if not self._chart_parity_v1:
+            return False
+        handler = self._y_axis_scale_about_handler
+        if not callable(handler):
+            return False
+        factor = y_axis_scale_factor_for_drag_delta(float(dy_px))
+        if not np.isfinite(factor) or factor <= 0:
+            return False
+        with contextlib.suppress(Exception):
+            handler(center_y, float(factor))
+            self.refresh_y_axis_controls()
+            return True
+        return False
+
+    def _process_axis_mouse_event(self, obj, event) -> bool:
+        if obj is None or event is None:
+            return False
+        viewport = self._plot_widget.viewport()
+        if obj is not self._plot_widget and obj is not viewport:
+            return False
+
+        event_type = event.type()
+        if event_type in (QEvent.Resize, QEvent.Show, QEvent.LayoutRequest):
+            self._reposition_y_axis_controls()
+            return False
+
+        if event_type == QEvent.Leave:
+            if self._y_axis_drag_active:
+                self._end_y_axis_drag()
+            else:
+                self._set_y_axis_cursor_feedback(False)
+            return False
+
+        if event_type == QEvent.MouseMove and self._y_axis_drag_active:
+            pos = self._event_pos_in_plot_widget(obj, event)
+            if pos is None:
+                return False
+            self._set_y_axis_cursor_feedback(True)
+            last_pos = self._y_axis_drag_last_pos
+            self._y_axis_drag_last_pos = QPoint(pos)
+            if last_pos is None:
+                event.accept()
+                return True
+            dy_px = float(pos.y() - last_pos.y())
+            if dy_px == 0.0:
+                event.accept()
+                return True
+            center_y = self._data_y_for_widget_pos(pos)
+            if self._apply_y_axis_drag_scale(dy_px, center_y):
+                event.accept()
+                return True
+            return False
+
+        if event_type == QEvent.MouseMove:
+            pos = self._event_pos_in_plot_widget(obj, event)
+            self._set_y_axis_cursor_feedback(pos is not None and self._point_in_left_axis(pos))
+            return False
+
+        if event_type == QEvent.MouseButtonRelease and self._y_axis_drag_active:
+            with contextlib.suppress(Exception):
+                if event.button() == Qt.LeftButton:
+                    self._end_y_axis_drag()
+                    pos = self._event_pos_in_plot_widget(obj, event)
+                    self._set_y_axis_cursor_feedback(
+                        pos is not None and self._point_in_left_axis(pos)
+                    )
+                    event.accept()
+                    return True
+
+        if event_type not in (
+            QEvent.MouseButtonDblClick,
+            QEvent.MouseButtonPress,
+            QEvent.MouseButtonRelease,
+        ):
+            return False
+
+        pos = self._event_pos_in_plot_widget(obj, event)
+        if pos is None or not self._point_in_left_axis(pos):
+            return False
+
+        with contextlib.suppress(Exception):
+            button = event.button()
+            if event_type == QEvent.MouseButtonDblClick and button == Qt.LeftButton:
+                self._end_y_axis_drag()
+                if self._trigger_y_axis_autoscale_once():
+                    event.accept()
+                    return True
+                return False
+            if (
+                self._chart_parity_v1
+                and event_type == QEvent.MouseButtonPress
+                and button == Qt.LeftButton
+            ):
+                self._y_axis_drag_active = True
+                self._y_axis_drag_last_pos = QPoint(pos)
+                self._set_y_axis_cursor_feedback(True)
+                handler = self._y_axis_drag_started_handler
+                if callable(handler):
+                    with contextlib.suppress(Exception):
+                        handler()
+                event.accept()
+                return True
+            if event_type == QEvent.MouseButtonPress and button == Qt.RightButton:
+                global_pos = self._event_global_pos(obj, event)
+                if self._show_y_axis_menu(global_pos):
+                    event.accept()
+                    return True
+        return False
 
     def _build_display_curve(
         self, time: np.ndarray, mean: np.ndarray, ymin: np.ndarray, ymax: np.ndarray
@@ -372,7 +999,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._current_window = None
 
         # Set axis labels
-        self._plot_item.setLabel("bottom", "Time (s)")
+        self.set_bottom_axis_visible(self._bottom_axis_visible)
         ylabel = self._explicit_ylabel or self._default_ylabel()
         self._plot_item.setLabel("left", ylabel)
 
@@ -389,12 +1016,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
             self._view_box.set_time_limits(x0, x1, min_x_range=min_range, max_x_range=max_range)
 
-            # Constrain ViewBox to prevent panning beyond data boundaries
-            self._plot_item.setXRange(x0, x1, padding=0.02)
-
             # Render the initial data window
             pixel_width = max(int(self._plot_widget.width()), 400)
             self.update_window(x0, x1, pixel_width=pixel_width)
+        self._reposition_y_axis_controls()
 
     def _default_ylabel(self) -> str:
         """Get default Y-axis label based on mode."""
@@ -417,6 +1042,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if not times:
             # Clear event entries too
             self._event_entries.clear()
+            self._event_times_np = np.empty(0, dtype=float)
+            self._hovered_event_index = None
+            self._event_layer.set_hovered_event(None)
             return
 
         # Default event color
@@ -451,6 +1079,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             self._event_entries.append(event_entry)
 
         self._event_layer.set_events(self._event_entries)
+        self._event_times_np = np.asarray([float(entry.t) for entry in self._event_entries], dtype=float)
+        self._hovered_event_index = None
+        self._event_layer.set_hovered_event(None)
 
         if self._event_labels_visible and self._event_entries:
             xlim = self.get_xlim()
@@ -688,12 +1319,23 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             self._syncing_range = False
 
     def set_xlim(self, x0: float, x1: float) -> None:
-        """Set X-axis limits."""
+        """Manual API: sets X-axis limits directly on this view."""
+        if getattr(self, "_host_driven_xrange", False):
+            log.warning(
+                "TraceView.set_xlim ignored (host-driven xrange active): (%s, %s)",
+                x0,
+                x1,
+            )
+            return
         self._syncing_range = True
         try:
             self._plot_item.setXRange(x0, x1, padding=0)
         finally:
             self._syncing_range = False
+
+    def set_host_driven_xrange(self, enabled: bool) -> None:
+        """Enable/disable host-driven X ownership guard."""
+        self._host_driven_xrange = bool(enabled)
 
     def get_xlim(self) -> tuple[float, float]:
         """Get current X-axis limits."""
@@ -897,10 +1539,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def set_ylabel(self, label: str) -> None:
         """Set Y-axis label."""
         self._plot_item.setLabel("left", label)
+        self._reposition_y_axis_controls()
 
-    def set_title(self, title: str) -> None:
-        """Set plot title."""
-        self._plot_item.setTitle(title)
+    def set_title(self, _title: str) -> None:
+        """Plot titles are intentionally disabled; keep title area collapsed."""
+        self._disable_plot_title()
 
     def set_event_line_style(
         self,
@@ -990,7 +1633,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """
         self._event_labels_visible = enabled
         if not enabled:
-            self._event_layer.set_label_mode("none")
+            self._event_layer.set_display_mode(EventDisplayMode.OFF)
+        else:
+            self._event_layer.set_display_mode(self._event_display_mode)
         self._event_layer.set_labels_visible(bool(enabled))
         if enabled and self._event_entries:
             xlim = self.get_xlim()
@@ -1017,16 +1662,42 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
 
     def set_event_label_mode(self, mode: str) -> None:
-        """Set label mode for trace markers ("label_vertical" or "none")."""
-        self._event_layer.set_label_mode(mode)
+        """Compatibility bridge for legacy label-mode calls."""
+        normalized = str(mode or "").strip().lower()
+        if normalized in {"none", "off", "hidden"}:
+            self.set_event_display_mode(EventDisplayMode.OFF)
+            return
+        self.set_event_display_mode(EventDisplayMode.NAMES_ALWAYS)
         if self._event_entries:
             xlim = self.get_xlim()
             pixel_width = max(int(self._plot_widget.width()), 1)
             self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
 
+    def set_event_display_mode(self, mode: EventDisplayMode | str) -> None:
+        self._event_display_mode = coerce_event_display_mode(mode)
+        if self._event_labels_visible:
+            self._event_layer.set_display_mode(self._event_display_mode)
+        else:
+            self._event_layer.set_display_mode(EventDisplayMode.OFF)
+        if self._event_entries:
+            xlim = self.get_xlim()
+            pixel_width = max(int(self._plot_widget.width()), 1)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
+
+    def set_event_hover_handler(self, handler: Callable[[int | None], None] | None) -> None:
+        self._event_hover_handler = handler
+
     def set_selected_event_index(self, index: int | None) -> None:
         """Highlight a selected event in the marker layer."""
         self._event_layer.set_selected_event(index)
+        if self._event_entries:
+            xlim = self.get_xlim()
+            pixel_width = max(int(self._plot_widget.width()), 1)
+            self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
+
+    def set_hovered_event_index(self, index: int | None) -> None:
+        self._hovered_event_index = None if index is None else int(index)
+        self._event_layer.set_hovered_event(self._hovered_event_index)
         if self._event_entries:
             xlim = self.get_xlim()
             pixel_width = max(int(self._plot_widget.width()), 1)
@@ -1070,19 +1741,39 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._click_handler = handler
 
     def _handle_mouse_clicked(self, mouse_event) -> None:
-        if self._click_handler is None:
-            return
         try:
             button = mouse_event.button()
         except Exception:
             return
         if button not in (Qt.LeftButton, Qt.RightButton):
             return
+        try:
+            scene_pos = mouse_event.scenePos()
+            widget_pos = self._plot_widget.mapFromScene(scene_pos)
+        except Exception:
+            scene_pos = None
+            widget_pos = None
+
+        if widget_pos is not None and self._point_in_left_axis(widget_pos):
+            is_double = False
+            with contextlib.suppress(Exception):
+                is_double = bool(mouse_event.double())
+            if button == Qt.LeftButton and is_double and self._trigger_y_axis_autoscale_once():
+                with contextlib.suppress(Exception):
+                    mouse_event.accept()
+                return
+            if button == Qt.RightButton and self._show_y_axis_menu(QCursor.pos()):
+                with contextlib.suppress(Exception):
+                    mouse_event.accept()
+                return
+
+        if self._click_handler is None:
+            return
         vb = self._plot_item.vb
         if vb is None:
             return
         try:
-            point = vb.mapSceneToView(mouse_event.scenePos())
+            point = vb.mapSceneToView(scene_pos)
             x_val = float(point.x())
             y_val = float(point.y())
         except Exception:
@@ -1123,6 +1814,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return
         mouse_point = view_box.mapSceneToView(point)
         x_value = float(mouse_point.x())
+        self._update_hovered_event_from_x(x_value)
         window = self._current_window
         if window is None or window.time.size == 0:
             self._hide_hover_tooltip()
@@ -1170,6 +1862,43 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return left
         return idx
 
+    def _event_index_near_x(self, x_value: float, *, tolerance_px: float = 8.0) -> int | None:
+        if self._event_times_np.size == 0 or not np.isfinite(x_value):
+            return None
+        x_range = self.get_xlim()
+        x_min = float(x_range[0])
+        x_max = float(x_range[1])
+        span = max(x_max - x_min, 1e-9)
+        pixel_width = max(int(self._plot_widget.width()), 1)
+        tolerance_data = (float(tolerance_px) / float(pixel_width)) * span
+
+        idx = int(np.searchsorted(self._event_times_np, x_value))
+        candidates = []
+        if idx > 0:
+            candidates.append(idx - 1)
+        if idx < self._event_times_np.size:
+            candidates.append(idx)
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda i: abs(float(self._event_times_np[i]) - x_value))
+        delta = abs(float(self._event_times_np[best]) - x_value)
+        if delta <= tolerance_data:
+            return int(best)
+        return None
+
+    def _update_hovered_event_from_x(self, x_value: float) -> None:
+        new_index = self._event_index_near_x(x_value)
+        if new_index == self._hovered_event_index:
+            return
+        self._hovered_event_index = new_index
+        self._event_layer.set_hovered_event(new_index)
+        handler = self._event_hover_handler
+        if callable(handler):
+            try:
+                handler(new_index)
+            except Exception:
+                pass
+
     def _build_hover_text(self, window: TraceWindow, idx: int) -> str:
         precision = max(0, int(self._hover_tooltip_precision))
         fmt = f"{{:.{precision}f}}"
@@ -1191,6 +1920,18 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 return
 
         add("Time", window.time[idx] if window.time.size > idx else None, "s")
+        hovered_idx = self._hovered_event_index
+        if hovered_idx is not None and 0 <= hovered_idx < len(self._event_entries):
+            event_entry = self._event_entries[hovered_idx]
+            event_text = str(event_entry.text or "").strip()
+            if event_text:
+                lines.append(f"Event: {event_text}")
+            try:
+                event_time = float(event_entry.t)
+            except Exception:
+                event_time = None
+            if event_time is not None and np.isfinite(event_time):
+                lines.append(f"Event time: {fmt.format(event_time)} s")
 
         if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
             add(
@@ -1234,6 +1975,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._hover_last_text = ""
         self._last_hover_index = None
         self._last_hover_text = ""
+        if self._hovered_event_index is not None:
+            self._hovered_event_index = None
+            self._event_layer.set_hovered_event(None)
+            handler = self._event_hover_handler
+            if callable(handler):
+                with contextlib.suppress(Exception):
+                    handler(None)
         if self._hover_text_item is not None:
             self._hover_text_item.setVisible(False)
 
@@ -1249,6 +1997,20 @@ class _HoverHideFilter(QObject):
         if event.type() == QEvent.Leave:
             with contextlib.suppress(Exception):
                 self._owner._hide_hover_tooltip()
+        return False
+
+
+class _YAxisControlsFilter(QObject):
+    """Handle axis-control overlay positioning and axis gesture shortcuts."""
+
+    def __init__(self, owner: PyQtGraphTraceView, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._owner = owner
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        with contextlib.suppress(Exception):
+            if self._owner._process_axis_mouse_event(obj, event):
+                return True
         return False
 
 

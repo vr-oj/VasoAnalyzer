@@ -20,6 +20,7 @@ from PyQt5.QtWidgets import (
 from vasoanalyzer.ui.event_table import EventTableWidget
 from vasoanalyzer.ui.event_table_controller import EventTableController
 from vasoanalyzer.ui.interactions import InteractionController
+from vasoanalyzer.ui.navigation.trace_nav_bar import TraceNavBar
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.mpl_interactions import MplInteractionHost
 from vasoanalyzer.ui.plots.overview_strip import OverviewStrip
@@ -97,6 +98,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.overview_strip = OverviewStrip(window)
     window.overview_strip.timeWindowRequested.connect(window._on_trace_nav_window_requested)
     window.overview_strip.setVisible(False)
+    window.trace_nav_bar = TraceNavBar(plot_host=window.plot_host, parent=window.data_page)
+    window.trace_nav_bar.timeModeChanged.connect(window._on_time_mode_changed)
+    window._apply_time_mode(getattr(window, "_time_mode", "auto"), persist=False)
+    window.trace_nav_bar.setVisible(False)
     initial_specs = [
         ChannelTrackSpec(
             track_id="inner",
@@ -253,6 +258,11 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.event_table.customContextMenuRequested.connect(window.show_event_table_context_menu)
     window.event_table.installEventFilter(window)
     window.event_table.cellClicked.connect(window.table_row_clicked)
+    window.event_table.doubleClicked.connect(
+        lambda index: window._focus_event_row(index.row(), source="table")
+        if index.isValid()
+        else None
+    )
     window.event_table_controller = EventTableController(window.event_table, window)
     window.event_table_controller.cell_edited.connect(window.handle_table_edit)
     window.event_table_controller.label_edited.connect(window.handle_event_label_edit)
@@ -260,6 +270,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     selection_model = window.event_table.selectionModel()
     if selection_model is not None:
         selection_model.selectionChanged.connect(window._on_event_table_selection_changed)
+    window._apply_time_mode(getattr(window, "_time_mode", "auto"), persist=False)
 
     window.header_frame = window._build_data_header()
     window.main_layout.addWidget(window.header_frame)

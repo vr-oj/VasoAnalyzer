@@ -7,6 +7,8 @@ from collections.abc import Iterable, Sequence
 import pandas as pd
 from PyQt5.QtCore import QObject, pyqtSignal
 
+from vasoanalyzer.ui.formatting.time_format import TimeMode
+
 from .event_table import EventRow, EventTableModel, EventTableWidget
 
 
@@ -101,6 +103,10 @@ class EventTableController(QObject):
 
     def apply_column_contract(self, column_keys: Sequence[str]) -> None:
         self._table.apply_column_contract(column_keys)
+
+    def set_time_mode(self, mode: TimeMode | str) -> None:
+        self._model.set_time_mode(mode)
+        self._table.apply_viewport_fit_policy()
 
     def _handle_row_deletion_request(self, rows: list[int]) -> None:
         if not rows:

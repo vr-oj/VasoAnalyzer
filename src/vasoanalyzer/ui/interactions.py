@@ -186,7 +186,7 @@ class InteractionController:
 
     # ------------------------------------------------------------------ handlers
     def _on_scroll(self, ctx: ScrollContext) -> None:
-        """Handle scroll events - horizontal panning only (like LabChart).
+        """Handle scroll events - horizontal panning only.
 
         Simple and reliable:
         - Two-finger scroll = pan left/right
@@ -372,7 +372,7 @@ class InteractionController:
             self.plot_host.autoscale_all()
             return
 
-        # Zoom in/out with +/- keys (LabChart-style)
+        # Zoom in/out with +/- keys
         if base in {"equal", "+", "minus", "-"} and window is not None:
             # Determine zoom direction
             zoom_in = base in {"equal", "+"}

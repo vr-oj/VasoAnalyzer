@@ -12,15 +12,20 @@ from typing import Any, cast
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer
+from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPen
 from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
+from vasoanalyzer.ui.formatting.time_format import TimeMode, coerce_time_mode
 from vasoanalyzer.ui.plots.canvas_compat import PyQtGraphCanvasCompat
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.export_bridge import ExportViewState, MatplotlibExportRenderer
+from vasoanalyzer.ui.plots.event_display_mode import (
+    EventDisplayMode,
+    coerce_event_display_mode,
+)
 from vasoanalyzer.ui.plots.interactions_base import (
     ClickContext,
     InteractionHost,
@@ -28,11 +33,11 @@ from vasoanalyzer.ui.plots.interactions_base import (
     ScrollContext,
 )
 from vasoanalyzer.ui.plots.plot_host import LayoutState
+from vasoanalyzer.ui.plots.axis_width_sync import AxisWidthSync
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
 from vasoanalyzer.ui.plots.pyqtgraph_event_strip import PyQtGraphEventStripTrack
 from vasoanalyzer.ui.plots.pyqtgraph_nav_math import (
     tick_style_for_trace_count,
-    zoomed_range,
 )
 from vasoanalyzer.ui.plots.pyqtgraph_overlays import (
     PyQtGraphEventHighlightOverlay,
@@ -43,6 +48,7 @@ from vasoanalyzer.ui.plots.pyqtgraph_style import (
     PLOT_AXIS_TOOLTIPS,
     get_pyqtgraph_style,
 )
+from vasoanalyzer.ui.plots.y_axis_controls import required_outer_gutter_px
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 __all__ = ["PyQtGraphPlotHost"]
@@ -55,6 +61,10 @@ def _xrange_debug_enabled() -> bool:
     return os.getenv("VASO_DEBUG_XRANGE") == "1"
 
 
+class _TimeWindowSignalProxy(QObject):
+    time_window_changed = pyqtSignal(float, float)
+
+
 class PyQtGraphPlotHost(InteractionHost):
     """GPU-accelerated plot host using PyQtGraph.
 
@@ -63,6 +73,7 @@ class PyQtGraphPlotHost(InteractionHost):
     """
 
     _AXIS_WIDTH_PX = 80
+    _EVENT_STRIP_HEIGHT_PX = 22
 
     def __init__(self, *, dpi: int = 100, enable_opengl: bool = True) -> None:
         """Initialize PyQtGraph plot host.
@@ -78,7 +89,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._widget = QWidget()
         self.layout = QVBoxLayout(self._widget)
         self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(2)  # Small gap between tracks
+        self.layout.setSpacing(0)
 
         # Create graphics layout for tracks
         # Tracks are managed as individual widgets stacked vertically.
@@ -97,6 +108,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._channel_visible: dict[str, bool] = {}
         self._current_layout_signature: tuple | None = None
         self._bottom_visible_track_id: str | None = None
+        self._shared_xlabel_text: str | None = None
 
         # Data model and state
         self._model: TraceModel | None = None
@@ -108,7 +120,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._event_colors: list[str] | None = None
         self._event_labels: list[str] = []
         self._event_label_meta: list[dict[str, Any]] | None = None
-        self._event_label_options = LayoutOptionsV3(mode="h_belt", show_numbers_only=True)
+        self._event_label_options = LayoutOptionsV3(mode="h_belt", show_numbers_only=False)
         self._event_entries: list[EventEntryV3] = []
         self._event_strip_track: PyQtGraphEventStripTrack | None = None
         self._event_strip_widget: pg.PlotWidget | None = None
@@ -127,8 +139,9 @@ class PyQtGraphPlotHost(InteractionHost):
         # Overlays
         self._time_cursor_overlay = PyQtGraphTimeCursorOverlay()
         self._event_highlight_overlay = PyQtGraphEventHighlightOverlay()
-        self._show_event_text_labels_on_trace = False
+        self._event_display_mode = EventDisplayMode.NAMES_ALWAYS
         self._auto_event_label_mode = True
+        self._hovered_event_index: int | None = None
         self._label_density_thresholds: dict[str, float | None] = {"compact": None, "belt": None}
         self._hover_tooltip_enabled = True
         self._hover_tooltip_precision = 3
@@ -137,6 +150,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_font_family = str(style.font_family)
         self._axis_font_size = float(style.font_size)
         self._tick_font_size = float(style.tick_font_size)
+        self._time_mode = TimeMode.AUTO
         self._default_line_width: float = 4.0
         self._xrange_debug_connected = False
         self._xrange_debug_view_box = None
@@ -149,7 +163,10 @@ class PyQtGraphPlotHost(InteractionHost):
         self._compact_legend_location: str = "upper right"
         self._time_window_listeners: list[Callable[[float, float], None]] = []
         self._range_change_user_driven: bool = False
+        self._host_drives_xrange: bool = True
         self._click_handler: Callable[[str, float, float, int, Any], None] | None = None
+        self._time_window_signal_proxy = _TimeWindowSignalProxy()
+        self.time_window_changed = self._time_window_signal_proxy.time_window_changed
         border_color = CURRENT_THEME.get(
             "hover_label_border",
             CURRENT_THEME.get("text", "#000000"),
@@ -158,6 +175,12 @@ class PyQtGraphPlotHost(InteractionHost):
             color=border_color,
             width=1,
             cosmetic=True,
+        )
+        self._axis_width_sync = AxisWidthSync(
+            shrink_delay_s=0.5,
+            axis_padding_px=8.0,
+            min_axis_width_px=self._AXIS_WIDTH_PX,
+            left_gutter_px=int(required_outer_gutter_px()),
         )
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
@@ -259,6 +282,8 @@ class PyQtGraphPlotHost(InteractionHost):
         track = self._tracks.get(kind)
         if track is not None:
             track.set_visible(bool(visible))
+        self._apply_track_dividers()
+        self._axis_width_sync.request_sync()
 
         # Refresh axis ownership and fonts after visibility change
         self.refresh_axes_and_fonts(reason="channel-visible-changed")
@@ -561,38 +586,37 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def _rebuild_tracks(self) -> None:
         """Recreate tracks to match specs."""
-        # Clear existing widgets/layout but keep track objects we can reuse
-        for _track_id, track in list(self._tracks.items()):
+        for track in list(self._tracks.values()):
             widget = track.widget
             self.layout.removeWidget(widget)
             widget.setParent(None)
 
-        # Recreate tracks and re-add widgets in desired order
+        if self._event_strip_widget is not None:
+            self.layout.removeWidget(self._event_strip_widget)
+
         new_tracks: dict[str, PyQtGraphChannelTrack] = {}
         if not self._channel_specs:
             self._tracks = new_tracks
+            self._axis_width_sync.clear()
             self._current_layout_signature = None
             return
 
         primary_plot_item: pg.PlotItem | None = None
         primary_track: PyQtGraphChannelTrack | None = None
-        # Ensure event strip exists and sits at top
+
         if self._event_strip_track is None:
             self._event_strip_widget = pg.PlotWidget()
             bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
             with contextlib.suppress(Exception):
                 self._event_strip_widget.setBackground(hex_to_pyqtgraph_color(bg))
-            self._event_strip_widget.setMaximumHeight(40)
-            self._event_strip_widget.setVisible(True)
+            self._event_strip_widget.setContentsMargins(0, 0, 0, 0)
+            self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
             self._event_strip_track = PyQtGraphEventStripTrack(
                 self._event_strip_widget.getPlotItem()
             )
-            self.layout.insertWidget(0, self._event_strip_widget, 5)
+        elif self._event_strip_widget is not None:
+            self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
 
-        plot_items = []
-
-        # Determine which track should own the bottom X-axis.
-        # Prefer the lowest visible track; if none are visible, fall back to the last spec.
         visible_specs = [
             spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
         ]
@@ -600,6 +624,10 @@ class PyQtGraphPlotHost(InteractionHost):
             bottom_visible_id = visible_specs[-1].track_id
         else:
             bottom_visible_id = self._channel_specs[-1].track_id
+        self._bottom_visible_track_id = bottom_visible_id
+
+        plot_items: list[pg.PlotItem] = []
+        left_axes: list[Any] = []
 
         for idx, spec in enumerate(self._channel_specs):
             track = self._tracks.get(spec.track_id)
@@ -607,52 +635,47 @@ class PyQtGraphPlotHost(InteractionHost):
                 track = PyQtGraphChannelTrack(spec, enable_opengl=self._enable_opengl)
             else:
                 track.spec = spec
+                refresh_header = getattr(track, "refresh_header", None)
+                if callable(refresh_header):
+                    with contextlib.suppress(Exception):
+                        refresh_header()
+
             track.height_ratio = spec.height_ratio
-
-            # Initialize visibility flag default if unseen
             self._channel_visible.setdefault(spec.track_id, True)
+            with contextlib.suppress(Exception):
+                track.view.set_time_mode(self._time_mode)
+            with contextlib.suppress(Exception):
+                track.view.set_left_outer_gutter_px(self._axis_width_sync.left_gutter_px())
 
-            # Add to layout with stretch factor based on height ratio
             stretch = max(int(spec.height_ratio * 100), 1)
             self.layout.addWidget(track.widget, stretch)
-
             new_tracks[spec.track_id] = track
 
             plot_item = track.view.get_widget().getPlotItem()
             plot_items.append(plot_item)
+            left_axes.append(plot_item.getAxis("left"))
 
             if primary_plot_item is None:
                 primary_plot_item = plot_item
                 primary_track = track
             else:
-                # Link X-axis to the primary plot item to avoid manual range writes
                 plot_item.setXLink(primary_plot_item)
 
-            # Configure X-axis visibility: only show labels on the bottom-visible track
-            is_bottom_track = spec.track_id == bottom_visible_id
-            self._configure_bottom_axis(plot_item, is_bottom_track=is_bottom_track)
+            self._configure_bottom_axis(
+                track,
+                is_bottom_track=(spec.track_id == bottom_visible_id),
+            )
 
-            # Add subtle border around each plot's ViewBox for visual separation
             view_box = plot_item.getViewBox()
             view_box.setBorder(self._lane_border_pen)
-
-            # Ensure Y-axes are aligned by setting consistent width
-            left_axis = plot_item.getAxis("left")
-            left_axis.setWidth(self._AXIS_WIDTH_PX)  # Fixed width for alignment
 
             axes_wrapper = track.ax
             if hasattr(axes_wrapper, "set_grid_callback"):
                 axes_wrapper.set_grid_callback(self._handle_axis_grid_request)
 
-            # Apply model if already set
             if self._model is not None:
                 track.set_model(self._model)
 
-            # Link strip X-axis to first track
-            if idx == 0 and self._event_strip_track is not None:
-                self._event_strip_track.plot_item.setXLink(plot_item)
-
-            # Apply events if already set
             if self._event_times:
                 track.set_events(
                     self._event_times,
@@ -661,10 +684,11 @@ class PyQtGraphPlotHost(InteractionHost):
                     label_meta=self._event_label_meta,
                 )
 
-            # Apply stored visibility state for this track
             track.set_visible(self.is_channel_visible(spec.track_id))
+            track.set_divider_visible(spec.track_id != bottom_visible_id)
 
             self._connect_track_signals(track, bind_range=False)
+            self._configure_track_defaults(track, is_top_track=(idx == 0))
 
             if self._click_handler is not None:
                 track.set_click_handler(
@@ -672,54 +696,92 @@ class PyQtGraphPlotHost(InteractionHost):
                         tid, x, y, button, ev
                     )
                 )
+            with contextlib.suppress(Exception):
+                track.view.set_event_hover_handler(self._on_track_event_hover)
 
         self._tracks = new_tracks
+        self.layout.setSpacing(0)
 
-        # Prune visibility flags for channels that no longer exist
         for key in list(self._channel_visible.keys()):
             if key not in self._tracks:
                 self._channel_visible.pop(key, None)
 
-            # Connect signals for synchronized interactions
-            self._connect_track_signals(track, bind_range=False)
-            is_top_track = idx == 0
-            self._configure_track_defaults(track, is_top_track=is_top_track)
+        self._axis_width_sync.set_axes(axis for axis in left_axes if axis is not None)
+        self._sync_left_gutters()
+        self._apply_track_dividers()
 
-        # Set row spacing between tracks for visual separation
-        # Note: QVBoxLayout spacing is set in __init__, but we can adjust per-item spacing
-        self.layout.setSpacing(5)  # 5px spacing between tracks
+        if self._event_strip_track is not None and self._event_strip_widget is not None:
+            if primary_plot_item is not None:
+                self._event_strip_track.plot_item.setXLink(primary_plot_item)
+            self.layout.addWidget(self._event_strip_widget, 0)
 
-        # Sync overlays with new tracks
         self._time_cursor_overlay.sync_tracks(plot_items)
         self._event_highlight_overlay.sync_tracks(plot_items)
         self._apply_grid_to_all_tracks()
         self._sync_event_strip_axes()
 
-        # Only listen to range changes from the primary plot to avoid feedback loops.
         for track in self._tracks.values():
             plot_item = track.view.get_widget().getPlotItem()
             with contextlib.suppress(Exception):
                 plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
             track._range_bound = False
-        if primary_track is not None:
+        if primary_track is not None and not self._host_drives_xrange:
             self._connect_track_signals(primary_track, bind_range=True)
 
-        # Update window if already set
         if self._current_window is not None:
             x0, x1 = self._current_window
             self.set_time_window(x0, x1)
-        # Reapply the stored mouse mode (pan vs box zoom) to all tracks
         self.set_mouse_mode(self._mouse_mode)
+        self._apply_event_label_options()
         self._current_layout_signature = self._layout_signature(self._channel_specs)
+
+    def _sync_left_gutters(self) -> None:
+        gutter_px = self._axis_width_sync.left_gutter_px()
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view.set_left_outer_gutter_px(gutter_px)
+
+    def _apply_track_dividers(self) -> None:
+        visible_ids = [
+            spec.track_id
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks and self.is_channel_visible(spec.track_id)
+        ]
+        bottom_visible_id = visible_ids[-1] if visible_ids else None
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            show_divider = bool(track.is_visible()) and spec.track_id != bottom_visible_id
+            with contextlib.suppress(Exception):
+                track.set_divider_visible(show_divider)
 
     def _connect_track_signals(
         self, track: PyQtGraphChannelTrack, *, bind_range: bool = True
     ) -> None:
         """Connect track signals for synchronized pan/zoom."""
-        if bind_range and not getattr(track, "_range_bound", False):
+        if hasattr(track.view, "set_host_driven_xrange"):
+            with contextlib.suppress(Exception):
+                track.view.set_host_driven_xrange(self._host_drives_xrange)
+        view_box = track.view.get_widget().getPlotItem().getViewBox()
+        if hasattr(view_box, "set_time_window_requesters"):
+            with contextlib.suppress(Exception):
+                view_box.set_time_window_requesters(
+                    pan_x=self.request_pan_x,
+                    zoom_x=self.request_zoom_x,
+                    set_window=lambda x0, x1, _reason: self.set_time_window(x0, x1),
+                    get_window=lambda: (
+                        self._current_window if self._current_window is not None else (0.0, 1.0)
+                    ),
+                )
+        if bind_range and not self._host_drives_xrange and not getattr(track, "_range_bound", False):
             plot_item = track.view.get_widget().getPlotItem()
             plot_item.sigRangeChanged.connect(self._on_track_range_changed)
             track._range_bound = True
+        if hasattr(view_box, "sigYRangeChanged") and not getattr(track, "_y_range_bound", False):
+            with contextlib.suppress(Exception):
+                view_box.sigYRangeChanged.connect(self._on_track_y_range_changed)
+                track._y_range_bound = True
         self._bind_interaction_signals(track)
 
     def _bind_interaction_signals(self, track: PyQtGraphChannelTrack) -> None:
@@ -943,43 +1005,44 @@ class PyQtGraphPlotHost(InteractionHost):
         track.view.enable_hover_tooltip(
             self._hover_tooltip_enabled, precision=self._hover_tooltip_precision
         )
-        enable_labels = self._show_event_text_labels_on_trace and is_top_track
-        track.view.enable_event_labels(enable_labels, options=None)
-        track.view.set_event_label_mode("label_vertical" if enable_labels else "none")
+        track.view.enable_event_labels(False, options=None)
         if track.primary_line:
             track.set_line_width(self._default_line_width)
         self._apply_axis_font_to_track(track, trace_count=self._count_visible_tracks())
 
     def _configure_bottom_axis(
         self,
-        plot_item: pg.PlotItem,
+        track: PyQtGraphChannelTrack,
         *,
         is_bottom_track: bool,
     ) -> None:
         """Ensure only the bottom track shows X-axis labels/ticks."""
-        bottom_axis = plot_item.getAxis("bottom")
-        if bottom_axis is None:
-            return
-        plot_item.showAxis("bottom")
-        with contextlib.suppress(AttributeError):
-            bottom_axis.enableAutoSIPrefix(False)
-        bottom_axis.setVisible(True)
-        if is_bottom_track:
-            bottom_axis.setStyle(showValues=True)
-            bottom_axis.setLabel("Time (s)")
-            with contextlib.suppress(AttributeError):
-                bottom_axis.setTickLength(5, 0)
-            bottom_axis.setHeight(None)
-            with contextlib.suppress(AttributeError):
-                bottom_axis.label.show()
-                bottom_axis.showLabel(True)
-        else:
-            bottom_axis.setStyle(showValues=False, tickLength=0)
-            bottom_axis.setLabel("")
-            bottom_axis.setHeight(12)
-            with contextlib.suppress(AttributeError):
-                bottom_axis.label.hide()
-                bottom_axis.showLabel(False)
+        with contextlib.suppress(Exception):
+            track.view.set_bottom_axis_visible(bool(is_bottom_track))
+        if bool(is_bottom_track) and self._shared_xlabel_text is not None:
+            with contextlib.suppress(Exception):
+                track.view.get_widget().getPlotItem().setLabel("bottom", self._shared_xlabel_text)
+
+    def _resolved_bottom_track_id(self) -> str | None:
+        """Resolve the active bottom track ID honoring visibility."""
+        if not self._tracks or not self._channel_specs:
+            return None
+
+        visible_ids = [
+            spec.track_id
+            for spec in self._channel_specs
+            if spec.track_id in self._tracks and self.is_channel_visible(spec.track_id)
+        ]
+        if visible_ids:
+            return visible_ids[-1]
+
+        if self._bottom_visible_track_id is not None and self._bottom_visible_track_id in self._tracks:
+            return self._bottom_visible_track_id
+
+        for spec in reversed(self._channel_specs):
+            if spec.track_id in self._tracks:
+                return spec.track_id
+        return None
 
     def _update_bottom_axis_assignments(self) -> None:
         """Reapply bottom X-axis ownership based on current visibility.
@@ -1025,11 +1088,11 @@ class PyQtGraphPlotHost(InteractionHost):
             track = self._tracks.get(spec.track_id)
             if track is None:
                 continue
-            plot_item = track.view.get_widget().getPlotItem()
             self._configure_bottom_axis(
-                plot_item,
+                track,
                 is_bottom_track=(spec.track_id == bottom_visible_id),
             )
+        self._apply_track_dividers()
 
     def refresh_axes_and_fonts(self, *, reason: str = "") -> None:
         """Reapply bottom-axis ownership and axis fonts after layout/theme changes.
@@ -1053,7 +1116,10 @@ class PyQtGraphPlotHost(InteractionHost):
         # Reapply fonts based on current geometry
         trace_count = self._count_visible_tracks()
         for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view.set_left_outer_gutter_px(self._axis_width_sync.left_gutter_px())
             self._apply_axis_font_to_track(track, trace_count=trace_count)
+        self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
         for track in self._tracks.values():
             track.view.refresh_event_markers()
@@ -1117,7 +1183,9 @@ class PyQtGraphPlotHost(InteractionHost):
         if ref_track is None:
             return
         ref_plot_item = ref_track.view.get_widget().getPlotItem()
-        left_width = self._axis_width_px(ref_plot_item.getAxis("left")) or self._AXIS_WIDTH_PX
+        left_width = self._axis_width_sync.left_column_width_px()
+        if left_width <= 0:
+            left_width = self._axis_width_px(ref_plot_item.getAxis("left")) or self._AXIS_WIDTH_PX
         right_width = self._axis_width_px(ref_plot_item.getAxis("right"))
 
         strip_plot_item = self._event_strip_track.plot_item
@@ -1148,26 +1216,34 @@ class PyQtGraphPlotHost(InteractionHost):
             for spec in self._channel_specs
             if spec.track_id in self._tracks
         ] or list(self._tracks.values())
-        label_track: PyQtGraphChannelTrack | None = None
         for track in ordered_tracks:
-            if getattr(track, "is_visible", lambda: True)():
-                label_track = track
-                break
-        if label_track is None and ordered_tracks:
-            label_track = ordered_tracks[0]
-        for track in ordered_tracks:
-            labels_visible = self._show_event_text_labels_on_trace and track is label_track
-            track.view.enable_event_labels(labels_visible, options=None)
-            track.view.set_event_label_mode("label_vertical" if labels_visible else "none")
+            track.view.enable_event_labels(False, options=None)
+            track.view.set_event_display_mode(EventDisplayMode.OFF)
             track.view.set_selected_event_index(self._selected_event_index)
-            if labels_visible:
-                track.view.refresh_event_markers()
+            track.view.set_hovered_event_index(self._hovered_event_index)
+            track.view.refresh_event_markers()
         if self._event_strip_track is not None and self._event_strip_widget is not None:
-            self._event_strip_widget.setMaximumHeight(40)
-            self._event_strip_widget.setVisible(True)
-            self._event_strip_track.set_visible(True)
+            self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
+            show_strip = bool(self._event_entries) and self._event_display_mode != EventDisplayMode.OFF
+            self._event_strip_widget.setVisible(show_strip)
+            self._event_strip_track.set_visible(show_strip)
             if self._event_entries:
                 self._event_strip_track.set_events(self._event_entries, self._event_label_options)
+                self._event_strip_track.set_display_mode(self._event_display_mode)
+                self._event_strip_track.set_selected_event(self._selected_event_index)
+                self._event_strip_track.set_hovered_event(self._hovered_event_index)
+
+    def _on_track_event_hover(self, index: int | None) -> None:
+        resolved = None if index is None else int(index)
+        if resolved == self._hovered_event_index:
+            return
+        self._hovered_event_index = resolved
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view.set_hovered_event_index(resolved)
+        if self._event_strip_track is not None:
+            with contextlib.suppress(Exception):
+                self._event_strip_track.set_hovered_event(resolved)
 
     def _apply_tooltip_settings(self) -> None:
         for track in self._tracks.values():
@@ -1194,15 +1270,14 @@ class PyQtGraphPlotHost(InteractionHost):
         if not tracks:
             return
 
-        last_index = len(tracks) - 1
-        for idx, track in enumerate(tracks):
+        for track in tracks:
             plot_item = track.view.get_widget().getPlotItem()
             plot_item.showGrid(
                 x=self._x_grid_visible,
                 y=self._y_grid_visible,
                 alpha=self._grid_alpha,
             )
-            self._configure_bottom_axis(plot_item, is_bottom_track=(idx == last_index))
+        self._update_bottom_axis_assignments()
 
     def _handle_axis_grid_request(self, visible: bool) -> None:
         """Normalize grid toggles triggered through matplotlib-compatible axes."""
@@ -1234,6 +1309,18 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def tick_font_size(self) -> float:
         return self._tick_font_size
+
+    def set_time_mode(self, mode: TimeMode | str) -> None:
+        resolved = coerce_time_mode(mode)
+        if resolved == self._time_mode:
+            return
+        self._time_mode = resolved
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view.set_time_mode(resolved)
+
+    def time_mode(self) -> str:
+        return str(self._time_mode.value)
 
     def set_grid_visible(self, enabled: bool, *, alpha: float | None = None) -> None:
         """Show/hide the shared grid across all tracks."""
@@ -1287,6 +1374,9 @@ class PyQtGraphPlotHost(InteractionHost):
             if track is not None and track.is_visible():
                 count += 1
         return count
+
+    def visible_track_count(self) -> int:
+        return self._count_visible_tracks()
 
     def _estimate_track_height(self, track: PyQtGraphChannelTrack) -> float:
         """Approximate the pixel height of a track widget."""
@@ -1487,9 +1577,16 @@ class PyQtGraphPlotHost(InteractionHost):
         self._range_change_user_driven = True
         try:
             self._notify_time_window_changed()
+            with contextlib.suppress(Exception):
+                self.time_window_changed.emit(float(x0), float(x1))
         finally:
             self._range_change_user_driven = previous_flag
         self.debug_dump_state("range_changed")
+
+    def _on_track_y_range_changed(self, *_args) -> None:
+        """Resync shared left-axis width after a Y-range change."""
+        self._axis_width_sync.request_sync()
+        self._sync_event_strip_axes()
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
@@ -1506,13 +1603,17 @@ class PyQtGraphPlotHost(InteractionHost):
             x0, x1 = model.full_range
             self._data_t_min = float(x0)
             self._data_t_max = float(x1)
-            self.set_time_window(x0, x1)
+            self._current_window = (float(x0), float(x1))
+            self.set_time_window(float(x0), float(x1))
         self.debug_dump_state("set_trace_model (after)")
 
     def set_time_window(self, x0: float, x1: float) -> None:
         """Set the visible time window for all tracks."""
         x0 = float(x0)
         x1 = float(x1)
+        if not (math.isfinite(x0) and math.isfinite(x1)):
+            log.warning("Ignoring non-finite time window request: (%r, %r)", x0, x1)
+            return
         if _xrange_debug_enabled() and self._xrange_debug_getter is not None:
             try:
                 source, expected, scrolling = self._xrange_debug_getter()
@@ -1550,34 +1651,79 @@ class PyQtGraphPlotHost(InteractionHost):
         for track in self._tracks.values():
             # Block signals temporarily
             plot_item = track.view.get_widget().getPlotItem()
-            with contextlib.suppress(Exception):
-                plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
+            if not self._host_drives_xrange:
+                with contextlib.suppress(Exception):
+                    plot_item.sigRangeChanged.disconnect(self._on_track_range_changed)
 
             track.update_window(x0, x1)
             if primary_plot_item is not None and plot_item is primary_plot_item:
                 # Drive X range from the primary plot; linked tracks follow.
-                view_box = plot_item.getViewBox()
-                with contextlib.suppress(Exception):
-                    view_box.enableAutoRange(x=False)
-                    view_box.setRange(
-                        xRange=(float(x0), float(x1)),
-                        padding=0.0,
-                        update=True,
-                    )
+                self._apply_primary_xrange(x0, x1)
 
         # Reconnect signals only for the primary plot item.
-        if primary_plot_item is not None:
+        if primary_plot_item is not None and not self._host_drives_xrange:
             with contextlib.suppress(Exception):
                 primary_plot_item.sigRangeChanged.connect(self._on_track_range_changed)
 
         previous_flag = self._range_change_user_driven
-        self._range_change_user_driven = False
         try:
             self._notify_time_window_changed()
+            with contextlib.suppress(Exception):
+                self.time_window_changed.emit(float(x0), float(x1))
         finally:
             self._range_change_user_driven = previous_flag
         self.debug_dump_state("set_time_window (after)")
         self.log_data_and_view_ranges("time_window_changed")
+
+    def request_pan_x(self, dt: float, reason: str = "pan") -> None:
+        """Request a pan by ``dt`` seconds using host-owned window state."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        previous_flag = self._range_change_user_driven
+        self._range_change_user_driven = True
+        try:
+            self.set_time_window(x0 + float(dt), x1 + float(dt))
+        finally:
+            self._range_change_user_driven = previous_flag
+        _ = reason
+
+    def request_zoom_x(
+        self,
+        factor: float,
+        anchor_x: float | None,
+        reason: str = "zoom",
+    ) -> None:
+        """Request an X zoom around ``anchor_x`` using host-owned window math."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        dur = max(float(x1 - x0), self._min_window_span)
+
+        anchor = float(anchor_x) if anchor_x is not None else (x0 + x1) * 0.5
+        if self._data_t_min is not None:
+            anchor = max(anchor, float(self._data_t_min))
+        if self._data_t_max is not None:
+            anchor = min(anchor, float(self._data_t_max))
+
+        factor = float(factor)
+        if not (factor > 0.0):
+            return
+
+        new_dur = max(dur * factor, self._min_window_span)
+
+        left_ratio = (anchor - x0) / dur if dur > 0 else 0.5
+        left_ratio = min(max(left_ratio, 0.0), 1.0)
+
+        new_x0 = anchor - new_dur * left_ratio
+        new_x1 = new_x0 + new_dur
+        previous_flag = self._range_change_user_driven
+        self._range_change_user_driven = True
+        try:
+            self.set_time_window(new_x0, new_x1)
+        finally:
+            self._range_change_user_driven = previous_flag
+        _ = reason
 
     def _clamp_time_window(self, x0: float, x1: float) -> tuple[float, float]:
         """Clamp the requested window to known data bounds using public APIs."""
@@ -1588,26 +1734,21 @@ class PyQtGraphPlotHost(InteractionHost):
         data_max = float(self._data_t_max)
         data_span = data_max - data_min
         if data_span <= 0:
-            return x0, x1
+            return data_min, data_max
 
-        span = max(float(x1 - x0), self._min_window_span)
-        # If requested span exceeds data span, snap to full data.
+        left = float(min(x0, x1))
+        right = float(max(x0, x1))
+        span = max(float(right - left), self._min_window_span)
         if span >= data_span:
             return data_min, data_max
 
-        if x0 < data_min:
-            x0 = data_min
-            x1 = x0 + span
-        if x1 > data_max:
-            x1 = data_max
-            x0 = x1 - span
-        return x0, x1
+        max_start = data_max - span
+        start = min(max(left, data_min), max_start)
+        end = start + span
+        return float(start), float(end)
 
-    def force_primary_xrange(self, x0: float, x1: float) -> None:
-        """Force the primary ViewBox X range without rewriting linked tracks."""
-        x0 = float(x0)
-        x1 = float(x1)
-        x0, x1 = self._clamp_time_window(x0, x1)
+    def _apply_primary_xrange(self, x0: float, x1: float) -> None:
+        """Apply X range to the primary ViewBox only (canonical host writer)."""
         plot_item = self._primary_plot_item()
         if plot_item is None:
             return
@@ -1619,11 +1760,20 @@ class PyQtGraphPlotHost(InteractionHost):
                 padding=0.0,
                 update=True,
             )
+
+    def force_primary_xrange(self) -> None:
+        """Reapply the current host-owned window to the primary ViewBox."""
+        if self._current_window is None:
+            return
+        x0, x1 = self._current_window
+        self._apply_primary_xrange(x0, x1)
         self._current_window = (x0, x1)
         previous_flag = self._range_change_user_driven
         self._range_change_user_driven = False
         try:
             self._notify_time_window_changed()
+            with contextlib.suppress(Exception):
+                self.time_window_changed.emit(float(x0), float(x1))
         finally:
             self._range_change_user_driven = previous_flag
 
@@ -1646,6 +1796,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._event_colors = None if colors is None else list(colors)
         self._event_labels = [] if labels is None else list(labels)
         self._event_label_meta = None if label_meta is None else list(label_meta)
+        self._hovered_event_index = None
 
         entries: list[EventEntryV3] = []
         for idx, t in enumerate(self._event_times):
@@ -1672,10 +1823,14 @@ class PyQtGraphPlotHost(InteractionHost):
         for track in self._tracks.values():
             track.set_events(times, colors, labels, label_meta=self._event_label_meta)
         if self._event_strip_track is not None and self._event_strip_widget is not None:
-            self._event_strip_widget.setMaximumHeight(40)
-            self._event_strip_widget.setVisible(True)
-            self._event_strip_track.set_visible(True)
+            self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
+            show_strip = bool(entries) and self._event_display_mode != EventDisplayMode.OFF
+            self._event_strip_widget.setVisible(show_strip)
+            self._event_strip_track.set_visible(show_strip)
             self._event_strip_track.set_events(entries, self._event_label_options)
+            self._event_strip_track.set_display_mode(self._event_display_mode)
+            self._event_strip_track.set_selected_event(self._selected_event_index)
+            self._event_strip_track.set_hovered_event(None)
         self._apply_event_label_options()
 
     def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:
@@ -1727,15 +1882,17 @@ class PyQtGraphPlotHost(InteractionHost):
         return None
 
     def bottom_axis(self):
-        """Get the bottom axis (last track's plot item).
+        """Get the bottom axis for the lowest visible track.
 
         Returns:
             PyQtGraphAxesCompat wrapper with matplotlib-compatible interface
         """
-        if not self._channel_specs:
+        with contextlib.suppress(Exception):
+            self._update_bottom_axis_assignments()
+        bottom_track_id = self._resolved_bottom_track_id()
+        if bottom_track_id is None:
             return None
-        last_track_id = self._channel_specs[-1].track_id
-        track = self._tracks.get(last_track_id)
+        track = self._tracks.get(bottom_track_id)
         if track:
             # Return the wrapped axes object, not the raw AxisItem
             return track.ax
@@ -1893,12 +2050,25 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def set_shared_xlabel(self, text: str) -> None:
         """Set xlabel on bottom axis (matplotlib PlotHost compatibility)."""
-        if not self._channel_specs:
+        self._shared_xlabel_text = str(text)
+        with contextlib.suppress(Exception):
+            self._update_bottom_axis_assignments()
+
+        bottom_track_id = self._resolved_bottom_track_id()
+        if bottom_track_id is None:
             return
-        last_track_id = self._channel_specs[-1].track_id
-        track = self._tracks.get(last_track_id)
-        if track:
-            track.view.get_widget().getPlotItem().setLabel("bottom", text)
+
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            plot_item = track.view.get_widget().getPlotItem()
+            if spec.track_id == bottom_track_id:
+                with contextlib.suppress(Exception):
+                    plot_item.setLabel("bottom", self._shared_xlabel_text)
+            else:
+                with contextlib.suppress(Exception):
+                    plot_item.setLabel("bottom", "")
 
     def set_event_lines_visible(self, visible: bool) -> None:
         """Set event line visibility (matplotlib PlotHost compatibility).
@@ -1942,6 +2112,14 @@ class PyQtGraphPlotHost(InteractionHost):
     def current_window(self) -> tuple[float, float] | None:
         """Get current time window."""
         return self._current_window
+
+    def get_time_window(self) -> tuple[float, float] | None:
+        """Get current time window (explicit getter for nav widgets)."""
+        return self._current_window
+
+    def get_total_span(self) -> tuple[float | None, float | None]:
+        """Get current known data bounds (tmin, tmax)."""
+        return self._data_t_min, self._data_t_max
 
     def set_mouse_mode(self, mode: str = "pan") -> None:
         """Set interaction mode for all track ViewBoxes (pan or rectangle zoom)."""
@@ -2071,7 +2249,18 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def autoscale_all(self, *, margin: float = 0.05) -> None:
         """Autoscale all tracks."""
-        self.autoscale_all_tracks(margin=margin)
+        self.autoscale_all_y_once(margin=margin)
+
+    def autoscale_all_y_once(self, *, margin: float = 0.05) -> None:
+        """Apply one-shot Y autoscale to every track."""
+        for track in self._tracks.values():
+            autoscale_once = getattr(track, "autoscale_y_once", None)
+            if callable(autoscale_once):
+                with contextlib.suppress(Exception):
+                    autoscale_once(margin=margin)
+                continue
+            with contextlib.suppress(Exception):
+                track.autoscale(margin=margin)
 
     def set_autoscale_y_enabled(self, enabled: bool) -> None:
         """Enable/disable Y-axis autoscaling for all tracks."""
@@ -2092,24 +2281,40 @@ class PyQtGraphPlotHost(InteractionHost):
         pass
 
     def set_event_labels_visible(self, visible: bool) -> None:
-        """Set trace-embedded event text label visibility."""
-        self._show_event_text_labels_on_trace = bool(visible)
+        """Compatibility toggle for label rendering modes."""
+        if bool(visible):
+            if self._event_display_mode == EventDisplayMode.OFF:
+                self._event_display_mode = EventDisplayMode.NAMES_ALWAYS
+        else:
+            self._event_display_mode = EventDisplayMode.OFF
         self._apply_event_label_options()
 
     def set_event_labels_v3_enabled(self, enabled: bool) -> None:
         self.set_event_labels_visible(enabled)
 
     def event_labels_visible(self) -> bool:
-        """Return whether trace-embedded event text labels are enabled."""
-        return bool(self._show_event_text_labels_on_trace)
+        """Return whether any event labels are enabled."""
+        return self._event_display_mode != EventDisplayMode.OFF
 
     def event_label_options(self) -> LayoutOptionsV3:
         """Return current event label layout options."""
         return self._event_label_options
 
     def show_event_text_labels_on_trace(self) -> bool:
-        """Return whether trace-embedded event text labels are enabled."""
-        return bool(self._show_event_text_labels_on_trace)
+        """Return whether trace names can appear on the traces."""
+        return False
+
+    def event_display_mode(self) -> str:
+        return str(self._event_display_mode.value)
+
+    def set_event_display_mode(self, mode: EventDisplayMode | str) -> None:
+        resolved = coerce_event_display_mode(mode)
+        if resolved == self._event_display_mode:
+            return
+        self._event_display_mode = resolved
+        self._event_label_options.mode = "h_belt"
+        self._event_label_options.show_numbers_only = resolved == EventDisplayMode.INDICES
+        self._apply_event_label_options()
 
     def set_selected_event_index(self, index: int | None) -> None:
         """Set the selected event index for trace marker highlighting."""
@@ -2118,15 +2323,20 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def set_event_label_mode(self, mode: str) -> None:
         normalized = str(mode or "").lower()
-        mapping = {
-            "vertical": "vertical",
-            "horizontal": "h_inside",
-            "horizontal_outside": "h_belt",
-            "h_inside": "h_inside",
-            "h_belt": "h_belt",
+        display_mapping = {
+            "off": EventDisplayMode.OFF,
+            "none": EventDisplayMode.OFF,
+            "vertical": EventDisplayMode.INDICES,
+            "horizontal": EventDisplayMode.NAMES_ALWAYS,
+            "horizontal_outside": EventDisplayMode.INDICES,
+            "h_inside": EventDisplayMode.NAMES_ALWAYS,
+            "h_belt": EventDisplayMode.INDICES,
+            "indices": EventDisplayMode.INDICES,
+            "names_on_hover": EventDisplayMode.NAMES_ON_HOVER,
+            "names_always": EventDisplayMode.NAMES_ALWAYS,
         }
-        self._event_label_options.mode = mapping.get(normalized, "vertical")
-        self._apply_event_label_options()
+        resolved = display_mapping.get(normalized, coerce_event_display_mode(normalized))
+        self.set_event_display_mode(resolved)
 
     def set_max_labels_per_cluster(self, max_labels: int) -> None:
         self._event_label_options.max_labels_per_cluster = max(1, int(max_labels))
@@ -2219,8 +2429,12 @@ class PyQtGraphPlotHost(InteractionHost):
             widget = track.widget
             self.layout.removeWidget(widget)
             widget.setParent(None)
+        if self._event_strip_widget is not None:
+            self.layout.removeWidget(self._event_strip_widget)
+            self._event_strip_widget.setVisible(False)
 
         self._tracks.clear()
+        self._axis_width_sync.clear()
         self._channel_specs.clear()
         self._model = None
         self._current_window = None
@@ -2461,19 +2675,8 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def zoom_x_at(self, anchor: float | None, factor: float) -> None:
         """Zoom the X axis around an anchor point if available."""
-        view_box = self._primary_view_box()
-        if view_box is None:
-            return
-        anchor = self._resolve_zoom_anchor(anchor)
-        if hasattr(view_box, "zoom_x_at"):
-            try:
-                view_box.zoom_x_at(anchor, factor)
-                return
-            except Exception:
-                pass
-        (x_min, x_max), _ = view_box.viewRange()
-        new_x_min, new_x_max = zoomed_range(x_min, x_max, anchor, factor)
-        view_box.setXRange(new_x_min, new_x_max, padding=0.0)
+        resolved_anchor = self._resolve_zoom_anchor(anchor)
+        self.request_zoom_x(float(factor), resolved_anchor, reason="zoom_x_at")
 
     def zoom_at(self, center: float | None, factor: float) -> None:
         """Backward-compatible alias for X-axis zoom with cursor anchoring."""
@@ -2484,22 +2687,31 @@ class PyQtGraphPlotHost(InteractionHost):
         full = self.full_range()
         if full is None:
             return
-        view_box = self._primary_view_box()
-        if view_box is None:
-            return
         x_min, x_max = float(full[0]), float(full[1])
-        if hasattr(view_box, "set_x_range_with_history"):
-            with contextlib.suppress(Exception):
-                view_box.set_x_range_with_history(x_min, x_max)
-                return
-        view_box.setXRange(x_min, x_max, padding=0.0)
+        self.set_time_window(x_min, x_max)
+
+    def set_time_compression_target(self, seconds: float | None) -> None:
+        """Set a target visible duration for the current view center.
+
+        Args:
+            seconds: Desired window span in seconds; ``None`` means full-range view.
+        """
+        if seconds is None:
+            self.zoom_to_full_range()
+            return
+        target_span = float(seconds)
+        if not math.isfinite(target_span) or target_span <= 0.0:
+            return
+        window = self.current_window() or self.full_range()
+        if window is None:
+            return
+        center = 0.5 * (float(window[0]) + float(window[1]))
+        half = target_span * 0.5
+        self.set_time_window(center - half, center + half)
 
     def scroll_by(self, delta: float) -> None:
         """Scroll the current time window by delta seconds."""
-        if self._current_window is None:
-            return
-        x0, x1 = self._current_window
-        self.set_time_window(x0 + delta, x1 + delta)
+        self.request_pan_x(float(delta), reason="scroll_by")
 
     def center_on_time(self, time_value: float) -> None:
         """Recenter the current window around ``time_value`` without changing span."""
