@@ -61,8 +61,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.stack.addWidget(window.data_page)
 
     window.main_layout = QVBoxLayout(window.data_page)
-    window.main_layout.setContentsMargins(16, 8, 16, 16)
-    window.main_layout.setSpacing(12)
+    window.main_layout.setContentsMargins(12, 8, 12, 12)
+    window.main_layout.setSpacing(10)
 
     dpi = int(QApplication.primaryScreen().logicalDotsPerInch())
     # Main trace view uses PyQtGraph by default:
@@ -285,8 +285,9 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         border_color = CURRENT_THEME["grid_color"]
         text_color = CURRENT_THEME["text"]
         hover_bg = CURRENT_THEME["button_hover_bg"]
-        content_bg = CURRENT_THEME.get("table_bg", CURRENT_THEME["window_bg"])
-        panel_bg = CURRENT_THEME.get("panel_bg", content_bg)
+        chrome_bg = CURRENT_THEME.get("window_bg", CURRENT_THEME.get("table_bg", "#F3F4F6"))
+        content_bg = chrome_bg
+        panel_bg = CURRENT_THEME.get("panel_bg", CURRENT_THEME.get("table_bg", chrome_bg))
         panel_border = CURRENT_THEME.get("panel_border", border_color)
         panel_radius = int(CURRENT_THEME.get("panel_radius", 6))
         snapshot_bg = CURRENT_THEME.get("snapshot_bg", panel_bg)
@@ -316,6 +317,9 @@ def init_ui(window: VasoAnalyzerApp) -> None:
         status_color = rgba_from_hex(text_color, 0.60)
         preview_color = rgba_from_hex(text_color, 0.58)
         preview_border = rgba_from_hex(panel_border, 0.45)
+        chip_bg = rgba_from_hex(button_bg, 0.90)
+        chip_border = rgba_from_hex(panel_border, 0.80)
+        splitter_handle = rgba_from_hex(panel_border, 0.78)
         preview_radius = max(2, panel_radius - 2)
 
         window.data_page.setStyleSheet(
@@ -337,17 +341,20 @@ QLabel#HeaderSubtitle {{
     color: {subtitle_color};
 }}
 QLabel#TraceChip {{
-    background: {hover_bg};
+    background: {chip_bg};
     color: {text_color};
+    border: 1px solid {chip_border};
     border-radius: 12px;
-    padding: 4px 12px;
-    font-weight: 500;
+    padding: 4px 10px;
+    font-size: 10.5pt;
+    font-weight: 600;
 }}
 QFrame#PlotPanel, QFrame#SidePanel {{
     background: transparent;
     border: none;
 }}
-QFrame#PlotContainer {{
+QFrame#PlotContainer,
+QFrame#RightPanelCard {{
     background: {panel_bg};
     border: 1px solid {panel_border};
     border-radius: {panel_radius}px;
@@ -419,6 +426,12 @@ QLabel#SectionTitle {{
     color: {section_color};
     padding-bottom: 4px;
 }}
+QLabel#PanelSectionTitle {{
+    color: {section_color};
+    font-size: 10.5pt;
+    font-weight: 600;
+    padding: 0px 0px 2px 0px;
+}}
 QWidget#SnapshotPreview {{
     background: {snapshot_bg};
     border: 1px solid {preview_border};
@@ -428,9 +441,10 @@ QWidget#SnapshotPreview {{
 QWidget#SnapshotPreview QLabel {{
     color: {preview_color};
 }}
-QSplitter#DataSplitter::handle {{
-    background: {panel_border};
-    width: 4px;
+QSplitter#DataSplitter::handle:horizontal {{
+    background: {splitter_handle};
+    width: 6px;
+    margin: 8px 0px;
     border-radius: 2px;
 }}
 QFrame#MetadataPanel {{

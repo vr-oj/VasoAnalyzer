@@ -314,7 +314,7 @@ class SmoothPanViewBox(PanOnlyViewBox):
             span = y_max - y_min
             if span > 0:
                 direction = -1 if steps > 0 else 1
-                shift_amount = direction * pan_step(span, 0.10) * abs(steps)
+                shift_amount = direction * pan_step(span, 0.05) * abs(steps)
                 self._apply_y_pan(shift_amount)
         else:
             x_min: float

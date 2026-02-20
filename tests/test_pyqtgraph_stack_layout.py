@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.axis_width_sync import AxisWidthSync
@@ -138,6 +140,53 @@ def test_channel_track_uses_track_frame_divider(qt_app) -> None:
     assert track.divider_visible() is False
 
 
+def test_channel_viewboxes_use_no_border_pen(qt_app) -> None:
+    host = _build_host_with_three_tracks()
+    widget = host.get_widget()
+    try:
+        widget.resize(900, 600)
+        widget.show()
+        qt_app.processEvents()
+        host.apply_theme()
+        qt_app.processEvents()
+
+        for track_id in ("a", "b", "c"):
+            track = host.track(track_id)
+            assert track is not None
+            border_pen = track.view.get_widget().getPlotItem().getViewBox().border
+            assert border_pen.style() == Qt.NoPen
+    finally:
+        widget.close()
+        qt_app.processEvents()
+
+
+def test_all_plot_items_hide_buttons_and_disable_menus(qt_app) -> None:
+    host = _build_host_with_three_tracks()
+    widget = host.get_widget()
+    try:
+        widget.resize(900, 600)
+        widget.show()
+        qt_app.processEvents()
+
+        for track_id in ("a", "b", "c"):
+            track = host.track(track_id)
+            assert track is not None
+            plot_item = track.view.get_widget().getPlotItem()
+            assert bool(getattr(plot_item, "buttonsHidden", False)) is True
+            assert bool(plot_item.menuEnabled()) is False
+            assert bool(plot_item.getViewBox().menuEnabled()) is False
+
+        strip_track = host._event_strip_track
+        assert strip_track is not None
+        strip_plot_item = strip_track.plot_item
+        assert bool(getattr(strip_plot_item, "buttonsHidden", False)) is True
+        assert bool(strip_plot_item.menuEnabled()) is False
+        assert bool(strip_plot_item.getViewBox().menuEnabled()) is False
+    finally:
+        widget.close()
+        qt_app.processEvents()
+
+
 class _FakeRect:
     def __init__(self, width: float) -> None:
         self._width = float(width)
@@ -189,6 +238,20 @@ def test_axis_width_sync_applies_uniform_width(qt_app) -> None:
     assert axis_a.applied_widths
     assert axis_b.applied_widths
     assert axis_a.applied_widths[-1] == axis_b.applied_widths[-1] == 72
+
+
+def test_axis_width_sync_applies_sample_text_floor(qt_app) -> None:
+    axis = _FakeAxis(24.0)
+    sync = AxisWidthSync(
+        shrink_delay_s=0.5,
+        axis_padding_px=0.0,
+        min_axis_width_px=0,
+        left_gutter_px=0,
+    )
+    sync.set_min_from_sample_text("-00:00:00.000", QApplication.font())
+    sync.set_axes([axis])
+    assert axis.applied_widths
+    assert axis.applied_widths[-1] >= 24
 
 
 def test_axis_width_sync_aligns_waveform_columns_across_tracks(qt_app) -> None:

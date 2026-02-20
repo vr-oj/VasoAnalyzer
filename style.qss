@@ -305,25 +305,25 @@ QLabel#ProjectEmptyState {
 QToolBar#PrimaryToolbar {
   background-color: palette(window);
   border: 1px solid palette(mid);
-  border-radius: 6px;
-  padding: 4px 6px;
-  spacing: 4px;
+  border-radius: 4px;
+  padding: 3px 4px;
+  spacing: 3px;
 }
 
 QToolBar#PrimaryToolbar::separator {
   background-color: palette(midlight);
   width: 1px;
-  margin: 2px 8px;
+  margin: 3px 6px;
 }
 
 QToolBar#PrimaryToolbar > QToolButton,
 QToolBar#PrimaryToolbar > QWidget > QToolButton {
   background-color: palette(button);
   border: 1px solid palette(mid);
-  border-radius: 6px;
-  margin: 1px 3px;
-  padding: 5px 8px;
-  min-width: 48px;
+  border-radius: 4px;
+  margin: 1px 2px;
+  padding: 4px 7px;
+  min-width: 44px;
   color: palette(buttonText);
 }
 
@@ -369,26 +369,26 @@ QToolBar#PlotToolbar,
 QToolBar[objectName="PlotToolbar"] {
   background-color: palette(window);
   border: 1px solid palette(mid);
-  border-radius: 6px;
-  padding: 4px 6px;
-  spacing: 4px;
+  border-radius: 4px;
+  padding: 3px 4px;
+  spacing: 3px;
 }
 
 QToolBar#PlotToolbar::separator,
 QToolBar[objectName="PlotToolbar"]::separator {
   background-color: palette(midlight);
   width: 1px;
-  margin: 2px 8px;
+  margin: 3px 6px;
 }
 
 QToolBar#PlotToolbar > QToolButton,
 QToolBar[objectName="PlotToolbar"] > QToolButton {
   background-color: palette(button);
   border: 1px solid palette(mid);
-  border-radius: 6px;
-  margin: 1px 3px;
-  padding: 5px 8px;
-  min-width: 48px;
+  border-radius: 4px;
+  margin: 1px 2px;
+  padding: 4px 7px;
+  min-width: 44px;
   color: palette(buttonText);
 }
 

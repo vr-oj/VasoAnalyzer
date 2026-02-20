@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QObject, QPoint, QRect, Qt
+from PyQt5.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt
 from PyQt5.QtGui import QColor, QCursor
 from PyQt5.QtWidgets import QApplication, QWidget
 
@@ -42,40 +42,6 @@ log = logging.getLogger(__name__)
 TOP_PAD = 3
 BOTTOM_PAD = 3
 INTER_TRACK_GAP_MIN = 6
-
-
-def axis_controls_top_left_for_viewbox(
-    *,
-    viewbox_rect: QRect,
-    controls_width: int,
-    controls_height: int,
-    widget_width: int,
-    widget_height: int,
-    margin: int = 2,
-) -> tuple[int, int]:
-    """Compute axis-control top-left anchored just left of the ViewBox."""
-    width = max(int(controls_width), 0)
-    height = max(int(controls_height), 0)
-    max_x = max(int(widget_width) - width, 0)
-    max_y = max(int(widget_height) - height, 0)
-    x = int(viewbox_rect.left()) - width - int(margin)
-    y = int(viewbox_rect.top()) + int(margin)
-    return max(0, min(x, max_x)), max(0, min(y, max_y))
-
-
-def _clamp_overlay_position(
-    *,
-    x: int,
-    y: int,
-    width: int,
-    height: int,
-    widget_width: int,
-    widget_height: int,
-) -> tuple[int, int]:
-    """Clamp an overlay widget position to the plot widget bounds."""
-    clamped_x = max(0, min(int(x), max(int(widget_width) - max(int(width), 0), 0)))
-    clamped_y = max(0, min(int(y), max(int(widget_height) - max(int(height), 0), 0)))
-    return clamped_x, clamped_y
 
 
 def y_axis_scale_factor_for_drag_delta(dy_px: float, *, gain: float = 0.006) -> float:
@@ -127,6 +93,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._plot_item = self._plot_widget.getPlotItem()
         self._apply_plot_item_layout()
         self._view_box = view_box
+        self._y_axis_controls_host: QWidget = self._plot_widget
         with contextlib.suppress(Exception):
             self._view_box.setDefaultPadding(0.0)
         self._disable_plot_title()
@@ -425,7 +392,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             trace_name = "Inner Diameter"
 
         self.inner_curve = self._plot_item.plot(
-            pen=pg.mkPen(color=theme_color, width=1.5),
+            pen=pg.mkPen(color=theme_color, width=1.2),
             antialias=False,
             name=None,
         )
@@ -440,7 +407,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if self._mode == "dual":
             outer_color = "#FF8C00"  # Orange for outer diameter (fixed, doesn't change with theme)
             self.outer_curve = self._plot_item.plot(
-                pen=pg.mkPen(color=outer_color, width=1.2),
+                pen=pg.mkPen(color=outer_color, width=1.1),
                 antialias=False,
                 name=None,
             )
@@ -474,7 +441,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Other traces (outer, pressure, set_pressure) keep their fixed colors
         if self.inner_curve is not None and self._mode in ("inner", "dual"):
             inner_color = CURRENT_THEME.get("trace_color", "#000000")
-            pen = pg.mkPen(color=inner_color, width=1.5)
+            pen = pg.mkPen(color=inner_color, width=1.2)
             self.inner_curve.setPen(pen)
 
         # Outer diameter trace always stays orange (doesn't change with theme)
@@ -526,7 +493,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 self._y_axis_controls.setParent(None)
             self._detach_y_axis_control_widgets()
 
-        controls.setParent(self._plot_widget)
+        host_widget = self._y_axis_controls_host or self._plot_widget
+        if self._chart_parity_v1 and host_widget is self._plot_widget:
+            raise RuntimeError("Y-axis controls host must be the dedicated gutter widget")
+        controls.setParent(host_widget)
         controls.hide()
         self._y_axis_controls = controls
 
@@ -539,20 +509,43 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         )
 
         if self._y_axis_menu_control_widget is not None:
-            self._y_axis_menu_control_widget.setParent(self._plot_widget)
+            self._y_axis_menu_control_widget.setParent(host_widget)
             self._y_axis_menu_control_widget.show()
             self._y_axis_menu_control_widget.raise_()
 
         if self._y_axis_scale_control_widget is not None:
-            self._y_axis_scale_control_widget.setParent(self._plot_widget)
+            self._y_axis_scale_control_widget.setParent(host_widget)
             self._y_axis_scale_control_widget.show()
             self._y_axis_scale_control_widget.raise_()
 
         if self._y_axis_menu_control_widget is None and self._y_axis_scale_control_widget is None:
             controls.show()
             controls.raise_()
+        attach_controls = getattr(host_widget, "attach_control_widgets", None)
+        if callable(attach_controls):
+            with contextlib.suppress(Exception):
+                attach_controls(
+                    menu_widget=self._y_axis_menu_control_widget,
+                    scale_widget=self._y_axis_scale_control_widget,
+                    controls_widget=controls,
+                )
+        assert controls.parent() is host_widget
+        if self._y_axis_menu_control_widget is not None:
+            assert self._y_axis_menu_control_widget.parent() is host_widget
+        if self._y_axis_scale_control_widget is not None:
+            assert self._y_axis_scale_control_widget.parent() is host_widget
         self.refresh_y_axis_controls()
         self._reposition_y_axis_controls()
+
+    def set_y_axis_controls_host(self, host: QWidget | None) -> None:
+        """Set the widget that owns and positions Y-axis controls."""
+        target = host if isinstance(host, QWidget) else self._plot_widget
+        if target is self._y_axis_controls_host:
+            return
+        self._y_axis_controls_host = target
+        controls = self._y_axis_controls
+        if controls is not None:
+            self.install_y_axis_controls(controls)
 
     def set_y_axis_interaction_handlers(
         self,
@@ -575,6 +568,29 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         controls = self._y_axis_controls
         if controls is None:
             return
+
+        menu_widget = self._y_axis_menu_control_widget
+        scale_widget = self._y_axis_scale_control_widget
+        host_widget = self._y_axis_controls_host or self.get_widget()
+        track_height = int(self.get_widget().height())
+        viewbox_rect = self._viewbox_rect_in_widget()
+        if viewbox_rect is not None and viewbox_rect.height() > 0:
+            track_height = int(viewbox_rect.height())
+        elif int(host_widget.height()) > 0:
+            track_height = int(host_widget.height())
+        show_controls = track_height >= 48
+        show_menu_button = False
+        show_scale_buttons = track_height >= 64
+
+        if menu_widget is not None:
+            menu_widget.setVisible(show_controls and show_menu_button)
+        if scale_widget is not None:
+            scale_widget.setVisible(show_controls and show_scale_buttons)
+        if menu_widget is None and scale_widget is None:
+            controls.setVisible(show_controls)
+        else:
+            controls.setVisible(False)
+
         refresh_state = getattr(controls, "refresh_state", None)
         if callable(refresh_state):
             with contextlib.suppress(Exception):
@@ -690,130 +706,43 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._y_axis_cursor_forced = False
         self._y_axis_saved_cursor_explicit = False
 
+    def _update_cursor_for_position(self, scene_pos: QPointF | None) -> None:
+        if scene_pos is None:
+            self._set_y_axis_cursor_feedback(False)
+            return
+        y_axis = self._plot_item.getAxis("left")
+        if y_axis is None:
+            self._set_y_axis_cursor_feedback(False)
+            return
+        axis_rect = y_axis.sceneBoundingRect()
+        if axis_rect is None or not axis_rect.isValid() or axis_rect.isEmpty():
+            self._set_y_axis_cursor_feedback(False)
+            return
+        self._set_y_axis_cursor_feedback(axis_rect.contains(scene_pos))
+
     def _reposition_y_axis_controls(self) -> None:
         controls = self._y_axis_controls
         if controls is None:
             return
-        axis = self._plot_item.getAxis("left")
-        view_box = self._plot_item.getViewBox()
-        if axis is None or view_box is None:
-            return
-        try:
-            axis_scene = axis.sceneBoundingRect()
-            vb_scene = view_box.sceneBoundingRect()
-            if axis_scene is None or not axis_scene.isValid() or axis_scene.isEmpty():
-                return
-            if vb_scene is None or not vb_scene.isValid() or vb_scene.isEmpty():
-                return
-            axis_left_px = int(self._plot_widget.mapFromScene(axis_scene.topLeft()).x())
-            vb_top_px = int(self._plot_widget.mapFromScene(vb_scene.topLeft()).y())
-            vb_bottom_px = int(self._plot_widget.mapFromScene(vb_scene.bottomLeft()).y())
-        except Exception:
-            return
+        host_widget = self._y_axis_controls_host or self._plot_widget
 
         menu_widget = self._y_axis_menu_control_widget
         scale_widget = self._y_axis_scale_control_widget
 
-        if menu_widget is None and scale_widget is None:
-            viewbox_rect = self._viewbox_rect_in_widget()
-            if viewbox_rect is None:
-                return
-            controls.adjustSize()
-            width = max(controls.width(), controls.sizeHint().width())
-            height = max(controls.height(), controls.sizeHint().height())
-            if width <= 0 or height <= 0:
-                return
-            margin = 2
-            proposed_x = int(viewbox_rect.left()) - width - margin
-            x, y = axis_controls_top_left_for_viewbox(
-                viewbox_rect=viewbox_rect,
-                controls_width=width,
-                controls_height=height,
-                widget_width=self._plot_widget.width(),
-                widget_height=self._plot_widget.height(),
-                margin=margin,
-            )
-            if proposed_x < 0 and not self._y_axis_controls_clamped_left_logged:
-                self._y_axis_controls_clamped_left_logged = True
-                log.debug(
-                    "Y-axis controls clamped to x=0 (left gutter too narrow): view_left=%s width=%s",
-                    viewbox_rect.left(),
-                    width,
-                )
-            controls.move(x, y)
-            controls.raise_()
+        if host_widget is not self._plot_widget:
+            attach_controls = getattr(host_widget, "attach_control_widgets", None)
+            if callable(attach_controls):
+                with contextlib.suppress(Exception):
+                    attach_controls(
+                        menu_widget=menu_widget,
+                        scale_widget=scale_widget,
+                        controls_widget=controls,
+                    )
+            layout_channel_label = getattr(host_widget, "layout_channel_label", None)
+            if callable(layout_channel_label):
+                with contextlib.suppress(Exception):
+                    layout_channel_label()
             return
-
-        margin = 2
-        widget_width = max(int(self._plot_widget.width()), 0)
-        widget_height = max(int(self._plot_widget.height()), 0)
-        menu_h = 0
-        scale_h = 0
-
-        if menu_widget is not None:
-            menu_widget.adjustSize()
-            menu_w = max(menu_widget.width(), menu_widget.sizeHint().width())
-            menu_h = max(menu_widget.height(), menu_widget.sizeHint().height())
-            proposed_menu_x = int(axis_left_px) - int(menu_w) - margin
-            proposed_menu_y = int(vb_top_px) + int(TOP_PAD)
-            menu_x, menu_y = _clamp_overlay_position(
-                x=proposed_menu_x,
-                y=proposed_menu_y,
-                width=menu_w,
-                height=menu_h,
-                widget_width=widget_width,
-                widget_height=widget_height,
-            )
-            if proposed_menu_x < 0 and not self._y_axis_controls_clamped_left_logged:
-                self._y_axis_controls_clamped_left_logged = True
-                log.debug(
-                    "Y-axis controls clamped to x=0 (left gutter too narrow): view_left=%s width=%s",
-                    axis_left_px,
-                    menu_w,
-                )
-            menu_widget.move(menu_x, menu_y)
-            menu_widget.raise_()
-
-        if scale_widget is not None:
-            scale_widget.adjustSize()
-            scale_w = max(scale_widget.width(), scale_widget.sizeHint().width())
-            scale_h = max(scale_widget.height(), scale_widget.sizeHint().height())
-            vb_height = max(int(vb_bottom_px) - int(vb_top_px), 0)
-            show_scale_widget = True
-            if menu_widget is not None:
-                min_required = (
-                    int(menu_h)
-                    + int(scale_h)
-                    + int(TOP_PAD)
-                    + int(BOTTOM_PAD)
-                    + int(INTER_TRACK_GAP_MIN)
-                )
-                show_scale_widget = vb_height >= min_required
-
-            if not show_scale_widget:
-                scale_widget.hide()
-                return
-
-            scale_widget.show()
-            proposed_scale_x = int(axis_left_px) - int(scale_w) - margin
-            proposed_scale_y = int(vb_bottom_px) - int(scale_h) - int(BOTTOM_PAD)
-            scale_x, scale_y = _clamp_overlay_position(
-                x=proposed_scale_x,
-                y=proposed_scale_y,
-                width=scale_w,
-                height=scale_h,
-                widget_width=widget_width,
-                widget_height=widget_height,
-            )
-            if proposed_scale_x < 0 and not self._y_axis_controls_clamped_left_logged:
-                self._y_axis_controls_clamped_left_logged = True
-                log.debug(
-                    "Y-axis controls clamped to x=0 (left gutter too narrow): view_left=%s width=%s",
-                    axis_left_px,
-                    scale_w,
-                )
-            scale_widget.move(scale_x, scale_y)
-            scale_widget.raise_()
 
     def _trigger_y_axis_autoscale_once(self) -> bool:
         handler = self._y_axis_autoscale_once_handler
@@ -907,7 +836,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         if event_type == QEvent.MouseMove:
             pos = self._event_pos_in_plot_widget(obj, event)
-            self._set_y_axis_cursor_feedback(pos is not None and self._point_in_left_axis(pos))
+            scene_pos = self._plot_widget.mapToScene(pos) if pos is not None else None
+            self._update_cursor_for_position(scene_pos)
             return False
 
         if event_type == QEvent.MouseButtonRelease and self._y_axis_drag_active:
@@ -1589,7 +1519,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         """
         # Update trace colors
         if "trace_color" in style and self.inner_curve is not None:
-            pen = pg.mkPen(color=style["trace_color"], width=1.5)
+            pen = pg.mkPen(color=style["trace_color"], width=1.2)
             self.inner_curve.setPen(pen)
 
         if "trace_color_secondary" in style and self.outer_curve is not None:
@@ -1802,6 +1732,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             self._hide_hover_tooltip()
 
     def _handle_mouse_moved(self, point) -> None:
+        self._update_cursor_for_position(point)
         if not self._hover_tooltip_enabled:
             return
         if self._plot_item.scene() is None:

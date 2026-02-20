@@ -28,8 +28,8 @@ class SelectionBoxStyle:
     brush_alpha: float
 
 
-PLOT_AXIS_FONT_SIZE = 11.0
-PLOT_TICK_FONT_SIZE = 9.0
+PLOT_AXIS_FONT_SIZE = 8.5
+PLOT_TICK_FONT_SIZE = 7.0
 PLOT_AXIS_LABELS = {
     "inner": "ID (µm)",
     "outer": "OD (µm)",
@@ -77,9 +77,9 @@ def get_pyqtgraph_style() -> PyQtGraphStyleTokens:
     event_color = CURRENT_THEME.get("event_line", "#8A8A8A")
     event_marker = EventMarkerStyle(
         color=event_color,
-        width=1.0,
+        width=0.65,
         style=Qt.DashLine,
-        alpha=120.0 / 255.0,
+        alpha=0.26,
     )
 
     selection_color = CURRENT_THEME.get("selection_bg", "#3B82F6")

@@ -16137,13 +16137,13 @@ QPushButton[isGhost="true"]:pressed {{
         plot_panel.setObjectName("PlotPanel")
         plot_panel_layout = QVBoxLayout(plot_panel)
         plot_panel_layout.setContentsMargins(0, 0, 0, 0)
-        plot_panel_layout.setSpacing(10)
+        plot_panel_layout.setSpacing(8)
 
         plot_container = QFrame()
         plot_container.setObjectName("PlotContainer")
         plot_container_layout = QVBoxLayout(plot_container)
-        plot_container_layout.setContentsMargins(14, 14, 14, 14)
-        plot_container_layout.setSpacing(6)
+        plot_container_layout.setContentsMargins(10, 10, 10, 10)
+        plot_container_layout.setSpacing(8)
         if getattr(self, "overview_strip", None) is not None:
             plot_container_layout.addWidget(self.overview_strip)
         self.plot_stack_widget = QWidget()
@@ -16154,7 +16154,7 @@ QPushButton[isGhost="true"]:pressed {{
         self.plot_content_page = QWidget()
         plot_content_layout = QVBoxLayout(self.plot_content_page)
         plot_content_layout.setContentsMargins(0, 0, 0, 0)
-        plot_content_layout.setSpacing(6)
+        plot_content_layout.setSpacing(4)
         plot_content_layout.addWidget(self.trace_widget, 1)
         if getattr(self, "trace_nav_bar", None) is not None:
             plot_content_layout.addWidget(self.trace_nav_bar)
@@ -16178,19 +16178,19 @@ QPushButton[isGhost="true"]:pressed {{
 
         side_panel = QFrame()
         side_panel.setObjectName("SidePanel")
-        side_panel.setMinimumWidth(480)
-        side_panel.setMaximumWidth(640)
+        side_panel.setMinimumWidth(420)
+        side_panel.setMaximumWidth(560)
         side_layout = QVBoxLayout(side_panel)
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(0)
 
         right_panel_card = QFrame()
-        right_panel_card.setObjectName("PlotContainer")
+        right_panel_card.setObjectName("RightPanelCard")
         self.right_panel_card = right_panel_card
         right_panel_layout = QVBoxLayout(right_panel_card)
         self._right_panel_layout = right_panel_layout
-        right_panel_layout.setContentsMargins(14, 14, 14, 14)
-        right_panel_layout.setSpacing(6)
+        right_panel_layout.setContentsMargins(10, 10, 10, 10)
+        right_panel_layout.setSpacing(8)
         side_layout.addWidget(right_panel_card)
 
         # Snapshot + event layout:
@@ -16212,8 +16212,11 @@ QPushButton[isGhost="true"]:pressed {{
             self.snapshot_card.setObjectName("SnapshotCard")
             self.snapshot_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             snapshot_box = QVBoxLayout(self.snapshot_card)
-            snapshot_box.setContentsMargins(8, 8, 8, 8)
-            snapshot_box.setSpacing(6)
+            snapshot_box.setContentsMargins(10, 10, 10, 10)
+            snapshot_box.setSpacing(8)
+            snapshot_title = QLabel("Snapshot Viewer", self.snapshot_card)
+            snapshot_title.setObjectName("PanelSectionTitle")
+            snapshot_box.addWidget(snapshot_title, 0, Qt.AlignLeft)
             self.snapshot_stack = QStackedWidget(self.snapshot_card)
             self.snapshot_stack.setObjectName("SnapshotStack")
             self.snapshot_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -16227,8 +16230,11 @@ QPushButton[isGhost="true"]:pressed {{
         self.event_table_card.setObjectName("TableCard")
         self.event_table_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         table_layout = QVBoxLayout(self.event_table_card)
-        table_layout.setContentsMargins(12, 12, 12, 12)
-        table_layout.setSpacing(8)
+        table_layout.setContentsMargins(10, 10, 10, 10)
+        table_layout.setSpacing(6)
+        table_title = QLabel("Event Table", self.event_table_card)
+        table_title.setObjectName("PanelSectionTitle")
+        table_layout.addWidget(table_title)
         self.review_notice_banner = QFrame(self.event_table_card)
         self.review_notice_banner.setObjectName("ReviewNoticeBanner")
         notice_layout = QHBoxLayout(self.review_notice_banner)
@@ -16370,8 +16376,8 @@ QPushButton[isGhost="true"]:pressed {{
         if card is None:
             return
 
-        border = CURRENT_THEME.get("grid_color", "#d0d0d0")
-        bg = CURRENT_THEME.get("window_bg", "#ffffff")
+        border = CURRENT_THEME.get("panel_border", CURRENT_THEME.get("grid_color", "#d0d0d0"))
+        bg = CURRENT_THEME.get("panel_bg", CURRENT_THEME.get("window_bg", "#ffffff"))
         text = CURRENT_THEME.get("text", "#000000")
         status = CURRENT_THEME.get("text_disabled", text)
         radius = int(CURRENT_THEME.get("panel_radius", 6))

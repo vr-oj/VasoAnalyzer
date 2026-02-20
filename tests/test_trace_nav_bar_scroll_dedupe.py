@@ -79,3 +79,17 @@ def test_disabled_state_resets_drag_state(qt_app) -> None:
     finally:
         nav.close()
         qt_app.processEvents()
+
+
+def test_all_button_tooltip_includes_total_duration(qt_app) -> None:
+    host = _DummyPlotHost()
+    host.total = (0.0, 5025.0)
+    nav = TraceNavBar(plot_host=host)
+    try:
+        nav.refresh_from_host()
+        tooltip = nav.btn_all.toolTip()
+        assert tooltip.startswith("All (")
+        assert nav._format_seconds(5025.0) in tooltip
+    finally:
+        nav.close()
+        qt_app.processEvents()

@@ -668,14 +668,14 @@ class EventTableWidget(QTableView):
         h_header.setMinimumSectionSize(24)
         h_header.setStretchLastSection(False)
         h_header.setDefaultSectionSize(84)
-        h_header.setMinimumHeight(30)
+        h_header.setMinimumHeight(28)
         if h_header.count() > EVENT_COLUMN_INDEX:
             h_header.resizeSection(EVENT_COLUMN_INDEX, self._preferred_event_width)
             h_header.setSectionResizeMode(EVENT_COLUMN_INDEX, QHeaderView.Interactive)
 
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.Fixed)
-        v_header.setDefaultSectionSize(28)
+        v_header.setDefaultSectionSize(26)
         v_header.setMinimumWidth(STATUS_COLUMN_WIDTH + 4)
         v_header.setDefaultAlignment(Qt.AlignCenter)
 
@@ -697,9 +697,7 @@ class EventTableWidget(QTableView):
             "highlighted_text", palette.color(QPalette.HighlightedText).name()
         )
         grid_base = palette.color(QPalette.Mid)
-        grid = QColor(grid_base.red(), grid_base.green(), grid_base.blue(), int(0.35 * 255)).name(
-            QColor.HexArgb
-        )
+        grid = CURRENT_THEME.get("table_header_border", grid_base.name())
         header_border = CURRENT_THEME.get(
             "panel_border", CURRENT_THEME.get("table_header_border", grid_base.name())
         )
@@ -711,8 +709,8 @@ class EventTableWidget(QTableView):
                 background-color: {header_bg};
                 color: {header_text};
                 font-weight: 600;
-                font-size: 10pt;
-                padding: 6px 8px;
+                font-size: 9.5pt;
+                padding: 5px 8px;
                 border: none;
                 border-right: 1px solid {header_border};
                 border-bottom: 1px solid {header_border};
@@ -733,13 +731,13 @@ class EventTableWidget(QTableView):
         v_header_bg = header_bg
         v_header_style = (
             f"QHeaderView::section {{background-color: {v_header_bg}; color: {header_text}; "
-            "font-weight: 500; padding: 0px 6px; border: none;}"
+            f"font-weight: 500; padding: 0px 5px; border: none; border-right: 1px solid {header_border};}}"
         )
         v_header.setStyleSheet(v_header_style)
         body_style = (
             f"QTableView {{alternate-background-color: {alt}; background-color: {base}; "
-            f"gridline-color: {grid}; border: none;}} "
-            f"QTableView::item{{padding: 2px 6px;}} "
+            f"gridline-color: {grid}; border: 1px solid {header_border}; border-radius: 3px;}} "
+            f"QTableView::item{{padding: 1px 6px;}} "
             f"QTableView::item:hover{{background-color: {row_hover};}} "
             f"QTableView::item:selected{{background-color: {selection}; color: {selection_text};}} "
             f"QTableView::item:selected:hover{{background-color: {selection}; color: {selection_text};}}"

@@ -5,12 +5,13 @@ from __future__ import annotations
 import contextlib
 import logging
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import pyqtgraph as pg
-from PyQt5.QtGui import QFont, QFontMetricsF
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QPointF
+from PyQt5.QtGui import QColor, QCursor, QFont, QFontMetricsF
+from PyQt5.QtWidgets import QApplication, QToolTip
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.event_display_mode import (
@@ -26,9 +27,43 @@ from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
 
 log = logging.getLogger(__name__)
 
-_LABEL_MAX_CHARS = 12
+_LABEL_MAX_CHARS = 8
 _LABEL_ELLIPSIS = "..."
 _TOOLTIP_TIME_DECIMALS = 3
+_MIN_SPACING_PX = 80.0
+
+
+class EventLodDebouncer:
+    """Debounce labels->markers LOD downgrades to prevent flicker near threshold."""
+
+    def __init__(self, delay_ms: int = 0) -> None:
+        self._current = "labels"
+        self._pending: str | None = None
+        self._pending_since: float | None = None
+        self._delay = max(float(delay_ms), 0.0) / 1000.0
+
+    def update(self, candidate: str) -> str:
+        choice = str(candidate or "labels")
+        if choice == self._current:
+            self._pending = None
+            self._pending_since = None
+            return self._current
+
+        if choice == "labels":
+            self._current = "labels"
+            self._pending = None
+            self._pending_since = None
+            return self._current
+
+        now = time.monotonic()
+        if self._pending != choice:
+            self._pending = choice
+            self._pending_since = now
+        elif self._pending_since is not None and (now - self._pending_since) >= self._delay:
+            self._current = choice
+            self._pending = None
+            self._pending_since = None
+        return self._current
 
 
 def _truncate_event_label(text: str, *, max_chars: int = _LABEL_MAX_CHARS) -> str:
@@ -71,6 +106,12 @@ class PyQtGraphEventStripTrack:
         self._display_mode = EventDisplayMode.NAMES_ALWAYS
         self._selected_event_id: int | None = None
         self._hovered_event_id: int | None = None
+        self._lod_debouncer = EventLodDebouncer(delay_ms=0)
+        self._effective_lod_mode = "labels"
+        self._last_placed: list[PlacedLabel] = []
+        self._overflow_hints: dict[int, pg.TextItem] = {}
+        self._height_change_callback: Callable[[int], None] | None = None
+        self._last_reported_height_px = 0
 
         def _mute_axis(axis, *, height: float | None = None) -> None:
             if axis is None:
@@ -109,6 +150,10 @@ class PyQtGraphEventStripTrack:
         except Exception:
             pass
         self._plot_item.hideButtons()
+        with contextlib.suppress(Exception):
+            self._plot_item.setMenuEnabled(False)
+        with contextlib.suppress(Exception):
+            vb.setMenuEnabled(False)
 
         self._plot_item.showAxis("left")
         self._plot_item.showAxis("bottom")
@@ -130,10 +175,25 @@ class PyQtGraphEventStripTrack:
             vb.setBackgroundColor(bg_rgb)
         with contextlib.suppress(Exception):
             vb.sigRangeChanged.connect(lambda *_args: self._refresh_from_current_view())
+        scene = self._plot_item.scene()
+        if scene is not None:
+            with contextlib.suppress(Exception):
+                scene.sigMouseMoved.connect(self._on_mouse_moved)
 
     @property
     def plot_item(self) -> pg.PlotItem:
         return self._plot_item
+
+    def set_height_change_callback(self, callback: Callable[[int], None] | None) -> None:
+        """Register callback invoked when required strip height changes."""
+        self._height_change_callback = callback
+
+    @property
+    def required_height_px(self) -> int:
+        if self._display_mode == EventDisplayMode.OFF or self._effective_lod_mode == "markers_only":
+            return 14
+        active_lanes = max((int(p.lane) for p in self._last_placed if p.visible), default=0) + 1
+        return max(22, 12 + (active_lanes * 14))
 
     def set_visible(self, visible: bool) -> None:
         self._plot_item.setVisible(visible)
@@ -146,6 +206,9 @@ class PyQtGraphEventStripTrack:
                 self._plot_item.removeItem(item.line)
         self._items_by_id.clear()
         self._event_order.clear()
+        self._last_placed.clear()
+        self._clear_overflow_hints()
+        QToolTip.hideText()
 
     def set_display_mode(self, mode: EventDisplayMode | str) -> None:
         resolved = coerce_event_display_mode(mode)
@@ -313,12 +376,20 @@ class PyQtGraphEventStripTrack:
         x_min = float(x_min)
         x_max = float(x_max)
         pixel_width = max(int(pixels_width), 1)
-        max_lanes = 3
+        max_lanes = 2
         if self._options is not None:
-            max_lanes = max(2, min(3, int(getattr(self._options, "lanes", 3) or 3)))
+            requested_lanes = max(2, min(3, int(getattr(self._options, "lanes", 2) or 2)))
+            current_strip_height = 0
+            vb = self._plot_item.getViewBox()
+            if vb is not None:
+                with contextlib.suppress(Exception):
+                    current_strip_height = max(int(vb.height()), 0)
+            if current_strip_height >= 34:
+                max_lanes = requested_lanes
         min_gap = float(
             getattr(self._options, "min_px", 6) if self._options is not None else 6.0
         )
+        min_gap = max(min_gap, 8.0)
 
         visible_ids = []
         for event_id in self._event_order:
@@ -334,17 +405,31 @@ class PyQtGraphEventStripTrack:
         if self._display_mode != EventDisplayMode.INDICES:
             for item in self._items_by_id.values():
                 item.label.setVisible(False)
+        self._last_placed = []
+        self._clear_overflow_hints()
         if self._display_mode == EventDisplayMode.OFF or not visible_ids:
+            self._effective_lod_mode = "markers_only"
+            self._notify_height_if_changed()
             return
 
-        lod_mode = choose_event_label_lod(
+        if len(visible_ids) >= len(self._event_order):
+            for item in self._items_by_id.values():
+                item.label.setVisible(False)
+            self._effective_lod_mode = "markers_only"
+            self._notify_height_if_changed()
+            return
+
+        candidate_lod = choose_event_label_lod(
             visible_event_count=len(visible_ids),
             pixel_width=pixel_width,
-            min_spacing_px=max(14.0, min_gap * 1.25),
+            min_spacing_px=max(_MIN_SPACING_PX, min_gap * 2.0),
         )
+        lod_mode = self._lod_debouncer.update(candidate_lod)
+        self._effective_lod_mode = lod_mode
         if lod_mode == "markers_only":
             for item in self._items_by_id.values():
                 item.label.setVisible(False)
+            self._notify_height_if_changed()
             return
 
         x_to_px = self._x_to_px_mapper(x_min, x_max, pixel_width)
@@ -421,6 +506,8 @@ class PyQtGraphEventStripTrack:
                     )
             by_id[forced_id] = forced
 
+        self._last_placed = list(by_id.values())
+
         lane_step = 0.16
         lane_base = 0.45
         for event_id in visible_ids:
@@ -440,6 +527,13 @@ class PyQtGraphEventStripTrack:
         for event_id, item in self._items_by_id.items():
             if event_id not in visible_ids:
                 item.label.setVisible(False)
+        self._render_overflow_hints(
+            placed=list(self._last_placed),
+            pixel_width=pixel_width,
+            x_min=x_min,
+            x_max=x_max,
+        )
+        self._notify_height_if_changed()
 
     def _full_label_text(self, item: _StripItem) -> str:
         text = str(item.entry.text or "").strip()
@@ -464,6 +558,147 @@ class PyQtGraphEventStripTrack:
 
     def _display_label_text(self, item: _StripItem) -> str:
         return self._short_label_text(item)
+
+    def _notify_height_if_changed(self) -> None:
+        callback = self._height_change_callback
+        if not callable(callback):
+            return
+        required = int(self.required_height_px)
+        if abs(required - int(self._last_reported_height_px)) <= 2:
+            return
+        self._last_reported_height_px = required
+        with contextlib.suppress(Exception):
+            callback(required)
+
+    def _clear_overflow_hints(self) -> None:
+        for hint in self._overflow_hints.values():
+            with contextlib.suppress(Exception):
+                hint.hide()
+
+    def _overflow_hint_color(self) -> QColor:
+        color = QColor(str(CURRENT_THEME.get("text", "#000000")))
+        if not color.isValid():
+            color = QColor("#000000")
+        color.setAlpha(100)
+        return color
+
+    @staticmethod
+    def _px_to_data(x_px: float, x_min: float, x_max: float, pixel_width: int) -> float:
+        span = max(float(x_max - x_min), 1e-9)
+        width = max(int(pixel_width), 1)
+        ratio = float(x_px) / float(width)
+        return float(x_min + (ratio * span))
+
+    def _render_overflow_hints(
+        self,
+        *,
+        placed: list[PlacedLabel],
+        pixel_width: int,
+        x_min: float,
+        x_max: float,
+    ) -> None:
+        bucket_width = 80
+        if pixel_width <= 0:
+            self._clear_overflow_hints()
+            return
+        buckets: dict[int, int] = {}
+        for placement in placed:
+            if placement.visible:
+                continue
+            x_px = max(min(float(placement.x_px0), float(pixel_width - 1)), 0.0)
+            bucket = int(x_px // float(bucket_width))
+            buckets[bucket] = buckets.get(bucket, 0) + 1
+
+        active_buckets: set[int] = set()
+        color = self._overflow_hint_color()
+        for bucket, count in buckets.items():
+            x_px = (float(bucket) + 0.5) * float(bucket_width)
+            x_data = self._px_to_data(x_px, x_min, x_max, pixel_width)
+            hint = self._overflow_hints.get(bucket)
+            if hint is None:
+                hint = pg.TextItem(text="", color=color, anchor=(0.5, 0.5))
+                hint.setZValue(7)
+                self._overflow_hints[bucket] = hint
+                with contextlib.suppress(Exception):
+                    self._plot_item.addItem(hint)
+            with contextlib.suppress(Exception):
+                hint.setColor(color)
+                hint.setText(f"+{count}" if count > 1 else ".")
+                hint.setPos(float(x_data), 0.08)
+                hint.show()
+            active_buckets.add(bucket)
+
+        for bucket, hint in self._overflow_hints.items():
+            if bucket in active_buckets:
+                continue
+            with contextlib.suppress(Exception):
+                hint.hide()
+
+    def _hit_tolerance(self) -> float:
+        vb = self._plot_item.getViewBox()
+        if vb is None:
+            return 0.0
+        view_range = self._plot_item.viewRange()
+        if not view_range or len(view_range) < 1:
+            return 0.0
+        x_min, x_max = view_range[0]
+        span = max(float(x_max - x_min), 1e-9)
+        try:
+            pixel_width = max(int(vb.width()), 1)
+        except Exception:
+            pixel_width = 1
+        return (8.0 / float(pixel_width)) * span
+
+    def _find_event_near(self, x_data: float, *, tolerance_data: float) -> int | None:
+        if not self._event_order:
+            return None
+        x_value = float(x_data)
+        if not (x_value == x_value):
+            return None
+        best_id: int | None = None
+        best_delta = max(float(tolerance_data), 0.0)
+        for event_id in self._event_order:
+            item = self._items_by_id.get(event_id)
+            if item is None:
+                continue
+            delta = abs(float(item.entry.t) - x_value)
+            if delta <= best_delta:
+                best_delta = delta
+                best_id = int(event_id)
+        return best_id
+
+    def _label_is_truncated(self, item: _StripItem) -> bool:
+        full_text = self._full_label_text(item)
+        short_text = self._display_label_text(item)
+        return bool(full_text) and short_text != full_text
+
+    def _on_mouse_moved(self, pos: QPointF) -> None:
+        vb = self._plot_item.getViewBox()
+        if vb is None:
+            QToolTip.hideText()
+            return
+        scene_rect = self._plot_item.sceneBoundingRect()
+        if scene_rect is None or not scene_rect.contains(pos):
+            QToolTip.hideText()
+            return
+        mouse_data = vb.mapSceneToView(pos)
+        x_data = float(mouse_data.x())
+        hit_id = self._find_event_near(x_data, tolerance_data=self._hit_tolerance())
+        if hit_id is None:
+            QToolTip.hideText()
+            return
+        item = self._items_by_id.get(hit_id)
+        if item is None:
+            QToolTip.hideText()
+            return
+        hidden = not bool(item.label.isVisible())
+        truncated = self._label_is_truncated(item)
+        if not hidden and not truncated:
+            QToolTip.hideText()
+            return
+        full_text = self._full_label_text(item)
+        time_text = f"{float(item.entry.t):.{_TOOLTIP_TIME_DECIMALS}f}s"
+        QToolTip.showText(QCursor.pos(), f"{full_text}\n{time_text}")
 
     def _refresh_from_current_view(self) -> None:
         if not self._items_by_id:

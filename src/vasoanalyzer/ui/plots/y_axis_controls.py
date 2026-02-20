@@ -16,9 +16,9 @@ from utils import resource_path
 
 log = logging.getLogger(__name__)
 
-BUTTON_PX = 22
-ICON_PX = 18
-OUTER_GUTTER_PX = BUTTON_PX + 6
+BUTTON_PX = 18
+ICON_PX = 14
+OUTER_GUTTER_PX = BUTTON_PX + 2
 
 _BTN_SIZE = QSize(BUTTON_PX, BUTTON_PX)
 _ICON_SIZE = QSize(ICON_PX, ICON_PX)
@@ -41,6 +41,12 @@ __all__ = [
     "required_outer_gutter_px",
     "YAxisControls",
 ]
+
+
+def _logical_size(base_px: int, dpr: float) -> int:
+    """Scale logical control size for high-DPI while capping growth."""
+    factor = min(max(float(dpr), 1.0), 1.5)
+    return max(int(round(float(base_px) * factor)), 1)
 
 
 def _alpha_bbox(image: QImage, alpha_threshold: int = 0) -> tuple[int, int, int, int] | None:
@@ -238,7 +244,17 @@ def _template_svg_icon(
 
 def required_outer_gutter_px() -> int:
     """Minimum per-plot left gutter required by the Y control widgets."""
-    return int(OUTER_GUTTER_PX)
+    dpr = 1.0
+    app = QApplication.instance()
+    if app is not None:
+        with contextlib.suppress(Exception):
+            screen = app.primaryScreen()
+            if screen is not None:
+                ratio = float(screen.devicePixelRatio())
+                if ratio > 0.0:
+                    dpr = ratio
+    padding_px = max(int(OUTER_GUTTER_PX - BUTTON_PX), 0)
+    return int(_logical_size(BUTTON_PX, dpr) + padding_px)
 
 
 class YAxisControls(QWidget):
@@ -280,6 +296,11 @@ class YAxisControls(QWidget):
         self._menu_icon_path = resource_path("icons", "chevron-down.svg")
         self._plus_icon_path = resource_path("icons", "plus.svg")
         self._minus_icon_path = resource_path("icons", "minus.svg")
+        initial_dpr = self._current_dpr()
+        btn_px = _logical_size(BUTTON_PX, initial_dpr)
+        icon_px = _logical_size(ICON_PX, initial_dpr)
+        self._btn_size = QSize(btn_px, btn_px)
+        self._icon_size = QSize(icon_px, icon_px)
 
         self.menu_button_widget = QWidget(self)
         self.menu_button_widget.setObjectName("YAxisMenuButtonWidget")
@@ -295,8 +316,8 @@ class YAxisControls(QWidget):
         self.scale_menu_btn.setFocusPolicy(Qt.NoFocus)
         self.scale_menu_btn.setPopupMode(QToolButton.InstantPopup)
         self.scale_menu_btn.setToolTip("Y scale options")
-        self.scale_menu_btn.setFixedSize(_BTN_SIZE)
-        self.scale_menu_btn.setIconSize(_ICON_SIZE)
+        self.scale_menu_btn.setFixedSize(self._btn_size)
+        self.scale_menu_btn.setIconSize(self._icon_size)
         menu_layout.addWidget(self.scale_menu_btn)
         self.menu_button_widget.adjustSize()
 
@@ -305,7 +326,7 @@ class YAxisControls(QWidget):
         self.scale_buttons_widget.setAttribute(Qt.WA_StyledBackground, False)
         scale_layout = QVBoxLayout(self.scale_buttons_widget)
         scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.setSpacing(1)
+        scale_layout.setSpacing(2)
 
         self.zoom_in_btn = QToolButton(self.scale_buttons_widget)
         self.zoom_in_btn.setObjectName("YAxisZoomInButton")
@@ -313,8 +334,8 @@ class YAxisControls(QWidget):
         self.zoom_in_btn.setAutoRaise(True)
         self.zoom_in_btn.setFocusPolicy(Qt.NoFocus)
         self.zoom_in_btn.setToolTip("Scale up (+): bigger waveform")
-        self.zoom_in_btn.setFixedSize(_BTN_SIZE)
-        self.zoom_in_btn.setIconSize(_ICON_SIZE)
+        self.zoom_in_btn.setFixedSize(self._btn_size)
+        self.zoom_in_btn.setIconSize(self._icon_size)
         self.zoom_in_btn.clicked.connect(self._handle_zoom_in_triggered)
         scale_layout.addWidget(self.zoom_in_btn)
 
@@ -324,8 +345,8 @@ class YAxisControls(QWidget):
         self.zoom_out_btn.setAutoRaise(True)
         self.zoom_out_btn.setFocusPolicy(Qt.NoFocus)
         self.zoom_out_btn.setToolTip("Scale down (-): smaller waveform")
-        self.zoom_out_btn.setFixedSize(_BTN_SIZE)
-        self.zoom_out_btn.setIconSize(_ICON_SIZE)
+        self.zoom_out_btn.setFixedSize(self._btn_size)
+        self.zoom_out_btn.setIconSize(self._icon_size)
         self.zoom_out_btn.clicked.connect(self._handle_zoom_out_triggered)
         scale_layout.addWidget(self.zoom_out_btn)
         self.scale_buttons_widget.adjustSize()
@@ -365,31 +386,30 @@ class YAxisControls(QWidget):
             QToolButton {
                 padding: 0px;
                 margin: 0px;
+                background: transparent;
             }
             QToolButton#YAxisScaleMenuButton,
             QToolButton#YAxisZoomInButton,
             QToolButton#YAxisZoomOutButton {
-                border: 1px solid rgba(127, 127, 127, 70);
-                background: transparent;
-                border-radius: 4px;
-                font-weight: 700;
-                font-size: 12px;
+                border: 1px solid palette(mid);
+                background: palette(base);
+                border-radius: 2px;
+                font-weight: 600;
+                font-size: 11px;
             }
             QToolButton#YAxisScaleMenuButton[continuousEnabled="true"] {
-                border: 1px solid rgba(84, 153, 255, 160);
-                background: rgba(84, 153, 255, 42);
+                border: 1px solid palette(highlight);
+                background: palette(button);
             }
             QToolButton#YAxisScaleMenuButton:hover,
             QToolButton#YAxisZoomInButton:hover,
             QToolButton#YAxisZoomOutButton:hover {
-                border: 1px solid rgba(127, 127, 127, 120);
-                background: rgba(127, 127, 127, 24);
+                background: palette(button);
             }
             QToolButton#YAxisScaleMenuButton:pressed,
             QToolButton#YAxisZoomInButton:pressed,
             QToolButton#YAxisZoomOutButton:pressed {
-                border: 1px solid rgba(127, 127, 127, 150);
-                background: rgba(127, 127, 127, 42);
+                background: palette(midlight);
             }
             """
         )
@@ -458,6 +478,7 @@ class YAxisControls(QWidget):
         self.refresh_state()
 
     def _apply_icons(self) -> None:
+        self._apply_dpr_sizes()
         color = self._icon_tint_color()
         dpr = self._current_dpr()
 
@@ -485,6 +506,20 @@ class YAxisControls(QWidget):
             color=color,
             dpr=dpr,
         )
+
+    def _apply_dpr_sizes(self) -> None:
+        dpr = self._current_dpr()
+        btn_px = _logical_size(BUTTON_PX, dpr)
+        icon_px = _logical_size(ICON_PX, dpr)
+        next_btn_size = QSize(btn_px, btn_px)
+        next_icon_size = QSize(icon_px, icon_px)
+        if next_btn_size == self._btn_size and next_icon_size == self._icon_size:
+            return
+        self._btn_size = next_btn_size
+        self._icon_size = next_icon_size
+        for button in (self.scale_menu_btn, self.zoom_in_btn, self.zoom_out_btn):
+            button.setFixedSize(self._btn_size)
+            button.setIconSize(self._icon_size)
 
     def _apply_button_icon(
         self,

@@ -71,6 +71,24 @@ class AxisWidthSync(QObject):
     def axis_width_px(self) -> int:
         return int(self._current_axis_width_px)
 
+    def set_min_from_sample_text(self, text: str, font) -> None:
+        """Raise the minimum axis width based on a representative tick label string."""
+        sample = str(text or "")
+        if not sample:
+            return
+        metrics = QFontMetricsF(font)
+        width_px = 0.0
+        with contextlib.suppress(AttributeError):
+            width_px = float(metrics.horizontalAdvance(sample))
+        if width_px <= 0.0:
+            with contextlib.suppress(Exception):
+                width_px = float(metrics.width(sample))
+        target = max(int(math.ceil(width_px + self._axis_padding_px)), 0)
+        if target <= self._min_axis_width_px:
+            return
+        self._min_axis_width_px = int(target)
+        self.request_sync()
+
     def left_column_width_px(self) -> int:
         return int(self._current_axis_width_px + self._left_gutter_px)
 
@@ -142,16 +160,7 @@ class AxisWidthSync(QObject):
         except Exception:
             pass
 
-        geometry_widths: list[float] = []
         tick_text_widths: list[float] = []
-        label_width = 0.0
-
-        with contextlib.suppress(Exception):
-            geometry_widths.append(float(axis.boundingRect().width()))
-        with contextlib.suppress(Exception):
-            geometry_widths.append(float(axis.size().width()))
-        with contextlib.suppress(Exception):
-            geometry_widths.append(float(axis.width()))
 
         tick_font = None
         with contextlib.suppress(Exception):
@@ -184,15 +193,12 @@ class AxisWidthSync(QObject):
                                 width_px = float(metrics.width(str(text)))
                         tick_text_widths.append(width_px)
 
-        with contextlib.suppress(Exception):
-            label = getattr(axis, "label", None)
-            if label is not None:
-                label_rect = label.boundingRect()
-                label_width = max(label_width, float(label_rect.height()))
-
         tick_text_offset = 0.0
         with contextlib.suppress(Exception):
             tick_text_offset = float(axis.style.get("tickTextOffset", 0) or 0.0)
+        style_text_width = 0.0
+        with contextlib.suppress(Exception):
+            style_text_width = float(axis.style.get("tickTextWidth", 0) or 0.0)
 
         if tick_text_widths:
             measured = max(
@@ -200,10 +206,14 @@ class AxisWidthSync(QObject):
                 default=0.0,
             )
         else:
-            measured = max(
-                (value for value in geometry_widths if math.isfinite(value)),
-                default=0.0,
-            )
-        measured = max(measured, label_width)
+            measured = 0.0
+        measured = max(measured, style_text_width)
+        if measured <= 0.0:
+            with contextlib.suppress(Exception):
+                measured = max(measured, float(axis.width()))
+            with contextlib.suppress(Exception):
+                measured = max(measured, float(axis.size().width()))
+            with contextlib.suppress(Exception):
+                measured = max(measured, float(axis.boundingRect().width()))
         measured += tick_text_offset + self._axis_padding_px
         return max(int(math.ceil(measured)), 0)

@@ -30,7 +30,7 @@ class ProjectExplorerWidget(QDockWidget):
         empty_title.setMaximumHeight(0)
         self.setTitleBarWidget(empty_title)
         self.setAllowedAreas(Qt.LeftDockWidgetArea)
-        self.setMinimumWidth(220)
+        self.setMinimumWidth(240)
 
         container = QWidget(self)
         container_layout = QVBoxLayout(container)
@@ -94,6 +94,11 @@ class ProjectExplorerWidget(QDockWidget):
         panel_border = CURRENT_THEME.get("panel_border", border)
         panel_radius = int(CURRENT_THEME.get("panel_radius", 6))
         text = CURRENT_THEME.get("text", "#000000")
+        alt = CURRENT_THEME.get("alternate_bg", bg)
+        hover = CURRENT_THEME.get("table_hover", alt)
+        selection = CURRENT_THEME.get("selection_bg", hover)
+        selection_text = CURRENT_THEME.get("highlighted_text", text)
+        muted = CURRENT_THEME.get("text_disabled", text)
 
         self.setStyleSheet(
             f"""
@@ -109,17 +114,43 @@ class ProjectExplorerWidget(QDockWidget):
                 background: {panel_bg};
                 border: 1px solid {panel_border};
                 border-radius: {panel_radius}px;
-                padding: 2px 2px 4px 2px;
+                padding: 3px 3px 4px 3px;
+            }}
+            QLabel#ProjectHeaderLabel {{
+                color: {text};
+                font-size: 10.5pt;
+                font-weight: 600;
             }}
             QTreeWidget#ProjectTree {{
                 background: {panel_bg};
                 border: none;
+                font-size: 10.5pt;
+                padding: 2px 0px;
             }}
             QTreeWidget#ProjectTree::item {{
-                background: {panel_bg};
+                background: transparent;
+                color: {text};
+                border: 1px solid transparent;
+                border-radius: {max(2, panel_radius)}px;
+                margin: 1px 3px;
+                padding: 3px 8px;
+                min-height: 21px;
+            }}
+            QTreeWidget#ProjectTree::item:hover {{
+                background: {hover};
             }}
             QTreeWidget#ProjectTree::item:alternate {{
-                background: {CURRENT_THEME.get("alternate_bg", bg)};
+                background: {alt};
+            }}
+            QTreeWidget#ProjectTree::item:selected {{
+                background: {selection};
+                color: {selection_text};
+                border: 1px solid {panel_border};
+            }}
+            QLabel#ProjectEmptyState {{
+                color: {muted};
+                font-size: 10pt;
+                padding: 4px 6px 6px 6px;
             }}
         """
         )

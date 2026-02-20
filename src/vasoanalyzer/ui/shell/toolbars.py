@@ -492,29 +492,31 @@ def _apply_toolbar_styles(toolbar: CustomToolbar) -> None:
     hover_bg = CURRENT_THEME.get("button_hover_bg", CURRENT_THEME.get("selection_bg", bg))
     checked_bg = CURRENT_THEME.get("selection_bg", hover_bg)
     pressed_bg = CURRENT_THEME.get("button_active_bg", checked_bg)
+    checked_border = CURRENT_THEME.get("accent", border_color)
     text_color = CURRENT_THEME["text"]
     disabled_text = CURRENT_THEME.get("text_disabled", text_color)
+    radius = int(CURRENT_THEME.get("panel_radius", 4))
     toolbar.setStyleSheet(
         f"""
         QToolBar#PlotToolbar {{
             background: {bg};
             border: 1px solid {border_color};
-            border-radius: 6px;
-            padding: 4px 6px;
-            spacing: 4px;
+            border-radius: {radius}px;
+            padding: 3px 4px;
+            spacing: 3px;
         }}
         QToolBar#PlotToolbar::separator {{
             background: {separator_color};
             width: 1px;
-            margin: 2px 8px;
+            margin: 3px 6px;
         }}
         QToolBar#PlotToolbar QToolButton {{
             background: {button_bg};
             border: 1px solid {border_color};
-            border-radius: 6px;
-            margin: 1px 3px;
-            padding: 5px 8px;
-            min-width: 48px;
+            border-radius: {radius}px;
+            margin: 1px 2px;
+            padding: 4px 7px;
+            min-width: 44px;
             color: {text_color};
         }}
         QToolBar#PlotToolbar QToolButton:disabled {{
@@ -527,11 +529,12 @@ def _apply_toolbar_styles(toolbar: CustomToolbar) -> None:
         }}
         QToolBar#PlotToolbar QToolButton:checked {{
             background: {checked_bg};
+            border: 1px solid {checked_border};
             color: {text_color};
         }}
         QToolBar#PlotToolbar QToolButton:checked:hover {{
             background: {checked_bg};
-            border: 1px solid {border_color};
+            border: 1px solid {checked_border};
             color: {text_color};
         }}
         QToolBar#PlotToolbar QToolButton:pressed {{

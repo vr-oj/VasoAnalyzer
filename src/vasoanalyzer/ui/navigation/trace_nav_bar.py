@@ -8,6 +8,7 @@ from typing import Any
 
 from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -67,8 +68,8 @@ class TraceNavBar(QFrame):
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(6)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
 
         self.btn_step_left = self._make_button("<", "Step left by one window")
         self.btn_step_right = self._make_button(">", "Step right by one window")
@@ -86,6 +87,7 @@ class TraceNavBar(QFrame):
             self.preset_combo.addItem(label, seconds)
         self.preset_combo.setCurrentText("10s")
         self.preset_combo.setToolTip("Time compression presets")
+        self.preset_combo.setMinimumWidth(74)
 
         self.time_mode_combo = QComboBox(self)
         self.time_mode_combo.setObjectName("TraceNavTimeModeCombo")
@@ -93,6 +95,7 @@ class TraceNavBar(QFrame):
         self.time_mode_combo.addItem("Seconds", TimeMode.SECONDS.value)
         self.time_mode_combo.addItem("MM:SS", TimeMode.MMSS.value)
         self.time_mode_combo.addItem("HH:MM:SS", TimeMode.HHMMSS.value)
+        self.time_mode_combo.setMinimumWidth(94)
 
         self.scrollbar = QScrollBar(Qt.Horizontal, self)
         self.scrollbar.setObjectName("TraceNavTimeScrollbar")
@@ -103,10 +106,15 @@ class TraceNavBar(QFrame):
         self.scrollbar.setTracking(True)
         self.scrollbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        self.duration_label = QLabel("Duration: --", self)
+        self.duration_label = QLabel("Dur --", self)
         self.duration_label.setObjectName("TraceNavDurationLabel")
-        self.view_label = QLabel("View: --", self)
+        self.duration_label.setMinimumWidth(92)
+        self.duration_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.view_label = QLabel("View --", self)
         self.view_label.setObjectName("TraceNavViewLabel")
+        self.view_label.setMinimumWidth(260)
+        self.view_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.view_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         self.btn_step_left.clicked.connect(lambda: self._step_pages(-1))
         self.btn_step_right.clicked.connect(lambda: self._step_pages(1))
@@ -120,6 +128,7 @@ class TraceNavBar(QFrame):
         self.scrollbar.sliderReleased.connect(self._on_scrollbar_released)
         self.scrollbar.sliderMoved.connect(self._on_scrollbar_moved)
         self.scrollbar.valueChanged.connect(self._on_scrollbar_value_changed)
+        self._apply_logical_control_sizes()
 
         layout.addWidget(self.btn_step_left)
         layout.addWidget(self.btn_step_right)
@@ -132,6 +141,45 @@ class TraceNavBar(QFrame):
         layout.addWidget(self.duration_label)
         layout.addWidget(self.view_label)
         layout.addWidget(self.btn_autoscale_all)
+
+    def _current_dpr(self) -> float:
+        with contextlib.suppress(Exception):
+            window = self.window()
+            if window is not None:
+                handle = window.windowHandle()
+                if handle is not None and handle.screen() is not None:
+                    ratio = float(handle.screen().devicePixelRatio())
+                    if ratio > 0.0:
+                        return ratio
+        app = QApplication.instance()
+        if app is not None:
+            with contextlib.suppress(Exception):
+                screen = app.primaryScreen()
+                if screen is not None:
+                    ratio = float(screen.devicePixelRatio())
+                    if ratio > 0.0:
+                        return ratio
+        return 1.0
+
+    def _logical_size(self, base_px: int) -> int:
+        factor = min(max(self._current_dpr(), 1.0), 1.5)
+        return max(int(round(float(base_px) * factor)), 1)
+
+    def _apply_logical_control_sizes(self) -> None:
+        button_h = self._logical_size(24)
+        for button in (
+            self.btn_step_left,
+            self.btn_step_right,
+            self.btn_zoom_out,
+            self.btn_zoom_in,
+            self.btn_all,
+            self.btn_autoscale_all,
+        ):
+            button.setMinimumHeight(button_h)
+            button.setMinimumWidth(self._logical_size(24))
+        self.preset_combo.setMinimumHeight(button_h)
+        self.time_mode_combo.setMinimumHeight(button_h)
+        self.scrollbar.setFixedHeight(max(self._logical_size(14), 12))
 
     def _make_button(self, text: str, tooltip: str) -> QPushButton:
         button = QPushButton(text, self)
@@ -189,25 +237,28 @@ class TraceNavBar(QFrame):
 
     def apply_theme(self) -> None:
         bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
-        border = CURRENT_THEME.get("grid_color", "#D0D0D0")
+        border = CURRENT_THEME.get("panel_border", CURRENT_THEME.get("grid_color", "#D0D0D0"))
         text = CURRENT_THEME.get("text", "#000000")
+        status_text = CURRENT_THEME.get("text_disabled", text)
         button_bg = CURRENT_THEME.get("button_bg", bg)
         button_hover = CURRENT_THEME.get("button_hover_bg", button_bg)
         button_active = CURRENT_THEME.get("button_active_bg", button_hover)
+        selection = CURRENT_THEME.get("selection_bg", button_hover)
+        radius = int(CURRENT_THEME.get("panel_radius", 4))
         self.setStyleSheet(
             f"""
 QFrame#TraceNavBar {{
     background: {bg};
     border: 1px solid {border};
-    border-radius: 8px;
+    border-radius: {radius}px;
 }}
 QPushButton#TraceNavButton {{
     background: {button_bg};
     color: {text};
     border: 1px solid {border};
-    border-radius: 4px;
-    padding: 2px 8px;
-    font-weight: 600;
+    border-radius: {radius}px;
+    padding: 1px 7px;
+    font-weight: 500;
 }}
 QPushButton#TraceNavButton:hover {{
     background: {button_hover};
@@ -215,9 +266,51 @@ QPushButton#TraceNavButton:hover {{
 QPushButton#TraceNavButton:pressed {{
     background: {button_active};
 }}
+QPushButton#TraceNavButton:disabled {{
+    color: {status_text};
+}}
+QComboBox#TraceNavPresetCombo,
+QComboBox#TraceNavTimeModeCombo {{
+    background: {button_bg};
+    color: {text};
+    border: 1px solid {border};
+    border-radius: {radius}px;
+    padding: 1px 6px;
+}}
+QComboBox#TraceNavPresetCombo:hover,
+QComboBox#TraceNavTimeModeCombo:hover {{
+    background: {button_hover};
+}}
+QComboBox#TraceNavPresetCombo QAbstractItemView,
+QComboBox#TraceNavTimeModeCombo QAbstractItemView {{
+    background: {bg};
+    color: {text};
+    selection-background-color: {selection};
+}}
+QScrollBar#TraceNavTimeScrollbar:horizontal {{
+    height: 14px;
+    border: 1px solid {border};
+    border-radius: 6px;
+    background: {button_bg};
+}}
+QScrollBar#TraceNavTimeScrollbar::handle:horizontal {{
+    background: {selection};
+    border: 1px solid {border};
+    border-radius: 5px;
+    min-width: 26px;
+}}
+QScrollBar#TraceNavTimeScrollbar::add-line:horizontal,
+QScrollBar#TraceNavTimeScrollbar::sub-line:horizontal {{
+    width: 0px;
+}}
+QScrollBar#TraceNavTimeScrollbar::add-page:horizontal,
+QScrollBar#TraceNavTimeScrollbar::sub-page:horizontal {{
+    background: transparent;
+}}
 QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
     color: {text};
-    font-weight: 600;
+    font-size: 9.5pt;
+    font-weight: 500;
 }}
 """
         )
@@ -248,10 +341,11 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         units_per_second = self._units_per_second(total_span)
         self._current_units_per_second = units_per_second
 
-        self.duration_label.setText(f"Duration: {self._format_seconds(duration)}")
+        self.duration_label.setText(f"Dur {self._format_seconds(duration)}")
         self.view_label.setText(
-            f"View: {self._format_seconds(t0)} - {self._format_seconds(t1)} / {self._format_seconds(total_span)}"
+            f"View {self._format_seconds(t0)} - {self._format_seconds(t1)} / {self._format_seconds(total_span)}"
         )
+        self.btn_all.setToolTip(f"All ({self._format_seconds(total_span)})")
 
         travel = max(total_span - duration, 0.0)
         slider_max = max(0, self._s_to_u(travel, units_per_second=units_per_second))
@@ -290,8 +384,9 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
             widget.setEnabled(enabled)
 
     def _set_disabled_state(self) -> None:
-        self.duration_label.setText("Duration: --")
-        self.view_label.setText("View: --")
+        self.duration_label.setText("Dur --")
+        self.view_label.setText("View --")
+        self.btn_all.setToolTip("Show full recording")
         self._scrollbar_dragging = False
         self._updating_slider = True
         blocker = QSignalBlocker(self.scrollbar)

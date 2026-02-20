@@ -87,7 +87,10 @@ class PyQtGraphCanvasCompat(QWidget):
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         """Intercept Qt events and translate to matplotlib-style events."""
-        if obj != self._pg_widget:
+        pg_widget = getattr(self, "_pg_widget", None)
+        if pg_widget is None:
+            return False
+        if obj != pg_widget:
             return False
 
         # WHEEL EVENTS: Translate to matplotlib scroll_event (for compatibility only)

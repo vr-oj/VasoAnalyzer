@@ -72,8 +72,11 @@ class PyQtGraphPlotHost(InteractionHost):
     while maintaining a compatible interface for easy integration.
     """
 
-    _AXIS_WIDTH_PX = 80
+    _AXIS_WIDTH_PX = 62
     _EVENT_STRIP_HEIGHT_PX = 22
+    _LEFT_AXIS_TICK_TEXT_OFFSET_PX = 6
+    _LEFT_AXIS_TICK_TEXT_WIDTH_PX = 40
+    _LEFT_AXIS_TICK_TEXT_HEIGHT_PX = 16
 
     def __init__(self, *, dpi: int = 100, enable_opengl: bool = True) -> None:
         """Initialize PyQtGraph plot host.
@@ -151,7 +154,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_font_size = float(style.font_size)
         self._tick_font_size = float(style.tick_font_size)
         self._time_mode = TimeMode.AUTO
-        self._default_line_width: float = 4.0
+        self._default_line_width: float = 1.6
         self._xrange_debug_connected = False
         self._xrange_debug_view_box = None
         self._xrange_debug_getter = None
@@ -180,7 +183,7 @@ class PyQtGraphPlotHost(InteractionHost):
             shrink_delay_s=0.5,
             axis_padding_px=8.0,
             min_axis_width_px=self._AXIS_WIDTH_PX,
-            left_gutter_px=int(required_outer_gutter_px()),
+            left_gutter_px=0,
         )
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
@@ -228,7 +231,7 @@ class PyQtGraphPlotHost(InteractionHost):
             try:
                 track.view.apply_theme()
                 plot_item = track.view.get_widget().getPlotItem()
-                plot_item.getViewBox().setBorder(self._lane_border_pen)
+                plot_item.getViewBox().setBorder(pg.mkPen(None))
             except Exception:
                 pass
 
@@ -614,8 +617,11 @@ class PyQtGraphPlotHost(InteractionHost):
             self._event_strip_track = PyQtGraphEventStripTrack(
                 self._event_strip_widget.getPlotItem()
             )
+            self._event_strip_track.set_height_change_callback(self._on_event_strip_height_requested)
         elif self._event_strip_widget is not None:
             self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
+        if self._event_strip_track is not None:
+            self._event_strip_track.set_height_change_callback(self._on_event_strip_height_requested)
 
         visible_specs = [
             spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
@@ -645,13 +651,19 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 track.view.set_time_mode(self._time_mode)
             with contextlib.suppress(Exception):
-                track.view.set_left_outer_gutter_px(self._axis_width_sync.left_gutter_px())
+                track.view.set_left_outer_gutter_px(0)
 
             stretch = max(int(spec.height_ratio * 100), 1)
             self.layout.addWidget(track.widget, stretch)
             new_tracks[spec.track_id] = track
 
             plot_item = track.view.get_widget().getPlotItem()
+            with contextlib.suppress(Exception):
+                plot_item.hideButtons()
+            with contextlib.suppress(Exception):
+                plot_item.setMenuEnabled(False)
+            with contextlib.suppress(Exception):
+                plot_item.getViewBox().setMenuEnabled(False)
             plot_items.append(plot_item)
             left_axes.append(plot_item.getAxis("left"))
 
@@ -667,7 +679,7 @@ class PyQtGraphPlotHost(InteractionHost):
             )
 
             view_box = plot_item.getViewBox()
-            view_box.setBorder(self._lane_border_pen)
+            view_box.setBorder(pg.mkPen(None))
 
             axes_wrapper = track.ax
             if hasattr(axes_wrapper, "set_grid_callback"):
@@ -713,6 +725,11 @@ class PyQtGraphPlotHost(InteractionHost):
         if self._event_strip_track is not None and self._event_strip_widget is not None:
             if primary_plot_item is not None:
                 self._event_strip_track.plot_item.setXLink(primary_plot_item)
+            with contextlib.suppress(Exception):
+                strip_plot = self._event_strip_track.plot_item
+                strip_plot.hideButtons()
+                strip_plot.setMenuEnabled(False)
+                strip_plot.getViewBox().setMenuEnabled(False)
             self.layout.addWidget(self._event_strip_widget, 0)
 
         self._time_cursor_overlay.sync_tracks(plot_items)
@@ -742,17 +759,12 @@ class PyQtGraphPlotHost(InteractionHost):
                 track.view.set_left_outer_gutter_px(gutter_px)
 
     def _apply_track_dividers(self) -> None:
-        visible_ids = [
-            spec.track_id
-            for spec in self._channel_specs
-            if spec.track_id in self._tracks and self.is_channel_visible(spec.track_id)
-        ]
-        bottom_visible_id = visible_ids[-1] if visible_ids else None
+        bottom_visible_id = self._bottom_visible_track_id
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
             if track is None:
                 continue
-            show_divider = bool(track.is_visible()) and spec.track_id != bottom_visible_id
+            show_divider = bool(track.is_visible() and spec.track_id != bottom_visible_id)
             with contextlib.suppress(Exception):
                 track.set_divider_visible(show_divider)
 
@@ -1117,7 +1129,7 @@ class PyQtGraphPlotHost(InteractionHost):
         trace_count = self._count_visible_tracks()
         for track in self._tracks.values():
             with contextlib.suppress(Exception):
-                track.view.set_left_outer_gutter_px(self._axis_width_sync.left_gutter_px())
+                track.view.set_left_outer_gutter_px(0)
             self._apply_axis_font_to_track(track, trace_count=trace_count)
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
@@ -1186,6 +1198,14 @@ class PyQtGraphPlotHost(InteractionHost):
         left_width = self._axis_width_sync.left_column_width_px()
         if left_width <= 0:
             left_width = self._axis_width_px(ref_plot_item.getAxis("left")) or self._AXIS_WIDTH_PX
+        gutter_width = 0
+        gutter_width_getter = getattr(ref_track, "gutter_width_px", None)
+        if callable(gutter_width_getter):
+            with contextlib.suppress(Exception):
+                gutter_width = max(int(gutter_width_getter()), 0)
+        if gutter_width <= 0:
+            gutter_width = int(required_outer_gutter_px())
+        left_width += int(gutter_width)
         right_width = self._axis_width_px(ref_plot_item.getAxis("right"))
 
         strip_plot_item = self._event_strip_track.plot_item
@@ -1208,6 +1228,15 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 bottom_axis.setHeight(0)
 
+    def _on_event_strip_height_requested(self, height_px: int) -> None:
+        if self._event_strip_widget is None:
+            return
+        target = max(int(height_px), 14)
+        current = int(self._event_strip_widget.height())
+        if abs(target - current) <= 2:
+            return
+        self._event_strip_widget.setFixedHeight(target)
+
     def _apply_event_label_options(self) -> None:
         if not self._tracks:
             return
@@ -1223,7 +1252,6 @@ class PyQtGraphPlotHost(InteractionHost):
             track.view.set_hovered_event_index(self._hovered_event_index)
             track.view.refresh_event_markers()
         if self._event_strip_track is not None and self._event_strip_widget is not None:
-            self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
             show_strip = bool(self._event_entries) and self._event_display_mode != EventDisplayMode.OFF
             self._event_strip_widget.setVisible(show_strip)
             self._event_strip_track.set_visible(show_strip)
@@ -1232,6 +1260,9 @@ class PyQtGraphPlotHost(InteractionHost):
                 self._event_strip_track.set_display_mode(self._event_display_mode)
                 self._event_strip_track.set_selected_event(self._selected_event_index)
                 self._event_strip_track.set_hovered_event(self._hovered_event_index)
+                self._on_event_strip_height_requested(self._event_strip_track.required_height_px)
+            else:
+                self._on_event_strip_height_requested(self._EVENT_STRIP_HEIGHT_PX)
 
     def _on_track_event_hover(self, index: int | None) -> None:
         resolved = None if index is None else int(index)
@@ -1454,9 +1485,10 @@ class PyQtGraphPlotHost(InteractionHost):
         tick_size = int(round(self._tick_font_size))
         label_size = int(round(self._axis_font_size))
 
-        ylabel_font = QFont(self._axis_font_family, label_size)
+        ylabel_font = QFont(self._axis_font_family, max(label_size - 2, 7))
         xlabel_font = QFont(self._axis_font_family, label_size)
         tick_font = QFont(self._axis_font_family, tick_size)
+        self._axis_width_sync.set_min_from_sample_text("-999.9", tick_font)
 
         left_axis = plot_item.getAxis("left")
         label_key = getattr(getattr(track, "spec", None), "component", None) or track.id
@@ -1476,9 +1508,11 @@ class PyQtGraphPlotHost(InteractionHost):
             left_axis.setTickLength(5, 0)
             left_axis.setTickDensity(tick_style.density)
             left_axis.setStyle(
-                tickTextOffset=tick_style.text_offset,
-                tickTextWidth=tick_style.text_width,
-                tickTextHeight=tick_style.text_height,
+                tickTextOffset=self._LEFT_AXIS_TICK_TEXT_OFFSET_PX,
+                tickTextWidth=self._LEFT_AXIS_TICK_TEXT_WIDTH_PX,
+                tickTextHeight=self._LEFT_AXIS_TICK_TEXT_HEIGHT_PX,
+                autoExpandTextSpace=False,
+                autoReduceTextSpace=False,
             )
         self._recenter_axis_label(left_axis, height_px)
 
@@ -1490,9 +1524,11 @@ class PyQtGraphPlotHost(InteractionHost):
                 right_axis.setTickFont(tick_font)
                 right_axis.setTickDensity(tick_style.density)
                 right_axis.setStyle(
-                    tickTextOffset=tick_style.text_offset,
-                    tickTextWidth=tick_style.text_width,
-                    tickTextHeight=tick_style.text_height,
+                    tickTextOffset=self._LEFT_AXIS_TICK_TEXT_OFFSET_PX,
+                    tickTextWidth=self._LEFT_AXIS_TICK_TEXT_WIDTH_PX,
+                    tickTextHeight=self._LEFT_AXIS_TICK_TEXT_HEIGHT_PX,
+                    autoExpandTextSpace=False,
+                    autoReduceTextSpace=False,
                 )
 
         # Use cached bottom track ID (single source of truth)
@@ -1823,7 +1859,6 @@ class PyQtGraphPlotHost(InteractionHost):
         for track in self._tracks.values():
             track.set_events(times, colors, labels, label_meta=self._event_label_meta)
         if self._event_strip_track is not None and self._event_strip_widget is not None:
-            self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
             show_strip = bool(entries) and self._event_display_mode != EventDisplayMode.OFF
             self._event_strip_widget.setVisible(show_strip)
             self._event_strip_track.set_visible(show_strip)
@@ -1831,6 +1866,7 @@ class PyQtGraphPlotHost(InteractionHost):
             self._event_strip_track.set_display_mode(self._event_display_mode)
             self._event_strip_track.set_selected_event(self._selected_event_index)
             self._event_strip_track.set_hovered_event(None)
+            self._on_event_strip_height_requested(self._event_strip_track.required_height_px)
         self._apply_event_label_options()
 
     def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:

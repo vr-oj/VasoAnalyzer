@@ -1,10 +1,11 @@
-"""Frame wrapper for contiguous stacked tracks with internal divider painting."""
+"""Frame wrapper for contiguous stacked tracks with per-track outline painting."""
 
 from __future__ import annotations
 
-from PyQt5.QtGui import QPainter
-from PyQt5.QtGui import QPalette
+from PyQt5.QtGui import QColor, QPainter
 from PyQt5.QtWidgets import QVBoxLayout, QWidget
+
+from vasoanalyzer.ui.theme import CURRENT_THEME
 
 TRACK_DIVIDER_THICKNESS_PX = 2
 
@@ -12,7 +13,7 @@ __all__ = ["TRACK_DIVIDER_THICKNESS_PX", "TrackFrame"]
 
 
 class TrackFrame(QWidget):
-    """Wrap one track widget and paint an internal bottom divider line."""
+    """Wrap one track widget and paint a visible outline around the track."""
 
     def __init__(
         self,
@@ -54,6 +55,25 @@ class TrackFrame(QWidget):
     def divider_thickness(self) -> int:
         return int(self._divider_thickness)
 
+    def _divider_color(self) -> QColor:
+        color_hex = CURRENT_THEME.get("plot_divider", CURRENT_THEME.get("border", None))
+        if color_hex:
+            color = QColor(str(color_hex))
+            if color.isValid():
+                return color
+
+        bg = QColor(str(CURRENT_THEME.get("plot_bg", "#FFFFFF")))
+        if not bg.isValid():
+            bg = QColor("#FFFFFF")
+        fg = QColor(str(CURRENT_THEME.get("text", "#000000")))
+        if not fg.isValid():
+            fg = QColor("#000000")
+        return QColor(
+            (bg.red() + fg.red()) // 2,
+            (bg.green() + fg.green()) // 2,
+            (bg.blue() + fg.blue()) // 2,
+        )
+
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().paintEvent(event)
         if not self._divider_visible or self._divider_thickness <= 0:
@@ -61,15 +81,16 @@ class TrackFrame(QWidget):
         if self.width() <= 0 or self.height() <= 0:
             return
 
-        color = self.palette().color(QPalette.Mid)
-        if not color.isValid():
-            color = self.palette().color(QPalette.Dark)
+        color = self._divider_color()
         if not color.isValid():
             return
 
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, False)
-        thickness = min(self._divider_thickness, self.height())
-        y = max(self.height() - thickness, 0)
-        painter.fillRect(0, y, self.width(), thickness, color)
+        thickness = max(1, min(self._divider_thickness, self.width(), self.height()))
+        width = int(self.width())
+        height = int(self.height())
+
+        # Draw a clear separator between stacked channels.
+        painter.fillRect(0, max(height - thickness, 0), width, thickness, color)
         painter.end()

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, QSize, Qt
+from PyQt5.QtCore import QEvent, QPoint, Qt
 
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
-from vasoanalyzer.ui.plots.pyqtgraph_trace_view import (
-    PyQtGraphTraceView,
-    axis_controls_top_left_for_viewbox,
-)
+from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
 from vasoanalyzer.ui.plots.y_axis_controls import (
     BUTTON_PX,
     ICON_PX,
@@ -28,20 +25,6 @@ def test_pyqtgraph_trace_view_hides_builtin_hover_buttons(qt_app) -> None:
         qt_app.processEvents()
 
 
-def test_axis_controls_anchor_stays_left_of_viewbox() -> None:
-    viewbox_rect = QRect(84, 8, 620, 188)
-    x, y = axis_controls_top_left_for_viewbox(
-        viewbox_rect=viewbox_rect,
-        controls_width=24,
-        controls_height=16,
-        widget_width=720,
-        widget_height=220,
-        margin=2,
-    )
-    assert x + 24 <= viewbox_rect.left()
-    assert y >= viewbox_rect.top()
-
-
 def test_y_axis_controls_presence_and_state_sync(qt_app) -> None:
     track = PyQtGraphChannelTrack(
         ChannelTrackSpec(
@@ -58,12 +41,12 @@ def test_y_axis_controls_presence_and_state_sync(qt_app) -> None:
         qt_app.processEvents()
 
         plot_widget = track.view.get_widget()
-        controls = plot_widget.findChild(YAxisControls)
+        controls = track.widget.findChild(YAxisControls)
         assert controls is not None
-        assert controls.parent() is plot_widget
+        assert controls.parent() is track.gutter_widget
         assert controls.menu_btn.menu() is controls._menu
-        assert controls.menu_button_widget.parent() is plot_widget
-        assert controls.scale_buttons_widget.parent() is plot_widget
+        assert controls.menu_button_widget.parent() is track.gutter_widget
+        assert controls.scale_buttons_widget.parent() is track.gutter_widget
 
         assert widget.findChild(YAxisControls) is controls
         assert widget.findChild(type(controls.menu_btn), "ChannelTrackMenuButton") is None
@@ -90,15 +73,18 @@ def test_y_axis_controls_presence_and_state_sync(qt_app) -> None:
         assert "Set Y scale..." in menu_texts
         assert "Reset Y scale" in menu_texts
 
-        assert controls.scale_menu_btn.iconSize() == QSize(ICON_PX, ICON_PX)
-        assert controls.zoom_in_btn.iconSize() == QSize(ICON_PX, ICON_PX)
-        assert controls.zoom_out_btn.iconSize() == QSize(ICON_PX, ICON_PX)
-        assert controls.scale_menu_btn.size() == QSize(BUTTON_PX, BUTTON_PX)
-        assert controls.zoom_in_btn.size() == QSize(BUTTON_PX, BUTTON_PX)
-        assert controls.zoom_out_btn.size() == QSize(BUTTON_PX, BUTTON_PX)
+        icon_min = ICON_PX
+        icon_max = int(round(ICON_PX * 1.5))
+        btn_min = BUTTON_PX
+        btn_max = int(round(BUTTON_PX * 1.5))
+        for button in (controls.scale_menu_btn, controls.zoom_in_btn, controls.zoom_out_btn):
+            icon_size = button.iconSize()
+            btn_size = button.size()
+            assert icon_min <= icon_size.width() <= icon_max
+            assert icon_min <= icon_size.height() <= icon_max
+            assert btn_min <= btn_size.width() <= btn_max
+            assert btn_min <= btn_size.height() <= btn_max
         assert controls.scale_menu_btn.text() == ""
-        assert controls.zoom_in_btn.icon().isNull() is False or controls.zoom_in_btn.text() == "+"
-        assert controls.zoom_out_btn.icon().isNull() is False or controls.zoom_out_btn.text() == "-"
         assert controls._menu_icon_path.endswith(".svg")
 
         assert controls.menu_button_widget.y() <= controls.scale_buttons_widget.y()
@@ -118,20 +104,19 @@ def test_y_axis_controls_split_anchor_positions(qt_app) -> None:
         widget.show()
         qt_app.processEvents()
 
-        controls = track.view.get_widget().findChild(YAxisControls)
+        controls = track.widget.findChild(YAxisControls)
         assert controls is not None
-
-        viewbox_rect = track.view._viewbox_rect_in_widget()
-        assert viewbox_rect is not None
+        gutter = track.gutter_widget
+        track.view.refresh_y_axis_controls()
+        qt_app.processEvents()
 
         menu_geo = controls.menu_button_widget.geometry()
         scale_geo = controls.scale_buttons_widget.geometry()
 
-        assert menu_geo.x() + menu_geo.width() <= viewbox_rect.left() + 2
-        assert menu_geo.y() <= viewbox_rect.top() + 6
-
-        assert scale_geo.x() + scale_geo.width() <= viewbox_rect.left() + 2
-        assert scale_geo.y() + scale_geo.height() >= viewbox_rect.bottom() - 6
+        assert abs(menu_geo.center().x() - (gutter.width() // 2)) <= 4
+        assert abs(scale_geo.center().x() - (gutter.width() // 2)) <= 4
+        assert controls.menu_button_widget.isVisible() is False
+        assert controls.scale_buttons_widget.isVisible() is True
     finally:
         track.widget.close()
         qt_app.processEvents()
@@ -148,18 +133,26 @@ def test_y_axis_controls_hide_scale_block_on_tiny_tracks(qt_app) -> None:
         widget.show()
         qt_app.processEvents()
 
-        controls = track.view.get_widget().findChild(YAxisControls)
+        controls = track.widget.findChild(YAxisControls)
         assert controls is not None
 
         track.view.refresh_y_axis_controls()
         qt_app.processEvents()
-        assert controls.menu_button_widget.isVisible() is True
+        assert controls.menu_button_widget.isVisible() is False
+        assert controls.scale_buttons_widget.isVisible() is False
+
+        widget.resize(720, 40)
+        qt_app.processEvents()
+        track.view.refresh_y_axis_controls()
+        qt_app.processEvents()
+        assert controls.menu_button_widget.isVisible() is False
         assert controls.scale_buttons_widget.isVisible() is False
 
         widget.resize(720, 220)
         qt_app.processEvents()
         track.view.refresh_y_axis_controls()
         qt_app.processEvents()
+        assert controls.menu_button_widget.isVisible() is False
         assert controls.scale_buttons_widget.isVisible() is True
     finally:
         track.widget.close()
@@ -177,27 +170,15 @@ def test_y_axis_controls_are_left_of_left_axis(qt_app) -> None:
         widget.show()
         qt_app.processEvents()
 
-        controls = track.view.get_widget().findChild(YAxisControls)
+        controls = track.widget.findChild(YAxisControls)
         assert controls is not None
-
-        track.view.refresh_y_axis_controls()
-        qt_app.processEvents()
-
-        plot_widget = track.view.get_widget()
-        axis = plot_widget.getPlotItem().getAxis("left")
-        assert axis is not None
-        axis_scene = axis.sceneBoundingRect()
-        assert axis_scene is not None
-        assert axis_scene.isValid() and not axis_scene.isEmpty()
-
-        axis_left_px = int(plot_widget.mapFromScene(axis_scene.topLeft()).x())
-        assert axis_left_px >= required_outer_gutter_px() - 1
 
         menu_geo = controls.menu_button_widget.geometry()
         scale_geo = controls.scale_buttons_widget.geometry()
-
-        assert menu_geo.right() <= axis_left_px - 1
-        assert scale_geo.right() <= axis_left_px - 1
+        gutter = track.gutter_widget
+        assert gutter.width() >= required_outer_gutter_px()
+        assert menu_geo.right() <= gutter.width()
+        assert scale_geo.right() <= gutter.width()
     finally:
         track.widget.close()
         qt_app.processEvents()
@@ -209,7 +190,7 @@ def test_right_click_axis_uses_same_controls_menu_instance(qt_app) -> None:
         enable_opengl=False,
     )
     try:
-        controls = track.view.get_widget().findChild(YAxisControls)
+        controls = track.widget.findChild(YAxisControls)
         assert controls is not None
         assert controls.menu_btn.menu() is controls._menu
 
