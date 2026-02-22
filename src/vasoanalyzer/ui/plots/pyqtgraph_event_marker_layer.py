@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 
 import pyqtgraph as pg
@@ -88,6 +89,11 @@ class PyQtGraphEventMarkerLayer:
             label.setFont(self._font)
             label.setZValue(6)
             label.setVisible(False)
+            tooltip = self._event_tooltip(entry)
+            with contextlib.suppress(Exception):
+                line.setToolTip(tooltip)
+            with contextlib.suppress(Exception):
+                label.setToolTip(tooltip)
 
             self._plot_item.addItem(line)
             self._plot_item.addItem(label)
@@ -328,6 +334,18 @@ class PyQtGraphEventMarkerLayer:
         if item.entry.index is not None:
             return f"Event {int(item.entry.index)}"
         return ""
+
+    def _event_tooltip(self, entry: EventEntryV3) -> str:
+        text_val = str(entry.text or "").strip()
+        if not text_val and entry.index is not None:
+            text_val = f"Event {int(entry.index)}"
+        if not text_val:
+            text_val = "Event"
+        try:
+            time_text = f"{float(entry.t):.3f} s"
+        except Exception:
+            time_text = "--"
+        return f"{text_val}\nTime: {time_text}"
 
     def _is_selected(self, item: _MarkerItem) -> bool:
         if self._selected_index is None:

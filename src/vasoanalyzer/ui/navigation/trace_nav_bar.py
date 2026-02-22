@@ -49,6 +49,7 @@ class TraceNavBar(QFrame):
         super().__init__(parent)
         self.setObjectName("TraceNavBar")
         self._plot_host = plot_host
+        self._time_zoom_controls_visible = True
         self._updating_slider = False
         self._scrollbar_dragging = False
         self._last_applied_scroll_value: int | None = None
@@ -64,6 +65,26 @@ class TraceNavBar(QFrame):
         self.timeCompressionRequested.connect(self._on_time_compression_requested)
         self._attach_listeners()
         self._sync_time_mode_from_host()
+        self.refresh_from_host()
+
+    def set_time_zoom_controls_visible(self, visible: bool) -> None:
+        """Show/hide zoom/compression controls on the nav strip.
+
+        When hidden, toolbar actions remain the single authority for zooming.
+        """
+        desired = bool(visible)
+        if desired == self._time_zoom_controls_visible:
+            return
+        self._time_zoom_controls_visible = desired
+        for widget in (
+            self.btn_zoom_out,
+            self.btn_zoom_in,
+            self.preset_combo,
+            self.btn_all,
+        ):
+            widget.setVisible(desired)
+            if not desired:
+                widget.setEnabled(False)
         self.refresh_from_host()
 
     def _build_ui(self) -> None:
@@ -374,14 +395,18 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         for widget in (
             self.btn_step_left,
             self.btn_step_right,
-            self.btn_zoom_out,
-            self.btn_zoom_in,
-            self.btn_all,
-            self.preset_combo,
             self.time_mode_combo,
             self.btn_autoscale_all,
         ):
             widget.setEnabled(enabled)
+        if self._time_zoom_controls_visible:
+            for widget in (
+                self.btn_zoom_out,
+                self.btn_zoom_in,
+                self.btn_all,
+                self.preset_combo,
+            ):
+                widget.setEnabled(enabled)
 
     def _set_disabled_state(self) -> None:
         self.duration_label.setText("Dur --")
@@ -561,6 +586,8 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         self._set_time_window(x0 + shift, x1 + shift)
 
     def _zoom_with_center(self, factor: float) -> None:
+        if not self._time_zoom_controls_visible:
+            return
         window = self._get_time_window()
         if window is None:
             return
@@ -575,6 +602,8 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         self._set_time_window(anchor - duration * 0.5, anchor + duration * 0.5)
 
     def _on_preset_selected(self, index: int) -> None:
+        if not self._time_zoom_controls_visible:
+            return
         if index < 0:
             return
         duration = self.preset_combo.itemData(index)
@@ -607,6 +636,8 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         self._set_time_window(new_x0, new_x1)
 
     def _show_all(self) -> None:
+        if not self._time_zoom_controls_visible:
+            return
         if self._chart_parity_v1:
             self.timeCompressionRequested.emit(None)
             return

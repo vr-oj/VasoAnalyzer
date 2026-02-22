@@ -314,7 +314,6 @@ class YAxisControls(QWidget):
         self.scale_menu_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.scale_menu_btn.setAutoRaise(True)
         self.scale_menu_btn.setFocusPolicy(Qt.NoFocus)
-        self.scale_menu_btn.setPopupMode(QToolButton.InstantPopup)
         self.scale_menu_btn.setToolTip("Y scale options")
         self.scale_menu_btn.setFixedSize(self._btn_size)
         self.scale_menu_btn.setIconSize(self._icon_size)
@@ -352,7 +351,7 @@ class YAxisControls(QWidget):
         self.scale_buttons_widget.adjustSize()
 
         self._menu = QMenu(self.scale_menu_btn)
-        self.scale_menu_btn.setMenu(self._menu)
+        self.scale_menu_btn.clicked.connect(self._handle_menu_button_clicked)
         self._menu.aboutToShow.connect(self.refresh_state)
 
         self._autoscale_once_action = self._menu.addAction("Autoscale once")
@@ -400,6 +399,14 @@ class YAxisControls(QWidget):
             QToolButton#YAxisScaleMenuButton[continuousEnabled="true"] {
                 border: 1px solid palette(highlight);
                 background: palette(button);
+            }
+            QToolButton#YAxisScaleMenuButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+            QToolButton#YAxisScaleMenuButton::menu-button {
+                border: none;
+                width: 0px;
             }
             QToolButton#YAxisScaleMenuButton:hover,
             QToolButton#YAxisZoomInButton:hover,
@@ -451,6 +458,10 @@ class YAxisControls(QWidget):
         if global_pos is None:
             global_pos = self.scale_menu_btn.mapToGlobal(self.scale_menu_btn.rect().bottomLeft())
         self._menu.popup(global_pos)
+
+    def _handle_menu_button_clicked(self, _checked: bool = False) -> None:
+        _ = _checked
+        self.popup_menu()
 
     def _handle_auto_toggled(self, enabled: bool) -> None:
         self._set_state(bool(enabled))

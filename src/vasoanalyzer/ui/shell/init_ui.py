@@ -80,6 +80,9 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.fig = window.plot_host.figure if not use_pyqtgraph else None
     window.canvas = window.plot_host.canvas if not use_pyqtgraph else window.plot_host.canvas
     window.trace_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
+    if use_pyqtgraph and hasattr(window.plot_host, "set_shared_time_axis_footer_enabled"):
+        with contextlib.suppress(Exception):
+            window.plot_host.set_shared_time_axis_footer_enabled(True)
     if hasattr(window.plot_host, "set_click_handler"):
         window.plot_host.set_click_handler(window._handle_pyqtgraph_click)
     target_mouse_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
@@ -99,6 +102,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.overview_strip.timeWindowRequested.connect(window._on_trace_nav_window_requested)
     window.overview_strip.setVisible(False)
     window.trace_nav_bar = TraceNavBar(plot_host=window.plot_host, parent=window.data_page)
+    if use_pyqtgraph and hasattr(window.trace_nav_bar, "set_time_zoom_controls_visible"):
+        with contextlib.suppress(Exception):
+            # Toolbar remains the single zoom/compression authority.
+            window.trace_nav_bar.set_time_zoom_controls_visible(False)
     window.trace_nav_bar.timeModeChanged.connect(window._on_time_mode_changed)
     window._apply_time_mode(getattr(window, "_time_mode", "auto"), persist=False)
     window.trace_nav_bar.setVisible(False)

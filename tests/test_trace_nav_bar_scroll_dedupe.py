@@ -93,3 +93,30 @@ def test_all_button_tooltip_includes_total_duration(qt_app) -> None:
     finally:
         nav.close()
         qt_app.processEvents()
+
+
+def test_single_zoom_authority_hides_nav_zoom_controls(qt_app) -> None:
+    host = _DummyPlotHost()
+    nav = TraceNavBar(plot_host=host)
+    try:
+        nav.show()
+        qt_app.processEvents()
+        nav.set_time_zoom_controls_visible(False)
+        qt_app.processEvents()
+
+        assert nav.btn_zoom_out.isVisible() is False
+        assert nav.btn_zoom_in.isVisible() is False
+        assert nav.btn_all.isVisible() is False
+        assert nav.preset_combo.isVisible() is False
+
+        before = list(host.calls)
+        nav._zoom_with_center(0.8)
+        assert host.calls == before
+
+        idx_10s = nav.preset_combo.findText("10s")
+        assert idx_10s >= 0
+        nav._on_preset_selected(idx_10s)
+        assert host.calls == before
+    finally:
+        nav.close()
+        qt_app.processEvents()

@@ -95,8 +95,16 @@ class PyQtGraphEventStripTrack:
     hidden axes/grid, and a linked x-axis (configured by the host).
     """
 
-    def __init__(self, plot_item: pg.PlotItem):
+    def __init__(
+        self,
+        plot_item: pg.PlotItem,
+        *,
+        label_max_chars: int = _LABEL_MAX_CHARS,
+        marker_stems_visible: bool = True,
+    ):
         self._plot_item = plot_item
+        self._label_max_chars = max(int(label_max_chars), len(_LABEL_ELLIPSIS) + 1)
+        self._marker_stems_visible = bool(marker_stems_visible)
         self._items_by_id: dict[int, _StripItem] = {}
         self._event_order: list[int] = []
         self._options: LayoutOptionsV3 | None = None
@@ -292,7 +300,8 @@ class PyQtGraphEventStripTrack:
 
                 strip_item = self._items_by_id.get(event_id)
                 if strip_item is None:
-                    line = self._plot_item.plot([0.0, 0.0], [0.0, 0.2], pen=color)
+                    line_top = 0.2 if self._marker_stems_visible else 0.0
+                    line = self._plot_item.plot([0.0, 0.0], [0.0, line_top], pen=color)
                     line.setZValue(5)
                     text_item = pg.TextItem(text=label_text, color=color, anchor=(0.5, 0.5))
                     text_item.setZValue(6)
@@ -309,7 +318,8 @@ class PyQtGraphEventStripTrack:
                 strip_item.entry = entry
                 strip_item.label_text = label_text
                 x = float(entry.t)
-                strip_item.line.setData([x, x], [0.0, 0.2])
+                line_top = 0.2 if self._marker_stems_visible else 0.0
+                strip_item.line.setData([x, x], [0.0, line_top])
                 strip_item.line.setPen(color)
                 strip_item.label.setText(self._display_label_text(strip_item))
                 strip_item.label.setColor(color)
@@ -398,7 +408,7 @@ class PyQtGraphEventStripTrack:
                 continue
             x_val = float(item.entry.t)
             in_view = x_min <= x_val <= x_max
-            item.line.setVisible(in_view)
+            item.line.setVisible(in_view and self._marker_stems_visible)
             if in_view:
                 visible_ids.append(event_id)
 
@@ -546,7 +556,7 @@ class PyQtGraphEventStripTrack:
     def _short_label_text(self, item: _StripItem) -> str:
         text = str(item.entry.text or "").strip()
         if text:
-            return _truncate_event_label(text, max_chars=_LABEL_MAX_CHARS)
+            return _truncate_event_label(text, max_chars=self._label_max_chars)
         if item.entry.index is not None:
             return str(int(item.entry.index))
         return str(int(item.event_id))

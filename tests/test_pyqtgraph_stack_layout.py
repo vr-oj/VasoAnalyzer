@@ -76,11 +76,11 @@ def test_shared_xlabel_tracks_bottom_visible_channel(qt_app) -> None:
     axis_c = track_c.view.get_widget().getPlotItem().getAxis("bottom")
     assert str(axis_a.labelText or "") == ""
     assert str(axis_b.labelText or "") == ""
-    assert str(axis_c.labelText or "") == "Time (s)"
+    assert str(axis_c.labelText or "") == ""
 
     host.set_channel_visible("c", False)
     assert str(axis_a.labelText or "") == ""
-    assert str(axis_b.labelText or "") == "Time (s)"
+    assert str(axis_b.labelText or "") == ""
     assert str(axis_c.labelText or "") == ""
 
 

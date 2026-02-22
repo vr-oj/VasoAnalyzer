@@ -97,6 +97,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         with contextlib.suppress(Exception):
             self._view_box.setDefaultPadding(0.0)
         self._disable_plot_title()
+        self._collapse_top_axis()
         self._y_axis_controls_clamped_left_logged = False
         self.set_bottom_axis_visible(True)
 
@@ -213,19 +214,58 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
     def _disable_plot_title(self) -> None:
         """Remove PlotItem title text and reclaim the title row height."""
         with contextlib.suppress(Exception):
-            self._plot_item.setTitle("")
+            # In pyqtgraph, an empty-string title still reserves title-row height.
+            # `None` is the only value that truly disables the title row.
+            self._plot_item.setTitle(None)
 
         label = getattr(self._plot_item, "titleLabel", None)
         if label is not None:
             with contextlib.suppress(Exception):
                 label.setText("")
             with contextlib.suppress(Exception):
+                label.setVisible(False)
+            with contextlib.suppress(Exception):
                 label.hide()
+            for setter in ("setMaximumHeight", "setMinimumHeight", "setPreferredHeight"):
+                fn = getattr(label, setter, None)
+                if callable(fn):
+                    with contextlib.suppress(Exception):
+                        fn(0)
 
         layout = getattr(self._plot_item, "layout", None)
         if layout is not None:
-            with contextlib.suppress(Exception):
-                layout.setRowFixedHeight(0, 0)
+            # Fully collapse the title row. `setRowFixedHeight` alone is not
+            # sufficient because the LabelItem can still contribute min/preferred
+            # size and leave a top gutter.
+            for setter in (
+                "setRowFixedHeight",
+                "setRowPreferredHeight",
+                "setRowMinimumHeight",
+                "setRowMaximumHeight",
+            ):
+                fn = getattr(layout, setter, None)
+                if callable(fn):
+                    with contextlib.suppress(Exception):
+                        fn(0, 0)
+
+    def _collapse_top_axis(self) -> None:
+        """Remove reserved top-axis row height so Y-axis spans full track height."""
+        with contextlib.suppress(Exception):
+            self._plot_item.hideAxis("top")
+        axis = self._plot_item.getAxis("top")
+        if axis is None:
+            return
+        with contextlib.suppress(Exception):
+            axis.setVisible(False)
+        with contextlib.suppress(Exception):
+            axis.setStyle(showValues=False, tickLength=0)
+        with contextlib.suppress(Exception):
+            axis.setLabel("")
+        with contextlib.suppress(Exception):
+            axis.setHeight(0)
+        with contextlib.suppress(AttributeError):
+            axis.label.hide()
+            axis.showLabel(False)
 
     def _apply_plot_item_layout(self) -> None:
         """Tighten PlotItem layout while reserving a fixed left gutter for controls."""
@@ -432,6 +472,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             ax = self._plot_item.getAxis(axis)
             ax.setPen(pg.mkPen(axis_color))
             ax.setTextPen(pg.mkPen(tick_color))
+        self._collapse_top_axis()
 
         # Grid visibility
         self._plot_item.showGrid(x=True, y=True, alpha=style.grid_alpha)
@@ -579,7 +620,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         elif int(host_widget.height()) > 0:
             track_height = int(host_widget.height())
         show_controls = track_height >= 48
-        show_menu_button = False
+        show_menu_button = track_height >= 48
         show_scale_buttons = track_height >= 64
 
         if menu_widget is not None:

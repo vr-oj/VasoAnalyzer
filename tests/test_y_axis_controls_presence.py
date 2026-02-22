@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import QEvent, QPoint, Qt
+from PyQt5.QtWidgets import QFrame
 
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
@@ -44,13 +45,16 @@ def test_y_axis_controls_presence_and_state_sync(qt_app) -> None:
         controls = track.widget.findChild(YAxisControls)
         assert controls is not None
         assert controls.parent() is track.gutter_widget
-        assert controls.menu_btn.menu() is controls._menu
+        assert controls.menu_btn.menu() is None
+        assert controls._menu.parent() is controls.menu_btn
         assert controls.menu_button_widget.parent() is track.gutter_widget
         assert controls.scale_buttons_widget.parent() is track.gutter_widget
 
         assert widget.findChild(YAxisControls) is controls
         assert widget.findChild(type(controls.menu_btn), "ChannelTrackMenuButton") is None
-        assert widget.layout().count() == 1
+        assert widget.layout().count() == 2
+        separator = widget.findChild(QFrame, "TrackSeparatorBar")
+        assert separator is not None
 
         track._set_continuous_autoscale(True)
         controls.refresh_state()
@@ -115,7 +119,7 @@ def test_y_axis_controls_split_anchor_positions(qt_app) -> None:
 
         assert abs(menu_geo.center().x() - (gutter.width() // 2)) <= 4
         assert abs(scale_geo.center().x() - (gutter.width() // 2)) <= 4
-        assert controls.menu_button_widget.isVisible() is False
+        assert controls.menu_button_widget.isVisible() is True
         assert controls.scale_buttons_widget.isVisible() is True
     finally:
         track.widget.close()
@@ -152,7 +156,7 @@ def test_y_axis_controls_hide_scale_block_on_tiny_tracks(qt_app) -> None:
         qt_app.processEvents()
         track.view.refresh_y_axis_controls()
         qt_app.processEvents()
-        assert controls.menu_button_widget.isVisible() is False
+        assert controls.menu_button_widget.isVisible() is True
         assert controls.scale_buttons_widget.isVisible() is True
     finally:
         track.widget.close()
@@ -192,7 +196,8 @@ def test_right_click_axis_uses_same_controls_menu_instance(qt_app) -> None:
     try:
         controls = track.widget.findChild(YAxisControls)
         assert controls is not None
-        assert controls.menu_btn.menu() is controls._menu
+        assert controls.menu_btn.menu() is None
+        assert controls._menu.parent() is controls.menu_btn
 
         called = {"count": 0}
 

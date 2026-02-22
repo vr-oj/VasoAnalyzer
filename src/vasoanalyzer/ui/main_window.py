@@ -834,7 +834,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._right_panel_layout = None
         self.snapshot_viewer_action = None
         self.recent_files = []
-        self._event_label_mode: str = "indices"
+        self._event_label_mode: str = "names_on_hover"
         self._time_mode: str = "auto"
         self.settings = QSettings("TykockiLab", "VasoAnalyzer")
         self._time_mode = str(self.settings.value("plot/timeMode", self._time_mode, type=str) or "auto")
@@ -13994,6 +13994,16 @@ QPushButton[isGhost="true"]:pressed {{
                 f"Event time {event_time:.3f}s outside trace range; selection ignored."
             )
             return
+        label_value = ""
+        with contextlib.suppress(Exception):
+            label_value = str(self.event_table_data[row][0] or "").strip()
+        status_text = (
+            f"Event {row + 1}: {label_value} @ {event_time:.3f}s"
+            if label_value
+            else f"Event {row + 1} @ {event_time:.3f}s"
+        )
+        with contextlib.suppress(Exception):
+            self.statusBar().showMessage(status_text, 4000)
 
         if source not in {"table", "selection"}:
             model = self.event_table.model()
@@ -14424,20 +14434,23 @@ QPushButton[isGhost="true"]:pressed {{
                     return
             else:
                 # Context menu for empty trace area (add new pin)
+                tr_type = "inner"
+                track = getattr(self, "plot_host", None)
+                if track is not None and hasattr(track, "track"):
+                    spec_track = track.track(track_id)
+                    if spec_track and getattr(spec_track.spec, "component", "") == "outer":
+                        tr_type = "outer"
                 menu = QMenu(self)
                 add_pin_action = menu.addAction("📍 Add Pin Here")
+                add_event_action = menu.addAction("➕ Add Event Marker Here…")
                 action = menu.exec_(QCursor.pos())
 
                 if action == add_pin_action:
-                    # Determine trace type based on track
-                    tr_type = "inner"
-                    track = getattr(self, "plot_host", None)
-                    if track is not None and hasattr(track, "track"):
-                        spec_track = track.track(track_id)
-                        if spec_track and getattr(spec_track.spec, "component", "") == "outer":
-                            tr_type = "outer"
                     self._add_pyqtgraph_pin(track_id, x, y, tr_type)
                     self.mark_session_dirty()
+                    return
+                if action == add_event_action:
+                    self.quick_add_event_at_trace_point(x, y, tr_type)
                     return
 
     def handle_event_replacement(self, x, y):
@@ -14495,6 +14508,107 @@ QPushButton[isGhost="true"]:pressed {{
                 self._mark_row_edited(index)
                 self.auto_export_table()
                 self.mark_session_dirty()
+
+    def quick_add_event_at_trace_point(self, x: float, y: float, trace_type: str = "inner") -> None:
+        """Quick-add an event marker at the clicked trace position."""
+        if self.trace_data is None or "Time (s)" not in self.trace_data.columns:
+            QMessageBox.warning(self, "No Trace", "Load a trace before adding event markers.")
+            return
+
+        try:
+            click_time = float(x)
+        except (TypeError, ValueError):
+            return
+
+        times = self.trace_data["Time (s)"].to_numpy(dtype=float)
+        if times.size == 0:
+            QMessageBox.warning(self, "No Trace", "Trace timebase is empty.")
+            return
+
+        nearest_idx = int(np.argmin(np.abs(times - click_time)))
+        event_time = float(times[nearest_idx])
+
+        default_label = f"Event {len(self.event_table_data) + 1}"
+        label_text, label_ok = QInputDialog.getText(
+            self,
+            "Add Event Marker",
+            "Event label:",
+            text=default_label,
+        )
+        if not label_ok:
+            return
+
+        label_value = str(label_text or "").strip()
+        if not label_value:
+            return
+
+        def _round_optional(value: float | None) -> float | None:
+            if value is None:
+                return None
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(numeric):
+                return None
+            return round(numeric, 2)
+
+        id_val, od_val, avg_p_val, set_p_val = self._sample_values_at_time(event_time)
+        if str(trace_type).lower() == "outer" and od_val is not None:
+            od_val = float(y)
+        else:
+            id_val = float(y)
+
+        # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
+        new_entry = (
+            label_value,
+            round(event_time, 2),
+            _round_optional(id_val),
+            _round_optional(od_val),
+            _round_optional(avg_p_val),
+            _round_optional(set_p_val),
+            int(nearest_idx),
+        )
+
+        insert_idx = len(self.event_table_data)
+        for idx, row in enumerate(self.event_table_data):
+            row_time = event_time_for_row(row)
+            if row_time is None:
+                continue
+            with contextlib.suppress(Exception):
+                if float(event_time) < float(row_time):
+                    insert_idx = idx
+                    break
+
+        if not isinstance(self.event_labels, list):
+            self.event_labels = []
+        if not isinstance(self.event_times, list):
+            self.event_times = []
+        if not isinstance(self.event_frames, list):
+            self.event_frames = []
+        if not isinstance(self.event_label_meta, list):
+            self.event_label_meta = []
+
+        if insert_idx >= len(self.event_table_data):
+            self.event_table_data.append(new_entry)
+            self.event_labels.append(label_value)
+            self.event_times.append(event_time)
+            self.event_frames.append(int(nearest_idx))
+            self.event_label_meta.append(self._with_default_review_state(None))
+        else:
+            self.event_table_data.insert(insert_idx, new_entry)
+            self.event_labels.insert(insert_idx, label_value)
+            self.event_times.insert(insert_idx, event_time)
+            self.event_frames.insert(insert_idx, int(nearest_idx))
+            self._insert_event_meta(insert_idx)
+
+        self._ensure_event_meta_length(len(self.event_table_data))
+        self.populate_table()
+        self.update_plot()
+        self.auto_export_table()
+        self._focus_event_row(insert_idx, source="manual")
+        log.info("Quick-added event marker: %s", new_entry)
+        self.mark_session_dirty()
 
     def prompt_add_event(self, x, y, trace_type="inner"):
         if not self.event_table_data:
