@@ -258,27 +258,35 @@ def _read_from_metadata_sheet(wb: Workbook, ws: Worksheet) -> TemplateMetadata |
 
 
 def _read_from_named_ranges(wb: Workbook, ws: Worksheet) -> TemplateMetadata | None:
-    """Read metadata from named ranges (legacy format)."""
+    """Read metadata from named ranges (legacy format).
+
+    Named ranges may point to any sheet in the workbook (not just the active
+    sheet), so we resolve the target sheet from the destination rather than
+    comparing against ``ws.title``.
+    """
     from openpyxl.utils import range_boundaries
 
     try:
-        # Get named ranges
-        date_range = None
-        values_range = None
+        date_range: str | None = None
+        values_range: str | None = None
+        target_ws: Worksheet = ws  # default to active sheet
 
         for name, defn in wb.defined_names.items():
             if name == "VASO_DATES_ROW":
                 destinations = list(defn.destinations)
                 if destinations:
                     sheet_name, coord = destinations[0]
-                    if sheet_name == ws.title:
-                        date_range = coord
+                    date_range = coord
+                    # Use the sheet the named range actually points to
+                    if sheet_name in wb.sheetnames:
+                        target_ws = wb[sheet_name]
             elif name == "VASO_VALUES_BLOCK":
                 destinations = list(defn.destinations)
                 if destinations:
                     sheet_name, coord = destinations[0]
-                    if sheet_name == ws.title:
-                        values_range = coord
+                    values_range = coord
+                    if sheet_name in wb.sheetnames:
+                        target_ws = wb[sheet_name]
 
         if not date_range or not values_range:
             return None
@@ -300,11 +308,14 @@ def _read_from_named_ranges(wb: Workbook, ws: Worksheet) -> TemplateMetadata | N
         )
 
         # Detect event rows
-        metadata.event_rows = _detect_event_rows(ws, v_min_row, v_max_row, label_column=1)
+        metadata.event_rows = _detect_event_rows(
+            target_ws, v_min_row, v_max_row, label_column=1
+        )
 
-        # Detect date columns
+        # Detect date columns (formula columns and label column excluded automatically)
         metadata.date_columns = _detect_date_columns(
-            ws, d_min_row, d_min_col, d_max_col, v_min_row, v_max_row
+            target_ws, d_min_row, d_min_col, d_max_col, v_min_row, v_max_row,
+            label_column=1,
         )
 
         return metadata
@@ -372,6 +383,27 @@ def _infer_from_structure(wb: Workbook, ws: Worksheet) -> TemplateMetadata | Non
 # ---------------------------------------------------------------------------
 
 
+def _column_is_formulaic(
+    ws: Worksheet, col_idx: int, start_row: int, end_row: int
+) -> bool:
+    """Return True if ALL non-empty cells in a column contain formulas.
+
+    A 100% threshold is used so that data columns which also contain some
+    formula-calculated rows (e.g. '% Constriction') are not misclassified as
+    statistics columns.  Pure stats columns (MEAN/SEM/N) will have formulas in
+    every non-empty data cell and are correctly filtered.
+    """
+    total = 0
+    formula_count = 0
+    for row in range(start_row, end_row + 1):
+        val = ws.cell(row=row, column=col_idx).value
+        if val is not None:
+            total += 1
+            if isinstance(val, str) and val.startswith("="):
+                formula_count += 1
+    return total > 0 and formula_count == total
+
+
 def _detect_event_rows(
     ws: Worksheet, start_row: int, end_row: int, label_column: int = 1
 ) -> list[EventRowMetadata]:
@@ -389,9 +421,12 @@ def _detect_event_rows(
         if not label:
             continue
 
-        # Check if header (bold + filled)
+        # Check if header: '#' prefix convention (lab templates) OR bold+filled cell
         is_header = False
-        if cell.font and cell.font.bold:
+        if label.startswith("#"):
+            is_header = True
+            label = label[1:].strip()
+        elif cell.font and cell.font.bold:
             if cell.fill and isinstance(cell.fill, PatternFill):
                 if cell.fill.patternType and cell.fill.patternType != "none":
                     is_header = True
@@ -408,14 +443,33 @@ def _detect_date_columns(
     end_col: int,
     event_start_row: int,
     event_end_row: int,
+    label_column: int = 1,
 ) -> list[DateColumnMetadata]:
-    """Detect date columns in the worksheet."""
+    """Detect date columns in the worksheet, skipping formula-only columns (e.g. MEAN/SEM/N)."""
     from openpyxl.utils import get_column_letter
+
+    _STATS_HEADERS = frozenset(
+        {"mean", "sem", "n", "stdev", "std dev", "std", "sd", "average",
+         "count", "median", "se", "ci", "cv"}
+    )
 
     columns = []
     for col_idx in range(start_col, end_col + 1):
         if col_idx > ws.max_column:
             break
+
+        # Skip the label column (column A) — it contains row labels, not data
+        if col_idx == label_column:
+            continue
+
+        # Skip columns with a known statistics header in the date row
+        header_val = ws.cell(row=date_row, column=col_idx).value
+        if isinstance(header_val, str) and header_val.strip().lower() in _STATS_HEADERS:
+            continue
+
+        # Skip columns whose data cells are all formulas (calculated stats like MEAN/SEM/N)
+        if _column_is_formulaic(ws, col_idx, event_start_row, event_end_row):
+            continue
 
         cell = ws.cell(row=date_row, column=col_idx)
         value = str(cell.value) if cell.value not in (None, "") else None

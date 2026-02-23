@@ -5,6 +5,11 @@
 
 """Excel integration for VasoAnalyzer."""
 
+from .flexible_writer import (
+    FlexibleWritePlan,
+    apply_flexible_write_plan,
+    build_flexible_write_plan,
+)
 from .template_metadata import (
     DateColumnMetadata,
     EventRowMetadata,
@@ -19,4 +24,7 @@ __all__ = [
     "DateColumnMetadata",
     "read_template_metadata",
     "has_vaso_metadata",
+    "FlexibleWritePlan",
+    "build_flexible_write_plan",
+    "apply_flexible_write_plan",
 ]

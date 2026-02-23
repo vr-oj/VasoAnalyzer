@@ -29,3 +29,4 @@ venv/
 mypy.txt
 pytest.txt
 ruff.txt
+/ExcelTemplates
