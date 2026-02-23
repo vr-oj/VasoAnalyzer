@@ -295,6 +295,42 @@ def _add_shared_plot_actions(
         window.actOverviewStrip.triggered.disconnect()
     window.actOverviewStrip.triggered.connect(window.toggle_overview_strip)
 
+    if is_pyqtgraph:
+        window.actChannelEventLabels = QAction("Event labels", window)
+        window.actChannelEventLabels.setCheckable(True)
+        window.actChannelEventLabels.setChecked(
+            getattr(window, "_channel_event_labels_visible", False)
+        )
+        window.actChannelEventLabels.setToolTip(
+            "<b>Event Labels</b><br><br>"
+            "Show vertical event text labels next to each<br>"
+            "dashed marker line inside channel tracks."
+        )
+        with contextlib.suppress(Exception):
+            window.actChannelEventLabels.triggered.disconnect()
+        window.actChannelEventLabels.triggered.connect(window.toggle_channel_event_labels)
+
+        # Font-size submenu for event labels.
+        from PyQt5.QtWidgets import QActionGroup  # noqa: PLC0415
+        size_menu = QMenu("Event label size", None)
+        size_group = QActionGroup(size_menu)
+        size_group.setExclusive(True)
+        current_size = float(getattr(window, "_channel_event_label_font_size", 9.0))
+        for label, pt in (("Small (7 pt)", 7.0), ("Medium (9 pt)", 9.0),
+                          ("Large (11 pt)", 11.0), ("Extra Large (14 pt)", 14.0)):
+            act = QAction(label, size_menu)
+            act.setCheckable(True)
+            act.setData(pt)
+            act.setChecked(pt == current_size)
+            size_group.addAction(act)
+            size_menu.addAction(act)
+            with contextlib.suppress(Exception):
+                act.triggered.connect(
+                    lambda _checked, _pt=pt: window.set_channel_event_label_font_size(_pt)
+                )
+        window._event_label_size_menu = size_menu
+        window._event_label_font_size_group = size_group
+
     window.actStyle = QAction(QIcon(window.icon_path("plot-settings.svg")), "Style", window)
     if is_pyqtgraph:
         window.actStyle.setToolTip(
@@ -452,21 +488,28 @@ def _add_view_overflow_menu(
         view_menu.addAction(action)
         added_primary = True
 
-    secondary_actions = [
-        getattr(window, "actAutoscale", None),
-        getattr(window, "actAutoscaleY", None),
-        *_ensure_time_preset_actions(window),
-        getattr(window, "actGrid", None),
-        getattr(window, "actOverviewStrip", None),
-        getattr(window, "actStyle", None),
-    ]
-    secondary_actions = [
-        action for action in secondary_actions if action is not None and action not in promoted
-    ]
-    if added_primary and secondary_actions:
+    # Only Grid, optional Event Labels toggle, and Style belong in the More menu.
+    toggle_actions = []
+    act_labels = getattr(window, "actChannelEventLabels", None)
+    if is_pyqtgraph and act_labels is not None and act_labels not in promoted:
+        toggle_actions.append(act_labels)
+    act_grid = getattr(window, "actGrid", None)
+    if act_grid is not None and act_grid not in promoted:
+        toggle_actions.append(act_grid)
+    act_style = getattr(window, "actStyle", None)
+
+    if added_primary and toggle_actions:
         view_menu.addSeparator()
-    for action in secondary_actions:
+    for action in toggle_actions:
         view_menu.addAction(action)
+    # Font-size submenu sits right below the Event Labels toggle.
+    size_menu = getattr(window, "_event_label_size_menu", None)
+    if is_pyqtgraph and size_menu is not None and act_labels is not None:
+        view_menu.addMenu(size_menu)
+    if toggle_actions and act_style is not None:
+        view_menu.addSeparator()
+    if act_style is not None and act_style not in promoted:
+        view_menu.addAction(act_style)
 
     view_button = QToolButton(toolbar)
     view_button.setObjectName("PlotToolbarViewMenu")

@@ -111,9 +111,27 @@ class FrameView(QtWidgets.QWidget):
         self._transform_mode = QtCore.Qt.SmoothTransformation
         self.setAttribute(QtCore.Qt.WA_OpaquePaintEvent)
 
+    def sizeHint(self) -> QtCore.QSize:
+        if self._frame_qimage is not None and not self._frame_qimage.isNull():
+            return self._frame_qimage.size()
+        return QtCore.QSize(200, 150)
+
+    def hasHeightForWidth(self) -> bool:
+        return self._frame_qimage is not None and not self._frame_qimage.isNull()
+
+    def heightForWidth(self, width: int) -> int:
+        if self._frame_qimage is None or self._frame_qimage.isNull():
+            return -1
+        iw = self._frame_qimage.width()
+        ih = self._frame_qimage.height()
+        if iw <= 0:
+            return -1
+        return max(80, int(width * ih / iw))
+
     def set_frame(self, qimage: QtGui.QImage | None) -> None:
         self._frame_qimage = qimage
         self._scaled_qimage = None
+        self.updateGeometry()
         self.update()
 
     def clear(self) -> None:

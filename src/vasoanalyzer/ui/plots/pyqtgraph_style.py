@@ -77,9 +77,9 @@ def get_pyqtgraph_style() -> PyQtGraphStyleTokens:
     event_color = CURRENT_THEME.get("event_line", "#8A8A8A")
     event_marker = EventMarkerStyle(
         color=event_color,
-        width=0.65,
+        width=2.0,
         style=Qt.DashLine,
-        alpha=0.26,
+        alpha=0.85,
     )
 
     selection_color = CURRENT_THEME.get("selection_bg", "#3B82F6")

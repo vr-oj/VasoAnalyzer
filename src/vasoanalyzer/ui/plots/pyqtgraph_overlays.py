@@ -28,9 +28,9 @@ class PyQtGraphTimeCursorOverlay:
         self._cursor_lines: list[pg.InfiniteLine] = []
         self._visible: bool = False
         self._time: float | None = None
-        self._color: str = str(CURRENT_THEME.get("time_cursor", "#DC2626"))
-        self._width: float = 1.0
-        self._alpha: float = 120.0 / 255.0
+        self._color: str = str(CURRENT_THEME.get("time_cursor", "#FB0303"))
+        self._width: float = 4.0
+        self._alpha: float = 200.0 / 255.0
 
     def _make_pen(self):
         qcolor = QColor(self._color)
@@ -231,7 +231,9 @@ class PyQtGraphEventHighlightOverlay:
             with contextlib.suppress(RuntimeError):
                 region.setBrush(qcolor)
                 if self._time is not None:
-                    region.setRegion((self._time - self._width / 2, self._time + self._width / 2))
+                    region.setRegion(
+                        (self._time - self._width / 2, self._time + self._width / 2)
+                    )
 
     def alpha(self) -> float:
         """Get current alpha value.
@@ -293,7 +295,9 @@ class PyQtGraphEventHighlightOverlay:
     def apply_theme(self) -> None:
         """Reapply highlight styling from the current theme."""
 
-        color = CURRENT_THEME.get("event_highlight", CURRENT_THEME.get("accent", self._color))
+        color = CURRENT_THEME.get(
+            "event_highlight", CURRENT_THEME.get("accent", self._color)
+        )
         alpha = self._alpha
         try:
             alpha = float(alpha)

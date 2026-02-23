@@ -47,7 +47,7 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
         self.frame_view = FrameView(self)
         self.frame_view.setObjectName("SnapshotPreview")
         self.frame_view.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
         )
 
         self.controls = TiffTransportBar(self)

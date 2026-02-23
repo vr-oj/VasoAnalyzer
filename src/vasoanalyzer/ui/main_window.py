@@ -920,6 +920,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._event_label_action_group: QActionGroup | None = None
         self.event_label_button: QToolButton | None = None
         self._overview_strip_enabled = False
+        self._channel_event_labels_visible = False
+        self._channel_event_label_font_size: float = 9.0
         self._trace_navigation_available = False
         self._space_pan_active: bool = False
         self._space_pan_prev_mode: str | None = None
@@ -7001,13 +7003,6 @@ class VasoAnalyzerApp(QMainWindow):
         show_snapshot = bool(has_image and viewer_enabled)
         snapshot_card.setVisible(show_snapshot)
 
-        if show_snapshot:
-            layout.setStretch(0, 3)
-            layout.setStretch(1, 2)
-        else:
-            layout.setStretch(0, 0)
-            layout.setStretch(1, 1)
-
     def _update_snapshot_rotation_controls(self) -> None:
         """Enable or disable rotation buttons based on viewer state."""
 
@@ -10053,8 +10048,6 @@ QPushButton[isGhost="true"]:pressed {{
             self._on_view_state_changed(reason="event label mode")
             return
 
-        # Using the new helper: ensure per-track lines are *disabled* (helper draws its own)
-        plot_host.use_track_event_lines(False)
         set_display_mode = getattr(plot_host, "set_event_display_mode", None)
         if callable(set_display_mode):
             set_display_mode(self._event_label_mode)
@@ -13565,6 +13558,26 @@ QPushButton[isGhost="true"]:pressed {{
         self._overview_strip_enabled = bool(checked)
         self._apply_overview_strip_visibility()
 
+    def toggle_channel_event_labels(self, checked: bool) -> None:
+        """Show or hide vertical event text labels inside channel tracks."""
+        self._channel_event_labels_visible = bool(checked)
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "set_channel_event_labels_visible"):
+            plot_host.set_channel_event_labels_visible(self._channel_event_labels_visible)
+
+    def set_channel_event_label_font_size(self, size_pt: float) -> None:
+        """Set the event label font size and update checked state in the size menu."""
+        self._channel_event_label_font_size = float(size_pt)
+        # Sync checkmarks in the font-size submenu.
+        size_group = getattr(self, "_event_label_font_size_group", None)
+        if size_group is not None:
+            for action in size_group.actions():
+                with contextlib.suppress(Exception):
+                    action.setChecked(float(action.data()) == self._channel_event_label_font_size)
+        plot_host = getattr(self, "plot_host", None)
+        if plot_host is not None and hasattr(plot_host, "set_channel_event_label_font_size"):
+            plot_host.set_channel_event_label_font_size(self._channel_event_label_font_size)
+
     def _overview_event_times(self) -> list[float]:
         rows = list(getattr(self, "event_table_data", []) or [])
         times: list[float] = []
@@ -16251,13 +16264,13 @@ QPushButton[isGhost="true"]:pressed {{
         plot_panel.setObjectName("PlotPanel")
         plot_panel_layout = QVBoxLayout(plot_panel)
         plot_panel_layout.setContentsMargins(0, 0, 0, 0)
-        plot_panel_layout.setSpacing(8)
+        plot_panel_layout.setSpacing(0)
 
         plot_container = QFrame()
         plot_container.setObjectName("PlotContainer")
         plot_container_layout = QVBoxLayout(plot_container)
-        plot_container_layout.setContentsMargins(10, 10, 10, 10)
-        plot_container_layout.setSpacing(8)
+        plot_container_layout.setContentsMargins(0, 0, 0, 0)
+        plot_container_layout.setSpacing(0)
         if getattr(self, "overview_strip", None) is not None:
             plot_container_layout.addWidget(self.overview_strip)
         self.plot_stack_widget = QWidget()
@@ -16303,8 +16316,8 @@ QPushButton[isGhost="true"]:pressed {{
         self.right_panel_card = right_panel_card
         right_panel_layout = QVBoxLayout(right_panel_card)
         self._right_panel_layout = right_panel_layout
-        right_panel_layout.setContentsMargins(10, 10, 10, 10)
-        right_panel_layout.setSpacing(8)
+        right_panel_layout.setContentsMargins(0, 0, 0, 0)
+        right_panel_layout.setSpacing(0)
         side_layout.addWidget(right_panel_card)
 
         # Snapshot + event layout:
@@ -16324,17 +16337,17 @@ QPushButton[isGhost="true"]:pressed {{
         if not self._snapshot_panel_disabled_by_env:
             self.snapshot_card = QFrame()
             self.snapshot_card.setObjectName("SnapshotCard")
-            self.snapshot_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.snapshot_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
             snapshot_box = QVBoxLayout(self.snapshot_card)
-            snapshot_box.setContentsMargins(10, 10, 10, 10)
-            snapshot_box.setSpacing(8)
+            snapshot_box.setContentsMargins(0, 0, 0, 0)
+            snapshot_box.setSpacing(0)
             snapshot_title = QLabel("Snapshot Viewer", self.snapshot_card)
             snapshot_title.setObjectName("PanelSectionTitle")
             snapshot_box.addWidget(snapshot_title, 0, Qt.AlignLeft)
             self.snapshot_stack = QStackedWidget(self.snapshot_card)
             self.snapshot_stack.setObjectName("SnapshotStack")
-            self.snapshot_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            self.snapshot_stack.setMinimumHeight(220)
+            self.snapshot_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            self.snapshot_stack.setMinimumHeight(160)
             if self.snapshot_widget is not None:
                 self.snapshot_stack.addWidget(self.snapshot_widget)
             snapshot_box.addWidget(self.snapshot_stack, 1)
@@ -16344,8 +16357,8 @@ QPushButton[isGhost="true"]:pressed {{
         self.event_table_card.setObjectName("TableCard")
         self.event_table_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         table_layout = QVBoxLayout(self.event_table_card)
-        table_layout.setContentsMargins(10, 10, 10, 10)
-        table_layout.setSpacing(6)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(0)
         table_title = QLabel("Event Table", self.event_table_card)
         table_title.setObjectName("PanelSectionTitle")
         table_layout.addWidget(table_title)
@@ -16369,10 +16382,10 @@ QPushButton[isGhost="true"]:pressed {{
         table_layout.addWidget(self.review_notice_banner)
         table_layout.addWidget(self.event_table, 1)
         right_panel_layout.addWidget(self.event_table_card, 1)
-        # Give the snapshot stack the majority of the column; event table still expands.
+        # Snapshot card uses Preferred policy (aspect-ratio-aware); event table expands.
         if self.snapshot_card is not None:
-            right_panel_layout.setStretch(0, 3)
-            right_panel_layout.setStretch(1, 2)
+            right_panel_layout.setStretch(0, 0)
+            right_panel_layout.setStretch(1, 1)
         self._update_snapshot_panel_layout()
         self._update_review_notice_visibility()
 

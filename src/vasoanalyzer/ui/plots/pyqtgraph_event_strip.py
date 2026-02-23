@@ -101,10 +101,14 @@ class PyQtGraphEventStripTrack:
         *,
         label_max_chars: int = _LABEL_MAX_CHARS,
         marker_stems_visible: bool = True,
+        bypass_all_visible_lod_check: bool = False,
+        show_index_only: bool = False,
     ):
         self._plot_item = plot_item
         self._label_max_chars = max(int(label_max_chars), len(_LABEL_ELLIPSIS) + 1)
         self._marker_stems_visible = bool(marker_stems_visible)
+        self._bypass_all_visible_lod_check = bool(bypass_all_visible_lod_check)
+        self._show_index_only = bool(show_index_only)
         self._items_by_id: dict[int, _StripItem] = {}
         self._event_order: list[int] = []
         self._options: LayoutOptionsV3 | None = None
@@ -422,11 +426,15 @@ class PyQtGraphEventStripTrack:
             self._notify_height_if_changed()
             return
 
-        if len(visible_ids) >= len(self._event_order):
+        if not self._bypass_all_visible_lod_check and len(visible_ids) >= len(self._event_order):
             for item in self._items_by_id.values():
                 item.label.setVisible(False)
             self._effective_lod_mode = "markers_only"
             self._notify_height_if_changed()
+            return
+
+        if self._show_index_only:
+            self._render_index_only_labels(visible_ids)
             return
 
         candidate_lod = choose_event_label_lod(
@@ -545,6 +553,46 @@ class PyQtGraphEventStripTrack:
         )
         self._notify_height_if_changed()
 
+    def _render_index_only_labels(self, visible_ids: list[int]) -> None:
+        """Fast-path renderer for the top event lane (show_index_only=True).
+
+        Every visible event gets its number placed at a fixed y position —
+        no staggering, no overlap-hiding — guaranteeing pixel-perfect
+        alignment with the dashed InfiniteLines in the channel tracks below.
+        A short tick mark is drawn from the bottom of the lane up to each
+        label, acting as a visual connector to the dashed lines.
+        """
+        _LABEL_Y = 0.60   # centre of the text in 0..1 lane space
+        _TICK_TOP = 0.22  # tick runs from y=0 (bottom) up to here
+
+        visible_set = set(visible_ids)
+        for event_id, item in self._items_by_id.items():
+            in_view = event_id in visible_set
+            if in_view:
+                item.label.setText(self._display_label_text(item))
+                item.label.setPos(float(item.entry.t), _LABEL_Y)
+                item.label.setVisible(True)
+                item.line.setData(
+                    [float(item.entry.t), float(item.entry.t)],
+                    [0.0, _TICK_TOP],
+                )
+                item.line.setVisible(True)
+            else:
+                item.label.setVisible(False)
+                item.line.setVisible(False)
+
+        # One lane of labels → required_height_px = 26 px.
+        self._last_placed = [
+            PlacedLabel(
+                event_id=eid, x_data=0.0, lane=0,
+                visible=True, x_px0=0.0, x_px1=0.0,
+            )
+            for eid in visible_ids
+        ]
+        self._effective_lod_mode = "labels"
+        self._clear_overflow_hints()
+        self._notify_height_if_changed()
+
     def _full_label_text(self, item: _StripItem) -> str:
         text = str(item.entry.text or "").strip()
         if text:
@@ -567,6 +615,10 @@ class PyQtGraphEventStripTrack:
         return f"{label}\nTime: {time_s:.{_TOOLTIP_TIME_DECIMALS}f} s"
 
     def _display_label_text(self, item: _StripItem) -> str:
+        if self._show_index_only:
+            if item.entry.index is not None:
+                return str(int(item.entry.index))
+            return str(int(item.event_id))
         return self._short_label_text(item)
 
     def _notify_height_if_changed(self) -> None:

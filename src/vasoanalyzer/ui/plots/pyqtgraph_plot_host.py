@@ -14,7 +14,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QColor, QFont, QPen
-from PyQt5.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -131,6 +131,16 @@ class PyQtGraphPlotHost(InteractionHost):
         self._event_entries: list[EventEntryV3] = []
         self._event_strip_track: PyQtGraphEventStripTrack | None = None
         self._event_strip_widget: pg.PlotWidget | None = None
+        self._event_top_lane_widget: pg.PlotWidget | None = None
+        self._event_top_lane_track: PyQtGraphEventStripTrack | None = None
+        self._event_top_lane_container: QWidget | None = None
+        self._event_top_lane_gutter: QWidget | None = None
+        self._top_lane_separator: QFrame | None = None
+        self._use_track_event_lines: bool = True
+        self._event_lines_visible: bool = True
+        self._channel_event_labels_visible: bool = False
+        self._channel_event_label_font_size: float = 9.0
+        self._use_top_event_lane: bool = True
         self._shared_time_axis_footer_enabled: bool = bool(self._SHARED_TIME_AXIS_FOOTER_ENABLED)
         self._event_label_tracks_enabled: bool = bool(self._EVENT_LABEL_TRACKS_ENABLED)
         self._selected_event_index: int | None = None
@@ -256,6 +266,18 @@ class PyQtGraphPlotHost(InteractionHost):
                 vb.setBorder(self._lane_border_pen)
             except Exception:
                 pass
+
+        if self._event_top_lane_track is not None:
+            try:
+                if self._event_top_lane_widget is not None:
+                    self._event_top_lane_widget.setBackground(hex_to_pyqtgraph_color(bg))
+                    self._event_top_lane_widget.setStyleSheet(f"background-color: {bg};")
+                if self._event_top_lane_gutter is not None:
+                    self._event_top_lane_gutter.setStyleSheet(f"background-color: {bg};")
+                self._event_top_lane_track.apply_theme()
+            except Exception:
+                pass
+        self._update_top_lane_separator_style()
 
         for overlay in (
             getattr(self, "_time_cursor_overlay", None),
@@ -618,6 +640,14 @@ class PyQtGraphPlotHost(InteractionHost):
         if self._event_strip_widget is not None:
             self.layout.removeWidget(self._event_strip_widget)
 
+        if self._event_top_lane_container is not None:
+            self.layout.removeWidget(self._event_top_lane_container)
+        elif self._event_top_lane_widget is not None:
+            self.layout.removeWidget(self._event_top_lane_widget)
+
+        if self._top_lane_separator is not None:
+            self.layout.removeWidget(self._top_lane_separator)
+
         new_tracks: dict[str, PyQtGraphChannelTrack] = {}
         if not self._channel_specs:
             self._tracks = new_tracks
@@ -645,6 +675,44 @@ class PyQtGraphPlotHost(InteractionHost):
             self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
         if self._event_strip_track is not None:
             self._event_strip_track.set_height_change_callback(self._on_event_strip_height_requested)
+
+        if self._use_top_event_lane and self._event_top_lane_track is None:
+            top_footer_axis = TimeAxisItem(orientation="bottom")
+            top_footer_axis.set_time_mode(self._time_mode)
+            self._event_top_lane_widget = pg.PlotWidget(axisItems={"bottom": top_footer_axis})
+            bg = CURRENT_THEME.get("plot_bg", CURRENT_THEME.get("table_bg", "#FFFFFF"))
+            with contextlib.suppress(Exception):
+                self._event_top_lane_widget.setBackground(hex_to_pyqtgraph_color(bg))
+            with contextlib.suppress(Exception):
+                self._event_top_lane_widget.setFrameStyle(QFrame.NoFrame)
+            self._event_top_lane_widget.setStyleSheet(f"background-color: {bg};")
+            self._event_top_lane_widget.setContentsMargins(0, 0, 0, 0)
+            self._event_top_lane_track = PyQtGraphEventStripTrack(
+                self._event_top_lane_widget.getPlotItem(),
+                label_max_chars=20,
+                marker_stems_visible=False,
+                bypass_all_visible_lod_check=True,
+                show_index_only=True,
+            )
+            self._event_top_lane_track.set_height_change_callback(
+                self._on_event_top_lane_height_requested
+            )
+            # Wrap in a container that mirrors channel track structure:
+            # [gutter_spacer (fixed width) | PlotWidget (stretch=1)]
+            # This ensures the PlotWidget has the same width as channel track PlotWidgets,
+            # guaranteeing pixel-perfect ViewBox alignment without coordinate math.
+            gutter_px = int(required_outer_gutter_px())
+            self._event_top_lane_container = QWidget()
+            self._event_top_lane_container.setContentsMargins(0, 0, 0, 0)
+            self._event_top_lane_container.setFixedHeight(0)
+            _lane_layout = QHBoxLayout(self._event_top_lane_container)
+            _lane_layout.setContentsMargins(0, 0, 0, 0)
+            _lane_layout.setSpacing(0)
+            self._event_top_lane_gutter = QWidget()
+            self._event_top_lane_gutter.setFixedWidth(gutter_px)
+            self._event_top_lane_gutter.setStyleSheet(f"background-color: {bg};")
+            _lane_layout.addWidget(self._event_top_lane_gutter, 0)
+            _lane_layout.addWidget(self._event_top_lane_widget, 1)
 
         visible_specs = [
             spec for spec in self._channel_specs if self.is_channel_visible(spec.track_id)
@@ -756,10 +824,30 @@ class PyQtGraphPlotHost(InteractionHost):
                 strip_plot.getViewBox().setMenuEnabled(False)
             self.layout.addWidget(self._event_strip_widget, 0)
 
+        if self._use_top_event_lane and self._event_top_lane_track is not None \
+                and self._event_top_lane_widget is not None:
+            if primary_plot_item is not None:
+                with contextlib.suppress(Exception):
+                    self._event_top_lane_track.plot_item.setXLink(primary_plot_item)
+            with contextlib.suppress(Exception):
+                top_plot = self._event_top_lane_track.plot_item
+                top_plot.hideButtons()
+                top_plot.setMenuEnabled(False)
+                top_plot.getViewBox().setMenuEnabled(False)
+            lane_widget = self._event_top_lane_container or self._event_top_lane_widget
+            self.layout.insertWidget(0, lane_widget, 0)
+            if self._top_lane_separator is None:
+                self._top_lane_separator = QFrame()
+                self._top_lane_separator.setFixedHeight(2)
+                self._top_lane_separator.setFrameShape(QFrame.NoFrame)
+            self.layout.insertWidget(1, self._top_lane_separator, 0)
+            self._update_top_lane_separator_style()
+
         self._time_cursor_overlay.sync_tracks(plot_items)
         self._event_highlight_overlay.sync_tracks(plot_items)
         self._apply_grid_to_all_tracks()
         self._sync_event_strip_axes()
+        self._sync_event_top_lane_axes()
 
         for track in self._tracks.values():
             plot_item = track.view.get_widget().getPlotItem()
@@ -1167,6 +1255,7 @@ class PyQtGraphPlotHost(InteractionHost):
             self._apply_axis_font_to_track(track, trace_count=trace_count)
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
+        self._sync_event_top_lane_axes()
         for track in self._tracks.values():
             track.view.refresh_event_markers()
 
@@ -1312,6 +1401,69 @@ class PyQtGraphPlotHost(InteractionHost):
             return
         self._event_strip_widget.setFixedHeight(target)
 
+    def _sync_event_top_lane_axes(self) -> None:
+        if self._event_top_lane_track is None or not self._tracks:
+            return
+        ref_track = None
+        for spec in self._channel_specs:
+            track = self._tracks.get(spec.track_id)
+            if track is None:
+                continue
+            if ref_track is None:
+                ref_track = track
+            if getattr(track, "is_visible", lambda: True)():
+                ref_track = track
+                break
+        if ref_track is None:
+            return
+        ref_plot_item = ref_track.view.get_widget().getPlotItem()
+        # The top lane is wrapped in a container with a fixed-width gutter spacer that
+        # mirrors the channel track gutter widget.  The top lane PlotWidget therefore
+        # has exactly the same pixel width as channel track PlotWidgets, so its left
+        # axis only needs to match the channel axis width (no gutter addition needed).
+        left_width = self._axis_width_sync.left_column_width_px()
+        if left_width <= 0:
+            left_width = self._axis_width_px(ref_plot_item.getAxis("left")) or self._AXIS_WIDTH_PX
+        right_width = self._axis_width_px(ref_plot_item.getAxis("right"))
+
+        top_plot_item = self._event_top_lane_track.plot_item
+        left_axis = top_plot_item.getAxis("left")
+        if left_axis is not None:
+            top_plot_item.showAxis("left")
+            self._hide_axis_visuals(left_axis)
+            left_axis.setWidth(left_width)
+
+        right_axis = top_plot_item.getAxis("right")
+        if right_axis is not None:
+            top_plot_item.showAxis("right")
+            self._hide_axis_visuals(right_axis)
+            right_axis.setWidth(max(int(right_width), 0))
+
+        bottom_axis = top_plot_item.getAxis("bottom")
+        if bottom_axis is not None:
+            top_plot_item.showAxis("bottom")
+            self._hide_axis_visuals(bottom_axis)
+            with contextlib.suppress(Exception):
+                bottom_axis.setHeight(0)
+
+    def _on_event_top_lane_height_requested(self, height_px: int) -> None:
+        lane_host = self._event_top_lane_container or self._event_top_lane_widget
+        if lane_host is None:
+            return
+        target = max(int(height_px), 0)
+        current = int(lane_host.height())
+        if abs(target - current) <= 2:
+            return
+        lane_host.setFixedHeight(target)
+
+    def _update_top_lane_separator_style(self) -> None:
+        if self._top_lane_separator is None:
+            return
+        color_hex = CURRENT_THEME.get("plot_divider", CURRENT_THEME.get("grid_color", "#CCCCCC"))
+        self._top_lane_separator.setStyleSheet(
+            f"background: {color_hex}; border: none;"
+        )
+
     def _apply_event_label_options(self) -> None:
         if not self._tracks:
             return
@@ -1326,18 +1478,46 @@ class PyQtGraphPlotHost(InteractionHost):
             track.view.set_selected_event_index(self._selected_event_index)
             track.view.set_hovered_event_index(self._hovered_event_index)
             track.view.refresh_event_markers()
+        if self._use_top_event_lane \
+                and self._event_top_lane_track is not None \
+                and self._event_top_lane_widget is not None:
+            show_top_lane = (
+                bool(self._event_entries)
+                and self._event_display_mode != EventDisplayMode.OFF
+            )
+            lane_host = self._event_top_lane_container or self._event_top_lane_widget
+            lane_host.setVisible(show_top_lane)
+            self._event_top_lane_track.set_visible(show_top_lane)
+            if self._top_lane_separator is not None:
+                self._top_lane_separator.setVisible(show_top_lane)
+            if show_top_lane:
+                self._event_top_lane_track.set_events(
+                    self._event_entries, self._event_label_options
+                )
+                self._event_top_lane_track.set_display_mode(self._event_display_mode)
+                self._event_top_lane_track.set_selected_event(self._selected_event_index)
+                self._event_top_lane_track.set_hovered_event(self._hovered_event_index)
+                self._on_event_top_lane_height_requested(
+                    self._event_top_lane_track.required_height_px
+                )
+            else:
+                self._event_top_lane_track.clear()
+                self._on_event_top_lane_height_requested(0)
+
         if self._event_strip_track is not None and self._event_strip_widget is not None:
             show_strip = (
                 bool(self._shared_time_axis_footer_enabled)
                 or (
-                    bool(self._event_label_tracks_enabled)
+                    not self._use_top_event_lane
+                    and bool(self._event_label_tracks_enabled)
                     and bool(self._event_entries)
                     and self._event_display_mode != EventDisplayMode.OFF
                 )
             )
             self._event_strip_widget.setVisible(show_strip)
             self._event_strip_track.set_visible(show_strip)
-            if self._event_label_tracks_enabled and self._event_entries:
+            if not self._use_top_event_lane and self._event_label_tracks_enabled \
+                    and self._event_entries:
                 self._event_strip_track.set_events(self._event_entries, self._event_label_options)
                 self._event_strip_track.set_display_mode(self._event_display_mode)
                 self._event_strip_track.set_selected_event(self._selected_event_index)
@@ -1365,6 +1545,9 @@ class PyQtGraphPlotHost(InteractionHost):
         if self._event_strip_track is not None:
             with contextlib.suppress(Exception):
                 self._event_strip_track.set_hovered_event(resolved)
+        if self._event_top_lane_track is not None:
+            with contextlib.suppress(Exception):
+                self._event_top_lane_track.set_hovered_event(resolved)
 
     def _apply_tooltip_settings(self) -> None:
         for track in self._tracks.values():
@@ -1720,6 +1903,7 @@ class PyQtGraphPlotHost(InteractionHost):
         """Resync shared left-axis width after a Y-range change."""
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
+        self._sync_event_top_lane_axes()
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
@@ -1910,6 +2094,23 @@ class PyQtGraphPlotHost(InteractionHost):
         finally:
             self._range_change_user_driven = previous_flag
 
+    def _push_events_to_tracks(self) -> None:
+        """Propagate events to all channel tracks, respecting line visibility flags."""
+        if not self._event_lines_visible or not self._use_track_event_lines:
+            for track in self._tracks.values():
+                track.set_events([], None, [], label_meta=None)
+            return
+        for track in self._tracks.values():
+            track.set_events(
+                self._event_times,
+                self._event_colors,
+                self._event_labels,
+                label_meta=self._event_label_meta,
+            )
+            track.view.set_channel_event_labels_visible(self._channel_event_labels_visible)
+            with contextlib.suppress(Exception):
+                track.view.set_channel_event_label_font_size(self._channel_event_label_font_size)
+
     def set_events(
         self,
         times: list[float],
@@ -1953,35 +2154,7 @@ class PyQtGraphPlotHost(InteractionHost):
             )
         self._event_entries = entries
 
-        for track in self._tracks.values():
-            track.set_events(times, colors, labels, label_meta=self._event_label_meta)
-        if self._event_strip_track is not None and self._event_strip_widget is not None:
-            show_strip = (
-                bool(self._shared_time_axis_footer_enabled)
-                or (
-                    bool(self._event_label_tracks_enabled)
-                    and bool(entries)
-                    and self._event_display_mode != EventDisplayMode.OFF
-                )
-            )
-            self._event_strip_widget.setVisible(show_strip)
-            self._event_strip_track.set_visible(show_strip)
-            if self._event_label_tracks_enabled and entries:
-                self._event_strip_track.set_events(entries, self._event_label_options)
-                self._event_strip_track.set_display_mode(self._event_display_mode)
-                self._event_strip_track.set_selected_event(self._selected_event_index)
-                self._event_strip_track.set_hovered_event(None)
-                self._on_event_strip_height_requested(self._event_strip_track.required_height_px)
-            else:
-                self._event_strip_track.clear()
-                self._event_strip_track.set_display_mode(EventDisplayMode.OFF)
-                self._event_strip_track.set_selected_event(None)
-                self._event_strip_track.set_hovered_event(None)
-                self._on_event_strip_height_requested(
-                    self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX
-                    if self._shared_time_axis_footer_enabled
-                    else self._EVENT_STRIP_HEIGHT_PX
-                )
+        self._push_events_to_tracks()
         self._apply_event_label_options()
 
     def get_track(self, track_id: str) -> PyQtGraphChannelTrack | None:
@@ -2225,13 +2398,22 @@ class PyQtGraphPlotHost(InteractionHost):
                 plot_item.setLabel("bottom", "")
 
     def set_event_lines_visible(self, visible: bool) -> None:
-        """Set event line visibility (matplotlib PlotHost compatibility).
+        """Set event line visibility for per-channel marker lines."""
+        self._event_lines_visible = bool(visible)
+        self._push_events_to_tracks()
 
-        Note: PyQtGraph tracks handle event visibility internally.
-        This is a no-op for compatibility.
-        """
-        # TODO: Implement event line visibility control if needed
-        pass
+    def set_channel_event_labels_visible(self, visible: bool) -> None:
+        """Show or hide optional vertical text labels next to each dashed marker line."""
+        self._channel_event_labels_visible = bool(visible)
+        for track in self._tracks.values():
+            track.view.set_channel_event_labels_visible(self._channel_event_labels_visible)
+
+    def set_channel_event_label_font_size(self, size_pt: float) -> None:
+        """Set the point size for vertical channel event text labels."""
+        self._channel_event_label_font_size = float(size_pt)
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view.set_channel_event_label_font_size(self._channel_event_label_font_size)
 
     def set_annotation_entries(self, entries: list) -> None:
         """Set annotation entries (matplotlib PlotHost compatibility).
@@ -2430,9 +2612,9 @@ class PyQtGraphPlotHost(InteractionHost):
         return bool(first_track.view.is_autoscale_enabled())
 
     def use_track_event_lines(self, flag: bool) -> None:
-        """Control whether tracks draw their own event lines (compatibility stub)."""
-        # PyQtGraph tracks always handle their own event rendering
-        pass
+        """Control whether tracks draw their own per-channel event marker lines."""
+        self._use_track_event_lines = bool(flag)
+        self._push_events_to_tracks()
 
     def set_event_labels_visible(self, visible: bool) -> None:
         """Compatibility toggle for label rendering modes."""

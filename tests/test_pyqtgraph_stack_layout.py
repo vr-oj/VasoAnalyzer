@@ -285,3 +285,46 @@ def test_axis_width_sync_aligns_waveform_columns_across_tracks(qt_app) -> None:
     finally:
         widget.close()
         qt_app.processEvents()
+
+
+def test_top_event_lane_is_first_item_in_layout(qt_app) -> None:
+    """Top lane widget must sit at layout index 0 so it renders above all tracks."""
+    host = _build_host_with_three_tracks()
+    widget = host.get_widget()
+    try:
+        widget.resize(900, 600)
+        widget.show()
+        qt_app.processEvents()
+
+        assert host._event_top_lane_widget is not None
+        layout = host.layout
+        first_item = layout.itemAt(0)
+        assert first_item is not None
+        # Top lane is wrapped in a container (gutter spacer + PlotWidget).
+        expected = host._event_top_lane_container or host._event_top_lane_widget
+        assert first_item.widget() is expected
+    finally:
+        widget.close()
+        qt_app.processEvents()
+
+
+def test_top_event_lane_does_not_affect_track_equal_heights(qt_app) -> None:
+    """Adding the top lane (stretch=0) must not skew the equal-height channel rows."""
+    host = _build_host_with_three_tracks()
+    widget = host.get_widget()
+    try:
+        widget.resize(900, 600)
+        widget.show()
+        qt_app.processEvents()
+
+        heights: list[int] = []
+        for track_id in ("a", "b", "c"):
+            track = host.track(track_id)
+            assert track is not None
+            heights.append(int(track.widget.height()))
+
+        assert heights
+        assert max(heights) - min(heights) <= 2
+    finally:
+        widget.close()
+        qt_app.processEvents()

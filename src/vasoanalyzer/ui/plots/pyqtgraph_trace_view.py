@@ -1682,6 +1682,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         pixel_width = max(int(self._plot_widget.width()), 1)
         self._event_layer.refresh_for_view(xlim[0], xlim[1], pixel_width)
 
+    def set_channel_event_labels_visible(self, visible: bool) -> None:
+        """Show or hide the optional vertical text labels next to each dashed marker line."""
+        self._event_layer.set_channel_labels_visible(bool(visible))
+
+    def set_channel_event_label_font_size(self, size_pt: float) -> None:
+        """Set the point size for vertical channel event text labels."""
+        self._event_layer.set_label_font_size(float(size_pt))
+
     def set_uncertainty_bands_visible(self, visible: bool) -> None:
         """Show/hide min/max uncertainty bands.
 

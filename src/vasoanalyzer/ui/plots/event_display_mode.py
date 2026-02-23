@@ -15,6 +15,8 @@ class EventDisplayMode(str, Enum):
 
 
 def coerce_event_display_mode(value: object) -> EventDisplayMode:
+    if isinstance(value, EventDisplayMode):
+        return value
     raw = str(value or "").strip().lower()
     aliases = {
         "off": EventDisplayMode.OFF,

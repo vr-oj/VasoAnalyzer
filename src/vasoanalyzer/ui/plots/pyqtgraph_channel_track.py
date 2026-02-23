@@ -478,6 +478,9 @@ class PyQtGraphChannelTrack:
 
         ymin, ymax = padded
         self._auto_margin = float(margin)
+        # Lock in these limits as the sticky Y range so that subsequent window
+        # updates (scroll, pan, event jumps) do not overwrite the user's scale.
+        self._sticky_ylim = (float(ymin), float(ymax))
         self.view.set_ylim(ymin, ymax, preserve_autoscale=True)
         return (ymin, ymax)
 

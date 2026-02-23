@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pyqtgraph as pg
-from PyQt5.QtGui import QColor, QFont, QFontMetricsF
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QFont
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3
 from vasoanalyzer.ui.plots.event_display_mode import (
     EventDisplayMode,
     coerce_event_display_mode,
 )
-from vasoanalyzer.ui.plots.event_label_layout import PlacedLabel, layout_labels
 from vasoanalyzer.ui.plots.pyqtgraph_style import get_pyqtgraph_style
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -24,20 +24,30 @@ __all__ = ["PyQtGraphEventMarkerLayer"]
 class _MarkerItem:
     entry: EventEntryV3
     line: pg.InfiniteLine
-    label: pg.TextItem
+    label: pg.TextItem | None = field(default=None)
 
 
 class PyQtGraphEventMarkerLayer:
-    """Manages per-event marker lines and labels for a PlotItem."""
+    """Manages per-event dashed marker lines for a PlotItem.
+
+    Each event is rendered as a dashed vertical InfiniteLine spanning the
+    full channel height.  The selected or hovered event switches to a solid
+    line for visual emphasis.
+
+    An *optional* vertical text label can be shown next to each line via
+    ``set_channel_labels_visible(True)``.  Labels are off by default.
+    Event index numbers are surfaced exclusively in the shared top-lane
+    strip above all channels (PyQtGraphEventStripTrack).
+    """
 
     def __init__(self, plot_item: pg.PlotItem) -> None:
         self._plot_item = plot_item
         self._items: list[_MarkerItem] = []
         self._display_mode: EventDisplayMode = EventDisplayMode.NAMES_ON_HOVER
-        self._labels_visible: bool = True
         self._selected_index: int | None = None
         self._hovered_index: int | None = None
         self._last_view: tuple[float, float, int] | None = None
+        self._channel_labels_visible: bool = False
 
         style = get_pyqtgraph_style()
         self._line_style = style.event_marker
@@ -49,10 +59,11 @@ class PyQtGraphEventMarkerLayer:
         self._font_family = str(style.font_family or "Arial")
         self._font_size = float(style.tick_font_size or 9.0)
         self._font = self._make_font(bold=False)
-        self._font_bold = self._make_font(bold=True)
         self._label_color = self._resolve_label_color()
-        self._max_label_lanes = 3
-        self._min_label_gap_px = 6.0
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def clear(self) -> None:
         for item in self._items:
@@ -60,10 +71,11 @@ class PyQtGraphEventMarkerLayer:
                 self._plot_item.removeItem(item.line)
             except Exception:
                 pass
-            try:
-                self._plot_item.removeItem(item.label)
-            except Exception:
-                pass
+            if item.label is not None:
+                try:
+                    self._plot_item.removeItem(item.label)
+                except Exception:
+                    pass
         self._items.clear()
         self._last_view = None
 
@@ -76,22 +88,28 @@ class PyQtGraphEventMarkerLayer:
             line = pg.InfiniteLine(
                 pos=float(entry.t),
                 angle=90,
-                pen=self._make_line_pen(entry, selected=False),
+                pen=self._make_line_pen(entry, selected=False, hovered=False),
                 movable=False,
             )
             line.setZValue(5)
-
-            label = pg.TextItem(
-                text="",
-                color=self._label_color,
-                anchor=(0.5, 1.0),
-            )
-            label.setFont(self._font)
-            label.setZValue(6)
-            label.setVisible(False)
             tooltip = self._event_tooltip(entry)
             with contextlib.suppress(Exception):
                 line.setToolTip(tooltip)
+
+            # Vertical text label — hidden by default, enabled by
+            # set_channel_labels_visible(True).  anchor=(0, 1) with
+            # rotation=-90° places the right edge of the rotated text at the
+            # set position (x=entry.t), so text sits entirely to the left of
+            # the dashed line and reads upward from y_bottom near the x-axis.
+            label = pg.TextItem(
+                text="",
+                color=self._label_color,
+                anchor=(0, 1),
+            )
+            label.setFont(self._font)
+            label.setRotation(-90)
+            label.setZValue(6)
+            label.setVisible(False)
             with contextlib.suppress(Exception):
                 label.setToolTip(tooltip)
 
@@ -100,51 +118,46 @@ class PyQtGraphEventMarkerLayer:
             self._items.append(_MarkerItem(entry=entry, line=line, label=label))
 
         self._apply_line_styles()
-        self._apply_label_styles()
 
-    def set_display_mode(self, mode: EventDisplayMode | str) -> None:
-        resolved = coerce_event_display_mode(mode)
-        if resolved == self._display_mode:
-            return
-        self._display_mode = resolved
-        if self._last_view is not None:
-            x_min, x_max, pixel_width = self._last_view
-            self.refresh_for_view(x_min, x_max, pixel_width)
-
-    def set_label_mode(self, mode: str) -> None:
-        """Compatibility shim for legacy label mode API."""
-
-        normalized = str(mode or "").strip().lower()
-        if normalized in {"none", "off", "hidden", "disable", "disabled"}:
-            self.set_display_mode(EventDisplayMode.OFF)
-            return
-        self.set_display_mode(EventDisplayMode.NAMES_ALWAYS)
-
-    def set_labels_visible(self, visible: bool) -> None:
-        self._labels_visible = bool(visible)
+    def set_channel_labels_visible(self, visible: bool) -> None:
+        """Show or hide the optional vertical text labels in channel tracks."""
+        self._channel_labels_visible = bool(visible)
         if self._last_view is not None:
             x_min, x_max, pixel_width = self._last_view
             self.refresh_for_view(x_min, x_max, pixel_width)
         else:
             for item in self._items:
-                item.label.setVisible(False)
+                if item.label is not None:
+                    item.label.setVisible(False)
+
+    def set_label_font_size(self, size_pt: float) -> None:
+        """Set the point size for vertical channel event text labels."""
+        self._font_size = max(float(size_pt), 5.0)
+        self._font = self._make_font(bold=False)
+        self._apply_label_styles()
+        if self._channel_labels_visible and self._last_view is not None:
+            x_min, x_max, pixel_width = self._last_view
+            self.refresh_for_view(x_min, x_max, pixel_width)
+
+    def set_display_mode(self, mode: EventDisplayMode | str) -> None:
+        self._display_mode = coerce_event_display_mode(mode)
+
+    def set_label_mode(self, mode: str) -> None:
+        """Compatibility shim — channel labels controlled via set_channel_labels_visible."""
+
+    def set_labels_visible(self, visible: bool) -> None:
+        """Compatibility shim — channel labels controlled via set_channel_labels_visible."""
 
     def set_selected_event(self, index: int | None) -> None:
         self._selected_index = None if index is None else int(index)
         self._apply_line_styles()
-        self._apply_label_styles()
-        if self._last_view is not None:
-            x_min, x_max, pixel_width = self._last_view
-            self.refresh_for_view(x_min, x_max, pixel_width)
 
     def set_hovered_event(self, index: int | None) -> None:
         resolved = None if index is None else int(index)
         if resolved == self._hovered_index:
             return
         self._hovered_index = resolved
-        if self._last_view is not None:
-            x_min, x_max, pixel_width = self._last_view
-            self.refresh_for_view(x_min, x_max, pixel_width)
+        self._apply_line_styles()
 
     def set_line_style(
         self,
@@ -170,23 +183,13 @@ class PyQtGraphEventMarkerLayer:
         self._font_family = str(style.font_family or "Arial")
         self._font_size = float(style.tick_font_size or 9.0)
         self._font = self._make_font(bold=False)
-        self._font_bold = self._make_font(bold=True)
         self._label_color = self._resolve_label_color()
         self._apply_line_styles()
         self._apply_label_styles()
 
-    def _x_to_px_mapper(self, x_min: float, x_max: float, pixels_width: int):
-        span = max(float(x_max - x_min), 1e-9)
-        px_width = max(int(pixels_width), 1)
-
-        def map_x(x_data: float) -> float:
-            return ((float(x_data) - x_min) / span) * float(px_width)
-
-        return map_x
-
-    @staticmethod
-    def _interval_overlaps(a: PlacedLabel, b: PlacedLabel, *, gap: float) -> bool:
-        return not (a.x_px1 + gap <= b.x_px0 or b.x_px1 + gap <= a.x_px0)
+    # ------------------------------------------------------------------
+    # Per-frame layout
+    # ------------------------------------------------------------------
 
     def refresh_for_view(self, x_min: float, x_max: float, pixels_width: int) -> None:
         if not self._items:
@@ -194,146 +197,59 @@ class PyQtGraphEventMarkerLayer:
 
         x_min = float(x_min)
         x_max = float(x_max)
-        pixel_width = max(int(pixels_width), 1)
-        self._last_view = (x_min, x_max, pixel_width)
+        self._last_view = (x_min, x_max, max(int(pixels_width), 1))
         self._apply_line_styles()
 
-        if not self._labels_visible or self._display_mode == EventDisplayMode.OFF:
-            for item in self._items:
+        # Hide all labels first.
+        for item in self._items:
+            if item.label is not None:
                 item.label.setVisible(False)
+
+        if not self._channel_labels_visible:
             return
 
-        visible_items = [item for item in self._items if x_min <= item.entry.t <= x_max]
-        if not visible_items:
-            for item in self._items:
-                item.label.setVisible(False)
+        # Determine bottom-of-channel y in data coordinates.
+        view_range = self._plot_item.viewRange()
+        if not view_range or len(view_range) < 2:
             return
-
-        mode = self._display_mode
-        if mode == EventDisplayMode.NAMES_ALWAYS:
-            candidates = list(visible_items)
-        else:
-            candidates = [
-                item for item in visible_items if self._is_selected(item) or self._is_hovered(item)
-            ]
-
-        if not candidates:
-            for item in self._items:
-                item.label.setVisible(False)
-            return
-
-        x_to_px = self._x_to_px_mapper(x_min, x_max, pixel_width)
-
-        text_cache: dict[int, str] = {}
-
-        def text_for(item: _MarkerItem) -> str:
-            item_id = id(item)
-            cached = text_cache.get(item_id)
-            if cached is not None:
-                return cached
-            label_text = self._label_text(item)
-            text_cache[item_id] = label_text
-            return label_text
-
-        metrics = QFontMetricsF(self._font_bold)
-
-        def text_width(text: str) -> float:
-            try:
-                return max(0.0, float(metrics.horizontalAdvance(text)))
-            except AttributeError:
-                return max(0.0, float(metrics.width(text)))
-
-        events_payload: list[tuple[int, float, str]] = []
-        item_by_id: dict[int, _MarkerItem] = {}
-        for item in sorted(candidates, key=lambda entry: float(entry.entry.t)):
-            event_id = int(item.entry.index or 0)
-            if event_id <= 0:
-                continue
-            text = text_for(item)
-            if not text:
-                continue
-            events_payload.append((event_id, float(item.entry.t), text))
-            item_by_id[event_id] = item
-
-        if not events_payload:
-            for item in self._items:
-                item.label.setVisible(False)
-            return
-
-        placements = layout_labels(
-            events=events_payload,
-            x_to_px=x_to_px,
-            text_width_px=text_width,
-            max_lanes=self._max_label_lanes,
-            min_gap_px=self._min_label_gap_px,
-            hide_if_no_space=True,
-        )
-        by_id: dict[int, PlacedLabel] = {placement.event_id: placement for placement in placements}
-
-        forced_ids = {
-            int(item.entry.index or 0)
-            for item in candidates
-            if self._is_selected(item) or self._is_hovered(item)
-        }
-        forced_ids.discard(0)
-        for forced_id in forced_ids:
-            placement = by_id.get(forced_id)
-            if placement is None or placement.visible:
-                continue
-            lane = max(0, min(placement.lane, self._max_label_lanes - 1))
-            forced = PlacedLabel(
-                event_id=placement.event_id,
-                x_data=placement.x_data,
-                lane=lane,
-                visible=True,
-                x_px0=placement.x_px0,
-                x_px1=placement.x_px1,
-            )
-            for other_id, other in list(by_id.items()):
-                if other_id == forced_id or not other.visible or other.lane != lane:
-                    continue
-                if self._interval_overlaps(forced, other, gap=self._min_label_gap_px):
-                    by_id[other_id] = PlacedLabel(
-                        event_id=other.event_id,
-                        x_data=other.x_data,
-                        lane=other.lane,
-                        visible=False,
-                        x_px0=other.x_px0,
-                        x_px1=other.x_px1,
-                    )
-            by_id[forced_id] = forced
+        y_min_raw, y_max_raw = view_range[1]
+        y_span = max(float(y_max_raw - y_min_raw), 1e-9)
+        # Place label text starting very close to the x-axis (bottom edge).
+        y_bottom = float(y_min_raw) + y_span * 0.01
 
         for item in self._items:
-            item.label.setVisible(False)
-        for event_id, placement in by_id.items():
-            marker = item_by_id.get(event_id)
-            if marker is None or not placement.visible:
+            if item.label is None:
                 continue
-            text = text_for(marker)
-            marker.label.setText(text)
-            marker.label.setRotation(0.0)
-            marker.label.setAnchor((0.5, 1.0))
-            marker.label.setFont(self._font_bold if self._is_selected(marker) else self._font)
-            marker.label.setPos(float(marker.entry.t), self._label_y_position(placement.lane))
-            marker.label.setVisible(True)
+            if not (x_min <= item.entry.t <= x_max):
+                continue
+            text = self._channel_label_text(item)
+            if not text:
+                continue
+            item.label.setText(text)
+            item.label.setPos(float(item.entry.t), y_bottom)
+            item.label.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _apply_line_styles(self) -> None:
         for item in self._items:
-            pen = self._make_line_pen(item.entry, selected=self._is_selected(item))
+            is_sel = self._is_selected(item)
+            is_hov = self._is_hovered(item)
+            pen = self._make_line_pen(item.entry, selected=is_sel, hovered=is_hov)
             item.line.setPen(pen)
 
     def _apply_label_styles(self) -> None:
         for item in self._items:
-            item.label.setColor(self._label_color)
-            item.label.setFont(self._font_bold if self._is_selected(item) else self._font)
+            if item.label is not None:
+                item.label.setColor(self._label_color)
+                item.label.setFont(self._font)
 
-    def _label_text(self, item: _MarkerItem) -> str:
+    def _channel_label_text(self, item: _MarkerItem) -> str:
+        """Event text displayed as a vertical label inside the channel."""
         text_val = str(item.entry.text or "").strip()
-        if text_val:
-            return text_val
-        if item.entry.index is not None:
-            return f"Event {int(item.entry.index)}"
-        return ""
+        return text_val
 
     def _event_tooltip(self, entry: EventEntryV3) -> str:
         text_val = str(entry.text or "").strip()
@@ -363,32 +279,7 @@ class PyQtGraphEventMarkerLayer:
             return False
         return int(index) - 1 == int(self._hovered_index)
 
-    def _label_y_position(self, lane: int) -> float:
-        view_range = self._plot_item.viewRange()
-        if not view_range or len(view_range) < 2:
-            return 0.0
-        y_min_raw, y_max_raw = view_range[1]
-        y_min = float(y_min_raw)
-        y_max = float(y_max_raw)
-        span = max(y_max - y_min, 1e-9)
-        vb = self._plot_item.getViewBox()
-        if vb is None:
-            return y_max
-        try:
-            pixel_height = float(vb.height())
-        except Exception:
-            return y_max
-        if pixel_height <= 0.0:
-            return y_max
-
-        metrics = QFontMetricsF(self._font)
-        lane_height_px = metrics.height() + 3.0
-        total_top_pad_px = (lane + 1) * lane_height_px
-        total_top_pad_px = min(total_top_pad_px, pixel_height - 2.0)
-        pad_data = (total_top_pad_px / pixel_height) * span
-        return y_max - pad_data
-
-    def _make_font(self, *, bold: bool) -> QFont:
+    def _make_font(self, *, bold: bool = False) -> QFont:
         font = QFont(self._font_family)
         font.setPointSizeF(self._font_size)
         font.setBold(bold)
@@ -413,18 +304,32 @@ class PyQtGraphEventMarkerLayer:
                 return str(candidate)
         return None
 
-    def _make_line_pen(self, entry: EventEntryV3, *, selected: bool):
+    # Highlight colors for selected / hovered events.
+    # Deliberately differ from the red time-cursor (#DC2626) so users
+    # cannot confuse the two.
+    _SELECTED_COLOR = "#1976D2"   # solid blue — confirmed selection
+    _HOVERED_COLOR  = "#42A5F5"   # lighter blue — hover preview
+
+    def _make_line_pen(self, entry: EventEntryV3, *, selected: bool, hovered: bool = False):
         style = self._line_style
+        if selected:
+            qcolor = QColor(self._SELECTED_COLOR)
+            qcolor.setAlphaF(1.0)
+            return pg.mkPen(color=qcolor, width=2.5, style=Qt.SolidLine)
+        if hovered:
+            qcolor = QColor(self._HOVERED_COLOR)
+            qcolor.setAlphaF(0.85)
+            return pg.mkPen(color=qcolor, width=2.0, style=Qt.SolidLine)
         color = self._line_color_override or self._entry_color(entry) or style.color
         qcolor = QColor(color)
         if not qcolor.isValid():
             qcolor = QColor(style.color)
-        alpha = self._line_alpha_override
-        if alpha is None:
-            alpha = style.alpha
+        alpha = self._line_alpha_override if self._line_alpha_override is not None else style.alpha
         qcolor.setAlphaF(max(0.0, min(float(alpha), 1.0)))
         width = self._line_width_override if self._line_width_override is not None else style.width
-        if selected:
-            width = float(width) + 1.0
-        pen_style = self._line_style_override or style.style
+        pen_style = (
+            self._line_style_override
+            if self._line_style_override is not None
+            else Qt.DashLine
+        )
         return pg.mkPen(color=qcolor, width=float(width), style=pen_style)

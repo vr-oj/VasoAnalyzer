@@ -61,8 +61,8 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.stack.addWidget(window.data_page)
 
     window.main_layout = QVBoxLayout(window.data_page)
-    window.main_layout.setContentsMargins(12, 8, 12, 12)
-    window.main_layout.setSpacing(10)
+    window.main_layout.setContentsMargins(0, 0, 0, 0)
+    window.main_layout.setSpacing(0)
 
     dpi = int(QApplication.primaryScreen().logicalDotsPerInch())
     # Main trace view uses PyQtGraph by default:
@@ -363,13 +363,13 @@ QFrame#PlotPanel, QFrame#SidePanel {{
 QFrame#PlotContainer,
 QFrame#RightPanelCard {{
     background: {panel_bg};
-    border: 1px solid {panel_border};
-    border-radius: {panel_radius}px;
+    border: none;
+    border-radius: 0px;
 }}
 QFrame#SnapshotCard, QFrame#TableCard {{
     background: {panel_bg};
-    border: 1px solid {panel_border};
-    border-radius: {panel_radius}px;
+    border: none;
+    border-radius: 0px;
 }}
 QFrame#TiffViewerHeader {{
     background: transparent;
