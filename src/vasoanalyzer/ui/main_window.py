@@ -12398,9 +12398,21 @@ QPushButton[isGhost="true"]:pressed {{
         self._time_cursor_time = float(trace_time)
         self._highlight_selected_event(float(trace_time))
         plot_host = getattr(self, "plot_host", None)
-        if plot_host is not None and hasattr(plot_host, "set_time_cursor"):
-            with contextlib.suppress(Exception):
-                plot_host.set_time_cursor(float(trace_time), visible=True)
+        if plot_host is None or not hasattr(plot_host, "set_time_cursor"):
+            return
+        with contextlib.suppress(Exception):
+            plot_host.set_time_cursor(float(trace_time), visible=True)
+        # Keep the cursor visible during playback (page-scroll mode): when the cursor
+        # exits the current window, jump so it lands at 20% from the left edge.
+        with contextlib.suppress(Exception):
+            if hasattr(plot_host, "current_window") and hasattr(plot_host, "set_time_window"):
+                window = plot_host.current_window()
+                if window is not None:
+                    x0, x1 = window
+                    span = x1 - x0
+                    if span > 0 and not (x0 <= trace_time <= x1):
+                        new_x0 = trace_time - span * 0.20
+                        plot_host.set_time_window(new_x0, new_x0 + span)
 
     def step_previous_frame(self) -> None:
         if not self.snapshot_frames:
