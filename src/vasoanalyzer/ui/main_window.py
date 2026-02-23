@@ -300,8 +300,10 @@ class _SampleLoadJob(QRunnable):
 
         try:
             self._emit_progress(10, "Opening storage")
-            # If we have a staging DB path, create a thread-local connection
-            if self._staging_db_path and repo is not None:
+            # If we have a staging DB path, create a thread-local connection.
+            # This fast path is used when project._store already has an open staging DB
+            # (set by _save_project_bundle after any save), even when project_ctx is None.
+            if self._staging_db_path:
                 log.debug(
                     "Background job: creating thread-local connection to %s",
                     self._staging_db_path,
@@ -3691,6 +3693,24 @@ class VasoAnalyzerApp(QMainWindow):
                                 )
                 except Exception as e:
                     log.warning(f"Could not extract staging DB path: {e}")
+            # Fallback: extract staging DB path directly from project._store when ctx is None.
+            # This is the common case during an import session — project_ctx is not set but
+            # _save_project_bundle already opened and attached a staging DB to the project.
+            if staging_db_path is None and self.current_project is not None:
+                try:
+                    project_store = getattr(self.current_project, "_store", None)
+                    if project_store is not None:
+                        handle = getattr(project_store, "handle", None)
+                        if handle is not None:
+                            staging_path = getattr(handle, "staging_path", None)
+                            if staging_path is not None:
+                                staging_db_path = str(staging_path)
+                                log.debug(
+                                    "Extracted staging DB path from project._store: %s",
+                                    staging_db_path,
+                                )
+                except Exception as e:
+                    log.debug("Could not extract staging DB path from project._store: %s", e)
 
             log.debug(
                 "load_sample_into_view: repo=%s project_path=%s needs_events=%s dataset_id=%s",
@@ -3703,21 +3723,12 @@ class VasoAnalyzerApp(QMainWindow):
             # CRITICAL: If repo is None but we have a project context, something is wrong
             if repo is None and ctx is not None:
                 log.warning("Repo is None but project context exists: %s", ctx)
-            if (
-                repo is None
-                and project_path
-                and sample.dataset_id is not None
-                and (needs_trace or needs_events or needs_results)
-            ):
-                if self._queue_sample_load_until_context(sample):
-                    status = "Preparing project resources…"
-                    self.statusBar().showMessage(status, 2000)
-                    return
-                log.warning(
-                    "⚠️  Unable to queue sample '%s' for deferred loading; proceeding without repo",
+            if repo is None and project_path and sample.dataset_id is not None:
+                log.debug(
+                    "No repo from project_ctx for '%s'; background job will open project context",
                     sample.name,
                 )
-            if repo is None and project_path and needs_events:
+            if repo is None and staging_db_path is None and project_path and needs_events:
                 log.warning(
                     "Background job will create a NEW project context which means a NEW staging database; "
                     "events may not be found."

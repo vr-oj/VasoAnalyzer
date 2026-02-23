@@ -48,8 +48,9 @@ class PyQtGraphTimeCursorOverlay:
         # Remove old cursor lines (safely handle deleted Qt objects)
         for line in self._cursor_lines:
             with contextlib.suppress(RuntimeError):
-                if line.scene() is not None:
-                    line.scene().removeItem(line)
+                scene = line.scene()
+                if scene is not None:
+                    scene.removeItem(line)
         self._cursor_lines.clear()
 
         # Create new cursor lines for each plot item
@@ -146,8 +147,9 @@ class PyQtGraphEventHighlightOverlay:
         # Remove old highlight regions (safely handle deleted Qt objects)
         for region in self._highlight_regions:
             with contextlib.suppress(RuntimeError):
-                if region.scene() is not None:
-                    region.scene().removeItem(region)
+                scene = region.scene()
+                if scene is not None:
+                    scene.removeItem(region)
         self._highlight_regions.clear()
 
         # Create new highlight regions for each plot item
@@ -155,7 +157,7 @@ class PyQtGraphEventHighlightOverlay:
             if self._time is not None:
                 region = pg.LinearRegionItem(
                     values=(self._time - self._width / 2, self._time + self._width / 2),
-                    orientation=pg.LinearRegionItem.Vertical,
+                    orientation="vertical",
                     movable=False,
                 )
 

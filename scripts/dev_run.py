@@ -64,7 +64,9 @@ def main() -> int:
     window.show()
 
     active_flags = ", ".join(sorted(k for k, v in all_enabled().items() if v)) or "none"
-    window.statusBar().showMessage(f"Active flags: {active_flags}", 4000)
+    status_bar = window.statusBar()
+    if status_bar:
+        status_bar.showMessage(f"Active flags: {active_flags}", 4000)
     if is_enabled("dev_toolbar", default=False):
         window.toolbar.show()
 

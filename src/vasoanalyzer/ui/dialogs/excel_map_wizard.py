@@ -19,6 +19,7 @@ project repository.
 import contextlib
 import csv
 import os
+import re
 import tempfile
 from collections import Counter, deque
 from dataclasses import dataclass, field
@@ -62,6 +63,31 @@ __all__ = ["ExcelMapWizard"]
 DEFAULT_QMODEL_INDEX = QModelIndex()
 
 SESSION_EVENT_MIME = "application/vnd.vaso.session-event"
+
+_NORM_SUBS = re.compile(r"[:\-–—•+/\\()\[\]{}=,;]")
+
+
+def _norm_label(label: str) -> str:
+    """Normalize a measurement label for fuzzy matching.
+
+    Handles common formatting differences between session event labels and
+    template row labels:
+    - Converts micro sign µ → u (e.g. "1 µM PE" → "1 um pe")
+    - Removes separator characters (colon, dash, em-dash, plus, etc.)
+    - Collapses whitespace
+    - Case-insensitive (lowercased)
+
+    Examples::
+
+        _norm_label("20 mmHg: Max")  →  "20 mmhg max"
+        _norm_label("+ 1 µM CCh")   →  "1 um cch"
+        _norm_label("1 µM PE")      →  "1 um pe"
+    """
+    s = label.strip().lower()
+    s = s.replace("µ", "u").replace("μ", "u")  # micro sign variants
+    s = _NORM_SUBS.sub(" ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 # UI Design Tokens
@@ -2412,6 +2438,7 @@ class ExcelMapWizard(QWizard):
         if self.active_date_column:
             self._load_existing_assignments_from_sheet()
 
+        # Pass 1: exact case-insensitive match
         label_map: dict[str, deque[int]] = {}
         for event in self.session_events:
             key = event.label.strip().lower()
@@ -2424,6 +2451,23 @@ class ExcelMapWizard(QWizard):
                 continue
             key = row.label.strip().lower()
             queue = label_map.get(key)
+            if queue:
+                self.row_assignments[row.row_index] = queue.popleft()
+
+        # Pass 2: normalized match — handles µ→u, punctuation, and spacing
+        # differences between session event labels and template row labels.
+        norm_map: dict[str, deque[int]] = {}
+        for event in self.session_events:
+            key = _norm_label(event.label)
+            norm_map.setdefault(key, deque()).append(event.index)
+
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            if self.row_assignments.get(row.row_index) is not None:
+                continue  # already matched in pass 1
+            key = _norm_label(row.label)
+            queue = norm_map.get(key)
             if queue:
                 self.row_assignments[row.row_index] = queue.popleft()
 

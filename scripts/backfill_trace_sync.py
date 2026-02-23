@@ -42,15 +42,22 @@ def _read_trace_csv(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, delimiter=delimiter, encoding="utf-8-sig", header=0)
 
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [" ".join(str(part) for part in col if pd.notna(part)) for col in df.columns]
+        df.columns = [
+            " ".join(str(part) for part in col if pd.notna(part)) for col in df.columns
+        ]
 
     df = df.dropna(axis=1, how="all")
 
     if len(df) > 1:
         numeric_preview = df.apply(pd.to_numeric, errors="coerce")
         header_row = df.iloc[0]
-        textual_mask = header_row.apply(lambda v: isinstance(v, str) and v.strip() != "")
-        if numeric_preview.iloc[0].isna().all() and numeric_preview.iloc[1:].notna().any().any():
+        textual_mask = header_row.apply(
+            lambda v: isinstance(v, str) and v.strip() != ""
+        )
+        if (
+            numeric_preview.iloc[0].isna().all()
+            and numeric_preview.iloc[1:].notna().any().any()
+        ):
             if textual_mask.any():
                 new_columns = []
                 for col, extra, is_textual in zip(
@@ -103,10 +110,13 @@ def _coerce_time(series: pd.Series) -> pd.Series:
 
 
 def _coerce_int(value: object) -> int | None:
-    if pd.isna(value):
-        return None
     try:
-        return int(value)
+        if pd.isna(value):  # type: ignore[arg-type]
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        return int(str(value))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
 
@@ -124,12 +134,18 @@ def main() -> int:
     parser.add_argument("--trace-csv", required=True, help="Original trace CSV path")
     parser.add_argument("--dataset-id", type=int, help="Dataset id to update")
     parser.add_argument("--sample-name", help="Sample name (matches dataset.name)")
-    parser.add_argument("--precision", type=int, default=6, help="Rounding decimals for time match")
-    parser.add_argument("--min-match", type=float, default=0.9, help="Minimum match ratio required")
+    parser.add_argument(
+        "--precision", type=int, default=6, help="Rounding decimals for time match"
+    )
+    parser.add_argument(
+        "--min-match", type=float, default=0.9, help="Minimum match ratio required"
+    )
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing non-null values"
     )
-    parser.add_argument("--dry-run", action="store_true", help="Show summary without writing")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Show summary without writing"
+    )
     parser.add_argument("--list", action="store_true", help="List datasets and exit")
     parser.add_argument(
         "--time-column",
@@ -232,7 +248,9 @@ def main() -> int:
         if tiff_col is not None:
             df_map["tiff_page_new"] = pd.to_numeric(df_csv[tiff_col], errors="coerce")
         if frame_col is not None:
-            df_map["frame_number_new"] = pd.to_numeric(df_csv[frame_col], errors="coerce")
+            df_map["frame_number_new"] = pd.to_numeric(
+                df_csv[frame_col], errors="coerce"
+            )
         df_map = df_map.dropna(subset=["t_seconds"])
         df_map["t_key"] = df_map["t_seconds"].round(args.precision)
         df_map = df_map.drop_duplicates(subset=["t_key"], keep="first")
@@ -240,7 +258,9 @@ def main() -> int:
         df_db["t_key"] = df_db["t_seconds"].round(args.precision)
         merged = df_db.merge(df_map, on="t_key", how="left", suffixes=("", "_csv"))
 
-        matched = merged["t_seconds_csv"].notna().sum() if "t_seconds_csv" in merged else 0
+        matched = (
+            merged["t_seconds_csv"].notna().sum() if "t_seconds_csv" in merged else 0
+        )
         match_rate = matched / max(len(merged), 1)
         print(f"Time column: {time_col}")
         print(f"Match rate: {matched}/{len(merged)} ({match_rate:.1%})")
@@ -261,7 +281,9 @@ def main() -> int:
             new_frame_raw = getattr(row, "frame_number_new", None)
 
             new_tiff = _coerce_int(new_tiff_raw) if new_tiff_raw is not None else None
-            new_frame = _coerce_int(new_frame_raw) if new_frame_raw is not None else None
+            new_frame = (
+                _coerce_int(new_frame_raw) if new_frame_raw is not None else None
+            )
 
             if new_tiff is None and new_frame is None:
                 continue
@@ -283,7 +305,9 @@ def main() -> int:
                 if frame_value != existing_frame:
                     updated_frame += 1
 
-        print(f"Planned updates: tiff_page={updated_tiff}, frame_number={updated_frame}")
+        print(
+            f"Planned updates: tiff_page={updated_tiff}, frame_number={updated_frame}"
+        )
         if args.dry_run:
             return 0
 

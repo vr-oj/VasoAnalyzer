@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 import pyqtgraph as pg
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QColor, QPen
+from PyQt5.QtCore import Qt as QtCore
 from PyQt5.QtGui import QBrush, QColor, QPen
 
 from vasoanalyzer.ui.theme import CURRENT_THEME, FONTS
@@ -78,7 +80,7 @@ def get_pyqtgraph_style() -> PyQtGraphStyleTokens:
     event_marker = EventMarkerStyle(
         color=event_color,
         width=2.0,
-        style=Qt.DashLine,
+        style=Qt.PenStyle.DashLine,
         alpha=0.85,
     )
 
@@ -86,7 +88,7 @@ def get_pyqtgraph_style() -> PyQtGraphStyleTokens:
     selection_box = SelectionBoxStyle(
         pen_color=selection_color,
         pen_width=1.0,
-        pen_style=Qt.DashLine,
+        pen_style=Qt.PenStyle.DashLine,
         brush_color=selection_color,
         brush_alpha=0.15,
     )
@@ -110,7 +112,9 @@ def make_event_pen(style: EventMarkerStyle) -> QPen:
 
 
 def make_selection_pen(style: SelectionBoxStyle) -> QPen:
-    return pg.mkPen(color=style.pen_color, width=float(style.pen_width), style=style.pen_style)
+    return pg.mkPen(
+        color=style.pen_color, width=float(style.pen_width), style=style.pen_style
+    )
 
 
 def make_selection_brush(style: SelectionBoxStyle) -> QBrush:

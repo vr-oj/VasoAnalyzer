@@ -1,8 +1,12 @@
 """Application bootstrap helpers."""
 
 from importlib import import_module
+from typing import TYPE_CHECKING
 
-__all__ = ["VasoAnalyzerLauncher", "all_enabled", "is_enabled", "reload"]
+if TYPE_CHECKING:
+    from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
+
+__all__ = ["VasoAnalyzerLauncher", "reload", "all_enabled", "is_enabled"]
 
 
 def __getattr__(name: str):

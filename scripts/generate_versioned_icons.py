@@ -44,14 +44,18 @@ def _render_badge(base: Image.Image, version: str) -> Image.Image:
         font = ImageFont.load_default()
     padding = max(4, img.width // 32)
     text = f"v{version}"
-    text_w, text_h = draw.textsize(text, font=font)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
     box_w = text_w + padding * 2
     box_h = text_h + padding
     x1 = img.width - box_w - padding
     y1 = img.height - box_h - padding
     rect = (x1, y1, x1 + box_w, y1 + box_h)
     draw.rounded_rectangle(rect, radius=padding, fill=(0, 0, 0, 180))
-    draw.text((x1 + padding, y1 + padding // 2), text, font=font, fill=(255, 255, 255, 230))
+    draw.text(
+        (x1 + padding, y1 + padding // 2), text, font=font, fill=(255, 255, 255, 230)
+    )
     return img
 
 
@@ -61,12 +65,12 @@ def generate_versioned_icons() -> tuple[Path, Path]:
 
     base = Image.open(BASE_ICON)
     # Use largest frame as base
-    if hasattr(base, "n_frames") and base.n_frames > 1:
-        base.seek(base.n_frames - 1)
+    if hasattr(base, "n_frames") and base.n_frames > 1:  # type: ignore[attr-defined]
+        base.seek(base.n_frames - 1)  # type: ignore[attr-defined]
     largest = base.copy()
     if largest.width != largest.height:
         size = max(largest.width, largest.height)
-        largest = largest.resize((size, size), Image.LANCZOS)
+        largest = largest.resize((size, size), Image.Resampling.LANCZOS)
 
     stamped = _render_badge(largest, version)
 
