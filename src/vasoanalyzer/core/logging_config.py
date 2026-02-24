@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -123,12 +124,12 @@ def setup_production_logging(
     for name in noisy_modules:
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    # Ensure plotting modules emit DEBUG logs (e.g., [RANGE DEBUG] helpers)
+    # Plotting modules: INFO in production (DEBUG still captured to file via root handler)
     plot_logger = logging.getLogger("vasoanalyzer.ui.plots")
-    plot_logger.setLevel(logging.DEBUG)
+    plot_logger.setLevel(logging.INFO)
 
     trace_view_logger = logging.getLogger("vasoanalyzer.ui.trace_view")
-    trace_view_logger.setLevel(logging.DEBUG)
+    trace_view_logger.setLevel(logging.INFO)
 
     # Log startup message
     log = logging.getLogger(__name__)
@@ -177,5 +178,3 @@ def get_log_directory(app_name: str = "VasoAnalyzer") -> Path:
     return _get_log_directory(app_name)
 
 
-# Import os for environment variables
-import os

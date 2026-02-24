@@ -5,12 +5,25 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vasoanalyzer"
 version = "3.0.0b0"
-description = "Developer tooling and tests for the VasoAnalyzer application."
+description = "VasoAnalyzer — Pressure Myography Analysis Toolkit"
 requires-python = ">=3.10"
 authors = [{ name = "Osvaldo J. Vega Rodríguez" }]
 license = { text = "CC BY-NC-SA 4.0" }
 readme = "README.md"
-dependencies = ["pydantic>=1.10"]
+dependencies = [
+    "pydantic>=1.10",
+    "matplotlib>=3.0",
+    "numpy>=1.18",
+    "pandas>=1.0",
+    "tifffile>=2020.7",
+    "imagecodecs>=2021.3",
+    "h5py>=3.14.0",
+    "Pillow>=9.0",
+    "PyQt5>=5.15",
+    "pyqtgraph>=0.13.0",
+    "openpyxl>=3.0",
+    "requests>=2.25",
+]
 
 [project.scripts]
 vaso = "vasoanalyzer.cli:main"

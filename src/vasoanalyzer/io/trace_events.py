@@ -304,8 +304,8 @@ def load_trace_and_events(
             try:
                 offsets_series = pd.to_numeric(offsets, errors="coerce").fillna(0.0)
                 numeric = numeric.add(offsets_series, fill_value=0.0)
-            except Exception:
-                pass
+            except Exception as exc:
+                log.debug("Could not apply time offsets: %s", exc)
         return numeric.astype(float)
 
     def _map_frames_to_trace_time(frame_series: pd.Series) -> pd.Series:

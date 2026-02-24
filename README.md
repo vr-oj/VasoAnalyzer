@@ -32,8 +32,10 @@ can send a whole analysis to a collaborator as one file.
 
 ## ✨ Key Features
 
-- **Single-file projects (`.vaso`)**
+- **Single-file projects (`.vaso` / `.vasopack`)**
   - All datasets, analysis state, and configuration are stored inside one file.
+  - `.vaso` for everyday use; `.vasopack` for cloud-sync scenarios (Dropbox,
+    iCloud, Google Drive).
   - Designed to be portable between machines and OSes.
 
 - **Multi-track trace viewer**
@@ -41,6 +43,8 @@ can send a whole analysis to a collaborator as one file.
     synchronized view.
   - Level-of-detail rendering keeps navigation smooth even for long recordings.
   - Event strip above the trace shows numbered event markers aligned in time.
+  - Per-channel event labels drawn inline on each track for at-a-glance
+    protocol context.
 
 - **Point Editor with audit history**
   - Interactive editor for cleaning artefacts and spikes in diameter traces.
@@ -56,10 +60,13 @@ can send a whole analysis to a collaborator as one file.
 - **Excel Mapper**
   - Map event- and trace-level data into your lab’s Excel templates.
   - Reuse mappings so you don’t have to redo column wiring every time.
+  - Flexible template writer supports non-standard lab workbooks: pick a sheet
+    and column, preview the result, and write without overwriting formulas.
 
 - **Exports + GIFs**
   - Export to clipboard, CSV, and Excel templates with consistent formatting.
-  - Generate high-res plot images and synchronized GIFs from the same data.
+  - Generate high-res plot images (PNG/TIFF/SVG) and synchronized vessel +
+    trace GIF animations from the same data.
 
 - **Cross-platform**
   - Runs on recent Windows and macOS versions.
@@ -67,11 +74,17 @@ can send a whole analysis to a collaborator as one file.
 
 ---
 
-## 🧬 Project Files (`.vaso`)
+## 🧬 Project Files (`.vaso` / `.vasopack`)
 
-VasoAnalyzer stores entire experiments as a single `*.vaso` file.
+VasoAnalyzer stores entire experiments as a single project file.
 
-A `.vaso` project is a **ZIP container** that typically includes:
+- **`.vaso`** — the standard format: a ZIP container you can open with any ZIP
+  tool for debugging and share freely between machines.
+- **`.vasopack`** — a cloud-friendly bundle optimised for Dropbox, iCloud, and
+  Google Drive; reduces corruption risk when syncing between machines. Use
+  **File → Export as Bundle…** to create one.
+
+A `.vaso` project typically includes:
 
 - **HEAD.json** — top-level metadata for the experiment.
 - **Embedded staging database** — SQLite file with traces, events, and
@@ -82,7 +95,7 @@ A `.vaso` project is a **ZIP container** that typically includes:
 - **Exports** — exported tables, plot images, and GIF settings.
 
 You can safely back up, version, and share a project by copying the `.vaso`
-file. For advanced debugging, the file can be unzipped with any ZIP tool.
+file. For advanced debugging, unzip it with any ZIP tool.
 
 ---
 
@@ -111,7 +124,7 @@ file. For advanced debugging, the file can be unzipped with any ZIP tool.
 
 For each sample / trace:
 
-1. Click **Import data…** in the toolbar.
+1. Click **Open Data…** in the toolbar.
 2. Choose:
    - **Trace CSV**: must contain a time column and at least an inner diameter
      column. Common header variants are recognized automatically.
@@ -158,7 +171,7 @@ project to regenerate views.
 
 ### 7. Import datasets between projects
 
-- Use **File → Import Dataset from Project…** to browse another `.vaso` project in read-only mode, select one or more datasets, and import them into your current project.
+- Use **File → Open Data → Import from Project…** to browse another `.vaso` project in read-only mode, select one or more datasets, and import them into your current project.
 - Optionally preserve the source experiment grouping or import everything into a single destination experiment.
 - Transfers use the portable `.vasods` dataset package format with validation and clear success/partial-failure reporting.
 
@@ -189,9 +202,13 @@ project to regenerate views.
 
 - `src/vasoanalyzer/`
   - `app/` — application entry points and launchers
+  - `cli/` — `vaso` command-line interface
   - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, export dialogs
   - `core/` — project model, trace/event handling, audit, logging
   - `storage/` — SQLite / project I/O
+  - `excel/` — Excel template reading and flexible writer
+  - `io/` — trace and event file importers
+  - `services/` — project repository, cache, and folder-import services
 - `docs/` — user guide, welcome tour, and import documentation
 - `icons/`, `resources/`, `style.qss` — application assets and styling
 - `schemas/` — data/schema definitions and validation helpers

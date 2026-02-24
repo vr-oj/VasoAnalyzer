@@ -133,8 +133,8 @@ def has_vaso_metadata(wb: Workbook, sheet_name: str | None = None) -> bool:
             props = wb.custom_doc_props
             if props and "VasoAnalyzerMetadata" in props:
                 return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Could not read custom_doc_props: %s", exc)
 
     return False
 

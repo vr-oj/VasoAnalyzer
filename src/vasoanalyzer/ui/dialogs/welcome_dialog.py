@@ -399,7 +399,7 @@ class WelcomeGuideDialog(QDialog):
         for heading, body in (
             (
                 "Multi-track trace viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure stacked in a synchronized view. Level-of-detail rendering keeps navigation smooth even for long recordings. Event strip above the trace shows numbered event markers aligned in time.",
+                "Inner diameter, outer diameter, pressure, and set-pressure stacked in a synchronized view. Level-of-detail rendering keeps navigation smooth even for long recordings. Event strip above the trace shows numbered event markers aligned in time, with optional per-channel event labels drawn inline on each track.",
             ),
             (
                 "Point Editor with audit history",
@@ -411,11 +411,11 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "Excel Mapper",
-                "Map event- and trace-level data into your lab’s Excel templates and reuse mappings so you don’t have to redo column wiring every time.",
+                "Map event- and trace-level data into your lab’s Excel templates and reuse mappings so you don’t have to redo column wiring every time. A flexible writer supports non-standard workbooks: pick a sheet and column, preview the result, and write without overwriting formulas.",
             ),
             (
                 "Figure export",
-                "Export publication-ready plots and tables from your traces and keep them with the .vaso project for reproducibility.",
+                "Export publication-ready plots (PNG/TIFF/SVG) and synchronized vessel + trace GIF animations from your traces, kept inside the .vaso project for reproducibility.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -534,7 +534,7 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "Multi-track viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure are stacked in a synchronized view, with an event strip above the trace so events and responses stay aligned in time.",
+                "Inner diameter, outer diameter, pressure, and set-pressure are stacked in a synchronized view, with an event strip above the trace and optional per-channel event labels drawn inline so events and responses stay aligned in time.",
             ),
             (
                 "Interpolation and timing",

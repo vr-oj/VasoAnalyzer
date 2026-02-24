@@ -18,7 +18,6 @@ __all__ = [
     "compute_events_signature",
     "compute_trace_signature",
     "quick_validate_project",
-    "deep_validate_dataset",
     "update_dataset_signatures",
 ]
 
