@@ -139,7 +139,11 @@ def has_vaso_metadata(wb: Workbook, sheet_name: str | None = None) -> bool:
     return False
 
 
-def read_template_metadata(path: str | Path, wb: Workbook | None = None) -> TemplateMetadata | None:
+def read_template_metadata(
+    path: str | Path,
+    wb: Workbook | None = None,
+    sheet_name: str | None = None,
+) -> TemplateMetadata | None:
     """
     Read template metadata from an Excel file.
 
@@ -151,6 +155,9 @@ def read_template_metadata(path: str | Path, wb: Workbook | None = None) -> Temp
     Args:
         path: Path to Excel file
         wb: Optional pre-loaded Workbook (if None, will load from path)
+        sheet_name: Optional sheet name to use instead of the active sheet.
+            Useful when the workbook has multiple sheets and the caller knows
+            which sheet the user selected.
 
     Returns:
         TemplateMetadata if successful, None if no metadata found
@@ -171,7 +178,10 @@ def read_template_metadata(path: str | Path, wb: Workbook | None = None) -> Temp
             logger.error(f"Failed to load workbook {path}: {exc}")
             raise
 
-    ws = wb.active
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb.active
     if ws is None:
         raise ValueError("Workbook has no active sheet")
 
@@ -330,23 +340,40 @@ def _infer_from_structure(wb: Workbook, ws: Worksheet) -> TemplateMetadata | Non
     Infer template structure by scanning the worksheet.
 
     Heuristics:
-    - Date row is first row with multiple non-empty cells
-    - Event rows start after date row
-    - Label column is first column (A)
+    - Scan column B for the first row containing a real numeric value (float/int);
+      that row is the start of the data block, and the row just before it is the
+      date/experiment-ID row.  This correctly skips any text-only header rows
+      above the date row (e.g. Scinote ID rows, title rows).
+    - Fall back to "first row with ≥2 non-empty cells" if no numeric row found.
+    - Event rows start immediately after the date row.
+    - Label column is first column (A).
     """
     try:
-        # Find date row (first row with multiple populated cells)
-        date_row = None
-        for row_idx in range(1, min(10, ws.max_row + 1)):
-            non_empty = sum(1 for cell in ws[row_idx] if cell.value not in (None, ""))
-            if non_empty >= 2:
-                date_row = row_idx
+        # Find the first row where column B contains a real number (start of data).
+        # datetimes, strings, and None are not considered numeric here.
+        data_start_row: int | None = None
+        for row_idx in range(2, min(20, ws.max_row + 1)):
+            val = ws.cell(row=row_idx, column=2).value
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                data_start_row = row_idx
                 break
+
+        if data_start_row and data_start_row > 1:
+            # The row immediately before the data is the date/experiment-ID row.
+            date_row: int | None = data_start_row - 1
+        else:
+            # Fallback: first row with ≥2 non-empty cells.
+            date_row = None
+            for row_idx in range(1, min(10, ws.max_row + 1)):
+                non_empty = sum(1 for cell in ws[row_idx] if cell.value not in (None, ""))
+                if non_empty >= 2:
+                    date_row = row_idx
+                    break
 
         if not date_row:
             return None
 
-        # Find event rows (rows with non-empty first cell after date row)
+        # Event rows start immediately after the date row.
         event_rows_start = date_row + 1
         event_rows_end = min(ws.max_row, event_rows_start + 50)
 

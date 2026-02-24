@@ -55,10 +55,14 @@ from PyQt5.QtWidgets import (
     QWizardPage,
 )
 
+import logging
+
 import vasoanalyzer.ui.theme as theme
 from vasoanalyzer.excel import TemplateMetadata
 
 __all__ = ["ExcelMapWizard"]
+
+log = logging.getLogger(__name__)
 
 DEFAULT_QMODEL_INDEX = QModelIndex()
 
@@ -805,11 +809,15 @@ class TemplatePage(WizardPageBase):
         if not path:
             return
 
+        log.info(f"[Wizard] Loading template: {path}")
         try:
             wb = load_workbook_preserve(path)
         except Exception as exc:  # pragma: no cover - GUI feedback
+            log.error(f"[Wizard] Failed to open workbook: {exc}", exc_info=True)
             QMessageBox.critical(self, "Load Failed", str(exc))
             return
+
+        log.info(f"[Wizard] Workbook opened. Sheets: {wb.sheetnames}")
 
         # Don't set ws yet - wait for sheet selection
         wiz = self._wizard()
@@ -828,11 +836,9 @@ class TemplatePage(WizardPageBase):
             idx = self.combo_sheet.findText(saved_sheet)
             if idx >= 0:
                 self.combo_sheet.setCurrentIndex(idx)
-                # _on_sheet_changed will be called automatically
         elif self.combo_sheet.count() == 1:
             # Auto-select if only one sheet
             self.combo_sheet.setCurrentIndex(0)
-            # _on_sheet_changed will be called automatically
         elif self.combo_sheet.count() > 1:
             # Show selection required message
             self.lbl_excel.setText(
@@ -852,6 +858,14 @@ class TemplatePage(WizardPageBase):
             self.lbl_excel.setText(f"Loaded: {Path(path).name} - No worksheets found")
             colors = get_semantic_colors()
             self.lbl_excel.setStyleSheet(f"color: {colors['error']};")
+
+        # Always call _on_sheet_changed explicitly for the selected sheet.
+        # setCurrentIndex() above does NOT guarantee currentIndexChanged fires
+        # when the combo was pre-populated with signals blocked (blockSignals=True
+        # in _populate_sheet_selector), leaving wiz.ws=None and Next grayed out.
+        current_idx = self.combo_sheet.currentIndex()
+        if current_idx >= 0:
+            self._on_sheet_changed(current_idx)
 
         self._update_recent_templates(path)
         self.completeChanged.emit()
@@ -1085,29 +1099,66 @@ class TemplatePage(WizardPageBase):
 
     # ------------------------------------------------------
     def _reload_metadata_for_sheet(self, sheet_name: str) -> None:
-        """Reload metadata for the selected sheet."""
-        from vasoanalyzer.excel.template_metadata import read_sheet_specific_metadata
+        """Reload metadata for the selected sheet.
+
+        Priority:
+        1. Sheet-specific VasoMetadata_{sheet} hidden sheet
+        2. Full inference via read_template_metadata (named ranges → structure)
+        """
+        from vasoanalyzer.excel.template_metadata import (
+            read_sheet_specific_metadata,
+            read_template_metadata,
+        )
 
         wiz = self._wizard()
         if not wiz.wb:
+            log.warning("[Wizard] _reload_metadata_for_sheet called but wiz.wb is None")
             return
 
+        log.info(f"[Wizard] Loading metadata for sheet '{sheet_name}'")
         try:
+            # 1. Try sheet-specific VasoMetadata first
             metadata = read_sheet_specific_metadata(wiz.wb, sheet_name)
             if metadata:
-                wiz.template_metadata = metadata
-                from pathlib import Path
+                log.info(f"[Wizard] Found sheet-specific VasoMetadata for '{sheet_name}'")
+            else:
+                log.debug(f"[Wizard] No VasoMetadata sheet for '{sheet_name}', trying inference")
 
+            # 2. Fall back to full inference (named ranges → auto-detect structure)
+            if not metadata:
                 template_path = self.field("templatePath")
+                metadata = read_template_metadata(template_path, wb=wiz.wb, sheet_name=sheet_name)
+
+            if metadata:
+                log.info(
+                    f"[Wizard] Metadata ready: source={metadata.source!r}, "
+                    f"date_row={metadata.date_row}, "
+                    f"event_rows={len(metadata.event_rows)}, "
+                    f"date_cols={len(metadata.date_columns)}"
+                )
+                wiz.template_metadata = metadata
+                template_path = self.field("templatePath")
+                _SOURCE_LABELS = {
+                    "sheet_specific": "VasoMetadata sheet",
+                    "vba_metadata": "VasoMetadata sheet",
+                    "named_ranges": "named ranges",
+                    "inferred": "auto-detected",
+                }
+                source_label = _SOURCE_LABELS.get(metadata.source, metadata.source)
                 status_msg = (
-                    f"✓ Loaded: {Path(template_path).name} (Sheet: {sheet_name}, metadata detected)"
+                    f"✓ Loaded: {Path(template_path).name}"
+                    f" (Sheet: {sheet_name}, {source_label})"
                 )
                 self.lbl_excel.setText(status_msg)
                 colors = get_semantic_colors()
                 self.lbl_excel.setStyleSheet(f"color: {colors['success']};")
+            else:
+                log.warning(
+                    f"[Wizard] No metadata detected for sheet '{sheet_name}'. "
+                    "prepare_layout will try named ranges as final fallback."
+                )
         except Exception as exc:
-            from pathlib import Path
-
+            log.error(f"[Wizard] Metadata load error for '{sheet_name}': {exc}", exc_info=True)
             template_path = self.field("templatePath")
             QMessageBox.warning(
                 self, "Metadata Error", f"Could not load metadata for sheet '{sheet_name}':\n{exc}"
@@ -2492,17 +2543,44 @@ class ExcelMapWizard(QWizard):
 
         if self.wb is None or self.ws is None or self.eventsDF is None:
             self.layout_error = "Load an Excel template and event data first."
+            log.warning(
+                f"[Wizard] prepare_layout blocked: wb={self.wb is not None}, "
+                f"ws={self.ws is not None}, eventsDF={self.eventsDF is not None}"
+            )
             return False
+
+        log.info(
+            f"[Wizard] prepare_layout starting. "
+            f"Sheet: {getattr(self.ws, 'title', '?')!r}, "
+            f"metadata: {self.template_metadata.source if self.template_metadata else 'None'}, "
+            f"events: {len(self.eventsDF)}"
+        )
 
         try:
             self._resolve_ranges()
+            log.info(
+                f"[Wizard] Ranges resolved: values_block={self.values_block}, "
+                f"date_row={self.date_row_index}, date_bounds={self.date_columns_bounds}"
+            )
             self._extract_event_rows()
+            log.info(
+                f"[Wizard] Event rows extracted: {len(self.event_rows)} total, "
+                f"{sum(1 for r in self.event_rows if not r.is_header)} mappable"
+            )
             self._build_date_options()
+            log.info(
+                f"[Wizard] Date columns: {[c.letter for c in self.date_columns]}"
+            )
             self.auto_select_date_column()
             self.auto_assign_rows(force=True)
+            matched = sum(1 for v in self.row_assignments.values() if v is not None)
+            log.info(
+                f"[Wizard] Auto-assign done: {matched}/{len(self.row_assignments)} rows matched"
+            )
             self._layout_ready = True
             self.layout_error = ""
         except Exception as exc:  # pragma: no cover - GUI feedback
+            log.error(f"[Wizard] prepare_layout failed: {exc}", exc_info=True)
             self.layout_error = str(exc)
             self._layout_ready = False
             return False
