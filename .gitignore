@@ -30,3 +30,4 @@ mypy.txt
 pytest.txt
 ruff.txt
 /ExcelTemplates
+installer/macos/output/VasoAnalyzer-v3.0.0.dmg
