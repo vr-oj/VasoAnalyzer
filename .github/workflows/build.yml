@@ -49,6 +49,14 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y
 
+      - name: Inject version into Inno Setup script
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}" -replace '^v', ''
+          (Get-Content installer\windows\VasoAnalyzer.iss) `
+            -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$ver`"" |
+            Set-Content installer\windows\VasoAnalyzer.iss
+
       - name: Build Windows installer
         shell: pwsh
         run: .\installer\windows\build_installer.ps1

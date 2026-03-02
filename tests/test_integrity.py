@@ -51,12 +51,14 @@ def _insert_event_via_writer(store, dataset_id: int, t_seconds: float, label: st
             rows,
         )
         conn.commit()
+        # Update signatures inside the write op so that create_snapshot can never
+        # capture new events with a stale signature (race window eliminated).
+        validation.update_dataset_signatures(conn, dataset_id)
 
     if getattr(store, "writer", None):
         store.writer.submit(_write).result()
     else:
         _write(store.conn)
-    validation.update_dataset_signatures(store.conn, dataset_id)
 
 
 def test_snapshot_is_consistent_under_autosave(tmp_path):

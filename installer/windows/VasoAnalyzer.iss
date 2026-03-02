@@ -1,5 +1,5 @@
 #define MyAppName "VasoAnalyzer"
-#define MyAppVersion "3.0.0 Beta"
+#define MyAppVersion "3.0.0"
 #define MyAppPublisher "Tykocki Lab"
 #define MyAppExeName "VasoAnalyzer.exe"
 #define MyAppId "{{C7E28CDA-3B4A-4C42-9DD4-84B0437D0B5E}}"
@@ -11,7 +11,7 @@ AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-OutputDir=installer\windows\output
+OutputDir=output
 OutputBaseFilename=VasoAnalyzer-Setup
 Compression=lzma
 SolidCompression=yes
