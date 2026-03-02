@@ -5,18 +5,16 @@
 
 """Dialog showing all keyboard shortcuts in the application."""
 
-from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QDialog,
-    QVBoxLayout,
+    QDialogButtonBox,
     QHBoxLayout,
-    QTableWidget,
-    QTableWidgetItem,
     QHeaderView,
-    QPushButton,
     QLabel,
     QLineEdit,
-    QDialogButtonBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
 )
 
 
@@ -86,11 +84,9 @@ class KeyboardShortcutsDialog(QDialog):
                 # Determine category from action name or text
                 category = self._categorize_action(text, action)
 
-                self.shortcuts_data.append({
-                    "action": text,
-                    "shortcut": shortcut,
-                    "category": category
-                })
+                self.shortcuts_data.append(
+                    {"action": text, "shortcut": shortcut, "category": category}
+                )
 
         # Sort by category, then by action name
         self.shortcuts_data.sort(key=lambda x: (x["category"], x["action"]))
@@ -99,11 +95,17 @@ class KeyboardShortcutsDialog(QDialog):
         """Categorize action based on its text or properties."""
         text_lower = text.lower()
 
-        if any(kw in text_lower for kw in ["new", "open", "save", "export", "import", "close", "quit", "exit"]):
+        if any(
+            kw in text_lower
+            for kw in ["new", "open", "save", "export", "import", "close", "quit", "exit"]
+        ):
             return "File"
         elif any(kw in text_lower for kw in ["undo", "redo", "cut", "copy", "paste", "delete"]):
             return "Edit"
-        elif any(kw in text_lower for kw in ["zoom", "pan", "reset", "fit", "grid", "fullscreen", "inner", "outer"]):
+        elif any(
+            kw in text_lower
+            for kw in ["zoom", "pan", "reset", "fit", "grid", "fullscreen", "inner", "outer"]
+        ):
             return "View"
         elif any(kw in text_lower for kw in ["project", "sample", "experiment"]):
             return "Project"
@@ -143,9 +145,9 @@ class KeyboardShortcutsDialog(QDialog):
 
             # Check if search text matches any column
             matches = (
-                search_text in action_item.text().lower() or
-                search_text in shortcut_item.text().lower() or
-                search_text in category_item.text().lower()
+                search_text in action_item.text().lower()
+                or search_text in shortcut_item.text().lower()
+                or search_text in category_item.text().lower()
             )
 
             self.table.setRowHidden(row, not matches)

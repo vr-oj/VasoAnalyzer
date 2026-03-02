@@ -252,7 +252,9 @@ def create_unified_project(
         # CRITICAL FIX: Ensure connection is synchronized with handle
         # For bundles/containers, the connection should always match handle.staging_conn
         if handle and handle.staging_conn and handle.staging_conn != conn:
-            log.warning("Connection mismatch detected after project creation, using handle's connection")
+            log.warning(
+                "Connection mismatch detected after project creation, using handle's connection"
+            )
             conn = handle.staging_conn
 
         # Initialize schema

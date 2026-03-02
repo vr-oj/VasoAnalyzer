@@ -99,7 +99,9 @@ class GestureCanvas(FigureCanvasQTAgg):
             scale_change = current_scale / self._last_scale_factor
             self._last_scale_factor = current_scale
 
-            log.debug(f"GestureCanvas: Pinch UPDATE - scale={current_scale:.3f}, change={scale_change:.3f}")
+            log.debug(
+                f"GestureCanvas: Pinch UPDATE - scale={current_scale:.3f}, change={scale_change:.3f}"
+            )
 
             # Apply zoom if we have a callback
             if self.on_pinch_zoom and abs(scale_change - 1.0) > 0.01:
@@ -112,7 +114,9 @@ class GestureCanvas(FigureCanvasQTAgg):
                 # < 1 means zoom in (spread fingers)
                 zoom_factor = 1.0 / scale_change
 
-                log.info(f"GestureCanvas: Pinch zoom - center=({center_x:.1f}, {center_y:.1f}), zoom_factor={zoom_factor:.3f}")
+                log.info(
+                    f"GestureCanvas: Pinch zoom - center=({center_x:.1f}, {center_y:.1f}), zoom_factor={zoom_factor:.3f}"
+                )
                 self.on_pinch_zoom(center_x, center_y, zoom_factor)
             elif not self.on_pinch_zoom:
                 log.warning("GestureCanvas: Pinch gesture detected but no callback set!")
@@ -122,7 +126,9 @@ class GestureCanvas(FigureCanvasQTAgg):
         elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
             # Reset gesture state
             self._last_scale_factor = 1.0
-            log.info(f"GestureCanvas: Pinch gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}")
+            log.info(
+                f"GestureCanvas: Pinch gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
+            )
             return True
 
         return False
@@ -168,7 +174,9 @@ class GestureCanvas(FigureCanvasQTAgg):
             # Reset gesture state
             self._accumulated_pan_x = 0.0
             self._accumulated_pan_y = 0.0
-            log.info(f"GestureCanvas: Pan gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}")
+            log.info(
+                f"GestureCanvas: Pan gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
+            )
             return True
 
         return False

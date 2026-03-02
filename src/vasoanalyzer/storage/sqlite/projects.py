@@ -38,7 +38,7 @@ def apply_default_pragmas(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA synchronous = NORMAL;")  # Changed from FULL - safe with WAL
     conn.execute("PRAGMA temp_store = MEMORY;")
     conn.execute("PRAGMA mmap_size = 268435456;")  # 256MB memory mapping
-    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+    conn.execute("PRAGMA cache_size = -131072;")  # 128MB cache
 
 
 def apply_cloud_safe_pragmas(conn: sqlite3.Connection) -> None:
@@ -56,9 +56,9 @@ def apply_cloud_safe_pragmas(conn: sqlite3.Connection) -> None:
     """
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = DELETE;")  # Cloud-safe mode
-    conn.execute("PRAGMA synchronous = FULL;")      # Ensure durability
+    conn.execute("PRAGMA synchronous = FULL;")  # Ensure durability
     conn.execute("PRAGMA temp_store = MEMORY;")
-    conn.execute("PRAGMA cache_size = -131072;")    # 128MB cache
+    conn.execute("PRAGMA cache_size = -131072;")  # 128MB cache
     # NOTE: No mmap_size for cloud storage - can cause issues with sync
 
 
@@ -202,23 +202,6 @@ def ensure_schema(
             png BLOB NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS figure_recipe (
-            recipe_id TEXT PRIMARY KEY,
-            dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            spec_json TEXT NOT NULL,
-            source TEXT NOT NULL,
-            trace_key TEXT,
-            x_min REAL,
-            x_max REAL,
-            y_min REAL,
-            y_max REAL,
-            export_background TEXT NOT NULL DEFAULT 'white'
-        );
-
-        CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
         """
     )
     set_user_version(conn, schema_version)
@@ -304,28 +287,7 @@ def run_migrations(
             version = 4
 
         elif version == 4:
-            # Migration from v4 to v5: Add figure_recipe table
-            log.info("Migrating schema from v4 to v5 (figure recipes)")
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS figure_recipe (
-                    recipe_id TEXT PRIMARY KEY,
-                    dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
-                    name TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    spec_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    trace_key TEXT,
-                    x_min REAL,
-                    x_max REAL,
-                    y_min REAL,
-                    y_max REAL,
-                    export_background TEXT NOT NULL DEFAULT 'white'
-                );
-                CREATE INDEX IF NOT EXISTS figure_recipe_ds_updated ON figure_recipe(dataset_id, updated_at DESC);
-                """
-            )
+            log.info("Migrating schema from v4 to v5")
             version = 5
 
         elif version == 5:
@@ -384,9 +346,7 @@ def run_migrations(
             version = 6
 
         else:
-            raise RuntimeError(
-                f"Unknown schema version {version}. Cannot migrate."
-            )
+            raise RuntimeError(f"Unknown schema version {version}. Cannot migrate.")
     set_user_version(conn, target)
     conn.commit()
 

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
 if TYPE_CHECKING:  # pragma: no cover
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
-    from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
     from vasoanalyzer.ui.panels.event_review_panel import EventReviewPanel
+    from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
 
 log = logging.getLogger(__name__)
 
@@ -174,7 +174,9 @@ class ReviewModeController(QObject):
 
         # Get event data and review state
         event_data = self._events[index]
-        state = self._review_states[index] if index < len(self._review_states) else REVIEW_UNREVIEWED
+        state = (
+            self._review_states[index] if index < len(self._review_states) else REVIEW_UNREVIEWED
+        )
 
         # Update panel
         self._panel.set_event(index, event_data, state, len(self._events))
@@ -289,7 +291,9 @@ class ReviewModeController(QObject):
         if 0 <= row < len(self._events):
             self._current_index = row
             event_data = self._events[row]
-            state = self._review_states[row] if row < len(self._review_states) else REVIEW_UNREVIEWED
+            state = (
+                self._review_states[row] if row < len(self._review_states) else REVIEW_UNREVIEWED
+            )
             self._panel.set_event(row, event_data, state, len(self._events))
 
     # ---- Private helpers ---------------------------------------------------

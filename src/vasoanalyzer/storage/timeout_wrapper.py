@@ -13,7 +13,7 @@ import logging
 import platform
 import signal
 import threading
-from typing import Generator
+from collections.abc import Generator
 
 log = logging.getLogger(__name__)
 

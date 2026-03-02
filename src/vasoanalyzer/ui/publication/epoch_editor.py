@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QComboBox,
@@ -16,7 +14,6 @@ from PyQt5.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -171,7 +168,9 @@ class EpochEditorDialog(QDialog):
         self._color_edit.textChanged.connect(self._on_property_changed)
         layout.addRow("Color:", self._color_edit)
 
-        layout.addRow(QLabel("<i>Color should be hex code (e.g., #1f77b4) or empty for default</i>"))
+        layout.addRow(
+            QLabel("<i>Color should be hex code (e.g., #1f77b4) or empty for default</i>")
+        )
 
         return widget
 
@@ -193,14 +192,18 @@ class EpochEditorDialog(QDialog):
         self._epoch_list.clear()
 
         for epoch in self._epochs:
-            item = QListWidgetItem(f"{epoch.channel}: {epoch.label} ({epoch.t_start:.1f}s - {epoch.t_end:.1f}s)")
+            item = QListWidgetItem(
+                f"{epoch.channel}: {epoch.label} ({epoch.t_start:.1f}s - {epoch.t_end:.1f}s)"
+            )
             item.setData(Qt.UserRole, epoch.id)
             self._epoch_list.addItem(item)
 
         if self._epochs:
             self._epoch_list.setCurrentRow(0)
 
-    def _on_selection_changed(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
+    def _on_selection_changed(
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None
+    ) -> None:
         """Handle epoch selection change."""
         if current is None:
             self._current_epoch = None
@@ -262,7 +265,9 @@ class EpochEditorDialog(QDialog):
         # Update current epoch with new values
         try:
             # Find epoch in list
-            idx = next((i for i, e in enumerate(self._epochs) if e.id == self._current_epoch.id), None)
+            idx = next(
+                (i for i, e in enumerate(self._epochs) if e.id == self._current_epoch.id), None
+            )
             if idx is None:
                 return
 

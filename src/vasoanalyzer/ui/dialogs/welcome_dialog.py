@@ -399,7 +399,7 @@ class WelcomeGuideDialog(QDialog):
         for heading, body in (
             (
                 "Multi-track trace viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure stacked in a synchronized view. Level-of-detail rendering keeps navigation smooth even for long recordings. Event strip above the trace shows numbered event markers aligned in time.",
+                "Inner diameter, outer diameter, pressure, and set-pressure stacked in a synchronized view. Level-of-detail rendering keeps navigation smooth even for long recordings. Event strip above the trace shows numbered event markers aligned in time, with optional per-channel event labels drawn inline on each track.",
             ),
             (
                 "Point Editor with audit history",
@@ -411,11 +411,11 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "Excel Mapper",
-                "Map event- and trace-level data into your lab’s Excel templates and reuse mappings so you don’t have to redo column wiring every time.",
+                "Map event- and trace-level data into your lab’s Excel templates and reuse mappings so you don’t have to redo column wiring every time. A flexible writer supports non-standard workbooks: pick a sheet and column, preview the result, and write without overwriting formulas.",
             ),
             (
-                "Figure Composer",
-                "Build publication-ready multi-panel figures from your plots and share layouts inside the .vaso project for reproducibility.",
+                "Figure export",
+                "Export publication-ready plots (PNG/TIFF/SVG) and synchronized vessel + trace GIF animations from your traces, kept inside the .vaso project for reproducibility.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -534,7 +534,7 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "Multi-track viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure are stacked in a synchronized view, with an event strip above the trace so events and responses stay aligned in time.",
+                "Inner diameter, outer diameter, pressure, and set-pressure are stacked in a synchronized view, with an event strip above the trace and optional per-channel event labels drawn inline so events and responses stay aligned in time.",
             ),
             (
                 "Interpolation and timing",
@@ -571,26 +571,30 @@ class WelcomeGuideDialog(QDialog):
             ),
             (
                 "2. Import traces",
-                "Use Import data… to load trace CSVs with time and diameter (and optionally pressure) channels. The trace viewer will show stacked tracks and an event strip.",
+                "Use Open Data… to load trace CSVs with time and diameter (and optionally pressure) channels. The trace viewer will show stacked tracks and an event strip.",
             ),
             (
                 "3. Import events and images",
                 "Add event CSV/TXT for protocol markers and, optionally, a TIFF stack for snapshot/preview frames.",
             ),
             (
-                "4. Clean and annotate",
+                "4. Bring datasets from another project",
+                "Use File → Open Data → Import from Project… to browse a source .vaso read-only, select one or more datasets, and import them—optionally preserving their original experiment grouping.",
+            ),
+            (
+                "5. Clean and annotate",
                 "Open the Point Editor to clean spikes and artefacts; edits are recorded in the project’s Edit History. Adjust event times and labels in the Events table.",
             ),
             (
-                "5. Adjust plots",
+                "6. Adjust plots",
                 "Use plot settings to tweak grid, axes, fonts, and event label appearance until the trace clearly communicates your experiment.",
             ),
             (
-                "6. Export tables and figures",
-                "Export event tables, use Excel Mapper to fill your lab templates, or build multi-panel figures with Figure Composer.",
+                "7. Export tables and figures",
+                "Export event tables, use Excel Mapper to fill your lab templates, or export plots as publication-ready figures.",
             ),
             (
-                "7. Save and resume later",
+                "8. Save and resume later",
                 "Use Save Project to persist everything into the .vaso file so you can reopen it later and pick up exactly where you left off.",
             ),
         ):
@@ -668,7 +672,7 @@ class WelcomeGuideDialog(QDialog):
             self._make_shortcut_grid(
                 [
                     ((("⌘", "Ctrl"), "Shift", "N"), "Create new project"),
-                    ((("⌘", "Ctrl"), "O"), "Open trace and event files"),
+                    ((("⌘", "Ctrl"), "O"), "Import trace CSV"),
                     (
                         (("⌘", "Ctrl"), "Shift", "O"),
                         "Open saved project (.vaso / .vasopack)",
@@ -681,14 +685,25 @@ class WelcomeGuideDialog(QDialog):
                     ((("⌘", "Ctrl"), "D"), "Duplicate selected event(s)"),
                     (("Del",), "Delete selected event(s)"),
                     ((("⌘", "Ctrl"), "A"), "Select all events"),
-                    ((("⌘", "Ctrl"), "F"), "Find event / Fit data to window"),
-                    ((("⌘", "Ctrl"), ","), "Open Preferences"),
-                    ((("⌘", "Ctrl"), "Shift", "T"), "Load VasoTracker TIFF stack"),
-                    ((("⌘", "Ctrl"), "Shift", "H"), "Return to home screen"),
+                    ((("⌘", "Ctrl"), "F"), "Fit data to window"),
                     ((("⌘", "Ctrl"), "R"), "Reset plot view"),
-                    ((("⌘", "Ctrl"), "E"), "Zoom to selection"),
-                    (("I",), "Toggle inner diameter visibility"),
-                    (("O",), "Toggle outer diameter visibility"),
+                    ((("⌘", "Ctrl"), "E"), "Zoom to selection / fit"),
+                    ((("⌘", "Ctrl"), "G"), "Go to time…"),
+                    (("0",), "Zoom to full range"),
+                    (("Left",), "Pan left 10%"),
+                    (("Right",), "Pan right 10%"),
+                    (("Shift", "Left"), "Pan left 50%"),
+                    (("Shift", "Right"), "Pan right 50%"),
+                    (("Home",), "Jump to start"),
+                    (("End",), "Jump to end"),
+                    (("[",), "Previous event"),
+                    (("]",), "Next event"),
+                    (("I",), "Toggle inner diameter"),
+                    (("O",), "Toggle outer diameter"),
+                    (("S",), "Toggle set pressure"),
+                    ((("⌘", "Ctrl"), ","), "Open Preferences"),
+                    ((("⌘", "Ctrl"), "Shift", "T"), "Import TIFF stack"),
+                    ((("⌘", "Ctrl"), "Shift", "H"), "Return to home screen"),
                     (("F11",), "Toggle full screen"),
                     ((("⌘", "Ctrl"), "/"), "Reopen this Welcome Guide"),
                 ]

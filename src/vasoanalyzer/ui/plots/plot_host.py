@@ -564,7 +564,9 @@ class PlotHost:
             ylim = cast(tuple[float, float], ax.get_ylim())
             x_range = (float(xlim[0]), float(xlim[1]))
             y_range = (float(ylim[0]), float(ylim[1]))
-            log.debug("PlotHost.get_trace_view_range x=%s y=%s (event_times in seconds)", x_range, y_range)
+            log.debug(
+                "PlotHost.get_trace_view_range x=%s y=%s (event_times in seconds)", x_range, y_range
+            )
             return x_range, y_range
         except Exception:
             log.exception("Failed to fetch trace view range from PlotHost")

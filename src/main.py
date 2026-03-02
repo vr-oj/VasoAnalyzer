@@ -8,18 +8,52 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
-from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
-from vasoanalyzer.core.logging_config import setup_production_logging
+if os.environ.get("VA_FAULTHANDLER", "1") != "0":
+    import faulthandler
+
+    faulthandler.enable()
 
 log = logging.getLogger(__name__)
 
 
+def _configure_sip_exit_behavior() -> None:
+    for module_name in ("sip", "PyQt5.sip", "PyQt6.sip"):
+        try:
+            sip_module = __import__(module_name, fromlist=["setdestroyonexit"])
+        except Exception:
+            continue
+        setter = getattr(sip_module, "setdestroyonexit", None)
+        if callable(setter):
+            try:
+                setter(False)
+            except Exception:
+                pass
+            break
+
+
 def main(argv: list[str] | None = None) -> None:
     """Bootstrap the Qt application and block until it exits."""
+    _configure_sip_exit_behavior()
+    from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
+    from vasoanalyzer.core.logging_config import setup_production_logging
+    from vasoanalyzer.core.single_instance import (
+        SingleInstanceManager,
+        collect_vaso_paths,
+        queue_open_requests,
+    )
+
     argv = list(sys.argv if argv is None else argv)
-    project_path = argv[1] if len(argv) > 1 else None
+    vaso_paths = collect_vaso_paths(argv)
+    project_path = vaso_paths[0] if vaso_paths else None
+    if vaso_paths:
+        queue_open_requests(vaso_paths)
+
+    single_instance = SingleInstanceManager()
+    if single_instance.forward_to_primary(vaso_paths):
+        return
 
     # Setup production logging with file rotation and INFO console output
     try:
@@ -45,6 +79,7 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         launcher = VasoAnalyzerLauncher(project_path=project_path)
+        single_instance.start_listening()
         launcher.run()
         log.info("VasoAnalyzer exited normally")
     except Exception as e:

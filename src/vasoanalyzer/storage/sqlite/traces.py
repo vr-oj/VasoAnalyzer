@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterable, Sequence
 import time
+from collections.abc import Iterable, Sequence
 
 import pandas as pd
 
@@ -178,9 +178,14 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     # If everything is NaN but the original column looks like hh:mm:ss, try parsing to seconds.
     if df_local["t_seconds"].isna().all():
         original_time_col = df_local.get("t_seconds")
-        if isinstance(original_time_col, pd.Series) and original_time_col.astype(str).str.contains(":").any():
+        if (
+            isinstance(original_time_col, pd.Series)
+            and original_time_col.astype(str).str.contains(":").any()
+        ):
             try:
-                parsed = pd.to_timedelta(original_time_col.astype(str), errors="coerce").dt.total_seconds()
+                parsed = pd.to_timedelta(
+                    original_time_col.astype(str), errors="coerce"
+                ).dt.total_seconds()
                 df_local["t_seconds"] = parsed
                 log.info(
                     "TRACE-SAVE: parsed hh:mm:ss time column to seconds for dataset_id=%s (non_null=%d of %d)",
@@ -189,7 +194,11 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
                     len(parsed),
                 )
             except Exception:
-                log.debug("Failed to parse hh:mm:ss time column for dataset_id=%s", dataset_id, exc_info=True)
+                log.debug(
+                    "Failed to parse hh:mm:ss time column for dataset_id=%s",
+                    dataset_id,
+                    exc_info=True,
+                )
     for col in ("inner_diam", "outer_diam", "p_avg", "p1", "p2"):
         if col in df_local.columns:
             df_local[col] = pd.to_numeric(df_local[col], errors="coerce")
@@ -262,6 +271,11 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     p_avg_values = df_local["p_avg"].to_numpy() if "p_avg" in df_local else None
     p1_values = df_local["p1"].to_numpy() if "p1" in df_local else None
     p2_values = df_local["p2"].to_numpy() if "p2" in df_local else None
+    frame_values = df_local["frame_number"].to_numpy() if "frame_number" in df_local else None
+    tiff_values = df_local["tiff_page"].to_numpy() if "tiff_page" in df_local else None
+    temp_values = df_local["temp"].to_numpy() if "temp" in df_local else None
+    marker_values = df_local["table_marker"].to_numpy() if "table_marker" in df_local else None
+    caliper_values = df_local["caliper_length"].to_numpy() if "caliper_length" in df_local else None
 
     row_build_start = time.perf_counter()
     try:
@@ -276,6 +290,11 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
                     nullable_float(p_avg_values[pos]) if p_avg_values is not None else None,
                     nullable_float(p1_values[pos]) if p1_values is not None else None,
                     nullable_float(p2_values[pos]) if p2_values is not None else None,
+                    nullable_float(frame_values[pos]) if frame_values is not None else None,
+                    nullable_float(tiff_values[pos]) if tiff_values is not None else None,
+                    nullable_float(temp_values[pos]) if temp_values is not None else None,
+                    nullable_float(marker_values[pos]) if marker_values is not None else None,
+                    nullable_float(caliper_values[pos]) if caliper_values is not None else None,
                 )
             )
             if idx == 1 or idx % progress_every == 0 or idx == total_rows:
@@ -345,7 +364,8 @@ def fetch_trace_dataframe(
     """
 
     query = [
-        "SELECT t_seconds, inner_diam, outer_diam, p_avg, p1, p2",
+        "SELECT t_seconds, inner_diam, outer_diam, p_avg, p1, p2,",
+        "frame_number, tiff_page, temp, table_marker, caliper_length",
         "FROM trace",
         "WHERE dataset_id = ?",
     ]

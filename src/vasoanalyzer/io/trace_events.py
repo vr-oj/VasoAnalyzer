@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +20,14 @@ try:
 except ImportError:  # pragma: no cover - optional during bootstrap
     DataCache = None
 
+from vasoanalyzer.core.timebase import (
+    RANGE_TOL_S,
+    TIME_EPS_S,
+    derive_tiff_page_times,
+    validate_and_normalize_events,
+)
 from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
-from vasoanalyzer.io.traces import load_trace
+from vasoanalyzer.io.traces import load_trace, merge_traces
 
 
 def _read_event_dataframe(path: str, *, cache: Any | None = None) -> pd.DataFrame:
@@ -51,8 +58,8 @@ log = logging.getLogger(__name__)
 
 
 def load_trace_and_events(
-    trace_path: str,
-    events_path: str | pd.DataFrame | None = None,
+    trace_path: str | Sequence[str],
+    events_path: str | Sequence[str] | pd.DataFrame | None = None,
     *,
     cache: Any | None = None,
 ):
@@ -61,7 +68,7 @@ def load_trace_and_events(
     Parameters
     ----------
     trace_path:
-        Path to the trace CSV file.
+        Path to the trace CSV file, or an ordered list of CSVs to merge.
     events_path:
         Optional explicit path to the event file. If ``None``, a matching
         file is searched next to ``trace_path`` using
@@ -83,13 +90,28 @@ def load_trace_and_events(
         and a metadata dictionary describing any adjustments applied during import.
     """
     log.debug("Loading trace and events for %s", trace_path)
-    df = load_trace(trace_path, cache=cache)
-    log.info(
-        "Import: Loaded trace CSV %s with %d rows and columns=%s",
-        trace_path,
-        len(df.index),
-        list(df.columns),
-    )
+    multi_paths: list[str] | None = None
+    if isinstance(trace_path, Sequence) and not isinstance(trace_path, (str, os.PathLike)):
+        multi_paths = [str(p) for p in trace_path]
+        if not multi_paths:
+            raise ValueError("trace_path must include at least one file")
+        df = merge_traces(multi_paths, cache=cache)
+        log.info(
+            "Import: Merged %d trace CSVs into %d rows; columns=%s",
+            len(df.attrs.get("merged_from_paths", multi_paths)),
+            len(df.index),
+            list(df.columns),
+        )
+        primary_trace_path = df.attrs.get("merged_from_paths", multi_paths)[0]
+    else:
+        primary_trace_path = str(trace_path)
+        df = load_trace(primary_trace_path, cache=cache)
+        log.info(
+            "Import: Loaded trace CSV %s with %d rows and columns=%s",
+            primary_trace_path,
+            len(df.index),
+            list(df.columns),
+        )
 
     from datetime import datetime, timezone
     from pathlib import Path
@@ -104,50 +126,122 @@ def load_trace_and_events(
         "time_source": None,
         # Provenance metadata
         "import_timestamp": datetime.now(timezone.utc).isoformat(),
-        "trace_original_filename": Path(trace_path).name,
-        "trace_original_directory": str(Path(trace_path).parent),
+        "trace_original_filename": Path(primary_trace_path).name,
+        "trace_original_directory": str(Path(primary_trace_path).parent),
         "canonical_time_source": df.attrs.get("canonical_time_source", "Time (s)"),
         "schema_version": 3,
     }
+    if multi_paths:
+        extras["trace_original_filenames"] = [Path(p).name for p in multi_paths]
+        extras["merged_traces"] = multi_paths
+        extras["merged_segments"] = df.attrs.get("merged_segments", [])
+        extras["merge_warnings"] = df.attrs.get("merge_warnings", [])
+        extras["merged_skipped_paths"] = df.attrs.get("merged_skipped_paths", [])
+        extras["merged_from_paths"] = df.attrs.get("merged_from_paths", multi_paths)
+        extras["merged_requested_paths"] = df.attrs.get("merged_requested_paths", multi_paths)
+
+    # Segment map for merge-aware offsets
+    segment_map: dict[str, dict[str, object]] = {}
+    for seg in df.attrs.get("merged_segments", []) or []:
+        path = seg.get("path")
+        if path:
+            segment_map[str(path)] = seg
 
     events_df: pd.DataFrame | None = None
     ev_path: str | None = None
 
     event_source_label: str | None = None
+    event_merge_warnings: list[str] = []
+    event_skipped: list[dict[str, str]] = []
+    event_files: list[str] = []
+    # Tuples of (event_path, originating_trace_path|None)
+    candidate_event_paths: list[tuple[str, str | None]] = []
+
     if isinstance(events_path, pd.DataFrame):
         events_df = _standardize_headers(events_path.copy())
         event_source_label = "<DataFrame>"
+    elif isinstance(events_path, Sequence) and not isinstance(events_path, (str, os.PathLike)):
+        user_paths = [str(p) for p in events_path]
+        if multi_paths and len(user_paths) == len(multi_paths):
+            candidate_event_paths = list(zip(user_paths, multi_paths, strict=False))
+        else:
+            candidate_event_paths = [(p, None) for p in user_paths]
     else:
         ev_path = events_path
         if ev_path:
-            event_source_label = ev_path
+            candidate_event_paths = [(str(ev_path), None)]
 
-    if ev_path is None and events_df is None:
-        ev_path = find_matching_event_file(trace_path)
-        if ev_path:
-            extras["auto_detected"] = True
-            event_source_label = ev_path
+    if events_df is None and not candidate_event_paths:
+        # Auto-discover per trace segment (merge-aware)
+        if multi_paths:
+            for path in multi_paths:
+                match = find_matching_event_file(path)
+                if match:
+                    candidate_event_paths.append((match, path))
+            if candidate_event_paths:
+                extras["auto_detected"] = True
+        else:
+            ev_path = find_matching_event_file(primary_trace_path)
+            if ev_path:
+                candidate_event_paths.append((ev_path, primary_trace_path))
+                extras["auto_detected"] = True
 
-    if ev_path and os.path.exists(ev_path):
-        extras["event_file"] = ev_path
-        extras["events_original_filename"] = Path(ev_path).name
-        events_df = _read_event_dataframe(ev_path, cache=cache)
-        log.info(
-            "Import: Loaded events CSV %s with %d rows (columns=%s)",
-            ev_path,
-            len(events_df.index),
-            list(events_df.columns),
-        )
-    elif events_df is None:
-        log.info("Import: No separate events file for %s (using trace-only)", trace_path)
+    if candidate_event_paths:
+        event_frames: list[pd.DataFrame] = []
+        for ev, trace_origin in candidate_event_paths:
+            if not os.path.exists(ev):
+                msg = f"Events file not found: {os.path.basename(ev)}"
+                event_merge_warnings.append(msg)
+                event_skipped.append({"path": ev, "reason": "missing file"})
+                log.warning(msg)
+                continue
+            try:
+                frame = _read_event_dataframe(ev, cache=cache)
+            except Exception as exc:
+                msg = f"Skipped events {os.path.basename(ev)}: {exc}"
+                event_merge_warnings.append(msg)
+                event_skipped.append({"path": ev, "reason": str(exc)})
+                log.warning(msg, exc_info=True)
+                continue
+
+            seg = (
+                segment_map.get(trace_origin or "")
+                or segment_map.get(ev)
+                or segment_map.get((trace_origin or "").replace("\\", "/"))
+            )
+            time_offset = float(seg.get("applied_time_offset", 0.0)) if seg else 0.0
+            frame_offset = int(seg.get("applied_frame_offset", 0)) if seg else 0
+            if "Frame" in frame.columns:
+                frame["Frame"] = pd.to_numeric(frame["Frame"], errors="coerce") + frame_offset
+            frame["__time_offset_seconds"] = time_offset
+            frame["__event_source"] = ev
+            event_frames.append(frame)
+            event_files.append(ev)
+
+        if event_frames:
+            events_df = pd.concat(event_frames, ignore_index=True, sort=False)
+            event_source_label = ", ".join(os.path.basename(p) for p in event_files)
+            ev_path = event_files[0]
+
+    if events_df is None:
+        log.info("Import: No separate events file for %s (using trace-only)", primary_trace_path)
         return df, [], [], None, [], [], extras
-    else:
-        log.info(
-            "Import: Loaded inline events table %s with %d rows (columns=%s)",
-            event_source_label or "(embedded)",
-            len(events_df.index),
-            list(events_df.columns),
-        )
+
+    if event_files and not ev_path:
+        ev_path = event_files[0]
+
+    extras["event_file"] = ev_path if isinstance(ev_path, str) else None
+    extras["event_files"] = event_files or ([ev_path] if ev_path else [])
+    extras["events_original_filename"] = Path(ev_path).name if isinstance(ev_path, str) else None
+    extras["event_merge_warnings"] = event_merge_warnings
+    extras["event_skipped_paths"] = event_skipped
+
+    log.info(
+        "Import: Loaded events table %s with %d rows (columns=%s)",
+        event_source_label or "(embedded)",
+        len(events_df.index),
+        list(events_df.columns),
+    )
 
     labels: list[str] = []
     times: list[float] = []
@@ -165,9 +259,7 @@ def load_trace_and_events(
         # FrameNumber values in the trace CSV align with the events CSV "Frame" column.
         frame_numbers = pd.to_numeric(df["FrameNumber"], errors="coerce")
         frame_number_to_trace_idx = {
-            int(fn): int(i)
-            for i, fn in enumerate(frame_numbers.to_numpy())
-            if pd.notna(fn)
+            int(fn): int(i) for i, fn in enumerate(frame_numbers.to_numpy()) if pd.notna(fn)
         }
         log.info(
             "Import: Prepared %d frame→trace index mappings from trace CSV",
@@ -176,10 +268,11 @@ def load_trace_and_events(
     if "TiffPage" in df.columns:
         # TiffPage values come from the VasoTracker TIFF stack (0-based frame indices).
         tiff_pages = pd.to_numeric(df["TiffPage"], errors="coerce")
+        if "Saved" in df.columns:
+            saved_mask = pd.to_numeric(df["Saved"], errors="coerce").fillna(0) > 0
+            tiff_pages = tiff_pages.where(saved_mask)
         tiff_page_to_trace_idx = {
-            int(tp): int(i)
-            for i, tp in enumerate(tiff_pages.to_numpy())
-            if pd.notna(tp)
+            int(tp): int(i) for i, tp in enumerate(tiff_pages.to_numpy()) if pd.notna(tp)
         }
         log.info(
             "Import: Prepared %d TIFF-page→trace index mappings from trace CSV",
@@ -191,7 +284,15 @@ def load_trace_and_events(
     df.attrs["frame_number_to_trace_idx"] = frame_number_to_trace_idx
     df.attrs["tiff_page_to_trace_idx"] = tiff_page_to_trace_idx
 
-    def _coerce_time_values(series: pd.Series) -> pd.Series:
+    tiff_result = derive_tiff_page_times(df)
+    extras["tiff_page_times"] = tiff_result.tiff_page_times
+    extras["tiff_page_times_valid"] = tiff_result.valid
+    extras["tiff_page_times_warnings"] = tiff_result.warnings
+    extras["snapshot_interval_median_s"] = tiff_result.median_interval_s
+    df.attrs["tiff_page_times"] = tiff_result.tiff_page_times
+    df.attrs["tiff_page_times_valid"] = tiff_result.valid
+
+    def _coerce_time_values(series: pd.Series, *, offsets: pd.Series | None = None) -> pd.Series:
         """Return ``series`` converted to seconds where possible."""
 
         numeric = pd.to_numeric(series, errors="coerce")
@@ -199,6 +300,12 @@ def load_trace_and_events(
         if mask.any():
             td = pd.to_timedelta(series.loc[mask], errors="coerce")
             numeric.loc[mask] = td.dt.total_seconds()
+        if offsets is not None:
+            try:
+                offsets_series = pd.to_numeric(offsets, errors="coerce").fillna(0.0)
+                numeric = numeric.add(offsets_series, fill_value=0.0)
+            except Exception as exc:
+                log.debug("Could not apply time offsets: %s", exc)
         return numeric.astype(float)
 
     def _map_frames_to_trace_time(frame_series: pd.Series) -> pd.Series:
@@ -259,10 +366,23 @@ def load_trace_and_events(
         frame_series = pd.to_numeric(working_df[frame_col], errors="coerce")
 
     time_series = (
-        _coerce_time_values(working_df[time_col])
+        _coerce_time_values(
+            working_df[time_col],
+            offsets=working_df.get("__time_offset_seconds"),
+        )
         if time_col
         else pd.Series(np.nan, index=working_df.index, dtype=float)
     )
+    trace_t0_s = None
+    if isinstance(df.attrs, dict):
+        trace_t0_s = df.attrs.get("timebase", {}).get("trace", {}).get("t0_s")
+    if trace_t0_s is not None and time_col:
+        try:
+            trace_t0_s = float(trace_t0_s)
+        except (TypeError, ValueError):
+            trace_t0_s = None
+    if trace_t0_s is not None and abs(trace_t0_s) > TIME_EPS_S:
+        time_series = time_series - float(trace_t0_s)
 
     approx_frame_times = None
     if frame_series is not None and not frame_number_to_trace_idx:
@@ -297,6 +417,18 @@ def load_trace_and_events(
             resolved_times = resolved_times.combine_first(approx_frame_times)
 
     working_df = working_df.assign(_time_seconds=resolved_times)
+    try:
+        working_df, report = validate_and_normalize_events(
+            working_df,
+            trace_time,
+            range_tol_s=RANGE_TOL_S,
+            eps_s=TIME_EPS_S,
+            time_col=time_col,
+        )
+    except ValueError as exc:
+        log.warning("Event time validation failed: %s", exc)
+        return df, [], [], None, [], [], extras
+
     valid_mask_series = working_df["_time_seconds"].notna()
     dropped_missing_time = int((~valid_mask_series).sum())
     if dropped_missing_time:
@@ -309,26 +441,33 @@ def load_trace_and_events(
         log.info("Events table became empty after dropping invalid times")
         return df, [], [], None, [], [], extras
 
+    extras["ignored_out_of_range"] = 0
+    extras["flagged_out_of_range"] = int(report.out_of_range)
+    extras["clamped_out_of_range"] = int(report.clamped)
+    extras["event_time_invalid"] = int(report.invalid)
+
+    timebase_meta = df.attrs.get("timebase") if isinstance(df.attrs, dict) else None
+    if not isinstance(timebase_meta, dict):
+        timebase_meta = {}
+    event_warnings = list(report.warnings)
+    if trace_t0_s is not None and abs(float(trace_t0_s)) > TIME_EPS_S:
+        event_warnings.append(
+            f"Applied trace t0 offset of {float(trace_t0_s):.6f}s to event times."
+        )
+    timebase_meta["events"] = {
+        "range_tol_s": float(RANGE_TOL_S),
+        "eps_s": float(TIME_EPS_S),
+        "total": int(report.total),
+        "valid": int(report.valid),
+        "invalid": int(report.invalid),
+        "clamped": int(report.clamped),
+        "out_of_range": int(report.out_of_range),
+        "trace_t0_s": float(trace_t0_s) if trace_t0_s is not None else None,
+        "warnings": event_warnings,
+    }
+    extras["timebase"] = timebase_meta
+
     times_series = working_df["_time_seconds"].astype(float)
-
-    arr_t = df["Time (s)"].to_numpy(dtype=float)
-    if arr_t.size:
-        finite_trace_mask = np.isfinite(arr_t)
-        if finite_trace_mask.any():
-            t_min = float(arr_t[finite_trace_mask].min())
-            t_max = float(arr_t[finite_trace_mask].max())
-            in_range_mask = (times_series >= t_min) & (times_series <= t_max)
-            ignored_out_of_range = int((~in_range_mask).sum())
-            if ignored_out_of_range:
-                extras["ignored_out_of_range"] = ignored_out_of_range
-                working_df = working_df.loc[in_range_mask].reset_index(drop=True)
-                times_series = times_series.loc[in_range_mask].reset_index(drop=True)
-                if frame_series is not None:
-                    frame_series = frame_series.loc[in_range_mask].reset_index(drop=True)
-
-    if working_df.empty:
-        log.info("No events remain within trace time range")
-        return df, [], [], None, [], [], extras
 
     labels = working_df[label_col].astype(str).tolist()
     times = times_series.astype(float).tolist()
@@ -391,7 +530,7 @@ def load_trace_and_events(
     log.info(
         "Import: Prepared %d normalised events for %s (source=%s)",
         len(labels),
-        trace_path,
+        primary_trace_path,
         extras.get("event_file") or "trace-only",
     )
     return df, labels, times, frames, diam, od_diam, extras

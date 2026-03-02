@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -17,9 +18,76 @@ __all__ = [
     "compute_events_signature",
     "compute_trace_signature",
     "quick_validate_project",
-    "deep_validate_dataset",
     "update_dataset_signatures",
 ]
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(num):
+        return None
+    return num
+
+
+def _coerce_int(value: Any) -> int | None:
+    num = _coerce_float(value)
+    if num is None:
+        return None
+    return int(num)
+
+
+def _coerce_int_round(value: Any) -> int | None:
+    num = _coerce_float(value)
+    if num is None:
+        return None
+    return int(round(num))
+
+
+def _coerce_str(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        if isinstance(value, float) and math.isnan(value):
+            return ""
+    except Exception:
+        return str(value).strip()
+    return str(value).strip()
+
+
+def _canonicalize_event_signature_rows(rows: list[sqlite3.Row]) -> list[list[Any]]:
+    normalized: list[list[Any]] = []
+    for t_us, t_seconds, label, source_row, source_frame in rows:
+        time_us = _coerce_int_round(t_us)
+        if time_us is None:
+            time_seconds = _coerce_float(t_seconds)
+            if time_seconds is None:
+                time_us = 0
+            else:
+                time_us = int(round(time_seconds * 1_000_000))
+        normalized.append(
+            [
+                time_us,
+                _coerce_str(label),
+                _coerce_int(source_row),
+                _coerce_int(source_frame),
+            ]
+        )
+    normalized.sort(
+        key=lambda row: (
+            row[0],
+            row[1],
+            row[2] is None,
+            row[2] if row[2] is not None else 0,
+            row[3] is None,
+            row[3] if row[3] is not None else 0,
+        )
+    )
+    return normalized
 
 
 def _stable_hash(obj: Any) -> str:
@@ -41,17 +109,7 @@ def compute_events_signature(conn: sqlite3.Connection, dataset_id: int) -> str:
         (dataset_id,),
     ).fetchall()
 
-    normalized = []
-    for t_us, t_seconds, label, source_row, source_frame in rows:
-        ts = int(t_us) if t_us is not None else int(round(float(t_seconds) * 1_000_000))
-        normalized.append(
-            [
-                ts,
-                str(label) if label is not None else "",
-                int(source_row) if source_row is not None else None,
-                int(source_frame) if source_frame is not None else None,
-            ]
-        )
+    normalized = _canonicalize_event_signature_rows(rows)
     return _stable_hash(normalized)
 
 
@@ -74,7 +132,7 @@ def compute_trace_signature(conn: sqlite3.Connection, dataset_id: int, *, sample
     sample_suffix = t_us[-sample_k:] if n > sample_k else []
 
     if n > 1:
-        deltas = [b - a for a, b in zip(t_us[:-1], t_us[1:])]
+        deltas = [b - a for a, b in zip(t_us[:-1], t_us[1:], strict=False)]
         median_dt = sorted(deltas)[len(deltas) // 2]
         min_dt = min(deltas)
         max_dt = max(deltas)
@@ -134,9 +192,7 @@ def _duplicate_signature_issues(conn: sqlite3.Connection) -> list[dict[str, Any]
     for sig, datasets in sig_map.items():
         if len(datasets) < 2:
             continue
-        fingerprints = {
-            (d[2] or "", d[3] or "") for d in datasets
-        }
+        fingerprints = {(d[2] or "", d[3] or "") for d in datasets}
         if len(fingerprints) > 1:
             issues.append(
                 {

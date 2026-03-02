@@ -3,17 +3,20 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
+import base64
 import contextlib
+import inspect
+import logging
 import re
-import subprocess
-import sys
 from pathlib import Path
 from typing import cast
 
 from matplotlib import rcParams
-from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import QObject, QSettings, pyqtSignal
 from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import QApplication
+
+log = logging.getLogger(__name__)
 
 try:  # Optional helper used for locating packaged resources
     from utils import resource_path
@@ -28,31 +31,29 @@ except Exception:  # pragma: no cover - resource helper missing or not packaged
 LIGHT_THEME = {
     # Surfaces
     "window_bg": "#F3F4F6",  # Gray chrome (toolbars, status bar)
-    "plot_bg": "#FFFFFF",     # White content area
+    "plot_bg": "#FFFFFF",  # White content area
     "toolbar_bg": "#F3F4F6",
     "table_bg": "#FFFFFF",
     "alternate_bg": "#F9FAFB",
-
+    "panel_bg": "#FFFFFF",
     # Text
     "text": "#111827",
     "text_disabled": "#9CA3AF",
     "table_text": "#111827",
-
     # Buttons
     "button_bg": "#F3F4F6",
     "button_hover_bg": "#E5E7EB",
     "button_active_bg": "#3B82F6",
-
     # Grids and borders
     "grid_color": "#E5E7EB",
+    "plot_divider": "#CCCCCC",
     "table_header_border": "#D1D5DB",
+    "panel_border": "#D1D5DB",
     "hover_label_bg": "rgba(243, 244, 246, 0.9)",
     "hover_label_border": "#D1D5DB",
-
     # Selection
     "selection_bg": "#3B82F6",
     "highlighted_text": "#FFFFFF",
-
     # Lines / cursors / semantic colors
     "cursor_a": "#3366FF",
     "cursor_b": "#FF6B3D",
@@ -66,47 +67,44 @@ LIGHT_THEME = {
     "time_cursor": "#FF6B3D",
     "trace_color": "#111827",
     "trace_color_secondary": "#FF6B3D",
-
     # Warnings
     "warning_bg": "#FEF3C7",
     "warning_border": "#F59E0B",
     "warning_text": "#78350F",
-
     # Snapshot
-    "snapshot_bg": "#2B2B2B",
+    "snapshot_bg": "#F3F4F6",
     "table_hover": "#F3F4F6",
     "table_editable_hover": "#DBEAFE",
     "table_focused_border": "#3366FF",
+    "panel_radius": 6,
 }
 
 DARK_THEME = {
     # Surfaces
     "window_bg": "#1E242D",  # Dark gray chrome
-    "plot_bg": "#0D1117",    # Dark content area
+    "plot_bg": "#0D1117",  # Dark content area
     "toolbar_bg": "#1E242D",
     "table_bg": "#0D1117",
     "alternate_bg": "#161B22",
-
+    "panel_bg": "#0D1117",
     # Text
     "text": "#E6EDF3",
     "text_disabled": "#7D8590",
     "table_text": "#E6EDF3",
-
     # Buttons
     "button_bg": "#21262D",
     "button_hover_bg": "#30363D",
     "button_active_bg": "#388BFD",
-
     # Grids and borders
     "grid_color": "#30363D",
+    "plot_divider": "#3A3A3A",
     "table_header_border": "#373E47",
+    "panel_border": "#373E47",
     "hover_label_bg": "rgba(30, 36, 45, 0.9)",
     "hover_label_border": "#30363D",
-
     # Selection
     "selection_bg": "#1F6FEB",
     "highlighted_text": "#FFFFFF",
-
     # Lines / cursors / semantic colors
     "cursor_a": "#58A6FF",
     "cursor_b": "#F97316",
@@ -120,17 +118,16 @@ DARK_THEME = {
     "time_cursor": "#F97316",
     "trace_color": "#E6EDF3",
     "trace_color_secondary": "#F97316",
-
     # Warnings
     "warning_bg": "#451A03",
     "warning_border": "#F97316",
     "warning_text": "#FDE68A",
-
     # Snapshot
-    "snapshot_bg": "#1F2933",
+    "snapshot_bg": "#0D1117",
     "table_hover": "#21262D",
     "table_editable_hover": "#1C3D5A",
     "table_focused_border": "#3B82F6",
+    "panel_radius": 6,
 }
 
 
@@ -189,6 +186,20 @@ def _derive_tooltip_bg(window_bg: QColor, is_dark: bool) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
+def _pick_contrast_color(color_str: str, *, light: str = "#FFFFFF", dark: str = "#111827") -> str:
+    """Pick a high-contrast color for a given background."""
+    color = QColor(color_str)
+    if not color.isValid():
+        return light
+    return light if color.lightness() < 128 else dark
+
+
+def _svg_data_uri(svg: str) -> str:
+    """Return a data URI for an SVG payload."""
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
 # -----------------------------------------------------------------------------
 # OS Palette Extraction
 # -----------------------------------------------------------------------------
@@ -230,33 +241,27 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "plot_bg": base.name(),  # Use Base for plot backgrounds
         "toolbar_bg": window_bg.name(),
         "is_dark": bool(is_dark),
-
         # Text
         "text": window_text.name(),
         "text_disabled": mid.name(),  # Mid palette role for disabled text
-
         # Tables
         "table_bg": base.name(),
         "table_text": window_text.name(),
         "alternate_bg": alternate_base.name(),
         "selection_bg": highlight.name(),
-
         # Buttons
         "button_bg": button.name(),
         "button_hover_bg": _derive_hover_color(button, is_dark),
         "button_active_bg": highlight.name(),
-
         # Overlays / tooltips
         "hover_label_bg": _derive_tooltip_bg(window_bg, is_dark),
         "hover_label_border": mid.name(),
-
         # Lines / grids / cursors
         "grid_color": _derive_grid_color(base, is_dark),
         "cursor_a": "#38BDF8" if is_dark else "#3366FF",  # Blue - semantic
         "cursor_b": "#F97316" if is_dark else "#FF6B3D",  # Orange - semantic
         "cursor_text": window_text.name(),
         "cursor_line": "#38BDF8" if is_dark else "#3366FF",
-
         # Accents (semantic colors for data visualization)
         "accent": "#38BDF8" if is_dark else "#3366FF",
         "accent_fill": "#0EA5E9" if is_dark else "#2563EB",
@@ -264,19 +269,15 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
         "event_line": mid.name(),
         "event_highlight": highlight.name(),
         "time_cursor": "#F97316" if is_dark else "#FF6B3D",
-
         # Trace defaults (semantic)
         "trace_color": window_text.name(),
         "trace_color_secondary": "#F97316" if is_dark else "#FF6B3D",
-
         # Warnings (semantic - keep consistent)
         "warning_bg": "#451A03" if is_dark else "#FEF3C7",
         "warning_border": "#F97316" if is_dark else "#F59E0B",
         "warning_text": "#FDE68A" if is_dark else "#78350F",
-
         # Snapshot (for matplotlib snapshots)
-        "snapshot_bg": "#1F2933" if is_dark else "#2B2B2B",
-
+        "snapshot_bg": "#0F141B" if is_dark else "#F3F4F6",
         # Table-specific
         "table_hover": _derive_hover_color(base, is_dark),
         "table_editable_hover": _derive_hover_color(highlight, is_dark),
@@ -312,6 +313,7 @@ def refresh_theme_from_os() -> None:
     # Apply to matplotlib
     apply_matplotlib_style(CURRENT_THEME)
 
+
 # Extra contrast styling using OS palette
 # No longer uses hardcoded colors - adapts to OS theme automatically
 DARK_WIDGET_CONTRAST_QSS = """
@@ -334,27 +336,7 @@ QComboBox:focus {
     border: 1px solid palette(highlight);
 }
 
-/* Checkboxes and radio buttons: clearer indicators */
-QCheckBox::indicator,
-QRadioButton::indicator {
-    width: 14px;
-    height: 14px;
-    border-radius: 2px;
-    border: 1px solid palette(mid);
-    background-color: palette(base);
-}
-
-QCheckBox::indicator:checked,
-QRadioButton::indicator:checked {
-    background-color: palette(highlight);
-    border-color: palette(highlight);
-}
-
-/* Hover state for indicators */
-QCheckBox::indicator:hover,
-QRadioButton::indicator:hover {
-    border-color: palette(dark);
-}
+/* Indicator visuals are applied in the theme-aware indicator stylesheet. */
 
 /* Group boxes: use OS palette borders */
 QGroupBox {
@@ -371,104 +353,310 @@ QGroupBox::title {
 }
 """
 
+UI_INTERACTION_CONTRACT_QSS = """
+/* UI interaction contract: menus, tooltips, disabled, focus */
+QMenu {
+    background-color: palette(base);
+    border: 1px solid palette(mid);
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 18px 6px 24px;
+    color: palette(text);
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
+}
+
+QMenu::item:disabled {
+    color: palette(mid);
+}
+
+QMenu::separator {
+    height: 1px;
+    background: palette(mid);
+    margin: 6px 6px;
+}
+
+QToolTip {
+    background-color: palette(tool-tip-base);
+    color: palette(tool-tip-text);
+    border: 1px solid palette(mid);
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
+QPushButton:focus,
+QToolButton:focus,
+QLineEdit:focus,
+QComboBox:focus,
+QTreeWidget:focus,
+QTableWidget:focus {
+    outline: none;
+    border: 1px solid palette(highlight);
+}
+
+QPushButton:disabled,
+QToolButton:disabled {
+    color: palette(mid);
+}
+"""
+
+
+def _build_indicator_qss(theme: dict) -> str:
+    """Build theme-aware QSS for checkbox and radio indicators."""
+    indicator_size = 16
+    base_bg = theme.get("plot_bg", theme.get("table_bg", "#FFFFFF"))
+    hover_bg = theme.get("table_hover", theme.get("alternate_bg", base_bg))
+    border_color = theme.get("panel_border", theme.get("grid_color", "#D1D5DB"))
+    accent_bg = theme.get("accent_fill", theme.get("selection_bg", "#2563EB"))
+    accent_border = theme.get("accent", accent_bg)
+    disabled_bg = theme.get("grid_color", border_color)
+    disabled_border = theme.get("grid_color", border_color)
+    text_color = theme.get("text", "#111827")
+    disabled_check = theme.get("text_disabled", _pick_contrast_color(disabled_bg))
+
+    check_color = _pick_contrast_color(accent_bg)
+    check_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M12.2 4.3L6.7 11.7L3.8 8.8" fill="none" '
+        f'stroke="{check_color}" stroke-width="2.4" stroke-linecap="round" '
+        'stroke-linejoin="round"/></svg>'
+    )
+    check_disabled_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M12.2 4.3L6.7 11.7L3.8 8.8" fill="none" '
+        f'stroke="{disabled_check}" stroke-width="2.4" stroke-linecap="round" '
+        'stroke-linejoin="round"/></svg>'
+    )
+    dash_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M4 8H12" fill="none" stroke="{check_color}" '
+        'stroke-width="2.6" stroke-linecap="round"/></svg>'
+    )
+    dash_disabled_svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" '
+        'viewBox="0 0 16 16">'
+        f'<path d="M4 8H12" fill="none" stroke="{disabled_check}" '
+        'stroke-width="2.6" stroke-linecap="round"/></svg>'
+    )
+
+    check_url = _svg_data_uri(check_svg)
+    check_disabled_url = _svg_data_uri(check_disabled_svg)
+    dash_url = _svg_data_uri(dash_svg)
+    dash_disabled_url = _svg_data_uri(dash_disabled_svg)
+
+    return f"""
+QCheckBox,
+QRadioButton {{
+    spacing: 6px;
+    color: {text_color};
+}}
+
+QCheckBox::indicator,
+QRadioButton::indicator,
+QTreeView::indicator,
+QTableView::indicator,
+QListView::indicator {{
+    width: {indicator_size}px;
+    height: {indicator_size}px;
+    border: 2px solid {border_color};
+    background-color: {base_bg};
+}}
+
+QCheckBox::indicator {{
+    border-radius: 3px;
+}}
+
+QRadioButton::indicator {{
+    border-radius: {indicator_size // 2}px;
+}}
+
+QCheckBox::indicator:hover,
+QRadioButton::indicator:hover,
+QTreeView::indicator:hover,
+QTableView::indicator:hover,
+QListView::indicator:hover {{
+    border-color: {accent_border};
+    background-color: {hover_bg};
+}}
+
+QCheckBox::indicator:checked,
+QRadioButton::indicator:checked,
+QTreeView::indicator:checked,
+QTableView::indicator:checked,
+QListView::indicator:checked {{
+    background-color: {accent_bg};
+    border-color: {accent_border};
+    image: url("{check_url}");
+}}
+
+QCheckBox::indicator:checked:hover,
+QRadioButton::indicator:checked:hover,
+QTreeView::indicator:checked:hover,
+QTableView::indicator:checked:hover,
+QListView::indicator:checked:hover {{
+    background-color: {accent_bg};
+    border-color: {accent_border};
+    image: url("{check_url}");
+}}
+
+QCheckBox::indicator:indeterminate,
+QTreeView::indicator:indeterminate,
+QTableView::indicator:indeterminate,
+QListView::indicator:indeterminate {{
+    background-color: {accent_bg};
+    border-color: {accent_border};
+    image: url("{dash_url}");
+}}
+
+QCheckBox::indicator:disabled,
+QRadioButton::indicator:disabled,
+QTreeView::indicator:disabled,
+QTableView::indicator:disabled,
+QListView::indicator:disabled {{
+    background-color: {disabled_bg};
+    border-color: {disabled_border};
+}}
+
+QCheckBox::indicator:checked:disabled,
+QRadioButton::indicator:checked:disabled,
+QTreeView::indicator:checked:disabled,
+QTableView::indicator:checked:disabled,
+QListView::indicator:checked:disabled {{
+    background-color: {disabled_bg};
+    border-color: {disabled_border};
+    image: url("{check_disabled_url}");
+}}
+
+QCheckBox::indicator:indeterminate:disabled,
+QTreeView::indicator:indeterminate:disabled,
+QTableView::indicator:indeterminate:disabled,
+QListView::indicator:indeterminate:disabled {{
+    background-color: {disabled_bg};
+    border-color: {disabled_border};
+    image: url("{dash_disabled_url}");
+}}
+"""
+
+
 LIGHT_THEME = {
     # Surfaces
-    "window_bg": "#F3F4F6",
+    "window_bg": "#ECEFF3",
     "plot_bg": "#FFFFFF",
-    "toolbar_bg": "#F3F4F6",
+    "toolbar_bg": "#E9EDF2",
     "is_dark": False,
     # Text
-    "text": "#111827",
-    "text_disabled": "#9CA3AF",
+    "text": "#101828",
+    "text_disabled": "#76839A",
     # Tables
     "table_bg": "#FFFFFF",
-    "table_text": "#111827",
-    "alternate_bg": "#F3F6FB",
-    "selection_bg": "#E6F0FF",
+    "table_text": "#101828",
+    "alternate_bg": "#F6F8FB",
+    "selection_bg": "#DDE9F8",
+    "highlighted_text": "#0F172A",
+    "panel_bg": "#FFFFFF",
     # Buttons
-    "button_bg": "#FFFFFF",
-    "button_hover_bg": "#EAF2FF",
-    "button_active_bg": "#D7E5FF",
+    "button_bg": "#F7F9FC",
+    "button_hover_bg": "#E8EFF8",
+    "button_active_bg": "#D7E2F2",
     # Overlays / tooltips
-    "hover_label_bg": "rgba(255,255,255,220)",
-    "hover_label_border": "#CBD5E1",
+    "hover_label_bg": "rgba(255,255,255,235)",
+    "hover_label_border": "#C4CEDC",
     # Lines / grids / cursors
-    "grid_color": "#D1D5DB",
-    "cursor_a": "#3366FF",
-    "cursor_b": "#FF6B3D",
-    "cursor_text": "#222222",
-    "cursor_line": "#3366FF",
+    "grid_color": "#D3DAE5",
+    "plot_divider": "#CCCCCC",
+    "grid_alpha": 0.09,
+    "cursor_a": "#2F67A8",
+    "cursor_b": "#C96B1E",
+    "cursor_text": "#101828",
+    "cursor_line": "#2F67A8",
     # Accents
-    "accent": "#3366FF",
-    "accent_fill": "#2563EB",
-    "accent_fill_secondary": "#FF6B3D",
-    "event_line": "#9CA3AF",
-    "event_highlight": "#1D4ED8",
-    "time_cursor": "#FF6B3D",
+    "accent": "#2F67A8",
+    "accent_fill": "#235996",
+    "accent_fill_secondary": "#E68A2E",
+    "event_line": "#A1AAB6",
+    "event_highlight": "#2F67A8",
+    "time_cursor": "#C96B1E",
     # Trace defaults
-    "trace_color": "#000000",
-    "trace_color_secondary": "#FF6B3D",
+    "trace_color": "#111111",
+    "trace_color_secondary": "#D9781E",
     # Warnings
     "warning_bg": "#FEF3C7",
     "warning_border": "#F59E0B",
     "warning_text": "#78350F",
     # Snapshot
-    "snapshot_bg": "#2B2B2B",
+    "snapshot_bg": "#F0F3F7",
     # Table-specific
-    "table_hover": "#F0F0F0",
-    "table_editable_hover": "#E6F0FF",
-    "table_focused_border": "#3366FF",
-    "table_header_border": "#CBD5E1",
+    "table_hover": "#EEF3FA",
+    "table_editable_hover": "#E1ECF9",
+    "table_focused_border": "#2F67A8",
+    "table_header_border": "#C9D3E0",
+    "panel_border": "#C9D3E0",
+    "panel_radius": 4,
 }
 
 DARK_THEME = {
     # Surfaces
-    "window_bg": "#1E242D",
-    "plot_bg": "#10141C",
-    "toolbar_bg": "#1E242D",
+    "window_bg": "#1D242E",
+    "plot_bg": "#0F151E",
+    "toolbar_bg": "#232B36",
     "is_dark": True,
     # Text
-    "text": "#E5E7EB",
-    "text_disabled": "#9CA3AF",
+    "text": "#E7EDF4",
+    "text_disabled": "#99A6B7",
     # Tables
-    "table_bg": "#0F141B",
-    "table_text": "#E5E7EB",
-    "alternate_bg": "#161C25",
-    "selection_bg": "#263248",
+    "table_bg": "#101822",
+    "table_text": "#E7EDF4",
+    "alternate_bg": "#18212D",
+    "selection_bg": "#2A3D55",
+    "highlighted_text": "#FFFFFF",
+    "panel_bg": "#131C27",
     # Buttons
-    "button_bg": "#1A212B",
-    "button_hover_bg": "#232E3C",
-    "button_active_bg": "#2F3F55",
+    "button_bg": "#1F2A36",
+    "button_hover_bg": "#2A3848",
+    "button_active_bg": "#32475D",
     # Overlays / tooltips
-    "hover_label_bg": "rgba(30,36,45,230)",
-    "hover_label_border": "#364659",
+    "hover_label_bg": "rgba(20,28,39,235)",
+    "hover_label_border": "#435469",
     # Lines / grids / cursors
-    "grid_color": "#2E3A49",
-    "cursor_a": "#38BDF8",
-    "cursor_b": "#F97316",
-    "cursor_text": "#E5E7EB",
-    "cursor_line": "#38BDF8",
+    "grid_color": "#344659",
+    "plot_divider": "#3A3A3A",
+    "grid_alpha": 0.11,
+    "cursor_a": "#5DA8F8",
+    "cursor_b": "#F39A45",
+    "cursor_text": "#E7EDF4",
+    "cursor_line": "#5DA8F8",
     # Accents
-    "accent": "#38BDF8",
-    "accent_fill": "#0EA5E9",
-    "accent_fill_secondary": "#F97316",
-    "event_line": "#4B5563",
-    "event_highlight": "#2563EB",
-    "time_cursor": "#F97316",
+    "accent": "#5DA8F8",
+    "accent_fill": "#3D8DDF",
+    "accent_fill_secondary": "#F39A45",
+    "event_line": "#607182",
+    "event_highlight": "#5DA8F8",
+    "time_cursor": "#F39A45",
     # Trace defaults
-    "trace_color": "#FFFFFF",
-    "trace_color_secondary": "#F97316",
+    "trace_color": "#F2F5F8",
+    "trace_color_secondary": "#F39A45",
     # Warnings
     "warning_bg": "#451A03",
     "warning_border": "#F59E0B",
     "warning_text": "#FDE68A",
     # Snapshot
-    "snapshot_bg": "#0B1017",
+    "snapshot_bg": "#0F151E",
     # Table-specific
-    "table_hover": "#1F2835",
-    "table_editable_hover": "#2F3F55",
-    "table_focused_border": "#38BDF8",
-    "table_header_border": "#364659",
+    "table_hover": "#213041",
+    "table_editable_hover": "#314C69",
+    "table_focused_border": "#5DA8F8",
+    "table_header_border": "#435469",
+    "panel_border": "#435469",
+    "panel_radius": 4,
 }
 
 # Currently applied theme; initialized from light preset to avoid KeyErrors
@@ -476,7 +664,7 @@ CURRENT_THEME = dict(LIGHT_THEME)
 
 # Font settings
 FONTS = {
-    "family": "Arial",
+    "family": "Avenir Next",
     "axis_size": 14,
     "tick_size": 12,
     "event_size": 10,
@@ -540,10 +728,15 @@ def apply_qt_palette(theme: dict):
 
     # Highlight colors
     highlight_bg = parse_color(theme.get("selection_bg", "#3B82F6"))
-    highlight_text = parse_color(theme.get("text", "#FFFFFF"))
+    highlight_text = parse_color(theme.get("highlighted_text", "#FFFFFF"))
 
     # Mid/border colors
     mid_color = parse_color(theme.get("grid_color", "#D1D5DB"))
+    is_dark = bool(theme.get("is_dark", window_bg.lightness() < 128))
+
+    # Tooltip colors for palette(tool-tip-base) / palette(tool-tip-text)
+    tooltip_bg = window_bg.lighter(115) if is_dark else window_bg.darker(105)
+    tooltip_text = window_text
 
     # Apply to all color groups (Active, Inactive, Disabled)
     for group in [QPalette.Active, QPalette.Inactive, QPalette.Disabled]:
@@ -563,6 +756,8 @@ def apply_qt_palette(theme: dict):
         # Highlight (selections)
         palette.setColor(group, QPalette.Highlight, highlight_bg)
         palette.setColor(group, QPalette.HighlightedText, highlight_text)
+        palette.setColor(group, QPalette.ToolTipBase, tooltip_bg)
+        palette.setColor(group, QPalette.ToolTipText, tooltip_text)
 
         # Mid/borders
         palette.setColor(group, QPalette.Mid, mid_color)
@@ -592,10 +787,6 @@ QPushButton {{
 QToolButton {{
     border-radius: 6px;
     padding: 6px;
-}}
-QToolTip {{
-    padding: 2px 6px;
-    border-radius: 5px;
 }}
 QHeaderView::section {{
     font-weight: bold;
@@ -650,6 +841,22 @@ def apply_matplotlib_style(theme: dict):
 # -----------------------------------------------------------------------------
 
 
+def get_theme_mode() -> str:
+    """Return the active theme mode: 'light' or 'dark'."""
+    theme = CURRENT_THEME if isinstance(CURRENT_THEME, dict) else {}
+    window_bg = None
+    if isinstance(theme, dict):
+        window_bg = theme.get("window_bg") or theme.get("plot_bg")
+    if window_bg:
+        color = QColor(window_bg)
+        if color.isValid():
+            return "dark" if color.lightness() < 128 else "light"
+
+    app = QApplication.instance()
+    palette = app.palette() if app else QPalette()
+    return "dark" if palette.color(QPalette.Window).lightness() < 128 else "light"
+
+
 def _apply_theme(theme: dict) -> None:
     """
     Internal helper to apply theme to Qt palette, stylesheet, and matplotlib.
@@ -668,7 +875,8 @@ def _apply_theme(theme: dict) -> None:
     # Apply stylesheet and matplotlib
     app = QApplication.instance()
     if app is not None:
-        cast(QApplication, app).setStyleSheet(apply_qt_stylesheet(theme))
+        q_app = cast(QApplication, app)
+        q_app.setStyleSheet(_build_complete_stylesheet(theme))
 
     apply_matplotlib_style(theme)
 
@@ -704,6 +912,20 @@ def _load_light_stylesheet() -> str:
         except Exception:
             continue
     return ""
+
+
+def _build_complete_stylesheet(theme: dict) -> str:
+    """Build the full application stylesheet from all global sources."""
+    complete_qss = apply_qt_stylesheet(theme)
+
+    main_stylesheet = _load_light_stylesheet()
+    if main_stylesheet:
+        complete_qss += "\n" + main_stylesheet
+
+    complete_qss += "\n" + DARK_WIDGET_CONTRAST_QSS
+    complete_qss += "\n" + UI_INTERACTION_CONTRACT_QSS
+    complete_qss += "\n" + _build_indicator_qss(theme)
+    return complete_qss
 
 
 def set_theme_mode(mode: str, *, persist: bool = True) -> str:
@@ -748,16 +970,7 @@ def set_theme_mode(mode: str, *, persist: bool = True) -> str:
     if app is not None:
         q_app = cast(QApplication, app)
 
-        # Start with base stylesheet
-        complete_qss = apply_qt_stylesheet(CURRENT_THEME)
-
-        # Add main application stylesheet (style.qss)
-        main_stylesheet = _load_light_stylesheet()
-        if main_stylesheet:
-            complete_qss += "\n" + main_stylesheet
-
-        # Add widget contrast styles
-        complete_qss += "\n" + DARK_WIDGET_CONTRAST_QSS
+        complete_qss = _build_complete_stylesheet(CURRENT_THEME)
 
         # Apply complete stylesheet (this forces re-evaluation of palette() refs)
         q_app.setStyleSheet(complete_qss)
@@ -787,3 +1000,101 @@ def apply_theme_from_settings() -> str:
         refresh_theme_from_os()
         _apply_theme(CURRENT_THEME)
         return "system"
+
+
+# -----------------------------------------------------------------------------
+# Theme Broadcast + Refresh
+# -----------------------------------------------------------------------------
+
+
+class ThemeManager(QObject):
+    """Central theme broadcaster for runtime theme changes."""
+
+    themeChanged = pyqtSignal(str)
+
+
+_THEME_MANAGER: ThemeManager | None = None
+
+
+def get_theme_manager() -> ThemeManager:
+    """Return the singleton ThemeManager instance."""
+    global _THEME_MANAGER
+    if _THEME_MANAGER is None:
+        _THEME_MANAGER = ThemeManager()
+    return _THEME_MANAGER
+
+
+def _call_apply_theme_hook(widget, mode: str) -> None:
+    apply_hook = getattr(widget, "apply_theme", None)
+    if not callable(apply_hook):
+        return
+
+    try:
+        signature = inspect.signature(apply_hook)
+    except (TypeError, ValueError):
+        try:
+            apply_hook(mode)
+        except Exception:
+            with contextlib.suppress(Exception):
+                apply_hook()
+        return
+
+    params = list(signature.parameters.values())
+    try:
+        if not params:
+            apply_hook()
+            return
+
+        first = params[0]
+        if first.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        ):
+            apply_hook(mode)
+        elif first.kind == inspect.Parameter.KEYWORD_ONLY:
+            if "mode" in signature.parameters:
+                apply_hook(mode=mode)
+            else:
+                apply_hook()
+        else:
+            apply_hook()
+    except Exception:
+        log.exception("Theme apply hook failed for %r", widget)
+
+
+def _refresh_top_level_widgets(mode: str) -> int:
+    app = QApplication.instance()
+    if app is None:
+        return 0
+
+    widgets = app.topLevelWidgets()
+    log.info(
+        "Theme changed: %s - refreshing %d top-level widgets",
+        mode,
+        len(widgets),
+    )
+
+    for widget in widgets:
+        with contextlib.suppress(Exception):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
+        _call_apply_theme_hook(widget, mode)
+
+    with contextlib.suppress(Exception):
+        app.processEvents()
+    return len(widgets)
+
+
+def apply_theme(mode: str, *, persist: bool = True) -> str:
+    """Apply theme mode and refresh all visible widgets."""
+    scheme = set_theme_mode(mode, persist=persist)
+
+    _refresh_top_level_widgets(scheme)
+
+    manager = get_theme_manager()
+    with contextlib.suppress(Exception):
+        manager.themeChanged.emit(scheme)
+
+    return scheme

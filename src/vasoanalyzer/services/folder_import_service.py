@@ -11,15 +11,18 @@ detecting trace files, matching event files, and determining import status.
 """
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import logging
-
 from vasoanalyzer.core.project import Experiment, SampleN
-from vasoanalyzer.io.events import find_matching_event_file, find_matching_tiff_file, find_matching_trace_file
+from vasoanalyzer.io.events import (
+    find_matching_event_file,
+    find_matching_tiff_file,
+    find_matching_trace_file,
+)
 
 log = logging.getLogger(__name__)
 

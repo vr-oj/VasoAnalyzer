@@ -12,11 +12,8 @@ from collections.abc import Callable
 from typing import Any
 
 import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
-from matplotlib.figure import Figure
 from matplotlib.patches import FancyBboxPatch, Rectangle
-from matplotlib.text import Text
 
 from vasoanalyzer.ui.publication.epoch_model import Epoch, EpochManifest
 

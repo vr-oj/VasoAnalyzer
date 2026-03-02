@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -115,7 +114,9 @@ def _backup_db(conn: sqlite3.Connection, target_dir: Path) -> Path | None:
         return None
 
 
-def _match_deleted_targets(conn: sqlite3.Connection, dataset_id: int, audit_rows: list[sqlite3.Row]) -> list[int]:
+def _match_deleted_targets(
+    conn: sqlite3.Connection, dataset_id: int, audit_rows: list[sqlite3.Row]
+) -> list[int]:
     """Return ids of events that should be deleted based on audit entries."""
 
     if not audit_rows:
@@ -145,7 +146,11 @@ def _match_deleted_targets(conn: sqlite3.Connection, dataset_id: int, audit_rows
             if target_row is not None and row["source_row"] == target_row:
                 targets.append(int(row["id"]))
                 break
-            if target_ts is not None and row["t_us"] is not None and abs(row["t_us"] - target_ts) <= 500:
+            if (
+                target_ts is not None
+                and row["t_us"] is not None
+                and abs(row["t_us"] - target_ts) <= 500
+            ):
                 if target_label is None or str(row["label"]) == str(target_label):
                     targets.append(int(row["id"]))
                     break
@@ -205,7 +210,9 @@ def repair_dataset_from_raw(
         # Reapply deletes from audit
         delete_targets = _match_deleted_targets(conn, dataset_id, audit_rows)
         if delete_targets:
-            soft_delete_events(conn, dataset_id, delete_targets, reason="repair_replay", deleted_by=source)
+            soft_delete_events(
+                conn, dataset_id, delete_targets, reason="repair_replay", deleted_by=source
+            )
 
     sigs = _validation.update_dataset_signatures(conn, dataset_id)
     return {

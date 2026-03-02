@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, Iterable, Optional, Set
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from vasoanalyzer.ui.plots.interactions_base import (
     ClickContext,
@@ -94,7 +94,9 @@ class MplInteractionHost:
             ctx.y_px = float("nan")  # type: ignore[attr-defined]
 
         gui_event = getattr(event, "guiEvent", None)
-        buttons = gui_event.buttons() if gui_event is not None and hasattr(gui_event, "buttons") else None
+        buttons = (
+            gui_event.buttons() if gui_event is not None and hasattr(gui_event, "buttons") else None
+        )
         ctx.buttons = buttons  # type: ignore[attr-defined]
 
         self._dispatch(self._move_handlers, ctx)
@@ -132,7 +134,9 @@ class MplInteractionHost:
             ctx.y_px = float("nan")  # type: ignore[attr-defined]
         ctx.pressed = bool(pressed)  # type: ignore[attr-defined]
         gui_event = getattr(event, "guiEvent", None)
-        buttons = gui_event.buttons() if gui_event is not None and hasattr(gui_event, "buttons") else None
+        buttons = (
+            gui_event.buttons() if gui_event is not None and hasattr(gui_event, "buttons") else None
+        )
         ctx.buttons = buttons  # type: ignore[attr-defined]
         return ctx
 
@@ -143,7 +147,7 @@ class MplInteractionHost:
             except Exception:
                 continue
 
-    def _resolve_track(self, event: Any) -> tuple[Optional[Any], Optional[str]]:
+    def _resolve_track(self, event: Any) -> tuple[Any | None, str | None]:
         track = None
         track_id = None
         axes = getattr(event, "inaxes", None)
@@ -184,7 +188,7 @@ class MplInteractionHost:
             return "right"
         return str(raw_button) if raw_button is not None else ""
 
-    def _modifiers_from_event(self, event: Any) -> Set[str]:
+    def _modifiers_from_event(self, event: Any) -> set[str]:
         key = getattr(event, "key", None)
         if not key:
             return set()

@@ -34,7 +34,9 @@ def _insert_event_via_writer(store, dataset_id: int, t_seconds: float, label: st
     rows = list(
         _events.prepare_event_rows(
             dataset_id,
-            pd.DataFrame({"t_seconds": [t_seconds], "label": [label], "frame": [int(t_seconds * 10)]}),
+            pd.DataFrame(
+                {"t_seconds": [t_seconds], "label": [label], "frame": [int(t_seconds * 10)]}
+            ),
         )
     )
 
@@ -71,7 +73,9 @@ def test_snapshot_is_consistent_under_autosave(tmp_path):
     thread.start()
 
     for _ in range(3):
-        snapshots.append(create_snapshot(bundle, store.path, db_writer=getattr(store, "writer", None)))
+        snapshots.append(
+            create_snapshot(bundle, store.path, db_writer=getattr(store, "writer", None))
+        )
         time.sleep(0.02)
 
     thread.join()
@@ -108,7 +112,8 @@ def test_open_save_close_soak_no_unexpected_signature_drift(tmp_path):
 def test_repair_preserves_user_deletes(tmp_path):
     store, dataset_id = _make_project(tmp_path)
     rows = store.conn.execute(
-        "SELECT id FROM event WHERE dataset_id = ? AND deleted_utc IS NULL ORDER BY id", (dataset_id,)
+        "SELECT id FROM event WHERE dataset_id = ? AND deleted_utc IS NULL ORDER BY id",
+        (dataset_id,),
     ).fetchall()
     deleted_id = int(rows[0][0])
     soft_delete_events(store.conn, dataset_id, [deleted_id], reason="user_test", deleted_by="ui")
@@ -118,7 +123,9 @@ def test_repair_preserves_user_deletes(tmp_path):
     store.conn.commit()
 
     raw_events = pd.DataFrame({"t_seconds": [0.5, 1.5], "label": ["a", "b"], "frame": [1, 2]})
-    summary = repair_dataset_from_raw(store.conn, dataset_id, raw_events=raw_events, source="repair")
+    summary = repair_dataset_from_raw(
+        store.conn, dataset_id, raw_events=raw_events, source="repair"
+    )
 
     reapplied = store.conn.execute(
         "SELECT COUNT(*) FROM event WHERE dataset_id = ? AND deleted_reason = 'repair_replay'",
@@ -161,8 +168,12 @@ def test_dataset_switch_during_autosave_no_contamination(tmp_path):
         _insert(target, 5.0 + i, f"loop-{target}-{i}")
         save_project(store, skip_optimize=True)
 
-    count_a = store.conn.execute("SELECT COUNT(*) FROM event WHERE dataset_id = ?", (ds_a,)).fetchone()[0]
-    count_b = store.conn.execute("SELECT COUNT(*) FROM event WHERE dataset_id = ?", (ds_b,)).fetchone()[0]
+    count_a = store.conn.execute(
+        "SELECT COUNT(*) FROM event WHERE dataset_id = ?", (ds_a,)
+    ).fetchone()[0]
+    count_b = store.conn.execute(
+        "SELECT COUNT(*) FROM event WHERE dataset_id = ?", (ds_b,)
+    ).fetchone()[0]
 
     expected_a = 1 + ((iterations + 1) // 2)
     expected_b = 1 + (iterations // 2)
@@ -173,6 +184,10 @@ def test_dataset_switch_during_autosave_no_contamination(tmp_path):
     validation.update_dataset_signatures(store.conn, ds_b)
     issues = validation.quick_validate_project(store.conn)
     assert not issues
-    sig_a = store.conn.execute("SELECT events_signature FROM dataset WHERE id = ?", (ds_a,)).fetchone()[0]
-    sig_b = store.conn.execute("SELECT events_signature FROM dataset WHERE id = ?", (ds_b,)).fetchone()[0]
+    sig_a = store.conn.execute(
+        "SELECT events_signature FROM dataset WHERE id = ?", (ds_a,)
+    ).fetchone()[0]
+    sig_b = store.conn.execute(
+        "SELECT events_signature FROM dataset WHERE id = ?", (ds_b,)
+    ).fetchone()[0]
     assert sig_a != sig_b

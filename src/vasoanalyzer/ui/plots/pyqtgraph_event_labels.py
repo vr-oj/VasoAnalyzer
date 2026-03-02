@@ -6,9 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont, QFontMetricsF
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3

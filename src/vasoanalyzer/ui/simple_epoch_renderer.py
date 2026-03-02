@@ -18,8 +18,6 @@ from typing import Any
 
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
-from matplotlib.text import Text
-from matplotlib.transforms import blended_transform_factory
 
 log = logging.getLogger(__name__)
 
@@ -287,7 +285,9 @@ def events_to_simple_epochs(
 
     # Group events by category to infer durations
     category_events: dict[str, list[tuple[int, float, str]]] = {}
-    for i, (t, label, meta) in enumerate(zip(event_times, event_labels, event_label_meta)):
+    for i, (t, label, meta) in enumerate(
+        zip(event_times, event_labels, event_label_meta, strict=False)
+    ):
         category = (meta.get("category", "") or "").lower()
         if category not in category_events:
             category_events[category] = []
@@ -298,7 +298,9 @@ def events_to_simple_epochs(
         events.sort(key=lambda x: x[1])
 
     # Process each event
-    for i, (t, label, meta) in enumerate(zip(event_times, event_labels, event_label_meta)):
+    for i, (t, label, meta) in enumerate(
+        zip(event_times, event_labels, event_label_meta, strict=False)
+    ):
         category = (meta.get("category", "") or "").lower()
 
         # Determine semantic row

@@ -4,22 +4,111 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from collections.abc import Sequence
-from dataclasses import dataclass
 from typing import Any
 
-import pyqtgraph as pg
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_axes_compat import PyQtGraphAxesCompat
 from vasoanalyzer.ui.plots.pyqtgraph_line_compat import PyQtGraphLineCompat
+from vasoanalyzer.ui.plots.pyqtgraph_style import PLOT_AXIS_LABELS
 from vasoanalyzer.ui.plots.pyqtgraph_trace_view import PyQtGraphTraceView
+from vasoanalyzer.ui.plots.track_frame import TrackFrame
+from vasoanalyzer.ui.plots.y_axis_controls import YAxisControls, required_outer_gutter_px
 
 __all__ = ["PyQtGraphChannelTrack"]
 
 
 _log = logging.getLogger(__name__)
+
+Y_ZOOM_IN_FACTOR = 0.8
+Y_ZOOM_OUT_FACTOR = 1.25
+
+
+class _TrackGutterWidget(QWidget):
+    """Fixed-width gutter that hosts Y-axis controls and the channel label."""
+
+    _LABEL_MIN_TRACK_HEIGHT_PX = 36
+    _SHOW_COMPACT_GUTTER_LABEL = False
+
+    def __init__(self, *, label: str, width_px: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("ChannelTrackGutter")
+        self.setFixedWidth(max(int(width_px), 0))
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setAttribute(Qt.WA_PaintUnclipped, False)
+        self._root_layout = QVBoxLayout(self)
+        self._root_layout.setContentsMargins(0, 0, 0, 0)
+        self._root_layout.setSpacing(0)
+
+        self._menu_layout = QHBoxLayout()
+        self._menu_layout.setContentsMargins(0, 0, 0, 0)
+        self._menu_layout.setSpacing(0)
+
+        self._scale_layout = QHBoxLayout()
+        self._scale_layout.setContentsMargins(0, 0, 0, 0)
+        self._scale_layout.setSpacing(0)
+
+        self._channel_label = QLabel(str(label or ""), self)
+        self._channel_label.setObjectName("ChannelTrackGutterLabel")
+        self._channel_label.setAlignment(Qt.AlignCenter)
+        self._channel_label.setWordWrap(False)
+        font = self._channel_label.font()
+        font.setPointSizeF(8.0)
+        self._channel_label.setFont(font)
+        self._channel_label.hide()
+
+        self._root_layout.addLayout(self._menu_layout, 0)
+        self._root_layout.addLayout(self._scale_layout, 0)
+        self._root_layout.addStretch(1)
+
+    @staticmethod
+    def _rebuild_centered_row(layout: QHBoxLayout, widget: QWidget | None) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            child = item.widget()
+            if child is not None:
+                child.setParent(None)
+        layout.addStretch(1)
+        if widget is not None:
+            layout.addWidget(widget, 0, Qt.AlignHCenter | Qt.AlignTop)
+        layout.addStretch(1)
+
+    def attach_control_widgets(
+        self,
+        *,
+        menu_widget: QWidget | None,
+        scale_widget: QWidget | None,
+        controls_widget: QWidget | None,
+    ) -> None:
+        self._rebuild_centered_row(self._menu_layout, menu_widget)
+        self._rebuild_centered_row(self._scale_layout, scale_widget)
+        if controls_widget is not None:
+            controls_widget.hide()
+        self.layout_channel_label()
+
+    def set_channel_label(self, text: str) -> None:
+        self._channel_label.setText(str(text or ""))
+        self.layout_channel_label()
+
+    def layout_channel_label(self) -> None:
+        if not self._SHOW_COMPACT_GUTTER_LABEL:
+            self._channel_label.hide()
+            return
+        track_height = max(int(self.height()), 0)
+        text = str(self._channel_label.text() or "").strip()
+        if track_height < self._LABEL_MIN_TRACK_HEIGHT_PX or not text:
+            self._channel_label.hide()
+            return
+        self._channel_label.show()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        self.layout_channel_label()
 
 
 class PyQtGraphChannelTrack:
@@ -40,11 +129,27 @@ class PyQtGraphChannelTrack:
             if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}
             else "inner"
         )
+        y_label = PLOT_AXIS_LABELS.get(spec.component)
         self.view: PyQtGraphTraceView = PyQtGraphTraceView(
             mode=mode,
-            y_label=spec.label,
+            y_label=y_label,
             enable_opengl=enable_opengl,
         )
+        self.view.set_left_outer_gutter_px(0)
+        self._gutter_width_px = int(required_outer_gutter_px())
+        self._container = QWidget()
+        self._container_layout = QHBoxLayout(self._container)
+        self._container_layout.setContentsMargins(0, 0, 0, 0)
+        self._container_layout.setSpacing(0)
+        self._gutter_widget = _TrackGutterWidget(
+            label=str(spec.label or spec.track_id),
+            width_px=self._gutter_width_px,
+            parent=self._container,
+        )
+        self._container_layout.addWidget(self._gutter_widget, 0)
+        self._container_layout.addWidget(self.view.get_widget(), 1)
+        self._frame = TrackFrame(self._container)
+
         self._model: TraceModel | None = None
         self._height_ratio: float = max(float(spec.height_ratio), 0.05)
         self._visible = True
@@ -56,15 +161,40 @@ class PyQtGraphChannelTrack:
         self._sticky_ylim: tuple[float, float] | None = None
         self._last_time_span: float | None = None
         self._current_window: tuple[float, float] | None = None
+        self._autoscale_shrink_since: float | None = None
+        self._autoscale_shrink_ratio: float = 0.85
+        self._autoscale_shrink_delay_s: float = 0.3
 
         # Create matplotlib-compatible axes wrapper
         self._ax_compat: PyQtGraphAxesCompat | None = None
 
         # Create matplotlib-compatible line wrapper
         self._line_compat: PyQtGraphLineCompat | None = None
+        self._track_label: str = str(self.spec.label or self.id)
+
+        self._y_axis_controls = YAxisControls(
+            parent=self._gutter_widget,
+            get_state=lambda: bool(self.view.is_autoscale_enabled()),
+            set_state=self._set_continuous_autoscale,
+            autoscale_once=self.autoscale_y_once,
+            zoom_out_scale=self._zoom_out_y_scale_step,
+            zoom_in_scale=self._zoom_in_y_scale_step,
+            set_scale_dialog=self._prompt_set_y_scale,
+            reset_scale=self._reset_y_scale,
+        )
+        self.view.set_y_axis_controls_host(self._gutter_widget)
+        self.view.install_y_axis_controls(self._y_axis_controls)
+        self.view.set_y_axis_interaction_handlers(
+            autoscale_once=self.autoscale_y_once,
+            open_menu=self._open_y_axis_menu_at,
+            scale_about=self.scale_y_about,
+            drag_started=self._on_y_axis_drag_started,
+            drag_finished=self._on_y_axis_drag_finished,
+        )
 
         # Disable autoscale by default (user can enable in Plot Settings)
         self.view.set_autoscale_y(False)
+        self.refresh_header()
 
     @property
     def id(self) -> str:
@@ -79,9 +209,19 @@ class PyQtGraphChannelTrack:
         self._height_ratio = max(float(value), 0.05)
 
     @property
-    def widget(self) -> pg.PlotWidget:
-        """Get the PyQtGraph widget for layout."""
-        return self.view.get_widget()
+    def widget(self) -> QWidget:
+        """Get the container widget for layout."""
+        return self._frame
+
+    @property
+    def gutter_widget(self) -> QWidget:
+        """Get the fixed-width gutter widget for this track."""
+        return self._gutter_widget
+
+    def gutter_width_px(self) -> int:
+        """Return gutter width in logical pixels."""
+        width = int(self._gutter_widget.width())
+        return width if width > 0 else int(self._gutter_width_px)
 
     def set_xlim(self, xmin: float, xmax: float) -> None:
         """Set the visible X range for this track."""
@@ -140,7 +280,9 @@ class PyQtGraphChannelTrack:
         self._model = model
         self._sticky_ylim = None
         self._last_time_span = None
+        self._autoscale_shrink_since = None
         self.view.set_autoscale_y(False)
+        self._sync_header_state()
 
         # Check if component data is available, hide if not
         if self.spec.component == "outer" and model.outer_full is None:
@@ -156,18 +298,10 @@ class PyQtGraphChannelTrack:
         self.view.set_model(model)
 
         # Set axis labels
-        if self.spec.component == "outer":
-            label = self.spec.label or "Outer Diameter (µm)"
+        label = PLOT_AXIS_LABELS.get(self.spec.component) or self.spec.label
+        if label:
             self.view.set_ylabel(label)
-        elif self.spec.component == "inner":
-            label = self.spec.label or "Inner Diameter (µm)"
-            self.view.set_ylabel(label)
-        elif self.spec.component == "avg_pressure":
-            label = self.spec.label or "Avg Pressure (mmHg)"
-            self.view.set_ylabel(label)
-        elif self.spec.component == "set_pressure":
-            label = self.spec.label or "Set Pressure (mmHg)"
-            self.view.set_ylabel(label)
+        self.refresh_header()
 
         # Apply events if already set
         if self._events is not None:
@@ -224,8 +358,15 @@ class PyQtGraphChannelTrack:
     def set_visible(self, visible: bool) -> None:
         """Show/hide this track."""
         self._visible = bool(visible)
-        widget = self.view.get_widget()
-        widget.setVisible(self._visible)
+        self._frame.setVisible(self._visible)
+
+    def set_divider_visible(self, visible: bool) -> None:
+        """Show/hide the bottom divider line."""
+        self._frame.set_divider_visible(bool(visible))
+
+    def divider_visible(self) -> bool:
+        """Return whether the bottom divider line is visible."""
+        return self._frame.divider_visible()
 
     def set_click_handler(self, handler) -> None:
         """Assign click handler callback for this track's view."""
@@ -244,6 +385,83 @@ class PyQtGraphChannelTrack:
         if self.primary_line:
             self.primary_line.set_linewidth(width)
 
+    def refresh_header(self) -> None:
+        """Refresh track metadata and Y-control state for the current spec."""
+        label = (self.spec.label or self.id).strip()
+        if not label:
+            label = self.id
+        self._track_label = label
+        self._y_axis_controls.setAccessibleName(f"{label} Y scale controls")
+        self._gutter_widget.set_channel_label(label)
+        self._gutter_widget.layout_channel_label()
+        self._sync_header_state()
+
+    def autoscale_y_once(self, *, margin: float = 0.05) -> None:
+        """Autoscale this track Y-axis once (does not enable continuous autoscale)."""
+        self.view.set_autoscale_y(False)
+        self._autoscale_shrink_since = None
+        self.autoscale(margin=margin)
+        self._sync_header_state()
+
+    def _set_continuous_autoscale(self, enabled: bool) -> None:
+        self.view.set_autoscale_y(bool(enabled))
+        if enabled:
+            self._sticky_ylim = None
+            self._autoscale_shrink_since = None
+        else:
+            self._autoscale_shrink_since = None
+        self._sync_header_state()
+
+    def _prompt_set_y_scale(self) -> None:
+        current = self.get_ylim()
+        y_min, ok_min = QInputDialog.getDouble(
+            self._container,
+            "Set Y Scale",
+            "Y minimum:",
+            float(current[0]),
+            decimals=6,
+        )
+        if not ok_min:
+            return
+        y_max, ok_max = QInputDialog.getDouble(
+            self._container,
+            "Set Y Scale",
+            "Y maximum:",
+            float(current[1]),
+            decimals=6,
+        )
+        if not ok_max:
+            return
+        if not math.isfinite(y_min) or not math.isfinite(y_max):
+            return
+        if y_max <= y_min:
+            return
+        self.set_ylim(float(y_min), float(y_max))
+        self._sync_header_state()
+
+    def _zoom_out_y_scale_step(self) -> None:
+        self.scale_y_about(None, Y_ZOOM_OUT_FACTOR)
+
+    def _zoom_in_y_scale_step(self) -> None:
+        self.scale_y_about(None, Y_ZOOM_IN_FACTOR)
+
+    def _reset_y_scale(self) -> None:
+        self._sticky_ylim = None
+        self._autoscale_shrink_since = None
+        self.autoscale_y_once()
+
+    def _open_y_axis_menu_at(self, global_pos: QPoint) -> None:
+        self._y_axis_controls.popup_menu(global_pos)
+
+    def _on_y_axis_drag_started(self) -> None:
+        self._autoscale_shrink_since = None
+
+    def _on_y_axis_drag_finished(self) -> None:
+        self._sync_header_state()
+
+    def _sync_header_state(self) -> None:
+        self.view.refresh_y_axis_controls()
+
     def data_limits(self) -> tuple[float, float] | None:
         """Get Y-axis data limits for current window."""
         limits = self.view.data_limits()
@@ -260,15 +478,19 @@ class PyQtGraphChannelTrack:
 
         ymin, ymax = padded
         self._auto_margin = float(margin)
-        self.view.set_ylim(ymin, ymax)
-        self.view.set_autoscale_y(True)
+        # Lock in these limits as the sticky Y range so that subsequent window
+        # updates (scroll, pan, event jumps) do not overwrite the user's scale.
+        self._sticky_ylim = (float(ymin), float(ymax))
+        self.view.set_ylim(ymin, ymax, preserve_autoscale=True)
         return (ymin, ymax)
 
     def set_ylim(self, ymin: float, ymax: float) -> None:
         """Set Y-axis limits manually."""
         self._sticky_ylim = (float(ymin), float(ymax))
+        self._autoscale_shrink_since = None
         self.view.set_autoscale_y(False)
         self.view.set_ylim(ymin, ymax)
+        self._sync_header_state()
 
     def pan_y(self, delta: float) -> None:
         """Pan the Y-axis by a delta amount."""
@@ -276,8 +498,10 @@ class PyQtGraphChannelTrack:
         new_min = ymin + delta
         new_max = ymax + delta
         self._sticky_ylim = (float(new_min), float(new_max))
+        self._autoscale_shrink_since = None
         self.view.set_autoscale_y(False)
         self.view.set_ylim(new_min, new_max)
+        self._sync_header_state()
 
     def zoom_y(self, center: float, factor: float) -> None:
         """Zoom the Y-axis around a center point."""
@@ -297,8 +521,32 @@ class PyQtGraphChannelTrack:
         new_max = center + half
 
         self._sticky_ylim = (float(new_min), float(new_max))
+        self._autoscale_shrink_since = None
         self.view.set_autoscale_y(False)
         self.view.set_ylim(new_min, new_max)
+        self._sync_header_state()
+
+    def scale_y_about(self, center: float | None, factor: float) -> None:
+        """Scale Y around a center point; used by axis drag and scale-step actions."""
+        if not math.isfinite(float(factor)) or float(factor) <= 0.0:
+            return
+        if self.view.is_autoscale_enabled():
+            self.view.set_autoscale_y(False)
+        ymin, ymax = self.view.get_ylim()
+        span = float(ymax - ymin)
+        if span <= 0.0:
+            span = max(abs(float(ymin)), abs(float(ymax)), 1.0)
+        center_value = float(center) if center is not None and math.isfinite(float(center)) else None
+        if center_value is None:
+            center_value = (float(ymin) + float(ymax)) / 2.0
+        new_span = max(span * float(factor), 1e-6)
+        half = new_span * 0.5
+        new_min = center_value - half
+        new_max = center_value + half
+        self._sticky_ylim = (float(new_min), float(new_max))
+        self._autoscale_shrink_since = None
+        self.view.set_ylim(new_min, new_max)
+        self._sync_header_state()
 
     def get_xlim(self) -> tuple[float, float]:
         """Get current X-axis limits."""
@@ -414,6 +662,7 @@ class PyQtGraphChannelTrack:
         """Apply automatic Y-axis scaling."""
         track_id = getattr(self, "id", None) or getattr(self, "name", None) or repr(self)
         autoscale_enabled = bool(self.view.is_autoscale_enabled())
+        self._sync_header_state()
         _log.debug(
             "apply_auto_y track=%s autoscale_enabled=%s span_changed=%s",
             track_id,
@@ -422,6 +671,7 @@ class PyQtGraphChannelTrack:
         )
 
         if not autoscale_enabled:
+            self._autoscale_shrink_since = None
             if self._sticky_ylim is None and self._model is not None:
                 limits = self._compute_padded_limits()
                 if limits is not None:
@@ -478,10 +728,51 @@ class PyQtGraphChannelTrack:
             ymin -= margin
             ymax += margin
 
-        _log.debug(
-            "apply_auto_y track=%s setting ylim ymin=%.6f ymax=%.6f",
-            track_id,
-            ymin,
-            ymax,
-        )
-        self.view.set_ylim(ymin, ymax)
+        cur_min, cur_max = self.view.get_ylim()
+        cur_span = max(float(cur_max - cur_min), 1e-9)
+        new_span = max(float(ymax - ymin), 1e-9)
+        expands = float(ymin) < float(cur_min) or float(ymax) > float(cur_max)
+
+        if expands:
+            self._autoscale_shrink_since = None
+            _log.debug(
+                "apply_auto_y track=%s expand ylim=(%.6f, %.6f) from current=(%.6f, %.6f)",
+                track_id,
+                ymin,
+                ymax,
+                cur_min,
+                cur_max,
+            )
+            self.view.set_ylim(ymin, ymax)
+            return
+
+        if new_span < (cur_span * self._autoscale_shrink_ratio):
+            now = time.monotonic()
+            if self._autoscale_shrink_since is None:
+                self._autoscale_shrink_since = now
+                _log.debug(
+                    "apply_auto_y track=%s shrink candidate started current_span=%.6f new_span=%.6f",
+                    track_id,
+                    cur_span,
+                    new_span,
+                )
+                return
+            if (now - self._autoscale_shrink_since) < self._autoscale_shrink_delay_s:
+                _log.debug(
+                    "apply_auto_y track=%s shrink deferred elapsed=%.3f required=%.3f",
+                    track_id,
+                    now - self._autoscale_shrink_since,
+                    self._autoscale_shrink_delay_s,
+                )
+                return
+            self._autoscale_shrink_since = None
+            _log.debug(
+                "apply_auto_y track=%s shrink apply ylim=(%.6f, %.6f)",
+                track_id,
+                ymin,
+                ymax,
+            )
+            self.view.set_ylim(ymin, ymax)
+            return
+
+        self._autoscale_shrink_since = None

@@ -1,4 +1,4 @@
-# VasoAnalyzer User Guide (v2.3.0)
+# VasoAnalyzer User Guide (v3.0.0)
 
 This guide covers the typical end‑user workflow from first run to export.
 

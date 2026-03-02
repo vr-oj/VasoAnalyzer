@@ -231,13 +231,6 @@ class _SampleMetadataForm(_BaseForm):
         layout.addWidget(self.analysis_label)
         layout.addWidget(self.analysis_summary)
 
-        self.fig_label = QLabel("Figure Configurations")
-        self.figure_summary = QPlainTextEdit()
-        self.figure_summary.setReadOnly(True)
-        self.figure_summary.setPlaceholderText("No figure configuration saved.")
-        layout.addWidget(self.fig_label)
-        layout.addWidget(self.figure_summary)
-
         self.attachments_label = QLabel("Attachments")
         self.attachments_list = QListWidget()
         self.attachments_list.itemDoubleClicked.connect(self._on_open_attachment)
@@ -266,13 +259,11 @@ class _SampleMetadataForm(_BaseForm):
         if sample is None:
             self.notes_edit.clear()
             self.analysis_summary.clear()
-            self.figure_summary.clear()
             self.attachments_list.clear()
             self._set_edit_history(None)
         else:
             self.notes_edit.setPlainText(sample.notes or "")
             self._populate_analysis(sample)
-            self._populate_figures(sample.figure_configs)
             self._populate_attachments(sample.attachments)
             self._set_edit_history(sample)
         self._on_attachment_selection(self.attachments_list.currentRow())
@@ -300,15 +291,6 @@ class _SampleMetadataForm(_BaseForm):
             self.analysis_summary.setPlainText(preview)
         else:
             self.analysis_summary.clear()
-
-    def _populate_figures(self, figure_configs) -> None:
-        if not figure_configs:
-            self.figure_summary.clear()
-            return
-        lines = []
-        for key in figure_configs:
-            lines.append(str(key))
-        self.figure_summary.setPlainText("\n".join(lines))
 
     def _populate_attachments(self, attachments: Iterable[Attachment] | None) -> None:
         self.attachments_list.clear()

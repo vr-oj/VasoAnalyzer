@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 import logging
+from collections.abc import Sequence
 
 import pandas as pd
 from PyQt5.QtCore import (
     QAbstractTableModel,
     QEvent,
     QModelIndex,
+    QSignalBlocker,
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import QColor, QHelpEvent, QKeySequence, QPainter, QPalette, QPen, QPixmap, QResizeEvent
+from PyQt5.QtGui import (
+    QColor,
+    QHelpEvent,
+    QKeySequence,
+    QPainter,
+    QPalette,
+    QPixmap,
+    QResizeEvent,
+)
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -21,6 +30,7 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHeaderView,
     QMenu,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -28,6 +38,7 @@ from PyQt5.QtWidgets import (
     QToolTip,
 )
 
+from vasoanalyzer.ui.formatting.time_format import TimeFormatter, TimeMode, coerce_time_mode
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
 log = logging.getLogger(__name__)
@@ -38,8 +49,15 @@ DEFAULT_QMODEL_INDEX = QModelIndex()
 
 STATUS_COLUMN_INDEX = 0
 EVENT_COLUMN_INDEX = 1
+TIME_COLUMN_INDEX = 2
 DEFAULT_EVENT_COLUMN_WIDTH = 220
 DEFAULT_REVIEW_STATE = "UNREVIEWED"
+STATUS_COLUMN_WIDTH = 28
+TIME_COLUMN_WIDTH = 88
+ID_COLUMN_WIDTH = 86
+OD_COLUMN_WIDTH = 86
+PRESSURE_COLUMN_WIDTH = 84
+FRAME_COLUMN_WIDTH = 72
 
 HEADER_TOOLTIPS = {
     "Event": "Event label or description",
@@ -53,6 +71,64 @@ HEADER_TOOLTIPS = {
         "Trace/video sync is driven by event time (Time (s))."
     ),
 }
+
+COLUMN_KEY_ORDER = (
+    "review",
+    "event",
+    "time",
+    "id",
+    "od",
+    "avg_p",
+    "set_p",
+)
+
+COLUMN_LABELS = {
+    "review": "Review",
+    "event": "Event",
+    "time": "Time (s)",
+    "id": "ID (µm)",
+    "od": "OD (µm)",
+    "avg_p": "Avg P (mmHg)",
+    "set_p": "Set P (mmHg)",
+}
+
+COLUMN_KEY_FOR_LABEL = {label: key for key, label in COLUMN_LABELS.items()}
+COLUMN_KEY_FOR_LABEL["Time"] = "time"
+
+
+def build_event_table_column_contract(
+    *,
+    review_mode: bool,
+    show_id: bool,
+    show_od: bool,
+    show_avg_p: bool,
+    show_set_p: bool,
+    has_id: bool = True,
+    has_od: bool = True,
+    has_avg_p: bool = True,
+    has_set_p: bool = True,
+) -> list[str]:
+    """Return ordered column keys for the event table visibility contract."""
+    columns: list[str] = []
+    if review_mode:
+        columns.append("review")
+    columns.extend(("event", "time"))
+    if show_id and has_id:
+        columns.append("id")
+    if show_od and has_od:
+        columns.append("od")
+    if show_avg_p and has_avg_p:
+        columns.append("avg_p")
+    if show_set_p and has_set_p:
+        columns.append("set_p")
+    return columns
+
+
+def column_key_for_header(label: str | None) -> str | None:
+    """Map a column header label to its contract key."""
+    if not isinstance(label, str):
+        return None
+    return COLUMN_KEY_FOR_LABEL.get(label)
 
 
 class EventNameDelegate(QStyledItemDelegate):
@@ -89,10 +165,14 @@ class EventNameDelegate(QStyledItemDelegate):
 class NumericCellDelegate(QStyledItemDelegate):
     """Delegate for numeric columns with validation and hover states."""
 
+    def __init__(self, parent=None, *, decimals: int = 2) -> None:
+        super().__init__(parent)
+        self._decimals = max(0, int(decimals))
+
     def createEditor(self, parent, option: QStyleOptionViewItem, index: QModelIndex):
         """Create a QDoubleSpinBox editor for numeric input."""
         editor = QDoubleSpinBox(parent)
-        editor.setDecimals(2)
+        editor.setDecimals(self._decimals)
         editor.setMinimum(0.0)
         editor.setMaximum(99999.99)
         editor.setFrame(False)
@@ -105,7 +185,7 @@ class NumericCellDelegate(QStyledItemDelegate):
         value = index.data(Qt.EditRole)
         try:
             # Parse display value, removing formatting
-            value_str = str(value).replace(',', '').replace('—', '')
+            value_str = str(value).replace(",", "").replace("—", "")
             editor.setValue(float(value_str))
         except (TypeError, ValueError):
             editor.setValue(0.0)
@@ -118,9 +198,11 @@ class NumericCellDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
         """Custom painting with hover states for editable cells."""
         # Hover state for editable cells
-        if (option.state & QStyle.State_MouseOver and
-            index.flags() & Qt.ItemIsEditable):
-            painter.fillRect(option.rect, QColor("#172554"))  # Subtle dark blue hover
+        if option.state & QStyle.State_MouseOver and index.flags() & Qt.ItemIsEditable:
+            hover = CURRENT_THEME.get(
+                "table_editable_hover", CURRENT_THEME.get("table_hover", "#E5E7EB")
+            )
+            painter.fillRect(option.rect, QColor(hover))
 
         # Draw the default content
         super().paint(painter, option, index)
@@ -140,6 +222,29 @@ class EventTableModel(QAbstractTableModel):
         self._headers: list[str] = []
         self._review_states: list[str] = []
         self._status_icons: dict[str, QPixmap] = {}
+        self._time_formatter = TimeFormatter(TimeMode.SECONDS)
+        self._time_mode = TimeMode.SECONDS
+
+    def set_time_mode(self, mode: TimeMode | str) -> None:
+        resolved = coerce_time_mode(mode)
+        if resolved == self._time_mode:
+            return
+        self._time_mode = resolved
+        self._time_formatter.set_mode(resolved)
+        if self.rowCount() > 0 and self.columnCount() > TIME_COLUMN_INDEX:
+            top_left = self.index(0, TIME_COLUMN_INDEX)
+            bottom_right = self.index(self.rowCount() - 1, TIME_COLUMN_INDEX)
+            self.dataChanged.emit(top_left, bottom_right, [Qt.DisplayRole])
+        if self.columnCount() > TIME_COLUMN_INDEX:
+            self.headerDataChanged.emit(Qt.Horizontal, TIME_COLUMN_INDEX, TIME_COLUMN_INDEX)
+
+    def time_mode(self) -> TimeMode:
+        return self._time_mode
+
+    def _display_header(self, header: str) -> str:
+        if header == "Time (s)" and self._time_mode != TimeMode.SECONDS:
+            return "Time"
+        return header
 
     # Qt model API -----------------------------------------------------
     def rowCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
@@ -168,7 +273,7 @@ class EventTableModel(QAbstractTableModel):
             if 0 <= data_idx < len(self._headers):
                 header = self._headers[data_idx]
                 if role == Qt.DisplayRole:
-                    return header
+                    return self._display_header(header)
                 if role == Qt.ToolTipRole:
                     return HEADER_TOOLTIPS.get(header)
                 if role == Qt.TextAlignmentRole:
@@ -458,24 +563,27 @@ class EventTableModel(QAbstractTableModel):
             return value
         if value is None:
             return "—"
+        header_label = None
+        data_idx = column - 1
+        if 0 <= data_idx < len(self._headers):
+            header_label = self._headers[data_idx]
 
-        # Determine if this is the frame column (always last)
-        last_col_idx = self.columnCount() - 1
-        is_frame_column = column == last_col_idx
-
-        if is_frame_column:
-            try:
-                return f"{int(round(float(value))):,}"
-            except (TypeError, ValueError):
-                return value
+        if isinstance(header_label, str):
+            lowered = header_label.lower()
+            if "frame" in lowered or "trace idx" in lowered:
+                try:
+                    return f"{int(round(float(value))):,}"
+                except (TypeError, ValueError):
+                    return value
 
         try:
             num = float(value)
         except (TypeError, ValueError):
             return value
 
-        # Time, diameter, and pressure columns get 2 decimal places
-        if column >= 2:  # All numeric columns except status/event label
+        if header_label == "Time (s)" or column == TIME_COLUMN_INDEX:
+            return self._time_formatter.format(num)
+        if column >= TIME_COLUMN_INDEX:  # All numeric columns except status/event label
             return f"{num:,.2f}"
 
         return f"{num:,}"
@@ -542,35 +650,33 @@ class EventTableWidget(QTableView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setFrameShape(QFrame.NoFrame)
         self.setSortingEnabled(True)  # Enable column sorting
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # Set up delegates for different column types
         self._event_delegate = EventNameDelegate(self)
         self.setItemDelegateForColumn(EVENT_COLUMN_INDEX, self._event_delegate)
 
         # Numeric delegate for Time, ID, OD, and Pressure columns
-        self._numeric_delegate = NumericCellDelegate(self)
-        # Time column is always at index 2 (status=0, event=1, time=2)
-        self.setItemDelegateForColumn(2, self._numeric_delegate)
-        # ID column is always at index 3
-        self.setItemDelegateForColumn(3, self._numeric_delegate)
-        # OD and Pressure columns are set dynamically in _apply_numeric_delegates()
+        self._time_delegate = NumericCellDelegate(self, decimals=3)
+        self._numeric_delegate = NumericCellDelegate(self, decimals=2)
+        self._apply_numeric_delegates()
 
         self._preferred_event_width = DEFAULT_EVENT_COLUMN_WIDTH
 
         h_header = self.horizontalHeader()
-        h_header.setSectionResizeMode(QHeaderView.ResizeToContents)
-        h_header.setMinimumSectionSize(40)
+        h_header.setSectionResizeMode(QHeaderView.Fixed)
+        h_header.setMinimumSectionSize(24)
         h_header.setStretchLastSection(False)
-        h_header.setDefaultSectionSize(110)
-        h_header.setMinimumHeight(24)
+        h_header.setDefaultSectionSize(84)
+        h_header.setMinimumHeight(28)
         if h_header.count() > EVENT_COLUMN_INDEX:
             h_header.resizeSection(EVENT_COLUMN_INDEX, self._preferred_event_width)
             h_header.setSectionResizeMode(EVENT_COLUMN_INDEX, QHeaderView.Interactive)
 
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.Fixed)
-        v_header.setDefaultSectionSize(28)  # Increased from 24 for better visual hierarchy
-        v_header.setMinimumWidth(36)
+        v_header.setDefaultSectionSize(26)
+        v_header.setMinimumWidth(STATUS_COLUMN_WIDTH + 4)
         v_header.setDefaultAlignment(Qt.AlignCenter)
 
         self.clicked.connect(self._emit_cell_clicked)
@@ -578,19 +684,24 @@ class EventTableWidget(QTableView):
     def apply_theme(self) -> None:
         log.debug("[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)=%s", id(self))
         palette = self.palette()
-        header_bg = CURRENT_THEME.get("button_active_bg", CURRENT_THEME["button_bg"])
-        header_text = CURRENT_THEME["text"]
-        hover = CURRENT_THEME.get("button_hover_bg", header_bg)
-        is_dark = bool(CURRENT_THEME.get("is_dark", False))
+        header_bg = CURRENT_THEME.get(
+            "panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
+        )
+        header_text = CURRENT_THEME.get("text", palette.color(QPalette.Text).name())
+        hover = CURRENT_THEME.get("table_hover", CURRENT_THEME.get("button_hover_bg", header_bg))
 
         base = CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
         alt = CURRENT_THEME.get("alternate_bg", base)
-        selection = CURRENT_THEME["selection_bg"]
+        selection = CURRENT_THEME.get("selection_bg", palette.color(QPalette.Highlight).name())
+        selection_text = CURRENT_THEME.get(
+            "highlighted_text", palette.color(QPalette.HighlightedText).name()
+        )
         grid_base = palette.color(QPalette.Mid)
-        grid = QColor(
-            grid_base.red(), grid_base.green(), grid_base.blue(), int(0.35 * 255)
-        ).name(QColor.HexArgb)
-        header_border = CURRENT_THEME.get("table_header_border", grid_base.name())
+        grid = CURRENT_THEME.get("table_header_border", grid_base.name())
+        header_border = CURRENT_THEME.get(
+            "panel_border", CURRENT_THEME.get("table_header_border", grid_base.name())
+        )
+        row_hover = CURRENT_THEME.get("table_hover", base)
 
         header = self.horizontalHeader()
         header_style = f"""
@@ -598,11 +709,11 @@ class EventTableWidget(QTableView):
                 background-color: {header_bg};
                 color: {header_text};
                 font-weight: 600;
-                font-size: 11pt;
-                padding: 6px 10px;
+                font-size: 9.5pt;
+                padding: 5px 8px;
                 border: none;
                 border-right: 1px solid {header_border};
-                border-bottom: 2px solid {grid};
+                border-bottom: 1px solid {header_border};
             }}
             QHeaderView::section:hover {{
                 background-color: {hover};
@@ -611,22 +722,25 @@ class EventTableWidget(QTableView):
                 background-color: {header_bg};
                 border: none;
                 border-right: 1px solid {header_border};
-                border-bottom: 2px solid {grid};
+                border-bottom: 1px solid {header_border};
             }}
         """
         header.setStyleSheet(header_style)
 
         v_header = self.verticalHeader()
-        v_header_bg = CURRENT_THEME.get("button_active_bg", CURRENT_THEME["button_bg"])
+        v_header_bg = header_bg
         v_header_style = (
             f"QHeaderView::section {{background-color: {v_header_bg}; color: {header_text}; "
-            "font-weight: 500; padding: 0px 6px; border: none;}"
+            f"font-weight: 500; padding: 0px 5px; border: none; border-right: 1px solid {header_border};}}"
         )
         v_header.setStyleSheet(v_header_style)
         body_style = (
             f"QTableView {{alternate-background-color: {alt}; background-color: {base}; "
-            f"gridline-color: {grid}; border: none;}} "
-            f"QTableView::item:selected{{background-color: {selection}; color: {header_text};}}"
+            f"gridline-color: {grid}; border: 1px solid {header_border}; border-radius: 3px;}} "
+            f"QTableView::item{{padding: 1px 6px;}} "
+            f"QTableView::item:hover{{background-color: {row_hover};}} "
+            f"QTableView::item:selected{{background-color: {selection}; color: {selection_text};}} "
+            f"QTableView::item:selected:hover{{background-color: {selection}; color: {selection_text};}}"
         )
         self.setStyleSheet(body_style)
         log.debug(
@@ -637,8 +751,33 @@ class EventTableWidget(QTableView):
 
         model = self.model()
         if model and model.columnCount() > 0:
-            self._apply_column_resize_modes()
-            self.refresh_column_widths()
+            self._apply_numeric_delegates()
+            self.apply_viewport_fit_policy()
+
+    def apply_column_contract(self, column_keys: Sequence[str]) -> None:
+        """Show/hide columns to match the column visibility contract."""
+        model = self.model()
+        if model is None or model.columnCount() == 0:
+            return
+
+        visible_keys = set(column_keys)
+        h_scroll = self.horizontalScrollBar()
+        previous_scroll = h_scroll.value()
+        blocker = QSignalBlocker(h_scroll)
+        try:
+            for col in range(model.columnCount()):
+                if col == STATUS_COLUMN_INDEX:
+                    self.setColumnHidden(col, "review" not in visible_keys)
+                    continue
+                header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+                key = column_key_for_header(header_label)
+                if key is None:
+                    continue
+                self.setColumnHidden(col, key not in visible_keys)
+            self.apply_viewport_fit_policy()
+            h_scroll.setValue(min(previous_scroll, h_scroll.maximum()))
+        finally:
+            del blocker
 
     def _emit_cell_clicked(self, index: QModelIndex) -> None:
         if index.isValid():
@@ -744,31 +883,81 @@ class EventTableWidget(QTableView):
         model = self.model()
         if not model or model.columnCount() == 0:
             return
-
-        header = self.horizontalHeader()
-        for col in range(model.columnCount()):
-            mode = header.sectionResizeMode(col)
-            if mode == QHeaderView.ResizeToContents:
-                self.resizeColumnToContents(col)
         self._fit_columns_to_viewport()
 
     def _fit_columns_to_viewport(self) -> None:
-        """Fit columns to viewport - columns already sized to content, no extra stretching needed."""
-        # All columns are set to ResizeToContents, so they automatically fit their content
-        # No need to add extra width to fill the viewport
-        pass
+        """Fit columns to viewport - event column handles stretch."""
+        return
 
     def _apply_column_resize_modes(self) -> None:
+        self.apply_viewport_fit_policy()
+
+    def apply_viewport_fit_policy(self) -> None:
+        """Sets column resize modes and widths so the table fits the viewport."""
         model = self.model()
-        if not model or model.columnCount() == 0:
+        if model is None or model.columnCount() == 0:
             return
 
         header = self.horizontalHeader()
         header.setStretchLastSection(False)
 
-        # Set all columns to resize to their content for a tight fit
+        event_col = None
+        stretch_fallback = None
         for col in range(model.columnCount()):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            if col == STATUS_COLUMN_INDEX:
+                header.setSectionResizeMode(col, QHeaderView.Fixed)
+                self.setColumnWidth(col, STATUS_COLUMN_WIDTH)
+                continue
+
+            header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            key = column_key_for_header(header_label)
+            if key is None:
+                continue
+
+            if not self.isColumnHidden(col) and stretch_fallback is None:
+                stretch_fallback = col
+
+            if key == "event":
+                event_col = col
+                header.setSectionResizeMode(col, QHeaderView.Stretch)
+                continue
+
+            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            if key == "time":
+                self.setColumnWidth(col, TIME_COLUMN_WIDTH)
+            elif key == "id":
+                self.setColumnWidth(col, ID_COLUMN_WIDTH)
+            elif key == "od":
+                self.setColumnWidth(col, OD_COLUMN_WIDTH)
+            elif key in ("avg_p", "set_p"):
+                self.setColumnWidth(col, PRESSURE_COLUMN_WIDTH)
+
+        if event_col is None and stretch_fallback is not None:
+            header.setSectionResizeMode(stretch_fallback, QHeaderView.Stretch)
+
+    def _apply_numeric_delegates(self) -> None:
+        model = self.model()
+        if model is None or model.columnCount() == 0:
+            return
+
+        for col in range(model.columnCount()):
+            if col in (STATUS_COLUMN_INDEX, EVENT_COLUMN_INDEX):
+                continue
+            header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            if header_label == "Time (s)" or col == TIME_COLUMN_INDEX:
+                self.setItemDelegateForColumn(col, self._time_delegate)
+            else:
+                self.setItemDelegateForColumn(col, self._numeric_delegate)
+
+    def _column_index_for_header(self, label: str) -> int | None:
+        model = self.model()
+        if model is None:
+            return None
+        for col in range(model.columnCount()):
+            header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            if header_label == label:
+                return col
+        return None
 
     def _copy_selection_to_clipboard(self) -> None:
         indexes = self.selectedIndexes()
@@ -865,7 +1054,6 @@ class EventTableWidget(QTableView):
                 # Wrap to start of next row
                 next_row += 1
                 next_col = 0
-
 
     def _cycle_review_status(self, row: int) -> None:
         """Cycle through status states."""

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -78,11 +79,37 @@ def setup_production_logging(
     error_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(error_handler)
 
-    # Console output (configurable level, default INFO+)
+    # Console output (configurable level, default INFO+).
+    # Set VA_DEBUG=1 to lower to DEBUG for all vasoanalyzer modules.
+    # Set VA_DEBUG=excel to show only Excel/wizard debug messages.
+    va_debug = os.environ.get("VA_DEBUG", "").strip().lower()
+    if va_debug in ("1", "true", "yes", "all"):
+        effective_console_level = logging.DEBUG
+    else:
+        effective_console_level = console_level
+
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(console_level)
+    console_handler.setLevel(effective_console_level)
     console_handler.setFormatter(simple_formatter)
     vaso_logger.addHandler(console_handler)
+
+    # When VA_DEBUG=excel, show DEBUG only for Excel/wizard modules
+    if va_debug == "excel":
+        for excel_module in (
+            "vasoanalyzer.excel",
+            "vasoanalyzer.excel.template_metadata",
+            "vasoanalyzer.ui.dialogs.excel_map_wizard",
+            "vasoanalyzer.ui.dialogs.excel_template_export_dialog",
+        ):
+            excel_log = logging.getLogger(excel_module)
+            excel_log.setLevel(logging.DEBUG)
+            # Add a dedicated console handler so DEBUG from these modules
+            # always reaches the terminal regardless of the main level filter.
+            dbg_handler = logging.StreamHandler(sys.stdout)
+            dbg_handler.setLevel(logging.DEBUG)
+            dbg_handler.setFormatter(simple_formatter)
+            excel_log.addHandler(dbg_handler)
+            excel_log.propagate = False  # avoid double-printing
 
     # Reduce console noise from chatty modules; DEBUG still goes to file
     noisy_modules = [
@@ -97,16 +124,12 @@ def setup_production_logging(
     for name in noisy_modules:
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    # Ensure plotting modules emit DEBUG logs (e.g., [RANGE DEBUG] helpers)
+    # Plotting modules: INFO in production (DEBUG still captured to file via root handler)
     plot_logger = logging.getLogger("vasoanalyzer.ui.plots")
-    plot_logger.setLevel(logging.DEBUG)
+    plot_logger.setLevel(logging.INFO)
 
     trace_view_logger = logging.getLogger("vasoanalyzer.ui.trace_view")
-    trace_view_logger.setLevel(logging.DEBUG)
-
-    # Enable DEBUG logs for the figure composer to verify canvas initialization and memory
-    composer_logger = logging.getLogger("vasoanalyzer.ui.mpl_composer.composer_window")
-    composer_logger.setLevel(logging.DEBUG)
+    trace_view_logger.setLevel(logging.INFO)
 
     # Log startup message
     log = logging.getLogger(__name__)
@@ -155,5 +178,3 @@ def get_log_directory(app_name: str = "VasoAnalyzer") -> Path:
     return _get_log_directory(app_name)
 
 
-# Import os for environment variables
-import os

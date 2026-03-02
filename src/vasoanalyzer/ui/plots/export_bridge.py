@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
@@ -104,8 +103,7 @@ class MatplotlibExportRenderer:
 
         # Calculate height ratios
         height_ratios = [
-            view_state.height_ratios.get(track_id, 1.0)
-            for track_id in view_state.visible_tracks
+            view_state.height_ratios.get(track_id, 1.0) for track_id in view_state.visible_tracks
         ]
 
         # Create subplot grid
@@ -184,7 +182,7 @@ class MatplotlibExportRenderer:
             ymin = window.inner_min
             ymax = window.inner_max
 
-            ax.plot(time, mean, 'k-', linewidth=1.5, label="Inner Diameter")
+            ax.plot(time, mean, "k-", linewidth=1.5, label="Inner Diameter")
 
             # Add uncertainty band if requested
             if view_state.style.get("show_uncertainty", False):

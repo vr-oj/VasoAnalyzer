@@ -133,14 +133,16 @@ def has_vaso_metadata(wb: Workbook, sheet_name: str | None = None) -> bool:
             props = wb.custom_doc_props
             if props and "VasoAnalyzerMetadata" in props:
                 return True
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Could not read custom_doc_props: %s", exc)
 
     return False
 
 
 def read_template_metadata(
-    path: str | Path, wb: Workbook | None = None
+    path: str | Path,
+    wb: Workbook | None = None,
+    sheet_name: str | None = None,
 ) -> TemplateMetadata | None:
     """
     Read template metadata from an Excel file.
@@ -153,6 +155,9 @@ def read_template_metadata(
     Args:
         path: Path to Excel file
         wb: Optional pre-loaded Workbook (if None, will load from path)
+        sheet_name: Optional sheet name to use instead of the active sheet.
+            Useful when the workbook has multiple sheets and the caller knows
+            which sheet the user selected.
 
     Returns:
         TemplateMetadata if successful, None if no metadata found
@@ -173,7 +178,10 @@ def read_template_metadata(
             logger.error(f"Failed to load workbook {path}: {exc}")
             raise
 
-    ws = wb.active
+    if sheet_name and sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+    else:
+        ws = wb.active
     if ws is None:
         raise ValueError("Workbook has no active sheet")
 
@@ -260,27 +268,35 @@ def _read_from_metadata_sheet(wb: Workbook, ws: Worksheet) -> TemplateMetadata |
 
 
 def _read_from_named_ranges(wb: Workbook, ws: Worksheet) -> TemplateMetadata | None:
-    """Read metadata from named ranges (legacy format)."""
+    """Read metadata from named ranges (legacy format).
+
+    Named ranges may point to any sheet in the workbook (not just the active
+    sheet), so we resolve the target sheet from the destination rather than
+    comparing against ``ws.title``.
+    """
     from openpyxl.utils import range_boundaries
 
     try:
-        # Get named ranges
-        date_range = None
-        values_range = None
+        date_range: str | None = None
+        values_range: str | None = None
+        target_ws: Worksheet = ws  # default to active sheet
 
         for name, defn in wb.defined_names.items():
             if name == "VASO_DATES_ROW":
                 destinations = list(defn.destinations)
                 if destinations:
                     sheet_name, coord = destinations[0]
-                    if sheet_name == ws.title:
-                        date_range = coord
+                    date_range = coord
+                    # Use the sheet the named range actually points to
+                    if sheet_name in wb.sheetnames:
+                        target_ws = wb[sheet_name]
             elif name == "VASO_VALUES_BLOCK":
                 destinations = list(defn.destinations)
                 if destinations:
                     sheet_name, coord = destinations[0]
-                    if sheet_name == ws.title:
-                        values_range = coord
+                    values_range = coord
+                    if sheet_name in wb.sheetnames:
+                        target_ws = wb[sheet_name]
 
         if not date_range or not values_range:
             return None
@@ -303,12 +319,13 @@ def _read_from_named_ranges(wb: Workbook, ws: Worksheet) -> TemplateMetadata | N
 
         # Detect event rows
         metadata.event_rows = _detect_event_rows(
-            ws, v_min_row, v_max_row, label_column=1
+            target_ws, v_min_row, v_max_row, label_column=1
         )
 
-        # Detect date columns
+        # Detect date columns (formula columns and label column excluded automatically)
         metadata.date_columns = _detect_date_columns(
-            ws, d_min_row, d_min_col, d_max_col, v_min_row, v_max_row
+            target_ws, d_min_row, d_min_col, d_max_col, v_min_row, v_max_row,
+            label_column=1,
         )
 
         return metadata
@@ -323,27 +340,40 @@ def _infer_from_structure(wb: Workbook, ws: Worksheet) -> TemplateMetadata | Non
     Infer template structure by scanning the worksheet.
 
     Heuristics:
-    - Date row is first row with multiple non-empty cells
-    - Event rows start after date row
-    - Label column is first column (A)
+    - Scan column B for the first row containing a real numeric value (float/int);
+      that row is the start of the data block, and the row just before it is the
+      date/experiment-ID row.  This correctly skips any text-only header rows
+      above the date row (e.g. Scinote ID rows, title rows).
+    - Fall back to "first row with ≥2 non-empty cells" if no numeric row found.
+    - Event rows start immediately after the date row.
+    - Label column is first column (A).
     """
     try:
-        # Find date row (first row with multiple populated cells)
-        date_row = None
-        for row_idx in range(1, min(10, ws.max_row + 1)):
-            non_empty = sum(
-                1
-                for cell in ws[row_idx]
-                if cell.value not in (None, "")
-            )
-            if non_empty >= 2:
-                date_row = row_idx
+        # Find the first row where column B contains a real number (start of data).
+        # datetimes, strings, and None are not considered numeric here.
+        data_start_row: int | None = None
+        for row_idx in range(2, min(20, ws.max_row + 1)):
+            val = ws.cell(row=row_idx, column=2).value
+            if isinstance(val, (int, float)) and not isinstance(val, bool):
+                data_start_row = row_idx
                 break
+
+        if data_start_row and data_start_row > 1:
+            # The row immediately before the data is the date/experiment-ID row.
+            date_row: int | None = data_start_row - 1
+        else:
+            # Fallback: first row with ≥2 non-empty cells.
+            date_row = None
+            for row_idx in range(1, min(10, ws.max_row + 1)):
+                non_empty = sum(1 for cell in ws[row_idx] if cell.value not in (None, ""))
+                if non_empty >= 2:
+                    date_row = row_idx
+                    break
 
         if not date_row:
             return None
 
-        # Find event rows (rows with non-empty first cell after date row)
+        # Event rows start immediately after the date row.
         event_rows_start = date_row + 1
         event_rows_end = min(ws.max_row, event_rows_start + 50)
 
@@ -380,6 +410,27 @@ def _infer_from_structure(wb: Workbook, ws: Worksheet) -> TemplateMetadata | Non
 # ---------------------------------------------------------------------------
 
 
+def _column_is_formulaic(
+    ws: Worksheet, col_idx: int, start_row: int, end_row: int
+) -> bool:
+    """Return True if ALL non-empty cells in a column contain formulas.
+
+    A 100% threshold is used so that data columns which also contain some
+    formula-calculated rows (e.g. '% Constriction') are not misclassified as
+    statistics columns.  Pure stats columns (MEAN/SEM/N) will have formulas in
+    every non-empty data cell and are correctly filtered.
+    """
+    total = 0
+    formula_count = 0
+    for row in range(start_row, end_row + 1):
+        val = ws.cell(row=row, column=col_idx).value
+        if val is not None:
+            total += 1
+            if isinstance(val, str) and val.startswith("="):
+                formula_count += 1
+    return total > 0 and formula_count == total
+
+
 def _detect_event_rows(
     ws: Worksheet, start_row: int, end_row: int, label_column: int = 1
 ) -> list[EventRowMetadata]:
@@ -397,16 +448,17 @@ def _detect_event_rows(
         if not label:
             continue
 
-        # Check if header (bold + filled)
+        # Check if header: '#' prefix convention (lab templates) OR bold+filled cell
         is_header = False
-        if cell.font and cell.font.bold:
+        if label.startswith("#"):
+            is_header = True
+            label = label[1:].strip()
+        elif cell.font and cell.font.bold:
             if cell.fill and isinstance(cell.fill, PatternFill):
                 if cell.fill.patternType and cell.fill.patternType != "none":
                     is_header = True
 
-        rows.append(
-            EventRowMetadata(row=row_idx, label=label, is_header=is_header)
-        )
+        rows.append(EventRowMetadata(row=row_idx, label=label, is_header=is_header))
 
     return rows
 
@@ -418,14 +470,33 @@ def _detect_date_columns(
     end_col: int,
     event_start_row: int,
     event_end_row: int,
+    label_column: int = 1,
 ) -> list[DateColumnMetadata]:
-    """Detect date columns in the worksheet."""
+    """Detect date columns in the worksheet, skipping formula-only columns (e.g. MEAN/SEM/N)."""
     from openpyxl.utils import get_column_letter
+
+    _STATS_HEADERS = frozenset(
+        {"mean", "sem", "n", "stdev", "std dev", "std", "sd", "average",
+         "count", "median", "se", "ci", "cv"}
+    )
 
     columns = []
     for col_idx in range(start_col, end_col + 1):
         if col_idx > ws.max_column:
             break
+
+        # Skip the label column (column A) — it contains row labels, not data
+        if col_idx == label_column:
+            continue
+
+        # Skip columns with a known statistics header in the date row
+        header_val = ws.cell(row=date_row, column=col_idx).value
+        if isinstance(header_val, str) and header_val.strip().lower() in _STATS_HEADERS:
+            continue
+
+        # Skip columns whose data cells are all formulas (calculated stats like MEAN/SEM/N)
+        if _column_is_formulaic(ws, col_idx, event_start_row, event_end_row):
+            continue
 
         cell = ws.cell(row=date_row, column=col_idx)
         value = str(cell.value) if cell.value not in (None, "") else None
@@ -498,9 +569,7 @@ def invoke_export_metadata(path: str | Path) -> bool:
         return False
 
 
-def read_sheet_specific_metadata(
-    wb: Workbook, sheet_name: str
-) -> TemplateMetadata | None:
+def read_sheet_specific_metadata(wb: Workbook, sheet_name: str) -> TemplateMetadata | None:
     """
     Read metadata for a specific worksheet.
 

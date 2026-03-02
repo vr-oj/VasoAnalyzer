@@ -38,7 +38,11 @@ class ChannelTrack:
         self.spec = spec
         self.ax = ax
         self.canvas = canvas
-        mode = spec.component if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"} else "inner"
+        mode = (
+            spec.component
+            if spec.component in {"inner", "outer", "dual", "avg_pressure", "set_pressure"}
+            else "inner"
+        )
         self.view = TraceView(ax, canvas, mode=mode, y_label=spec.label)
         self._model: TraceModel | None = None
         self._height_ratio = max(spec.height_ratio, 0.05)

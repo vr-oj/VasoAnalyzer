@@ -4,7 +4,7 @@ Application preferences dialog for VasoAnalyzer.
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QSettings, Qt
+from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -146,7 +146,7 @@ class PreferencesDialog(QDialog):
         help_label = QLabel(
             "<small><b>Recommended (default):</b> Single-file format (.vaso) is crash-proof, "
             "works safely with cloud storage (Dropbox, iCloud, Google Drive), and is easy to "
-            "share and backup like LabChart or Prism files. Uses snapshot-based saves internally.</small>"
+            "share and backup like other analysis project files. Uses snapshot-based saves internally.</small>"
         )
         help_label.setWordWrap(True)
         help_label.setStyleSheet("color: #666;")
@@ -418,9 +418,7 @@ class PreferencesDialog(QDialog):
         self.autosave_interval_combo.setCurrentIndex(interval_index)
 
         # Snapshots
-        self.snapshot_count_spin.setValue(
-            self.settings.value("snapshots/keep_count", 3, type=int)
-        )
+        self.snapshot_count_spin.setValue(self.settings.value("snapshots/keep_count", 3, type=int))
         embed = self.settings.value("snapshots/embed_stacks", False, type=bool)
         self.embed_snapshots_checkbox.setChecked(bool(embed))
 
@@ -461,9 +459,7 @@ class PreferencesDialog(QDialog):
 
         # Snapshots
         self.settings.setValue("snapshots/keep_count", self.snapshot_count_spin.value())
-        self.settings.setValue(
-            "snapshots/embed_stacks", self.embed_snapshots_checkbox.isChecked()
-        )
+        self.settings.setValue("snapshots/embed_stacks", self.embed_snapshots_checkbox.isChecked())
 
         # Advanced
         self.settings.setValue("recovery/enabled", self.auto_recovery_checkbox.isChecked())
@@ -483,15 +479,8 @@ class PreferencesDialog(QDialog):
             from vasoanalyzer.ui import theme as theme_module
 
             try:
-                theme_module.set_theme_mode(mode, persist=True)
+                theme_module.apply_theme(mode, persist=True)
             except Exception:
                 pass
-            parent = self.parent()
-            apply_theme = getattr(parent, "apply_theme", None)
-            if callable(apply_theme):
-                try:
-                    apply_theme(mode, persist=False)
-                except Exception:
-                    pass
 
         super().accept()

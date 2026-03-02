@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional, Protocol, Set
+from typing import Protocol
 
 
 @dataclass
@@ -13,8 +14,8 @@ class ClickContext:
     x_data: float
     y_data: float
     button: str  # "left", "right", "middle"
-    modifiers: Set[str]  # e.g. {"shift", "ctrl"}
-    track_id: Optional[str]
+    modifiers: set[str]  # e.g. {"shift", "ctrl"}
+    track_id: str | None
     in_gutter: bool
     double: bool
 
@@ -25,7 +26,7 @@ class MoveContext:
 
     x_data: float
     y_data: float
-    track_id: Optional[str]
+    track_id: str | None
 
 
 @dataclass
@@ -39,18 +40,15 @@ class ScrollContext:
     x_data: float
     y_data: float
     delta_y: float
-    track_id: Optional[str]
-    modifiers: Set[str]
+    track_id: str | None
+    modifiers: set[str]
 
 
 class InteractionHost(Protocol):
     """Abstract interface for plot backends to expose user interactions."""
 
-    def on_click(self, handler: Callable[[ClickContext], None]) -> None:
-        ...
+    def on_click(self, handler: Callable[[ClickContext], None]) -> None: ...
 
-    def on_move(self, handler: Callable[[MoveContext], None]) -> None:
-        ...
+    def on_move(self, handler: Callable[[MoveContext], None]) -> None: ...
 
-    def on_scroll(self, handler: Callable[[ScrollContext], None]) -> None:
-        ...
+    def on_scroll(self, handler: Callable[[ScrollContext], None]) -> None: ...

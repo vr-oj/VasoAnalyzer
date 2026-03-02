@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import pyqtgraph as pg
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
-
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +91,13 @@ class PanOnlyViewBox(pg.ViewBox):
             x_min = x_max - span
         return x_min, x_max
 
+    def _is_host_driven_xmode(self) -> bool:
+        return (
+            getattr(self, "_request_pan_x", None) is not None
+            or getattr(self, "_request_zoom_x", None) is not None
+            or getattr(self, "_request_window", None) is not None
+        )
+
     def wheelEvent(self, ev: QGraphicsSceneWheelEvent, axis=None, **_ignored) -> None:
         """Pan horizontally on wheel/trackpad using public APIs only."""
         try:
@@ -113,6 +120,20 @@ class PanOnlyViewBox(pg.ViewBox):
 
         direction = -1 if angle_delta > 0 else 1
         shift = direction * 0.10 * span
+
+        if self._is_host_driven_xmode():
+            pan_request = getattr(self, "_request_pan_x", None)
+            if callable(pan_request):
+                with contextlib.suppress(Exception):
+                    pan_request(float(shift), "wheel.pan")
+            else:
+                log.warning("Blocked direct X-range mutation in host-driven mode.")
+            try:
+                self.sigWheelEvent.emit(ev)
+            except Exception:
+                log.exception("Error emitting sigWheelEvent from PanOnlyViewBox")
+            ev.accept()
+            return
 
         new_x_min = x_min + shift
         new_x_max = x_max + shift

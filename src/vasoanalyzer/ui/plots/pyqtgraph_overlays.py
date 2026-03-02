@@ -5,10 +5,9 @@ from __future__ import annotations
 import contextlib
 import math
 import time
-from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QColor
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -29,8 +28,16 @@ class PyQtGraphTimeCursorOverlay:
         self._cursor_lines: list[pg.InfiniteLine] = []
         self._visible: bool = False
         self._time: float | None = None
-        self._color: str = "#FF0000"
-        self._width: float = 1.5
+        self._color: str = str(CURRENT_THEME.get("time_cursor", "#FB0303"))
+        self._width: float = 4.0
+        self._alpha: float = 200.0 / 255.0
+
+    def _make_pen(self):
+        qcolor = QColor(self._color)
+        if not qcolor.isValid():
+            qcolor = QColor("#DC2626")
+        qcolor.setAlphaF(max(0.0, min(float(self._alpha), 1.0)))
+        return pg.mkPen(color=qcolor, width=float(self._width))
 
     def sync_tracks(self, plot_items: list[pg.PlotItem]) -> None:
         """Synchronize cursor across multiple tracks.
@@ -41,8 +48,9 @@ class PyQtGraphTimeCursorOverlay:
         # Remove old cursor lines (safely handle deleted Qt objects)
         for line in self._cursor_lines:
             with contextlib.suppress(RuntimeError):
-                if line.scene() is not None:
-                    line.scene().removeItem(line)
+                scene = line.scene()
+                if scene is not None:
+                    scene.removeItem(line)
         self._cursor_lines.clear()
 
         # Create new cursor lines for each plot item
@@ -50,7 +58,7 @@ class PyQtGraphTimeCursorOverlay:
             line = pg.InfiniteLine(
                 pos=self._time if self._time is not None else 0,
                 angle=90,
-                pen=pg.mkPen(color=self._color, width=self._width),
+                pen=self._make_pen(),
                 movable=False,
             )
             line.setZValue(15)  # Above event lines
@@ -80,29 +88,36 @@ class PyQtGraphTimeCursorOverlay:
             with contextlib.suppress(RuntimeError):
                 line.setVisible(visible)
 
-    def set_style(self, color: str | None = None, width: float | None = None) -> None:
+    def set_style(
+        self,
+        color: str | None = None,
+        width: float | None = None,
+        alpha: float | None = None,
+    ) -> None:
         """Set cursor visual style.
 
         Args:
             color: Line color
             width: Line width in pixels
+            alpha: Cursor opacity from 0.0 to 1.0
         """
         if color is not None:
             self._color = color
         if width is not None:
             self._width = width
+        if alpha is not None:
+            self._alpha = max(0.0, min(float(alpha), 1.0))
 
         # Update existing lines
         for line in self._cursor_lines:
             with contextlib.suppress(RuntimeError):
-                pen = pg.mkPen(color=self._color, width=self._width)
-                line.setPen(pen)
+                line.setPen(self._make_pen())
 
     def apply_theme(self) -> None:
         """Reapply cursor styling from the current theme."""
 
         color = CURRENT_THEME.get("time_cursor", self._color)
-        self.set_style(color=color, width=self._width)
+        self.set_style(color=color, width=self._width, alpha=self._alpha)
 
 
 class PyQtGraphEventHighlightOverlay:
@@ -132,8 +147,9 @@ class PyQtGraphEventHighlightOverlay:
         # Remove old highlight regions (safely handle deleted Qt objects)
         for region in self._highlight_regions:
             with contextlib.suppress(RuntimeError):
-                if region.scene() is not None:
-                    region.scene().removeItem(region)
+                scene = region.scene()
+                if scene is not None:
+                    scene.removeItem(region)
         self._highlight_regions.clear()
 
         # Create new highlight regions for each plot item
@@ -141,7 +157,7 @@ class PyQtGraphEventHighlightOverlay:
             if self._time is not None:
                 region = pg.LinearRegionItem(
                     values=(self._time - self._width / 2, self._time + self._width / 2),
-                    orientation=pg.LinearRegionItem.Vertical,
+                    orientation="vertical",
                     movable=False,
                 )
 
@@ -217,7 +233,9 @@ class PyQtGraphEventHighlightOverlay:
             with contextlib.suppress(RuntimeError):
                 region.setBrush(qcolor)
                 if self._time is not None:
-                    region.setRegion((self._time - self._width / 2, self._time + self._width / 2))
+                    region.setRegion(
+                        (self._time - self._width / 2, self._time + self._width / 2)
+                    )
 
     def alpha(self) -> float:
         """Get current alpha value.
@@ -279,7 +297,9 @@ class PyQtGraphEventHighlightOverlay:
     def apply_theme(self) -> None:
         """Reapply highlight styling from the current theme."""
 
-        color = CURRENT_THEME.get("event_highlight", CURRENT_THEME.get("accent", self._color))
+        color = CURRENT_THEME.get(
+            "event_highlight", CURRENT_THEME.get("accent", self._color)
+        )
         alpha = self._alpha
         try:
             alpha = float(alpha)

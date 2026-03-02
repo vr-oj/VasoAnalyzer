@@ -15,6 +15,7 @@ import os
 import string
 import tempfile
 import time
+import uuid
 import zipfile
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -221,9 +222,9 @@ class SampleN:
     snapshots: np.ndarray | None = None
     notes: str | None = None
     analysis_results: dict[str, Any] | None = None
-    figure_configs: dict[str, Any] | None = None
     attachments: list[Attachment] = field(default_factory=list)
     dataset_id: int | None = None
+    experiment_id: str | None = None
     asset_roles: dict[str, int] = field(default_factory=dict)
     snapshot_role: str | None = None
     snapshot_tiff_role: str | None = None
@@ -235,10 +236,11 @@ class SampleN:
     VasoTracker import provenance metadata:
     {
         "trace_original_filename": "20251202_Exp01.csv",
+        "trace_original_filenames": ["20251202_Exp01.csv", "20251202_Exp01_part2.csv"],
         "events_original_filename": "20251202_Exp01_table.csv",
         "tiff_original_filename": "20251202_Exp01_Result.tiff",
-        "trace_original_directory": "/path/to/RawFiles",
         "import_timestamp": "2025-12-04T10:30:00Z",
+        "import_source": "file_dialog",
         "canonical_time_source": "Time_s_exact",
         "schema_version": 3,
     }
@@ -286,11 +288,9 @@ class SampleN:
             analysis_results=copy.deepcopy(self.analysis_results)
             if isinstance(self.analysis_results, dict)
             else self.analysis_results,
-            figure_configs=copy.deepcopy(self.figure_configs)
-            if isinstance(self.figure_configs, dict)
-            else self.figure_configs,
             attachments=attachments_copy,
             dataset_id=self.dataset_id,
+            experiment_id=self.experiment_id,
             asset_roles=dict(self.asset_roles) if self.asset_roles else {},
             snapshot_role=self.snapshot_role,
             snapshot_tiff_role=self.snapshot_tiff_role,
@@ -307,6 +307,7 @@ class SampleN:
 @dataclass
 class Experiment:
     name: str
+    experiment_id: str | None = None
     excel_path: str | None = None
     next_column: str = "B"
     samples: list[SampleN] = field(default_factory=list)
@@ -647,10 +648,31 @@ def _populate_link_metadata(
             setattr(sample, signature_attr, sig)
 
 
+def _strip_legacy_composer_sample_state(state: dict | None) -> dict | None:
+    if not isinstance(state, dict):
+        return state
+    cleaned = dict(state)
+    cleaned.pop("figure_slides", None)
+    return cleaned or None
+
+
+def _strip_legacy_composer_project_state(state: dict | None) -> dict | None:
+    if not isinstance(state, dict):
+        return state
+    cleaned = dict(state)
+    cleaned.pop("publication_presets", None)
+    return cleaned or None
+
+
 def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
     data = asdict(sample)
     data.pop("snapshots", None)
     data.pop("attachments", None)
+    ui_state = _strip_legacy_composer_sample_state(data.get("ui_state"))
+    if ui_state is None:
+        data.pop("ui_state", None)
+    else:
+        data["ui_state"] = ui_state
     if isinstance(sample.trace_data, pd.DataFrame):
         data["trace_data"] = sample.trace_data.to_dict(orient="list")
         edit_log = sample.trace_data.attrs.get("edit_log")
@@ -668,8 +690,6 @@ def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
             data.pop("analysis_results", None)
     elif data.get("analysis_results") is None:
         data.pop("analysis_results", None)
-    if sample.figure_configs is None:
-        data.pop("figure_configs", None)
     if sample.edit_history:
         data["edit_history"] = sample.edit_history
     if sample.notes is None:
@@ -881,7 +901,6 @@ def sample_from_dict(data: dict) -> SampleN:
         snapshots=None,
         notes=data.get("notes"),
         analysis_results=analysis_results,
-        figure_configs=data.get("figure_configs"),
         attachments=attachments,
         edit_history=edit_history,
     )
@@ -1374,7 +1393,6 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
     OPTIMIZATION: Reuses existing store if available to avoid redundant unpack/pack cycles.
     """
     from ..storage.project_storage import (
-        USE_BUNDLE_FORMAT_BY_DEFAULT,
         create_unified_project,
         open_unified_project,
     )
@@ -1385,7 +1403,7 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
     use_container_format = dest.suffix == ".vaso"
 
     # Ensure proper extension
-    if not dest.suffix in (".vaso", ".vasopack"):
+    if dest.suffix not in (".vaso", ".vasopack"):
         # Default to container format (.vaso)
         dest = dest.with_suffix(".vaso")
         use_container_format = True
@@ -1398,6 +1416,7 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
     if not project.created_at:
         project.created_at = now_iso
     project.updated_at = now_iso
+    _experiment_ids, _experiment_ids_changed = _ensure_experiment_ids_on_project(project)
 
     # OPTIMIZATION: Check if we can reuse the existing store
     store_needs_close = False
@@ -1523,6 +1542,11 @@ def _load_project_bundle(path: str) -> Project:
     try:
         meta_rows = repo.read_meta()
         experiments_meta = _json_loads(meta_rows.get("experiments_meta"), default={})
+        (
+            experiments_meta,
+            experiment_ids,
+            _experiments_meta_needs_upgrade,
+        ) = _prepare_experiment_meta_map(experiments_meta)
 
         project_name = meta_rows.get("project_name") or path_obj.stem
         project_description = meta_rows.get("project_description")
@@ -1548,12 +1572,21 @@ def _load_project_bundle(path: str) -> Project:
                 )
                 continue
 
-            sample, experiment_name = _dataset_to_sample(
+            sample, experiment_name, sample_experiment_id = _dataset_to_sample(
                 repo=repo,
                 dataset=record,
                 base_dir=base_dir,
                 tmp_root=tmp_root,
             )
+
+            exp_id, added_id = _resolve_experiment_id_for_name(
+                experiment_name,
+                experiments_meta,
+                experiment_ids,
+                sample_experiment_id,
+            )
+            if added_id:
+                _experiments_meta_needs_upgrade = True
 
             exp_meta = experiments_meta.get(experiment_name, {})
             experiment = experiments_map.get(experiment_name)
@@ -1566,6 +1599,7 @@ def _load_project_bundle(path: str) -> Project:
 
                 experiment = Experiment(
                     name=experiment_name,
+                    experiment_id=exp_id,
                     excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
@@ -1576,6 +1610,10 @@ def _load_project_bundle(path: str) -> Project:
                     else [],
                 )
                 experiments_map[experiment_name] = experiment
+            elif experiment.experiment_id is None:
+                experiment.experiment_id = exp_id
+
+            sample.experiment_id = sample.experiment_id or exp_id
 
             experiment.samples.append(sample)
         t_load = time.perf_counter() - t_load_start
@@ -1821,9 +1859,10 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
         meta_entries.append(("project_updated_at", project.updated_at))
     if project.tags:
         meta_entries.append(("project_tags", _json_dumps(project.tags)))
-    if project.ui_state is not None:
+    project_ui_state = _strip_legacy_composer_project_state(project.ui_state)
+    if project_ui_state is not None:
         meta_entries.append(
-            ("project_ui_state", _json_dumps(_normalise_json_data(project.ui_state)))
+            ("project_ui_state", _json_dumps(_normalise_json_data(project_ui_state)))
         )
     if project.path:
         meta_entries.append(("project_path", project.path))
@@ -1831,6 +1870,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
     experiments_payload: dict[str, dict[str, Any]] = {}
     for exp in project.experiments:
         experiments_payload[exp.name] = {
+            "experiment_id": exp.experiment_id,
             "excel_path": _relativize_path(exp.excel_path, base_dir),
             "next_column": exp.next_column,
             "style": _normalise_json_data(exp.style),
@@ -1857,7 +1897,6 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                 source_repo = None
 
     try:
-        dataset_id_map: dict[int, int] = {}
         for _exp_index, exp in enumerate(project.experiments):
             for sample_index, sample in enumerate(exp.samples):
                 # DEBUG: _populate_store_from_project per-sample instrumentation start
@@ -1868,7 +1907,6 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     getattr(sample, "dataset_id", None),
                 )
                 # DEBUG: _populate_store_from_project per-sample instrumentation end
-                old_dataset_id = getattr(sample, "dataset_id", None)
                 _save_sample_to_store(
                     repo=repo,
                     base_dir=base_dir,
@@ -1878,81 +1916,6 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
                     source_repo=source_repo,
                     embed_snapshots=embed_snapshots,
                     embed_tiff_snapshots=embed_tiff_snapshots,
-                )
-                new_dataset_id = getattr(sample, "dataset_id", None)
-                if old_dataset_id is not None and new_dataset_id is not None:
-                    try:
-                        dataset_id_map[int(old_dataset_id)] = int(new_dataset_id)
-                    except (TypeError, ValueError):
-                        pass
-
-        if source_repo is not None and dataset_id_map:
-            try:
-                copied = 0
-                for old_id, new_id in dataset_id_map.items():
-                    try:
-                        recipes = source_repo.list_figure_recipes(int(old_id))
-                    except Exception:
-                        log.debug(
-                            "Failed to list figure recipes for dataset_id=%s",
-                            old_id,
-                            exc_info=True,
-                        )
-                        continue
-                    for recipe in recipes or []:
-                        recipe_id = recipe.get("recipe_id")
-                        if not recipe_id:
-                            continue
-                        try:
-                            payload = source_repo.get_figure_recipe(recipe_id)
-                        except Exception:
-                            log.debug(
-                                "Failed to load figure recipe %s",
-                                recipe_id,
-                                exc_info=True,
-                            )
-                            continue
-                        if not payload:
-                            continue
-                        spec_json = payload.get("spec_json")
-                        if not spec_json:
-                            continue
-                        name = (
-                            payload.get("name")
-                            or recipe.get("name")
-                            or "Figure Recipe"
-                        )
-                        try:
-                            repo.add_figure_recipe(
-                                int(new_id),
-                                name,
-                                spec_json,
-                                source=payload.get("source") or "current_view",
-                                trace_key=payload.get("trace_key"),
-                                x_min=payload.get("x_min"),
-                                x_max=payload.get("x_max"),
-                                y_min=payload.get("y_min"),
-                                y_max=payload.get("y_max"),
-                                export_background=payload.get("export_background") or "white",
-                                recipe_id=recipe_id,
-                            )
-                            copied += 1
-                        except Exception:
-                            log.debug(
-                                "Failed to copy figure recipe %s to dataset_id=%s",
-                                recipe_id,
-                                new_id,
-                                exc_info=True,
-                            )
-                if copied:
-                    log.info(
-                        "SAVE: copied %d figure recipe(s) into saved project",
-                        copied,
-                    )
-            except Exception:
-                log.warning(
-                    "Failed to copy figure recipes into saved project",
-                    exc_info=True,
                 )
 
         if project.attachments:
@@ -2442,12 +2405,100 @@ def _detect_trace_column_labels(trace_df: pd.DataFrame | None) -> dict[str, str]
     return normalized
 
 
+def _normalize_experiment_id_value(value: Any) -> str | None:
+    try:
+        return str(uuid.UUID(str(value)))
+    except Exception:
+        return None
+
+
+def _prepare_experiment_meta_map(
+    experiments_meta: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, str], bool]:
+    ids: dict[str, str] = {}
+    needs_upgrade = False
+    for name, meta in list(experiments_meta.items()):
+        if not isinstance(meta, dict):
+            meta = {}
+            experiments_meta[name] = meta
+        raw_id = meta.get("experiment_id")
+        exp_id = _normalize_experiment_id_value(raw_id)
+        if exp_id is None:
+            exp_id = str(uuid.uuid4())
+            needs_upgrade = True
+        elif raw_id != exp_id:
+            needs_upgrade = True
+        if meta.get("experiment_id") != exp_id:
+            meta["experiment_id"] = exp_id
+            needs_upgrade = True
+        ids[name] = exp_id
+    return experiments_meta, ids, needs_upgrade
+
+
+def _resolve_experiment_id_for_name(
+    experiment_name: str,
+    experiments_meta: dict[str, Any],
+    experiment_ids: dict[str, str],
+    sample_experiment_id: str | None = None,
+) -> tuple[str, bool]:
+    meta = experiments_meta.get(experiment_name)
+    if not isinstance(meta, dict):
+        meta = {}
+        experiments_meta[experiment_name] = meta
+
+    exp_id = experiment_ids.get(experiment_name)
+    raw_meta_id = meta.get("experiment_id")
+    if exp_id is None:
+        exp_id = _normalize_experiment_id_value(raw_meta_id)
+
+    sample_id = _normalize_experiment_id_value(sample_experiment_id)
+    if exp_id is None and sample_id is not None:
+        exp_id = sample_id
+
+    changed = False
+    if exp_id is None:
+        exp_id = str(uuid.uuid4())
+        changed = True
+    elif raw_meta_id != exp_id:
+        changed = True
+
+    experiment_ids[experiment_name] = exp_id
+    if meta.get("experiment_id") != exp_id:
+        meta["experiment_id"] = exp_id
+        changed = True
+
+    return exp_id, changed
+
+
+def _ensure_experiment_ids_on_project(project: Project) -> tuple[dict[str, str], bool]:
+    ids: dict[str, str] = {}
+    changed = False
+    for exp in project.experiments:
+        exp_id = _normalize_experiment_id_value(exp.experiment_id)
+        if exp_id is None:
+            exp_id = str(uuid.uuid4())
+            changed = True
+        elif exp.experiment_id != exp_id:
+            changed = True
+        exp.experiment_id = exp_id
+        ids[exp.name] = exp_id
+
+        for sample in exp.samples:
+            if sample.experiment_id != exp_id:
+                sample.experiment_id = exp_id
+                changed = True
+    return ids, changed
+
+
 def _build_sample_extra(
     experiment: Experiment,
     sample: SampleN,
     base_dir: Path,
     trace_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
+    if sample.experiment_id != experiment.experiment_id:
+        sample.experiment_id = experiment.experiment_id
+
     trace_link = _sample_link_payload(
         path_value=sample.trace_path,
         relative_hint=sample.trace_relative,
@@ -2464,6 +2515,7 @@ def _build_sample_extra(
     )
     payload: dict[str, Any] = {
         "experiment": experiment.name,
+        "experiment_id": experiment.experiment_id,
         "experiment_index": experiment.samples.index(sample)
         if sample in experiment.samples
         else None,
@@ -2472,8 +2524,7 @@ def _build_sample_extra(
         "trace_path": _relativize_path(sample.trace_path, base_dir),
         "events_path": _relativize_path(sample.events_path, base_dir),
         "snapshot_path": _relativize_path(sample.snapshot_path, base_dir),
-        "ui_state": sample.ui_state,
-        "figure_configs": sample.figure_configs,
+        "ui_state": _strip_legacy_composer_sample_state(sample.ui_state),
     }
     if trace_link:
         payload["trace_link"] = trace_link
@@ -2772,7 +2823,7 @@ def _is_cloud_storage_path(path: str) -> tuple[bool, str | None]:
     # macOS iCloud Drive (multiple possible formats)
     icloud_patterns = [
         "library/mobile documents/com~apple~clouddocs",  # Fixed typo
-        "library/mobile documents/com~apple~",           # More general
+        "library/mobile documents/com~apple~",  # More general
         "/icloud drive/",
         "/icloud/",
     ]
@@ -3017,12 +3068,21 @@ def _load_project_sqlite(path: str) -> Project:
                 )
                 continue
 
-            sample, experiment_name = _dataset_to_sample(
+            sample, experiment_name, sample_experiment_id = _dataset_to_sample(
                 repo=repo,
                 dataset=record,
                 base_dir=base_dir,
                 tmp_root=tmp_root,
             )
+
+            exp_id, added_id = _resolve_experiment_id_for_name(
+                experiment_name,
+                experiments_meta,
+                experiment_ids,
+                sample_experiment_id,
+            )
+            if added_id:
+                _experiments_meta_needs_upgrade = True
 
             exp_meta = experiments_meta.get(experiment_name, {})
             experiment = experiments_map.get(experiment_name)
@@ -3035,6 +3095,7 @@ def _load_project_sqlite(path: str) -> Project:
 
                 experiment = Experiment(
                     name=experiment_name,
+                    experiment_id=exp_id,
                     excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
@@ -3045,6 +3106,10 @@ def _load_project_sqlite(path: str) -> Project:
                     else [],
                 )
                 experiments_map[experiment_name] = experiment
+            elif experiment.experiment_id is None:
+                experiment.experiment_id = exp_id
+
+            sample.experiment_id = sample.experiment_id or exp_id
 
             experiment.samples.append(sample)
 
@@ -3250,7 +3315,6 @@ def _dataset_to_sample(
         snapshot_path=snapshot_path,
         notes=dataset.get("notes"),
         analysis_results=None,
-        figure_configs=extra.get("figure_configs"),
         attachments=attachments,
         dataset_id=dataset_id,
         asset_roles={role: asset["id"] for role, asset in assets_by_role.items()},
@@ -3265,7 +3329,14 @@ def _dataset_to_sample(
     _populate_link_metadata(sample, "events", events_path, events_link_meta, base_dir)
 
     experiment = extra.get("experiment") or "Default"
-    return sample, experiment
+    experiment_id = (
+        _normalize_experiment_id_value(extra.get("experiment_id"))
+        if isinstance(extra, dict)
+        else None
+    )
+    if experiment_id:
+        sample.experiment_id = experiment_id
+    return sample, experiment, experiment_id
 
 
 def _format_trace_df(
@@ -3303,7 +3374,7 @@ def _format_trace_df(
 
     log.info("Trace format raw columns=%s for sample=%s", list(df.columns), sample_label)
     log.info(
-        "Trace format labels: t_seconds=%r inner_diam=%r outer_diam=%r " "p_avg=%r p1=%r p2=%r",
+        "Trace format labels: t_seconds=%r inner_diam=%r outer_diam=%r p_avg=%r p1=%r p2=%r",
         time_label,
         inner_label,
         outer_label,
@@ -3326,6 +3397,10 @@ def _format_trace_df(
         columns[p1_label] = df["p1"]
     if "p2" in df.columns:
         columns[p2_label] = df["p2"]
+    if "frame_number" in df.columns:
+        columns["FrameNumber"] = df["frame_number"]
+    if "tiff_page" in df.columns:
+        columns["TiffPage"] = df["tiff_page"]
 
     formatted = pd.DataFrame(columns)
     log.info(

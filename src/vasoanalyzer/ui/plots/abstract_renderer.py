@@ -51,9 +51,7 @@ class AbstractTraceRenderer(ABC):
         pass
 
     @abstractmethod
-    def update_window(
-        self, x0: float, x1: float, *, pixel_width: int | None = None
-    ) -> None:
+    def update_window(self, x0: float, x1: float, *, pixel_width: int | None = None) -> None:
         """Update the visible time window.
 
         This triggers rendering of the specified time range with appropriate

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 import pandas as pd
 from PyQt5.QtCore import QObject, pyqtSignal
+
+from vasoanalyzer.ui.formatting.time_format import TimeMode
 
 from .event_table import EventRow, EventTableModel, EventTableWidget
 
@@ -23,6 +25,7 @@ class EventTableController(QObject):
         self._model = EventTableModel(table)
         self._table.setModel(self._model)
         self._table.apply_theme()
+        self._table.apply_viewport_fit_policy()
 
         self._model.value_edited.connect(self.cell_edited.emit)
         self._model.label_edited.connect(self.label_edited.emit)
@@ -63,6 +66,7 @@ class EventTableController(QObject):
             review_states=list(review_states) if review_states is not None else None,
         )
         self._table.apply_theme()
+        self._table.apply_viewport_fit_policy()
         self.rows_changed.emit()
 
     def clear(self) -> None:
@@ -96,6 +100,13 @@ class EventTableController(QObject):
 
     def set_review_states(self, states: Iterable[str] | None) -> None:
         self._model.set_review_states(list(states) if states is not None else None)
+
+    def apply_column_contract(self, column_keys: Sequence[str]) -> None:
+        self._table.apply_column_contract(column_keys)
+
+    def set_time_mode(self, mode: TimeMode | str) -> None:
+        self._model.set_time_mode(mode)
+        self._table.apply_viewport_fit_policy()
 
     def _handle_row_deletion_request(self, rows: list[int]) -> None:
         if not rows:

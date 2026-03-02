@@ -177,7 +177,7 @@ For more help, see docs/BUNDLE_FORMAT.md
             print(f"✓ Extracted to: {output_path}")
             return 0
         else:
-            print(f"✗ Extraction failed", file=sys.stderr)
+            print("✗ Extraction failed", file=sys.stderr)
             return 1
 
     # Automatic recovery mode
@@ -186,26 +186,26 @@ For more help, see docs/BUNDLE_FORMAT.md
     success, message, recovered_files = recover_project(project_path)
 
     if success:
-        print(f"✓ Recovery succeeded!")
+        print("✓ Recovery succeeded!")
         print(f"  {message}")
 
         if recovered_files:
-            print(f"\n  Recovered files:")
+            print("\n  Recovered files:")
             for file in recovered_files:
                 print(f"    - {file}")
 
         print(f"\nYou can now try opening: {project_path}")
         return 0
     else:
-        print(f"✗ Recovery failed")
+        print("✗ Recovery failed")
         print(f"  {message}")
 
         # Show available options
-        print(f"\nTry these recovery options:")
-        print(f"  1. Run with --list to see all available methods")
+        print("\nTry these recovery options:")
+        print("  1. Run with --list to see all available methods")
         print(f"  2. Check for autosave files: --find-autosaves {project_path.parent}")
-        print(f"  3. If bundle format, try --extract with earlier snapshot number")
-        print(f"  4. Check if .vaso.legacy backup exists")
+        print("  3. If bundle format, try --extract with earlier snapshot number")
+        print("  4. Check if .vaso.legacy backup exists")
 
         return 1
 

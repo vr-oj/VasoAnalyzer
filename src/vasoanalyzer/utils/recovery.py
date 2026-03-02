@@ -14,7 +14,8 @@ import logging
 import shutil
 import sqlite3
 from pathlib import Path
-from typing import Optional
+
+from vasoanalyzer.core import project_format
 
 log = logging.getLogger(__name__)
 
@@ -121,9 +122,9 @@ def list_recovery_options(project_path: str | Path) -> dict:
                 )
 
             # Check for autosave in bundle
-            autosave_candidates = list((path / ".staging").glob("*.sqlite")) if (
-                path / ".staging"
-            ).exists() else []
+            autosave_candidates = (
+                list((path / ".staging").glob("*.sqlite")) if (path / ".staging").exists() else []
+            )
             if autosave_candidates:
                 options.append(
                     {
@@ -227,16 +228,27 @@ def _recover_bundle(bundle_path: Path) -> tuple[bool, str, list[Path]]:
         best_snapshot = valid_snapshots[0]
 
         # Update HEAD to point to it
-        from vasoanalyzer.storage.snapshots import atomic_write_text
         import json
-        import time
 
-        head_doc = {
-            "current": best_snapshot.path.name,
-            "timestamp": time.time(),
-            "recovered": True,
-            "recovered_from": best_snapshot.number,
-        }
+        from vasoanalyzer.storage.snapshots import atomic_write_text
+
+        existing_head = None
+        try:
+            existing_head = project_format.read_head(
+                bundle_path / "HEAD.json", bundle_path / "snapshots", require_current=False
+            )
+        except Exception:
+            existing_head = None
+
+        head_doc = project_format.build_head_document(
+            current=best_snapshot.path.name,
+            previous=existing_head.current if existing_head else None,
+            updated_utc=project_format.iso_utc_now(),
+            write_in_progress=False,
+            base=(existing_head.data if existing_head else None) or {},
+        )
+        head_doc["recovered"] = True
+        head_doc["recovered_from"] = best_snapshot.number
         atomic_write_text(bundle_path / "HEAD.json", json.dumps(head_doc, indent=2))
 
         message = (

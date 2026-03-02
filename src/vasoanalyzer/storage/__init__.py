@@ -1,6 +1,12 @@
 """Storage backends for the VasoAnalyzer project format."""
 
 from . import sqlite  # Skeleton package exposing upcoming modular split.
+from .dataset_package import (
+    DatasetPackageError,
+    DatasetPackageValidationError,
+    export_dataset_package,
+    import_dataset_package,
+)
 from .sqlite_store import (
     SCHEMA_VERSION,
     ProjectStore,
@@ -48,4 +54,8 @@ __all__ = [
     "write_autosave",
     "restore_autosave",
     "update_dataset_meta",
+    "export_dataset_package",
+    "import_dataset_package",
+    "DatasetPackageError",
+    "DatasetPackageValidationError",
 ]

@@ -1,10 +1,5 @@
-"""Dockable panels for Figure Composer."""
+"""Legacy dock package placeholder."""
 
 from __future__ import annotations
 
-__all__ = [
-    "PresetLibraryDock",
-    "AdvancedStyleDock",
-    "LayoutDock",
-    "ExportQueueDock",
-]
+__all__: list[str] = []

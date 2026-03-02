@@ -89,14 +89,14 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
     origin_layout.addLayout(origin_form)
     layout.addWidget(origin_box)
 
-    # Canvas Size Section (white rectangle boundary in Figure Composer)
+    # Canvas Size Section (white rectangle boundary in plot workspace)
     canvas_box = QGroupBox("Canvas Size", tab)
     canvas_layout = QVBoxLayout(canvas_box)
     canvas_layout.setContentsMargins(12, 12, 12, 12)
     canvas_layout.setSpacing(8)
 
     canvas_hint = QLabel(
-        "Canvas defines the white rectangle boundary (Figure Composer workspace).",
+        "Canvas defines the white rectangle boundary for exported plots.",
         canvas_box,
     )
     canvas_hint.setWordWrap(True)
@@ -179,7 +179,7 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
 
 def populate_frame_tab(dialog: DialogT) -> None:
     """Populate Frame tab controls with the current dialog state."""
-    # Get parent window (FigureComposerWindow)
+    # Get parent window (figure export dialog, when present).
     parent = getattr(dialog, "parent_window", None)
 
     # Get figure size from parent state variables (not from matplotlib!)

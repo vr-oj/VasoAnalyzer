@@ -10,10 +10,13 @@ from __future__ import annotations
 import csv
 import logging
 import re
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+from vasoanalyzer.core.timebase import TimebaseSource, resolve_trace_timebase
 
 try:
     from vasoanalyzer.services.cache_service import DataCache
@@ -94,11 +97,7 @@ def load_trace(file_path, *, cache: Any | None = None):
     def _normalize(col):
         return re.sub(r"[^a-z0-9]", "", col.lower())
 
-    # Locate time and diameter columns using flexible matching for legacy files
-    # VasoTracker files have Time_s_exact (high precision) - prioritize it!
-    time_s_exact_col = None
-    time_s_col = None
-    time_col = None  # Generic fallback
+    # Locate diameter columns using flexible matching for legacy files
     diam_col = None
     outer_col = None
     avg_pressure_col = None
@@ -111,16 +110,6 @@ def load_trace(file_path, *, cache: Any | None = None):
 
     for c in df.columns:
         norm = _normalize(c)
-
-        # Priority 1: Look for Time_s_exact (VasoTracker high-precision time)
-        if norm == "timesexact":
-            time_s_exact_col = c
-        # Priority 2: Look for Time (s) or similar
-        elif norm in ("times", "timeseconds") or c == "Time (s)":
-            time_s_col = c
-        # Priority 3: Generic time column
-        elif time_col is None and ("time" in norm or "sec" in norm or norm in {"t", "ts"}):
-            time_col = c
 
         if "inner" in norm and "diam" in norm:
             inner_candidates.append(c)
@@ -152,28 +141,42 @@ def load_trace(file_path, *, cache: Any | None = None):
     if set_pressure_candidates:
         set_pressure_col = set_pressure_candidates[0]
 
-    # Use Time_s_exact if available (VasoTracker), fall back to Time (s), then generic
-    canonical_time_col = time_s_exact_col or time_s_col or time_col
-
-    if canonical_time_col is None or diam_col is None or canonical_time_col == diam_col:
+    if diam_col is None:
         raise ValueError("Trace file must contain Time and Inner Diameter columns")
 
-    # Log warning for legacy files missing Time_s_exact
-    if time_s_exact_col:
-        log.info(f"Using high-precision time column '{time_s_exact_col}' as canonical")
-    elif time_s_col or time_col:
+    timebase = resolve_trace_timebase(df)
+    canonical_time_col = timebase.source_column
+    if canonical_time_col is not None and canonical_time_col == diam_col:
+        raise ValueError("Trace file must contain distinct Time and Inner Diameter columns")
+
+    if timebase.source == TimebaseSource.TIME_S_EXACT and canonical_time_col:
+        log.info("Using high-precision time column '%s' as canonical", canonical_time_col)
+    elif timebase.source == TimebaseSource.TIME_SECONDS and canonical_time_col:
         log.warning(
-            f"Using legacy time column '{canonical_time_col}' (Time_s_exact not found). "
-            "Sub-millisecond precision may be lost."
+            "Using legacy time column '%s' (Time_s_exact not found). "
+            "Sub-millisecond precision may be lost.",
+            canonical_time_col,
+        )
+    elif timebase.source == TimebaseSource.TIMESTAMP and canonical_time_col:
+        log.info("Using timestamp column '%s' as canonical timebase", canonical_time_col)
+    elif timebase.source == TimebaseSource.SAMPLE_RATE:
+        log.info("Using explicit sample_rate_hz to construct trace timebase")
+
+    for warning in timebase.warnings:
+        log.warning("Timebase warning: %s", warning)
+
+    # If using a different time column, drop the old "Time (s)" column to avoid conflict
+    if canonical_time_col and canonical_time_col != "Time (s)" and "Time (s)" in df.columns:
+        df = df.drop(columns=["Time (s)"])
+        log.info(
+            "Dropped legacy 'Time (s)' column in favor of canonical '%s'",
+            canonical_time_col,
         )
 
-    # If using Time_s_exact, drop the old "Time (s)" column to avoid conflict
-    if time_s_exact_col and "Time (s)" in df.columns and time_s_exact_col != "Time (s)":
-        df = df.drop(columns=["Time (s)"])
-        log.info("Dropped rounded 'Time (s)' column in favor of high-precision 'Time_s_exact'")
-
     # Rename to standardized column names (canonical_time_col → "Time (s)")
-    rename_map = {canonical_time_col: "Time (s)", diam_col: "Inner Diameter"}
+    rename_map = {diam_col: "Inner Diameter"}
+    if canonical_time_col:
+        rename_map[canonical_time_col] = "Time (s)"
     if outer_col:
         rename_map[outer_col] = "Outer Diameter"
     if avg_pressure_col:
@@ -183,11 +186,23 @@ def load_trace(file_path, *, cache: Any | None = None):
     df = df.rename(columns=rename_map)
     df = df.loc[:, ~df.columns.duplicated()]
 
+    if "Time (s)" not in df.columns:
+        df["Time (s)"] = timebase.time_s
+    else:
+        df["Time (s)"] = timebase.time_s
+
     # Store provenance: which column was used as canonical time
-    df.attrs["canonical_time_source"] = canonical_time_col
+    df.attrs["canonical_time_source"] = canonical_time_col or timebase.source.value
+    df.attrs["timebase"] = {
+        "trace": {
+            "source": timebase.source.value,
+            "column": canonical_time_col,
+            "t0_s": float(timebase.t0_s) if timebase.t0_s is not None else None,
+            "warnings": list(timebase.warnings),
+        }
+    }
 
     # Ensure numeric types
-    df["Time (s)"] = pd.to_numeric(df["Time (s)"], errors="coerce")
     df["Inner Diameter"] = pd.to_numeric(df["Inner Diameter"], errors="coerce")
     if "Outer Diameter" in df.columns:
         df["Outer Diameter"] = pd.to_numeric(df["Outer Diameter"], errors="coerce")
@@ -226,3 +241,142 @@ def load_trace(file_path, *, cache: Any | None = None):
 
     log.debug("Loaded trace with %d rows", len(df))
     return df
+
+
+def merge_traces(
+    trace_paths: Sequence[str],
+    *,
+    cache: Any | None = None,
+) -> pd.DataFrame:
+    """Merge multiple trace CSVs into one continuous dataset.
+
+    Files are appended in the provided order with time, frame, and TIFF indices
+    offset so they remain strictly increasing across segments.
+
+    Args:
+        trace_paths: Ordered collection of CSV paths to merge.
+        cache: Optional cache for faster repeated reads.
+
+    Returns:
+        Merged trace dataframe with provenance stored in ``attrs``:
+        ``merged_from_paths`` and ``merged_segments`` (per-segment offsets).
+    """
+
+    if not trace_paths:
+        raise ValueError("trace_paths must contain at least one file")
+
+    normalized_paths = [str(p) for p in trace_paths]
+    merged_frames: list[pd.DataFrame] = []
+    merged_paths: list[str] = []
+    segments: list[dict[str, object]] = []
+    merge_warnings: list[str] = []
+    skipped: list[dict[str, str]] = []
+
+    time_offset = 0.0
+    frame_offset: float | None = None
+    tiff_offset: float | None = None
+    canonical_source: str | None = None
+    total_neg_inner = 0
+    total_neg_outer = 0
+
+    def _estimate_dt(values: pd.Series | np.ndarray) -> float:
+        arr = pd.to_numeric(values, errors="coerce")
+        diffs = np.diff(arr[np.isfinite(arr)])
+        diffs = diffs[diffs > 0]
+        if diffs.size:
+            return float(np.nanmedian(diffs))
+        return 0.0
+
+    for idx, path in enumerate(normalized_paths):
+        try:
+            df = load_trace(path, cache=cache).copy()
+        except Exception as exc:  # Skip malformed files but record why
+            msg = f"Skipped {os.path.basename(path)}: {exc}"
+            log.warning(msg, exc_info=True)
+            merge_warnings.append(msg)
+            skipped.append({"path": path, "reason": str(exc)})
+            continue
+
+        merged_paths.append(path)
+
+        if canonical_source is None:
+            canonical_source = df.attrs.get("canonical_time_source", "Time (s)")
+
+        time_values = pd.to_numeric(df["Time (s)"], errors="coerce")
+        dt = _estimate_dt(time_values)
+        t_start = float(np.nanmin(time_values)) if np.isfinite(np.nanmin(time_values)) else 0.0
+        shift = 0.0
+        if idx > 0:
+            shift = time_offset - t_start
+            if dt > 0:
+                shift += dt
+            df["Time (s)"] = time_values + shift
+
+        frame_shift = 0
+        if "FrameNumber" in df.columns:
+            frame_vals = pd.to_numeric(df["FrameNumber"], errors="coerce")
+            f_start = float(np.nanmin(frame_vals)) if np.isfinite(np.nanmin(frame_vals)) else 0.0
+            if idx > 0 and frame_offset is not None and np.isfinite(frame_offset):
+                frame_shift = int(frame_offset - f_start + 1)
+            df["FrameNumber"] = frame_vals + frame_shift
+            frame_offset_candidate = (
+                float(np.nanmax(df["FrameNumber"]))
+                if np.isfinite(np.nanmax(df["FrameNumber"]))
+                else None
+            )
+            if frame_offset_candidate is not None and np.isfinite(frame_offset_candidate):
+                frame_offset = frame_offset_candidate
+
+        tiff_shift = 0
+        if "TiffPage" in df.columns:
+            tiff_vals = pd.to_numeric(df["TiffPage"], errors="coerce")
+            tp_start = float(np.nanmin(tiff_vals)) if np.isfinite(np.nanmin(tiff_vals)) else 0.0
+            if idx > 0 and tiff_offset is not None and np.isfinite(tiff_offset):
+                tiff_shift = int(tiff_offset - tp_start + 1)
+            df["TiffPage"] = tiff_vals + tiff_shift
+            tiff_offset_candidate = (
+                float(np.nanmax(df["TiffPage"])) if np.isfinite(np.nanmax(df["TiffPage"])) else None
+            )
+            if tiff_offset_candidate is not None and np.isfinite(tiff_offset_candidate):
+                tiff_offset = tiff_offset_candidate
+
+        merged_frames.append(df)
+
+        t_end = (
+            float(np.nanmax(df["Time (s)"]))
+            if np.isfinite(np.nanmax(df["Time (s)"]))
+            else time_offset
+        )
+        time_offset = max(time_offset, t_end)
+
+        total_neg_inner += int(df.attrs.get("negative_inner_diameters", 0) or 0)
+        total_neg_outer += int(df.attrs.get("negative_outer_diameters", 0) or 0)
+
+        segments.append(
+            {
+                "path": path,
+                "rows": int(len(df.index)),
+                "applied_time_offset": float(shift),
+                "applied_frame_offset": int(frame_shift) if frame_shift else 0,
+                "applied_tiff_offset": int(tiff_shift) if tiff_shift else 0,
+                "t_start": float(t_start),
+                "t_end": float(t_end),
+                "dt_median": float(dt),
+            }
+        )
+
+    if not merged_frames:
+        raise ValueError("No valid trace files found to merge")
+
+    merged_df = pd.concat(merged_frames, ignore_index=True, sort=False)
+    merged_df.attrs["canonical_time_source"] = canonical_source or "Time (s)"
+    merged_df.attrs["merged_requested_paths"] = normalized_paths
+    merged_df.attrs["merged_from_paths"] = merged_paths
+    merged_df.attrs["merged_segments"] = segments
+    merged_df.attrs["negative_inner_diameters"] = total_neg_inner
+    merged_df.attrs["negative_outer_diameters"] = total_neg_outer
+    if merge_warnings:
+        merged_df.attrs["merge_warnings"] = merge_warnings
+    if skipped:
+        merged_df.attrs["merged_skipped_paths"] = skipped
+    return merged_df

@@ -111,7 +111,7 @@ def verify_event_mappings(trace_df, events_df):
         print(f"  Available: {list(events_df.columns)}")
         return False, None
 
-    print(f"✓ All required columns present")
+    print("✓ All required columns present")
     print(f"  Trace rows: {len(trace_df)}")
     print(f"  Events: {len(events_df)}")
 
@@ -154,14 +154,12 @@ def verify_event_mappings(trace_df, events_df):
         event_times.append(trace_time_s)
 
         if j < 5:  # Show first 5
-            print(
-                f"  Event {j}: Frame {event_frame} → Time {trace_time_s:.3f}s ({event_time_str})"
-            )
+            print(f"  Event {j}: Frame {event_frame} → Time {trace_time_s:.3f}s ({event_time_str})")
 
     if all_valid:
         print(f"✓ All {len(events_df)} events map correctly to trace times")
     else:
-        print(f"✗ Some events have mapping errors")
+        print("✗ Some events have mapping errors")
 
     return all_valid, np.array(event_times) if all_valid else None
 
@@ -180,7 +178,7 @@ def verify_tiff_mappings(trace_df, tiff_path):
 
     # Check if TiffPage column exists
     if "TiffPage" not in trace_df.columns:
-        print(f"✗ TiffPage column not found in trace")
+        print("✗ TiffPage column not found in trace")
         print(f"  Available columns: {list(trace_df.columns)}")
         return False, None, None
 
@@ -191,9 +189,7 @@ def verify_tiff_mappings(trace_df, tiff_path):
     print(f"✓ Trace has {n_pages} non-null TiffPage values")
 
     if n_pages != n_tiff:
-        print(
-            f"✗ Mismatch: TIFF has {n_tiff} frames but trace has {n_pages} TiffPage entries"
-        )
+        print(f"✗ Mismatch: TIFF has {n_tiff} frames but trace has {n_pages} TiffPage entries")
         return False, None, None
 
     # Build mapping: frame_index -> (trace_index, time_s)
@@ -207,7 +203,7 @@ def verify_tiff_mappings(trace_df, tiff_path):
             page_idx = int(tiff_page)
 
             if page_idx < 0 or page_idx >= n_tiff:
-                print(f"✗ Row {idx}: TiffPage {page_idx} out of range [0, {n_tiff-1}]")
+                print(f"✗ Row {idx}: TiffPage {page_idx} out of range [0, {n_tiff - 1}]")
                 all_valid = False
                 continue
 
@@ -235,12 +231,10 @@ def verify_tiff_mappings(trace_df, tiff_path):
     # Show first few mappings
     for f in range(min(5, n_tiff)):
         if frame_trace_index[f] != -1:
-            print(
-                f"  Frame {f} → trace[{frame_trace_index[f]}] → Time {frame_trace_time[f]:.3f}s"
-            )
+            print(f"  Frame {f} → trace[{frame_trace_index[f]}] → Time {frame_trace_time[f]:.3f}s")
 
     if all_valid:
-        print(f"✓ All TIFF frames map correctly to trace times")
+        print("✓ All TIFF frames map correctly to trace times")
         return True, frame_trace_index, frame_trace_time
     else:
         return False, None, None
@@ -265,9 +259,7 @@ def main():
         events_ok, event_times = verify_event_mappings(trace_df, events_df)
 
         # Verify TIFF
-        tiff_ok, frame_trace_index, frame_trace_time = verify_tiff_mappings(
-            trace_df, tiff_path
-        )
+        tiff_ok, frame_trace_index, frame_trace_time = verify_tiff_mappings(trace_df, tiff_path)
 
         # Summary
         print("\n" + "=" * 80)

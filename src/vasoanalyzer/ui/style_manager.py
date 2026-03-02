@@ -98,7 +98,7 @@ class PlotStyleManager:
 
         # Detect PyQtGraph backend - skip matplotlib-specific styling
         # PyQtGraph axes don't have 'xaxis' attribute (matplotlib-specific)
-        is_pyqtgraph = not hasattr(x_axis, 'xaxis')
+        is_pyqtgraph = not hasattr(x_axis, "xaxis")
         if is_pyqtgraph:
             # PyQtGraph styling is handled by the PyQtGraph renderer itself
             # This style manager is designed for matplotlib only
