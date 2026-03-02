@@ -1,4 +1,4 @@
-# VasoAnalyzer v3.0.0 Beta
+# VasoAnalyzer v3.0.0
 
 **Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
 

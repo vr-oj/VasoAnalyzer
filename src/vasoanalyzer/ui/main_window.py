@@ -339,10 +339,40 @@ class _SampleLoadJob(QRunnable):
                 repo = owned_ctx.repo
                 log.debug("Created new context %s (repo=%s)", owned_ctx, repo)
             else:
-                log.debug(
-                    "Background job: using existing repo from window.project_ctx (repo=%s)",
-                    repo,
-                )
+                # Never reuse the main thread's SQLite connection from a background thread.
+                # Extract the DB file path from the repo and open a thread-local connection.
+                db_path: str | None = None
+                try:
+                    existing_store = getattr(repo, "_store", None)
+                    if existing_store is not None:
+                        p = getattr(existing_store, "path", None)
+                        if p is not None:
+                            db_path = str(p)
+                except Exception:
+                    pass
+
+                if db_path:
+                    log.debug(
+                        "Background job: creating thread-local connection to %s (from repo._store.path)",
+                        db_path,
+                    )
+                    from pathlib import Path
+
+                    from vasoanalyzer.services.project_service import (
+                        SQLiteProjectRepository,
+                    )
+                    from vasoanalyzer.storage.sqlite_store import ProjectStore
+
+                    thread_local_conn = sqlite3.connect(db_path)
+                    temp_store = ProjectStore(path=Path(db_path), conn=thread_local_conn)
+                    repo = SQLiteProjectRepository(temp_store)
+                    log.debug("Background job: thread-safe repository created from repo store path")
+                else:
+                    log.warning(
+                        "Background job: could not extract DB path from repo; using existing repo connection "
+                        "(unsafe for cross-thread SQLite access) — repo=%s",
+                        repo,
+                    )
 
             if repo is None:
                 raise RuntimeError("Unable to obtain project repository")
@@ -5450,7 +5480,7 @@ class VasoAnalyzerApp(QMainWindow):
         edit_menu.addAction(self.action_select_all_events)
 
         self.action_find_event = QAction("Find Event…", self)
-        self.action_find_event.setShortcut(QKeySequence.Find)
+        # No shortcut assigned here: Ctrl+F is used by View → Fit to Data.
         self.action_find_event.triggered.connect(self.find_event_dialog)
         edit_menu.addAction(self.action_find_event)
 
@@ -6339,24 +6369,26 @@ class VasoAnalyzerApp(QMainWindow):
         self.reset_to_full_view()
 
     def fit_to_data(self, checked: bool = False):
-        """Fit view to data bounds.
+        """Fit view to full data bounds (delegates to _zoom_all_x for PyQtGraph).
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        self.ax.relim()
-        self.ax.autoscale_view()
-        self.canvas.draw_idle()
+        self._zoom_all_x()
 
     def zoom_to_selection(self, checked: bool = False):
-        """Zoom to current selection.
+        """Zoom to current selection, or to full data range if no selection is active.
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
         """
-        # if you later add box‐select, you'll grab the extents here;
-        # for now just stub it to full‐data
-        self.fit_to_data()
+        # Use the active range selection bounds if available; fall back to full range.
+        range_sel = getattr(self, "_range_selection", None)
+        if range_sel is not None:
+            t0, t1 = range_sel
+            self._apply_time_window((t0, t1))
+        else:
+            self._zoom_all_x()
 
     def zoom_out(self, factor: float = 1.5, x_only: bool = True):
         """Zoom out by ``factor`` around the current view's center.
@@ -7669,9 +7701,14 @@ class VasoAnalyzerApp(QMainWindow):
             "Release Notes",
             (
                 f"Release {APP_VERSION}:\n"
-                "- Packaging metadata refreshed for distribution.\n"
-                "- Documentation updated for the 2.5 onboarding flow.\n"
-                "- General maintenance and stability work.\n"
+                "- PyQtGraph renderer is now the primary backend for all trace views.\n"
+                "- Multi-track stacked layout: Inner Diameter, Outer Diameter, Pressure, and Set Pressure synchronized in a single scrollable view.\n"
+                "- Point Editor with undo/redo and audit history.\n"
+                "- Excel Mapper with flexible template writer for any workbook layout.\n"
+                "- VasoTracker v1 and v2 import with automatic sibling file discovery.\n"
+                "- Dataset package import/export between .vaso projects.\n"
+                "- Thread-safe background sample loading.\n"
+                "- General stability and logging improvements.\n"
             ),
         )
 
@@ -7684,7 +7721,7 @@ class VasoAnalyzerApp(QMainWindow):
         QMessageBox.information(
             self,
             "About VasoAnalyzer",
-            f"VasoAnalyzer {APP_VERSION} ()\nhttps://github.com/vr-oj/VasoAnalyzer",
+            f"VasoAnalyzer {APP_VERSION}\nhttps://github.com/vr-oj/VasoAnalyzer",
         )
 
     def show_tutorial(self, checked: bool = False):

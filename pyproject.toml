@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vasoanalyzer"
-version = "3.0.0b0"
+version = "3.0.0"
 description = "VasoAnalyzer — Pressure Myography Analysis Toolkit"
 requires-python = ">=3.10"
 authors = [{ name = "Osvaldo J. Vega Rodríguez" }]
