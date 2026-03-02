@@ -14,7 +14,18 @@ import sys
 if os.environ.get("VA_FAULTHANDLER", "1") != "0":
     import faulthandler
 
-    faulthandler.enable()
+    if sys.stderr is not None:
+        faulthandler.enable()
+    else:
+        # Windowed build on Windows has no stderr — redirect faulthandler to a file
+        try:
+            import tempfile
+
+            _fh_path = os.path.join(tempfile.gettempdir(), "vasoanalyzer_faulthandler.txt")
+            _fh_file = open(_fh_path, "w")  # noqa: WPS515
+            faulthandler.enable(file=_fh_file)
+        except Exception:
+            pass
 
 log = logging.getLogger(__name__)
 
@@ -58,9 +69,10 @@ def main(argv: list[str] | None = None) -> None:
     # Setup production logging with file rotation and INFO console output
     try:
         log_dir = setup_production_logging(app_name="VasoAnalyzer", console_level=logging.INFO)
-        print("=" * 70)
-        print("VasoAnalyzer - Intuitive Vascular Analysis")
-        print("=" * 70)
+        if sys.stdout is not None:
+            print("=" * 70)
+            print("VasoAnalyzer - Intuitive Vascular Analysis")
+            print("=" * 70)
         log.info(f"Starting VasoAnalyzer with project: {project_path or 'None'}")
     except Exception as e:
         # Fallback to basic logging if production logging fails
