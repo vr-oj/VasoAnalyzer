@@ -63,6 +63,9 @@ def _iter_text_files():
                 continue
             if path.suffix.lower() not in TEXT_SUFFIXES:
                 continue
+            # Skip generated package metadata directories (e.g. *.egg-info)
+            if any(part.endswith(".egg-info") for part in path.parts):
+                continue
             yield path
 
 
