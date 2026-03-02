@@ -18,13 +18,14 @@ jobs:
           python-version: "3.11"
           cache: "pip"
 
-      # PyQt5 needs these system libs on Ubuntu even when installed via pip
+      # PyQt5 needs these system libs on Ubuntu even when installed via pip.
+      # libgl1-mesa-glx and libegl1-mesa were renamed in Ubuntu 22.04+.
       - name: Install Qt system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libgl1-mesa-glx \
-            libegl1-mesa \
+            libgl1 \
+            libegl1 \
             libxkbcommon-x11-0 \
             libxcb-icccm4 \
             libxcb-image0 \
