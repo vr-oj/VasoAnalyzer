@@ -4982,7 +4982,10 @@ class VasoAnalyzerApp(QMainWindow):
             len(selected),
         )
 
-        # Import selected files
+        # Import selected files (merge or individual)
+        if dialog.should_merge and len(selected) >= 2:
+            self._import_as_merged(selected, target_experiment)
+            return
         success_count, error_count, _ = self._import_candidates(selected, target_experiment)
         log.info(
             "UI: Folder import finished for %s (success=%d errors=%d)",
@@ -5174,6 +5177,63 @@ class VasoAnalyzerApp(QMainWindow):
             time.perf_counter() - start_time,
         )
         return success_count, error_count, errors
+
+    def _import_as_merged(self, candidates, target_experiment) -> None:
+        """Merge multiple folder-import candidates into a single dataset."""
+        from vasoanalyzer.io.trace_events import load_trace_and_events
+        from vasoanalyzer.services.folder_import_service import get_file_signature
+
+        # Sort by trace filename so segments join in chronological order
+        sorted_cands = sorted(candidates, key=lambda c: Path(c.trace_file).name)
+        trace_paths = [c.trace_file for c in sorted_cands]
+        events_paths = [c.events_file for c in sorted_cands if c.events_file]
+
+        # Ask user for dataset name
+        default_name = Path(sorted_cands[0].subfolder_path).parent.name or "Merged Dataset"
+        name, ok = QInputDialog.getText(
+            self, "Merged Dataset Name", "Name for merged dataset:", text=default_name
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+
+        try:
+            ev_arg = events_paths if len(events_paths) == len(trace_paths) else None
+            df, labels, times, frames, diam, od_diam, import_meta = load_trace_and_events(
+                trace_paths, ev_arg
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Merge Error", f"Failed to merge trace files:\n{e}")
+            log.exception("Error merging candidates: %s", trace_paths)
+            return
+
+        sample = SampleN(name=name)
+        sample.trace_data = df
+        self._update_sample_link_metadata(sample, "trace", Path(trace_paths[0]).resolve())
+        sample.trace_sig = get_file_signature(trace_paths[0])
+
+        if labels and times:
+            events_data: dict[str, Any] = {"Time (s)": times, "Event": labels}
+            if frames:
+                events_data["Frame"] = frames
+            if diam:
+                events_data["DiamBefore"] = diam
+            if od_diam:
+                events_data["OuterDiamBefore"] = od_diam
+            sample.events_data = pd.DataFrame(events_data)
+
+        target_experiment.samples.append(sample)
+
+        self.refresh_project_tree()
+        self._open_first_sample_if_none_active()
+
+        if self.current_project and self.current_project.path:
+            save_project(self.current_project, self.current_project.path)
+
+        self.statusBar().showMessage(
+            f"✓ Merged {len(trace_paths)} segment(s) into '{name}'", 5000
+        )
+        log.info("IMPORT: merged %d segments into sample '%s'", len(trace_paths), name)
 
     def delete_sample(self, sample: SampleN):
         if not self.current_project:

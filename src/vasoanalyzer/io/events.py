@@ -170,7 +170,33 @@ def load_events(file_path, *, cache: Any | None = None):
                     delimiter = ";"
 
         def _read_events(path: Path) -> pd.DataFrame:
-            frame = pd.read_csv(path, delimiter=delimiter)
+            # Pre-check: count fields in the header vs data rows.
+            # When data rows have MORE fields than the header, pandas silently
+            # absorbs the extra leading fields into a MultiIndex row index,
+            # discarding the actual event times and labels.  Read the raw CSV
+            # first to detect and correct this before calling pd.read_csv.
+            with open(path, encoding="utf-8-sig") as _f:
+                _raw = list(csv.reader(_f, delimiter=delimiter))
+            if _raw:
+                _header = _raw[0]
+                _data_rows = [r for r in _raw[1:] if any(c.strip() for c in r)]
+                _max_cols = max((len(r) for r in _data_rows), default=len(_header))
+            else:
+                _header, _max_cols = [], 0
+
+            if _max_cols > len(_header):
+                # Extra fields are present — assign explicit names so pandas
+                # places ALL fields as columns instead of absorbing them as index.
+                _extra = [f"_extra{i}" for i in range(_max_cols - len(_header))]
+                frame = pd.read_csv(
+                    path,
+                    delimiter=delimiter,
+                    names=_header + _extra,
+                    skiprows=1,
+                )
+            else:
+                frame = pd.read_csv(path, delimiter=delimiter)
+
             if isinstance(frame.columns, pd.MultiIndex):
                 frame.columns = [
                     " ".join(str(part) for part in col if pd.notna(part)) for col in frame.columns
@@ -348,7 +374,10 @@ def find_matching_trace_file(reference_file: str) -> str | None:
     # Remove known suffixes to get base experiment name
     # e.g., "20251202_Exp01_table" → "20251202_Exp01"
     #       "20251202_Exp01_Result" → "20251202_Exp01"
-    for suffix in ["_table", "_Table", "_events", "_Events", "_Result", "_Raw"]:
+    for suffix in [
+        "_table", "_Table", "_events", "_Events", "_Result", "_Raw",
+        " - Table", " - table", " - Events", " - events",
+    ]:
         if base.endswith(suffix):
             base = base[: -len(suffix)]
             break

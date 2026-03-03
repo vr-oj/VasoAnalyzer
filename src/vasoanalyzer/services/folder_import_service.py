@@ -68,10 +68,6 @@ def scan_folder_for_traces(root_folder: str) -> list[tuple[str, str, str | None]
     for dirpath, _dirnames, filenames in os.walk(root_folder):
         dir_path = Path(dirpath)
 
-        # Skip the root folder itself - only process subfolders
-        if dir_path == root_path:
-            continue
-
         for filename in filenames:
             file_path = dir_path / filename
             base_name = _extract_experiment_base(filename)
@@ -143,10 +139,14 @@ def _extract_experiment_base(filename: str) -> str | None:
     """
     stem = Path(filename).stem
 
-    # Remove known suffixes
-    for suffix in ["_table", "_Table", "_events", "_Events", "_Result", "_Raw", "_output"]:
+    # Remove known suffixes (underscore-prefixed and space-dash-space VasoTracker v1 variants)
+    for suffix in [
+        "_table", "_Table", "_events", "_Events", "_Result", "_Raw", "_output",
+        " - Table", " - table", " - Events", " - events",
+    ]:
         if stem.endswith(suffix):
             stem = stem[: -len(suffix)]
+            break
 
     # Must have some content left
     return stem if stem else None
@@ -293,8 +293,14 @@ def scan_folder_with_status(
         # Determine status
         status, existing_sample = check_import_status(trace_file, events_file, experiment)
 
-        # Get subfolder name for sample naming
-        subfolder_name = os.path.basename(subfolder_path)
+        # Get subfolder name for sample naming.
+        # For root-level files (subfolder_path IS the root) use the experiment
+        # base name derived from the trace filename so each sample gets a
+        # unique, meaningful name instead of the root folder name repeated.
+        if os.path.normpath(subfolder_path) == os.path.normpath(root_folder):
+            subfolder_name = _extract_experiment_base(os.path.basename(trace_file)) or os.path.splitext(os.path.basename(trace_file))[0]
+        else:
+            subfolder_name = os.path.basename(subfolder_path)
 
         candidate = ImportCandidate(
             subfolder=subfolder_name,

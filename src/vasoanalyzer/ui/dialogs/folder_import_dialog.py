@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QSizePolicy,
 )
 
 from vasoanalyzer.services.folder_import_service import ImportCandidate
@@ -39,6 +40,7 @@ class FolderImportDialog(QDialog):
 
         self.candidates = candidates
         self.selected_candidates: list[ImportCandidate] = []
+        self.should_merge: bool = False
         self.total_count = len(candidates)
         self.new_count = sum(1 for c in candidates if c.status in {"NEW", "MODIFIED"})
         self.current_mode: str = "custom"
@@ -142,6 +144,20 @@ class FolderImportDialog(QDialog):
         import_layout.addWidget(self.mode_custom)
 
         import_layout.addStretch(1)
+
+        # Merge toggle — enabled only when ≥2 rows are checked
+        self.merge_btn = QPushButton("Merge into one dataset", self)
+        self.merge_btn.setCheckable(True)
+        self.merge_btn.setChecked(False)
+        self.merge_btn.setEnabled(False)
+        self.merge_btn.setToolTip(
+            "Combine all checked traces into a single merged dataset\n"
+            "instead of importing each as a separate dataset."
+        )
+        self.merge_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.merge_btn.toggled.connect(self._update_status_label)
+        import_layout.addWidget(self.merge_btn)
+
         layout.addLayout(import_layout)
 
         self.mode_group = QButtonGroup(self)
@@ -308,6 +324,15 @@ class FolderImportDialog(QDialog):
             self.status_label.setText("No files found.")
             return
 
+        selected = self._selected_count()
+
+        if self.merge_btn.isChecked() and selected >= 2:
+            self.status_label.setText(
+                f"{selected} checked item(s) will be merged into a single continuous dataset "
+                "(sorted by filename)."
+            )
+            return
+
         if self.current_mode == "new":
             if self.new_count > 0:
                 self.status_label.setText(f"Importing {self.new_count} new file(s).")
@@ -320,7 +345,6 @@ class FolderImportDialog(QDialog):
                 f"Re-importing {self.total_count} file(s). Existing data may be overwritten."
             )
         else:
-            selected = self._selected_count()
             self.status_label.setText(f"{selected} file(s) selected.")
 
     def _update_button_states(self) -> None:
@@ -328,6 +352,10 @@ class FolderImportDialog(QDialog):
         checked_count = self._selected_count()
         if self.ok_button:
             self.ok_button.setEnabled(checked_count > 0)
+        # Merge button requires at least 2 checked items; uncheck if no longer valid
+        self.merge_btn.setEnabled(checked_count >= 2)
+        if checked_count < 2 and self.merge_btn.isChecked():
+            self.merge_btn.setChecked(False)
 
     def get_selected_candidates(self) -> list[ImportCandidate]:
         """Get the list of selected candidates."""
@@ -341,4 +369,5 @@ class FolderImportDialog(QDialog):
     def accept(self) -> None:
         """Accept the dialog and store selected candidates."""
         self.selected_candidates = self.get_selected_candidates()
+        self.should_merge = self.merge_btn.isChecked() and len(self.selected_candidates) >= 2
         super().accept()
