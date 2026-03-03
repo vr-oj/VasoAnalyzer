@@ -572,7 +572,11 @@ class EventTableModel(QAbstractTableModel):
             lowered = header_label.lower()
             if "frame" in lowered or "trace idx" in lowered:
                 try:
-                    return f"{int(round(float(value))):,}"
+                    fv = float(value)
+                    import math
+                    if not math.isfinite(fv):
+                        return "—"
+                    return f"{int(round(fv)):,}"
                 except (TypeError, ValueError):
                     return value
 
@@ -580,6 +584,10 @@ class EventTableModel(QAbstractTableModel):
             num = float(value)
         except (TypeError, ValueError):
             return value
+
+        import math
+        if not math.isfinite(num):
+            return "—"
 
         if header_label == "Time (s)" or column == TIME_COLUMN_INDEX:
             return self._time_formatter.format(num)

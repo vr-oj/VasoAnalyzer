@@ -164,8 +164,21 @@ def fetch_events_dataframe(
 ) -> pd.DataFrame:
     """Return events for ``dataset_id`` optionally filtered to ``[t0, t1]``."""
 
+    # Check which columns exist to handle both old and new schemas gracefully.
+    existing_cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(event)").fetchall()
+    }
+    extra_select_cols = [
+        c for c in ("od", "id_diam") if c in existing_cols
+    ]
+    select_cols = "t_seconds, t_us, label, frame, p_avg, p1, p2, temp"
+    if extra_select_cols:
+        select_cols += ", " + ", ".join(extra_select_cols)
+    select_cols += ", extra_json"
+
     query = [
-        "SELECT t_seconds, t_us, label, frame, p_avg, p1, p2, temp, extra_json",
+        f"SELECT {select_cols}",
         "FROM event",
         "WHERE dataset_id = ?",
         "AND deleted_utc IS NULL",
@@ -183,19 +196,39 @@ def fetch_events_dataframe(
     if not df.empty and "extra_json" in df.columns:
         extras = []
         review_states = []  # CRITICAL FIX (Bug #1): Extract review states separately
+        extra_id_list = []
+        extra_od_list = []
 
-        for payload in df["extra_json"]:
+        for idx_row, payload in enumerate(df["extra_json"]):
             extra_dict = json.loads(payload) if isinstance(payload, str) and payload else {}
 
             # CRITICAL FIX: Extract review_state and add as top-level column
             review_state = extra_dict.pop("review_state", "UNREVIEWED")
             review_states.append(review_state)
 
+            # Extract stored ID/OD measurements from extra_json for legacy events that
+            # didn't populate the dedicated od/id_diam columns.
+            extra_id_list.append(extra_dict.get("ID (µm)"))
+            extra_od_list.append(extra_dict.get("OD (µm)"))
+
             extras.append(extra_dict)
 
         df = df.drop(columns=["extra_json"])
         df["review_state"] = review_states  # Add as top-level column
         df["extra"] = extras
+
+        # Merge dedicated columns with extra_json fallback: prefer dedicated columns when set
+        if "id_diam" in df.columns:
+            fallback_id = pd.Series(extra_id_list, index=df.index, dtype=object)
+            df["id_diam"] = df["id_diam"].combine_first(fallback_id)
+        else:
+            df["id_diam"] = pd.Series(extra_id_list, index=df.index, dtype=object)
+
+        if "od" in df.columns:
+            fallback_od = pd.Series(extra_od_list, index=df.index, dtype=object)
+            df["od"] = df["od"].combine_first(fallback_od)
+        else:
+            df["od"] = pd.Series(extra_od_list, index=df.index, dtype=object)
     else:
         # If no extra_json column exists, add default review_state
         if not df.empty:

@@ -1055,6 +1055,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.itemChanged.connect(self.on_tree_item_changed)
         self.project_tree.itemSelectionChanged.connect(self.on_tree_selection_changed)
         self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
+        self.project_tree.itemExpanded.connect(self._on_tree_experiment_expand_changed)
+        self.project_tree.itemCollapsed.connect(self._on_tree_experiment_expand_changed)
         log.info("Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked")
         # Single-click opens a sample; double-click is reserved for editing or opening figures
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -2998,6 +3000,29 @@ class VasoAnalyzerApp(QMainWindow):
     def refresh_project_tree(self):
         if not self.project_tree:
             return
+
+        # Capture current expand/collapse state for each experiment before clearing
+        expanded_state: dict[str, bool] = {}
+        for i in range(self.project_tree.topLevelItemCount()):
+            project_item = self.project_tree.topLevelItem(i)
+            if project_item is None:
+                continue
+            for j in range(project_item.childCount()):
+                exp_item = project_item.child(j)
+                if exp_item is None:
+                    continue
+                obj = exp_item.data(0, Qt.UserRole)
+                exp_name = getattr(obj, "name", None) or exp_item.text(0)
+                expanded_state[exp_name] = exp_item.isExpanded()
+
+        # Also seed from persisted project ui_state (for first load after a save)
+        if self.current_project and isinstance(self.current_project.ui_state, dict):
+            for exp_name, is_expanded in self.current_project.ui_state.get(
+                "experiment_expanded", {}
+            ).items():
+                if exp_name not in expanded_state:
+                    expanded_state[exp_name] = is_expanded
+
         self.project_tree.clear()
         if not self.current_project:
             return
@@ -3033,11 +3058,23 @@ class VasoAnalyzerApp(QMainWindow):
                     f"Data quality: {self._data_quality_label(quality)}",
                 )
                 exp_item.addChild(item)
-        self.project_tree.expandAll()
+            # Restore expand state; default to expanded for experiments seen for the first time
+            exp_item.setExpanded(expanded_state.get(exp.name, True))
+        root.setExpanded(True)
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()
         if self.current_sample:
             self._select_tree_item_for_sample(self.current_sample)
+
+    def _on_tree_experiment_expand_changed(self, item) -> None:
+        """Persist experiment expand/collapse state to project.ui_state."""
+        obj = item.data(0, Qt.UserRole)
+        if not isinstance(obj, Experiment) or not self.current_project:
+            return
+        if not isinstance(self.current_project.ui_state, dict):
+            self.current_project.ui_state = {}
+        exp_expanded = self.current_project.ui_state.setdefault("experiment_expanded", {})
+        exp_expanded[obj.name] = item.isExpanded()
 
     def _set_samples_data_quality(self, samples: Sequence[SampleN], quality: str | None) -> None:
         if not samples:
@@ -4147,11 +4184,43 @@ class VasoAnalyzerApp(QMainWindow):
                         if "Outer Diameter" in trace.columns
                         else None
                     )
-                    for t in times:
+                    # Extract stored OD/ID from the events DataFrame as fallback
+                    # when the trace has NaN at the event time (e.g. legacy files
+                    # with sparse inner-diameter measurements).
+                    stored_id: list[float | None] = []
+                    stored_od: list[float | None] = []
+                    ev_df = sample.events_data if sample.events_data is not None else None
+                    if ev_df is not None and isinstance(ev_df, pd.DataFrame):
+                        for col_name, out_list in (
+                            ("id_diam", stored_id),
+                            ("od", stored_od),
+                        ):
+                            if col_name in ev_df.columns:
+                                for val in ev_df[col_name]:
+                                    try:
+                                        fv = float(val)
+                                        out_list.append(fv if np.isfinite(fv) else None)
+                                    except (TypeError, ValueError):
+                                        out_list.append(None)
+                            else:
+                                out_list.extend([None] * len(times))
+                    else:
+                        stored_id = [None] * len(times)
+                        stored_od = [None] * len(times)
+
+                    for i, t in enumerate(times):
                         idx_evt = int(np.argmin(np.abs(arr_t - t)))
-                        diam.append(float(arr_d[idx_evt]))
+                        id_val = float(arr_d[idx_evt])
+                        if not np.isfinite(id_val) and i < len(stored_id) and stored_id[i] is not None:
+                            id_val = stored_id[i]
+                        diam.append(id_val)
                         if arr_od is not None:
-                            od.append(float(arr_od[idx_evt]))
+                            od_val = float(arr_od[idx_evt])
+                            if not np.isfinite(od_val) and i < len(stored_od) and stored_od[i] is not None:
+                                od_val = stored_od[i]
+                            od.append(od_val)
+                        elif i < len(stored_od) and stored_od[i] is not None:
+                            od.append(stored_od[i])
             except FileNotFoundError as exc:
                 missing = getattr(exc, "filename", None) or sample.events_path
                 self._handle_missing_asset(sample, "events", missing, str(exc))
@@ -11602,7 +11671,31 @@ QPushButton[isGhost="true"]:pressed {{
                 idx_pre = int(np.argmin(np.abs(arr_t - t_sample)))
 
                 diam_val = float(arr_d[idx_pre])
+                # Fallback to stored diam_before when the trace has NaN at the sample point
+                # (common for legacy VasoTracker files with sparse ID measurements)
+                if not np.isfinite(diam_val) and diam_before is not None and idx_ev < len(diam_before):
+                    fb = diam_before[idx_ev]
+                    if fb is not None:
+                        try:
+                            fb_f = float(fb)
+                            if np.isfinite(fb_f):
+                                diam_val = fb_f
+                        except (TypeError, ValueError):
+                            pass
+
                 od_val_sample = float(arr_od[idx_pre]) if arr_od is not None else None
+                # Fallback to stored od_before when the trace has NaN at the sample point
+                if (
+                    od_val_sample is None or not np.isfinite(od_val_sample)
+                ) and od_before is not None and idx_ev < len(od_before):
+                    fb_od = od_before[idx_ev]
+                    if fb_od is not None:
+                        try:
+                            fb_od_f = float(fb_od)
+                            if np.isfinite(fb_od_f):
+                                od_val_sample = fb_od_f
+                        except (TypeError, ValueError):
+                            pass
                 avg_p_val_sample = None
                 if arr_avg_p is not None:
                     val = arr_avg_p[idx_pre]
