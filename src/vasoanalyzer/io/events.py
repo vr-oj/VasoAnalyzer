@@ -148,6 +148,59 @@ def _looks_like_number_or_time(val: str) -> bool:
     return bool(re.fullmatch(r"\d{1,2}(?::\d{2}){1,2}(?:\.\d+)?", s))
 
 
+def _safe_read_events_csv(path: Path | str, delimiter: str | None = None) -> pd.DataFrame:
+    """Read an events CSV robustly, handling files where data rows have more
+    fields than the header row (which would otherwise create a MultiIndex)."""
+
+    path = Path(path)
+    if delimiter is None:
+        with open(path, encoding="utf-8-sig") as _h:
+            sample = _h.read(1024)
+        try:
+            delimiter = csv.Sniffer().sniff(sample).delimiter
+        except csv.Error:
+            if "," in sample:
+                delimiter = ","
+            elif "\t" in sample:
+                delimiter = "\t"
+            else:
+                delimiter = ";"
+
+    # Pre-check: count fields in the header vs data rows.
+    # When data rows have MORE fields than the header, pandas silently
+    # absorbs the extra leading fields into a MultiIndex row index,
+    # discarding the actual event times and labels.  Read the raw CSV
+    # first to detect and correct this before calling pd.read_csv.
+    with open(path, encoding="utf-8-sig") as _f:
+        _raw = list(csv.reader(_f, delimiter=delimiter))
+    if _raw:
+        _header = _raw[0]
+        _data_rows = [r for r in _raw[1:] if any(c.strip() for c in r)]
+        _max_cols = max((len(r) for r in _data_rows), default=len(_header))
+    else:
+        _header, _max_cols = [], 0
+
+    if _max_cols > len(_header):
+        _extra = [f"_extra{i}" for i in range(_max_cols - len(_header))]
+        frame = pd.read_csv(
+            path,
+            delimiter=delimiter,
+            names=_header + _extra,
+            skiprows=1,
+        )
+    else:
+        frame = pd.read_csv(path, delimiter=delimiter)
+
+    if isinstance(frame.columns, pd.MultiIndex):
+        frame.columns = [
+            " ".join(str(part) for part in col if pd.notna(part)) for col in frame.columns
+        ]
+    if any(_looks_like_number_or_time(c) for c in frame.columns):
+        frame = pd.read_csv(path, delimiter=delimiter, header=None)
+        frame.columns = [f"col{i}" for i in range(frame.shape[1])]
+    return frame
+
+
 def load_events(file_path, *, cache: Any | None = None):
     """Return event labels, times and optional frames from a table file or DataFrame."""
 
@@ -170,41 +223,7 @@ def load_events(file_path, *, cache: Any | None = None):
                     delimiter = ";"
 
         def _read_events(path: Path) -> pd.DataFrame:
-            # Pre-check: count fields in the header vs data rows.
-            # When data rows have MORE fields than the header, pandas silently
-            # absorbs the extra leading fields into a MultiIndex row index,
-            # discarding the actual event times and labels.  Read the raw CSV
-            # first to detect and correct this before calling pd.read_csv.
-            with open(path, encoding="utf-8-sig") as _f:
-                _raw = list(csv.reader(_f, delimiter=delimiter))
-            if _raw:
-                _header = _raw[0]
-                _data_rows = [r for r in _raw[1:] if any(c.strip() for c in r)]
-                _max_cols = max((len(r) for r in _data_rows), default=len(_header))
-            else:
-                _header, _max_cols = [], 0
-
-            if _max_cols > len(_header):
-                # Extra fields are present — assign explicit names so pandas
-                # places ALL fields as columns instead of absorbing them as index.
-                _extra = [f"_extra{i}" for i in range(_max_cols - len(_header))]
-                frame = pd.read_csv(
-                    path,
-                    delimiter=delimiter,
-                    names=_header + _extra,
-                    skiprows=1,
-                )
-            else:
-                frame = pd.read_csv(path, delimiter=delimiter)
-
-            if isinstance(frame.columns, pd.MultiIndex):
-                frame.columns = [
-                    " ".join(str(part) for part in col if pd.notna(part)) for col in frame.columns
-                ]
-            if any(_looks_like_number_or_time(c) for c in frame.columns):
-                frame = pd.read_csv(path, delimiter=delimiter, header=None)
-                frame.columns = [f"col{i}" for i in range(frame.shape[1])]
-            return frame
+            return _safe_read_events_csv(path, delimiter=delimiter)
 
         if cache is not None and DataCache is not None:
             df = cache.read_dataframe(file_path, loader=_read_events)
@@ -398,4 +417,5 @@ __all__ = [
     "find_matching_event_file",
     "find_matching_tiff_file",
     "find_matching_trace_file",
+    "_safe_read_events_csv",
 ]

@@ -2256,7 +2256,8 @@ def _resolve_events_dataframe(
                     path.exists(),
                 )
                 # DEBUG: _resolve_events_dataframe file path instrumentation end
-                df = pd.read_csv(path)
+                from vasoanalyzer.io.events import _safe_read_events_csv
+                df = _safe_read_events_csv(path)
                 log.debug(f"  ✓ Loaded {len(df)} events from CSV")
                 # DEBUG: _resolve_events_dataframe final instrumentation start
                 try:

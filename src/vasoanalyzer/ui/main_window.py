@@ -3278,6 +3278,13 @@ class VasoAnalyzerApp(QMainWindow):
             log.info(f"Single-clicked tree item: {obj[0]} (tuple with {len(obj)} elements)")
 
         if isinstance(obj, SampleN):
+            # When Ctrl or Shift is held the user is building a multi-selection.
+            # Skip activation so the tree can accumulate selections without
+            # refresh_project_tree clearing them.
+            modifiers = QApplication.keyboardModifiers()
+            if modifiers & (Qt.ControlModifier | Qt.ShiftModifier):
+                return
+
             experiment = None
             parent = item.parent()
             if parent:
@@ -4711,7 +4718,13 @@ class VasoAnalyzerApp(QMainWindow):
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save Data As…")
-            del_n = menu.addAction("Delete Data")
+            _del_targets = selected_samples if len(selected_samples) > 1 else [obj]
+            _del_label = (
+                f"Delete {len(_del_targets)} Datasets"
+                if len(_del_targets) > 1
+                else "Delete Data"
+            )
+            del_n = menu.addAction(_del_label)
             quality_menu = menu.addMenu("Mark Data Quality")
             quality_clear = quality_menu.addAction(
                 self._data_quality_icon(None), "No decision (white)"
@@ -4729,7 +4742,7 @@ class VasoAnalyzerApp(QMainWindow):
             elif action == save_n:
                 self.save_sample_as(obj)
             elif action == del_n:
-                self.delete_sample(obj)
+                self.delete_samples(_del_targets)
             elif action in {
                 quality_clear,
                 quality_good,
@@ -5234,6 +5247,43 @@ class VasoAnalyzerApp(QMainWindow):
             f"✓ Merged {len(trace_paths)} segment(s) into '{name}'", 5000
         )
         log.info("IMPORT: merged %d segments into sample '%s'", len(trace_paths), name)
+
+    def delete_samples(self, samples: list[SampleN]) -> None:
+        """Delete one or more samples with a single confirmation and save."""
+        if not self.current_project or not samples:
+            return
+
+        count = len(samples)
+        if count == 1:
+            msg = f"Delete dataset '{samples[0].name}'?\nThis cannot be undone."
+            title = "Delete Dataset"
+        else:
+            names = "\n  • ".join(s.name for s in samples[:10])
+            more = f"\n  … and {count - 10} more" if count > 10 else ""
+            msg = f"Delete {count} datasets?\n  • {names}{more}\nThis cannot be undone."
+            title = "Delete Datasets"
+
+        if (
+            QMessageBox.question(
+                self, title, msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            != QMessageBox.Yes
+        ):
+            return
+
+        for sample in samples:
+            for exp in self.current_project.experiments:
+                if sample in exp.samples:
+                    exp.samples.remove(sample)
+                    self.project_state.pop(id(sample), None)
+                    if self.current_sample is sample:
+                        self.current_sample = None
+                    break
+
+        self.refresh_project_tree()
+        self.mark_session_dirty()
+        if self.current_project.path:
+            save_project_file(self.current_project, self.current_project.path)
 
     def delete_sample(self, sample: SampleN):
         if not self.current_project:

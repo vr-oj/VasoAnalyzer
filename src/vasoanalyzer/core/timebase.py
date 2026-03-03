@@ -159,8 +159,16 @@ def resolve_trace_timebase(
                     warnings.append(
                         f"Using '{col}' as seconds because metadata specifies time units '{time_unit}'."
                     )
-                else:
+                elif time_unit is not None:
+                    # Explicit non-seconds unit — mark as ambiguous for later error
                     time_col = col
+                else:
+                    # No unit metadata — assume seconds (legacy trace convention)
+                    seconds_col = col
+                    warnings.append(
+                        f"Bare '{col}' column has no explicit unit; assuming seconds. "
+                        "Rename to 'Time (s)' to suppress this warning."
+                    )
                 break
 
     timestamp_col = next(

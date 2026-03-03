@@ -26,7 +26,7 @@ from vasoanalyzer.core.timebase import (
     derive_tiff_page_times,
     validate_and_normalize_events,
 )
-from vasoanalyzer.io.events import _standardize_headers, find_matching_event_file
+from vasoanalyzer.io.events import _safe_read_events_csv, _standardize_headers, find_matching_event_file
 from vasoanalyzer.io.traces import load_trace, merge_traces
 
 
@@ -45,7 +45,7 @@ def _read_event_dataframe(path: str, *, cache: Any | None = None) -> pd.DataFram
                 delimiter = ";"
 
     def _load_csv(p: str | Path) -> pd.DataFrame:
-        return pd.read_csv(p, delimiter=delimiter)
+        return _safe_read_events_csv(p, delimiter=delimiter)
 
     if cache is not None and DataCache is not None:
         df = cache.read_dataframe(path, loader=_load_csv)
