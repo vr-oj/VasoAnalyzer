@@ -653,11 +653,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if axis is None:
             return None
         with contextlib.suppress(Exception):
-            rect = axis.sceneBoundingRect()
+            # Use geometry() instead of sceneBoundingRect() — the latter
+            # returns the full widget area, not just the axis column.
+            rect = axis.geometry()
             if rect is None or not rect.isValid() or rect.isEmpty():
                 return None
-            top_left = self._plot_widget.mapFromScene(rect.topLeft())
-            bottom_right = self._plot_widget.mapFromScene(rect.bottomRight())
+            scene_rect = axis.mapRectToScene(rect)
+            top_left = self._plot_widget.mapFromScene(scene_rect.topLeft())
+            bottom_right = self._plot_widget.mapFromScene(scene_rect.bottomRight())
             mapped = QRect(top_left, bottom_right).normalized()
             if mapped.isEmpty():
                 return None
@@ -684,7 +687,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         axis_rect = self._left_axis_rect_in_widget()
         if axis_rect is None:
             return False
-        return axis_rect.adjusted(-2, -2, 2, 2).contains(pos)
+        # Small tolerance on left/top/bottom; none on right to avoid bleeding into plot
+        return axis_rect.adjusted(-2, -2, 0, 2).contains(pos)
 
     def _event_pos_in_plot_widget(self, obj, event) -> QPoint | None:
         if not hasattr(event, "pos"):
@@ -747,19 +751,30 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._y_axis_cursor_forced = False
         self._y_axis_saved_cursor_explicit = False
 
+    def _update_cursor_for_widget_pos(self, widget_pos: QPoint | None) -> None:
+        """Update Y-axis cursor feedback from a widget-coordinate position."""
+        if widget_pos is None:
+            self._set_y_axis_cursor_feedback(False)
+            return
+        # In rect (Select) mode, Y-axis drag is disabled so don't show resize cursor
+        if self.mouse_mode() == "rect":
+            self._set_y_axis_cursor_feedback(False)
+            return
+        self._set_y_axis_cursor_feedback(self._point_in_left_axis(widget_pos))
+
     def _update_cursor_for_position(self, scene_pos: QPointF | None) -> None:
+        """Update Y-axis cursor feedback from a scene-coordinate position."""
         if scene_pos is None:
             self._set_y_axis_cursor_feedback(False)
             return
-        y_axis = self._plot_item.getAxis("left")
-        if y_axis is None:
+        if self.mouse_mode() == "rect":
             self._set_y_axis_cursor_feedback(False)
             return
-        axis_rect = y_axis.sceneBoundingRect()
-        if axis_rect is None or not axis_rect.isValid() or axis_rect.isEmpty():
-            self._set_y_axis_cursor_feedback(False)
+        with contextlib.suppress(Exception):
+            widget_pos = self._plot_widget.mapFromScene(scene_pos)
+            self._set_y_axis_cursor_feedback(self._point_in_left_axis(widget_pos))
             return
-        self._set_y_axis_cursor_feedback(axis_rect.contains(scene_pos))
+        self._set_y_axis_cursor_feedback(False)
 
     def _reposition_y_axis_controls(self) -> None:
         controls = self._y_axis_controls
@@ -877,8 +892,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         if event_type == QEvent.MouseMove:
             pos = self._event_pos_in_plot_widget(obj, event)
-            scene_pos = self._plot_widget.mapToScene(pos) if pos is not None else None
-            self._update_cursor_for_position(scene_pos)
+            self._update_cursor_for_widget_pos(pos)
             return False
 
         if event_type == QEvent.MouseButtonRelease and self._y_axis_drag_active:
@@ -915,6 +929,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 self._chart_parity_v1
                 and event_type == QEvent.MouseButtonPress
                 and button == Qt.LeftButton
+                and self.mouse_mode() != "rect"
             ):
                 self._y_axis_drag_active = True
                 self._y_axis_drag_last_pos = QPoint(pos)
