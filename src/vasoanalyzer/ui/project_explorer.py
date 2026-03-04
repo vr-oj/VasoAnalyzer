@@ -3,7 +3,7 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
@@ -16,6 +16,26 @@ from PyQt5.QtWidgets import (
 )
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+
+class ExperimentTreeWidget(QTreeWidget):
+    """QTreeWidget that emits experiment_reordered after a drag-move of an experiment node."""
+
+    experiment_reordered = pyqtSignal()
+
+    def dropEvent(self, event):
+        dragged = self.currentItem()
+        if dragged is None:
+            event.ignore()
+            return
+        parent = dragged.parent()
+        # Only allow drag for direct children of the root item (experiment level).
+        # Reject drags of the root itself or of sample items (grandchildren).
+        if parent is None or parent.parent() is not None:
+            event.ignore()
+            return
+        super().dropEvent(event)
+        self.experiment_reordered.emit()
 
 
 class ProjectExplorerWidget(QDockWidget):
@@ -55,12 +75,13 @@ class ProjectExplorerWidget(QDockWidget):
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
 
-        self.tree = QTreeWidget()
+        self.tree = ExperimentTreeWidget()
         self.tree.setObjectName("ProjectTree")
         self.tree.setHeaderHidden(True)
         self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(14)
+        self.tree.setDragDropMode(QAbstractItemView.InternalMove)
 
         self.empty_state_label = QLabel("No datasets yet. Open Data… or Import Folder…", card)
         self.empty_state_label.setObjectName("ProjectEmptyState")

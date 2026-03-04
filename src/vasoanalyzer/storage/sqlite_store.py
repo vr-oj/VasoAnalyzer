@@ -248,7 +248,7 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
             log.debug("Quick validation failed during bundle open", exc_info=True)
         writer = DbWriter(project_path, connection=unified_store.conn)
         # Return the unified store (which is already a ProjectStore-compatible object)
-        return ProjectStore(
+        ps = ProjectStore(
             path=unified_store.path,
             conn=unified_store.conn,
             dirty=unified_store.dirty,
@@ -257,6 +257,12 @@ def open_project(path: str | os.PathLike[str]) -> ProjectStore:
             cloud_service=getattr(unified_store, "cloud_service", cloud_service),
             journal_mode=getattr(unified_store, "journal_mode", journal_mode),
         )
+        # Keep unified_store alive for the lifetime of ps.  Without this the
+        # CPython reference-count drops to zero immediately and the handle's
+        # weakref.finalize fires, calling shutil.rmtree on the temp bundle dir
+        # (including the staging DB) while the caller still holds staging_conn.
+        ps._unified_store_ref = unified_store  # type: ignore[attr-defined]
+        return ps
 
     # Legacy format: open directly
     conn = open_db(project_path.as_posix(), apply_pragmas=False)

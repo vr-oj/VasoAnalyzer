@@ -108,6 +108,9 @@ class UnifiedProjectStore:
     is_cloud_path: bool = False
     cloud_service: str | None = None
     journal_mode: str | None = None
+    # For container/bundle format: the outer .vaso file path (not the staging temp dir).
+    # Populated so that store-reuse checks in _save_project_bundle can match correctly.
+    container_path: Path | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     def mark_dirty(self) -> None:
@@ -361,6 +364,7 @@ def open_unified_project(
             is_cloud_path=getattr(handle, "is_cloud_path", is_cloud),
             cloud_service=getattr(handle, "cloud_service", cloud_service),
             journal_mode=getattr(handle, "journal_mode", None),
+            container_path=getattr(handle, "container_path", None),
         )
 
     else:

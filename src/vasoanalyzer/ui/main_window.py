@@ -1057,6 +1057,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.itemDoubleClicked.connect(self.on_tree_item_double_clicked)
         self.project_tree.itemExpanded.connect(self._on_tree_experiment_expand_changed)
         self.project_tree.itemCollapsed.connect(self._on_tree_experiment_expand_changed)
+        self.project_dock.tree.experiment_reordered.connect(self._on_experiment_reordered)
         log.info("Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked")
         # Single-click opens a sample; double-click is reserved for editing or opening figures
         self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -3035,7 +3036,7 @@ class VasoAnalyzerApp(QMainWindow):
         for exp in self.current_project.experiments:
             exp_item = QTreeWidgetItem([exp.name])
             exp_item.setData(0, Qt.UserRole, exp)
-            exp_item.setFlags(exp_item.flags() | Qt.ItemIsEditable)
+            exp_item.setFlags(exp_item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled)
             exp_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogListView))
             exp_item.setData(0, Qt.FontRole, self._bold_font(size_delta=1))
             root.addChild(exp_item)
@@ -3075,6 +3076,22 @@ class VasoAnalyzerApp(QMainWindow):
             self.current_project.ui_state = {}
         exp_expanded = self.current_project.ui_state.setdefault("experiment_expanded", {})
         exp_expanded[obj.name] = item.isExpanded()
+
+    def _on_experiment_reordered(self) -> None:
+        """Sync Project.experiments to the tree order after a drag-drop reorder."""
+        if not self.current_project or not self.project_tree:
+            return
+        new_order: list[Experiment] = []
+        for i in range(self.project_tree.topLevelItemCount()):
+            root = self.project_tree.topLevelItem(i)
+            for j in range(root.childCount()):
+                exp_item = root.child(j)
+                obj = exp_item.data(0, Qt.UserRole)
+                if isinstance(obj, Experiment):
+                    new_order.append(obj)
+        if new_order:
+            self.current_project.experiments = new_order
+            self.mark_session_dirty("experiment_reordered")
 
     def _set_samples_data_quality(self, samples: Sequence[SampleN], quality: str | None) -> None:
         if not samples:
@@ -17302,6 +17319,20 @@ QPushButton[isGhost="true"]:pressed {{
         elif host is not None:
             with contextlib.suppress(Exception):
                 state["set_pressure_visible"] = host.is_channel_visible("set_pressure")
+        # Capture experiment expand/collapse states from the tree at save-time.
+        # Must be here because gather_ui_state() completely overwrites project.ui_state,
+        # discarding whatever _on_tree_experiment_expand_changed had stored in memory.
+        if getattr(self, "project_tree", None):
+            experiment_expanded: dict[str, bool] = {}
+            for _i in range(self.project_tree.topLevelItemCount()):
+                _root = self.project_tree.topLevelItem(_i)
+                for _j in range(_root.childCount()):
+                    _exp_item = _root.child(_j)
+                    _obj = _exp_item.data(0, Qt.UserRole)
+                    if isinstance(_obj, Experiment):
+                        experiment_expanded[_obj.name] = _exp_item.isExpanded()
+            if experiment_expanded:
+                state["experiment_expanded"] = experiment_expanded
         return state
 
     def _invalidate_sample_state_cache(self):

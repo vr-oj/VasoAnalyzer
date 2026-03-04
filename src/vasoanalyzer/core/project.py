@@ -1554,6 +1554,7 @@ def _load_project_bundle(path: str) -> Project:
         project_ui = _json_loads(meta_rows.get("project_ui_state"))
         project_created = meta_rows.get("project_created_at")
         project_updated = meta_rows.get("project_updated_at")
+        experiment_order_raw = _json_loads(meta_rows.get("experiment_order"), default=[])
 
         base_dir = path_obj.resolve().parent
         tmp_manager = tempfile.TemporaryDirectory()
@@ -1620,7 +1621,7 @@ def _load_project_bundle(path: str) -> Project:
 
         project = Project(
             name=project_name,
-            experiments=list(experiments_map.values()),
+            experiments=_apply_experiment_order(experiments_map, experiment_order_raw),
             path=path,
             ui_state=project_ui,
             description=project_description,
@@ -1878,6 +1879,9 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
             "tags": list(exp.tags),
         }
     meta_entries.append(("experiments_meta", _json_dumps(experiments_payload)))
+    # Persist explicit experiment order so that load does not depend on dataset id sequence
+    experiment_order = [exp.name for exp in project.experiments]
+    meta_entries.append(("experiment_order", _json_dumps(experiment_order)))
 
     repo.write_meta(dict(meta_entries))
 
@@ -2411,6 +2415,19 @@ def _normalize_experiment_id_value(value: Any) -> str | None:
         return str(uuid.UUID(str(value)))
     except Exception:
         return None
+
+
+def _apply_experiment_order(
+    experiments_map: dict[str, "Experiment"],
+    stored_order: list,
+) -> list:
+    """Return experiments_map values sorted by stored_order; unknowns appended at end."""
+    if not stored_order or not isinstance(stored_order, list):
+        return list(experiments_map.values())
+    remaining = dict(experiments_map)
+    ordered = [remaining.pop(n) for n in stored_order if n in remaining]
+    ordered.extend(remaining.values())
+    return ordered
 
 
 def _prepare_experiment_meta_map(
@@ -3052,6 +3069,7 @@ def _load_project_sqlite(path: str) -> Project:
         project_ui = _json_loads(meta_rows.get("project_ui_state"))
         project_created = meta_rows.get("project_created_at")
         project_updated = meta_rows.get("project_updated_at")
+        experiment_order_raw = _json_loads(meta_rows.get("experiment_order"), default=[])
 
         base_dir = Path(path).resolve().parent
         tmp_manager = tempfile.TemporaryDirectory()
@@ -3116,7 +3134,7 @@ def _load_project_sqlite(path: str) -> Project:
 
         project = Project(
             name=project_name,
-            experiments=list(experiments_map.values()),
+            experiments=_apply_experiment_order(experiments_map, experiment_order_raw),
             path=path,
             ui_state=project_ui,
             description=project_description,
