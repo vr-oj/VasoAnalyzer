@@ -7,9 +7,16 @@ on:
       - "v*.*.*"
 
 jobs:
-  # ── macOS ──────────────────────────────────────────────────────────────────
+  # ── macOS (Intel + Apple Silicon) ────────────────────────────────────────
   build-macos:
     runs-on: macos-14
+    strategy:
+      matrix:
+        include:
+          - python-arch: x64
+            label: Intel
+          - python-arch: arm64
+            label: AppleSilicon
 
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
+          architecture: ${{ matrix.python-arch }}
 
       - name: Inject version from tag
         run: |
@@ -28,11 +35,13 @@ jobs:
 
       - name: Build macOS DMG
         run: bash installer/macos/build_macos.sh
+        env:
+          ARCH_LABEL: ${{ matrix.label }}
 
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-dmg
+          name: macos-dmg-${{ matrix.label }}
           path: installer/macos/output/*.dmg
 
   # ── Windows ────────────────────────────────────────────────────────────────
@@ -88,10 +97,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download macOS artifact
+      - name: Download macOS Intel artifact
         uses: actions/download-artifact@v4
         with:
-          name: macos-dmg
+          name: macos-dmg-Intel
+          path: release-assets/
+
+      - name: Download macOS Apple Silicon artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-dmg-AppleSilicon
           path: release-assets/
 
       - name: Download Windows artifact
@@ -117,12 +132,11 @@ jobs:
 
           | Platform | File |
           |----------|------|
-          | macOS | `.dmg` — open it and drag VasoAnalyzer to Applications |
+          | macOS (Apple Silicon) | `*-AppleSilicon.dmg` — M1/M2/M3/M4 Macs |
+          | macOS (Intel) | `*-Intel.dmg` — older Intel-based Macs |
           | Windows | `.exe` — run the installer |
 
-          **macOS note:** This is an unsigned build. On first launch, right-click the app → Open to bypass Gatekeeper. This is normal for open-source apps without an Apple Developer account.
-
-          Runs natively on Apple Silicon (M1/M2/M3/M4). Intel Macs are supported via Rosetta 2.
+          **macOS note:** This is an unsigned build. On first launch, right-click the app → Open to bypass Gatekeeper.
 
           ---
           HEADER

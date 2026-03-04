@@ -31,8 +31,12 @@ fi
 APP_NAME=$(basename "$APP_BUNDLE" .app)
 echo "==> Found bundle: $APP_BUNDLE"
 
-# Derive a filesystem-safe DMG name (replace spaces with hyphens)
-DMG_STEM="${APP_NAME// /-}"
+# Architecture label: use ARCH_LABEL env var if set, otherwise detect from uname
+ARCH_LABEL="${ARCH_LABEL:-$(uname -m)}"
+echo "==> Architecture: $ARCH_LABEL"
+
+# Derive a filesystem-safe DMG name (replace spaces with hyphens, append arch)
+DMG_STEM="${APP_NAME// /-}-${ARCH_LABEL}"
 DMG_PATH="$OUT_DIR/$DMG_STEM.dmg"
 STAGING_DIR="$DIST_DIR/dmg_staging"
 
