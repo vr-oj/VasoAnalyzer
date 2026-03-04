@@ -100,21 +100,36 @@ jobs:
           name: windows-installer
           path: release-assets/
 
+      - name: Generate release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api repos/${{ github.repository }}/releases/generate-notes \
+            -f tag_name="${{ github.ref_name }}" \
+            --jq '.body' > generated-notes.md
+
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          cat > release-body.md << 'HEADER'
+          ## Downloads
+
+          | Platform | File |
+          |----------|------|
+          | macOS | `.dmg` — open it and drag VasoAnalyzer to Applications |
+          | Windows | `.exe` — run the installer |
+
+          **macOS note:** This is an unsigned build. On first launch, right-click the app → Open to bypass Gatekeeper. This is normal for open-source apps without an Apple Developer account.
+
+          Runs natively on Apple Silicon (M1/M2/M3/M4). Intel Macs are supported via Rosetta 2.
+
+          ---
+          HEADER
+          cat generated-notes.md >> release-body.md
+
           gh release create "${{ github.ref_name }}" \
             release-assets/* \
             --repo "${{ github.repository }}" \
             --title "VasoAnalyzer ${{ github.ref_name }}" \
-            --notes "## Downloads
-
-          | Platform | File |
-          |----------|------|
-          | macOS | \`.dmg\` — open it and drag VasoAnalyzer to Applications |
-          | Windows | \`.exe\` — run the installer |
-
-          **macOS note:** This is an unsigned build. On first launch, right-click the app → Open to bypass Gatekeeper. This is normal for open-source apps without an Apple Developer account.
-
-          Runs natively on Apple Silicon (M1/M2/M3/M4). Intel Macs are supported via Rosetta 2."
+            --notes-file release-body.md
