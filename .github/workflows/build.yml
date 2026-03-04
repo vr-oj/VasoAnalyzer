@@ -9,14 +9,14 @@ on:
 jobs:
   # ── macOS (Intel + Apple Silicon) ────────────────────────────────────────
   build-macos:
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
-          - python-arch: x64
-            label: Intel
-          - python-arch: arm64
+          - runner: macos-15
             label: AppleSilicon
+          - runner: macos-15-intel
+            label: Intel
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          architecture: ${{ matrix.python-arch }}
+          cache: "pip"
 
       - name: Inject version from tag
         run: |
