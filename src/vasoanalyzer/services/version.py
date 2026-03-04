@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Final
 
 import requests
@@ -21,10 +22,45 @@ _HEADERS: Final[dict[str, str]] = {
     "User-Agent": "VasoAnalyzer Update Checker",
 }
 
+_VERSION_RE = re.compile(r"([\d.]+)(.*)")
+
+
+def _parse_version_tag(tag: str) -> tuple[tuple[int, ...], bool]:
+    """Parse a version tag like ``v3.0.0`` or ``v3.0.0 Beta`` into comparable parts.
+
+    Returns ``(numeric_parts, is_stable)`` where *is_stable* is ``False``
+    when the tag contains a pre-release suffix (e.g. Beta, alpha, rc1).
+    """
+    s = tag.strip().lstrip("vV")
+    m = _VERSION_RE.match(s)
+    if not m:
+        return (0,), False
+    parts: list[int] = []
+    for p in m.group(1).split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    is_stable = not bool(m.group(2).strip())
+    return tuple(parts) if parts else (0,), is_stable
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    """Return ``True`` only if *latest* is strictly newer than *current*."""
+    latest_parts, latest_stable = _parse_version_tag(latest)
+    current_parts, current_stable = _parse_version_tag(current)
+
+    if latest_parts > current_parts:
+        return True
+    if latest_parts < current_parts:
+        return False
+    # Same numeric version: a stable release is newer than a pre-release.
+    return latest_stable and not current_stable
+
 
 def check_for_new_version(current_version: str = APP_VERSION) -> str | None:
     """
-    Return the latest release tag if it differs from ``current_version``.
+    Return the latest release tag if it is *newer* than ``current_version``.
 
     Uses the GitHub releases API and never raises so callers can safely run it
     from worker threads.
@@ -47,6 +83,10 @@ def check_for_new_version(current_version: str = APP_VERSION) -> str | None:
         return None
 
     latest_version = payload.get("tag_name")
-    if isinstance(latest_version, str) and latest_version and latest_version != current_version:
+    if (
+        isinstance(latest_version, str)
+        and latest_version
+        and is_newer_version(latest_version, current_version)
+    ):
         return latest_version
     return None

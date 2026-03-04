@@ -664,7 +664,7 @@ class WelcomeGuideDialog(QDialog):
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
 
-        self.chk_hide = QCheckBox("Don’t show this again")
+        self.chk_hide = QCheckBox("Don’t show this at startup")
 
         layout.addWidget(title)
         layout.addWidget(intro)

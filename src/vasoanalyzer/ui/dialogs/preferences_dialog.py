@@ -381,7 +381,7 @@ class PreferencesDialog(QDialog):
         self.project_dir_edit.setText(self.settings.value("directories/projects", "", type=str))
         self.import_dir_edit.setText(self.settings.value("directories/imports", "", type=str))
         self.show_welcome_checkbox.setChecked(
-            self.settings.value("startup/show_welcome", True, type=bool)
+            self.settings.value("ui/show_welcome", True, type=bool)
         )
         self.restore_session_checkbox.setChecked(
             self.settings.value("startup/restore_session", False, type=bool)
@@ -439,7 +439,7 @@ class PreferencesDialog(QDialog):
         # General
         self.settings.setValue("directories/projects", self.project_dir_edit.text())
         self.settings.setValue("directories/imports", self.import_dir_edit.text())
-        self.settings.setValue("startup/show_welcome", self.show_welcome_checkbox.isChecked())
+        self.settings.setValue("ui/show_welcome", self.show_welcome_checkbox.isChecked())
         self.settings.setValue("startup/restore_session", self.restore_session_checkbox.isChecked())
 
         # Appearance

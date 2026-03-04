@@ -13,6 +13,8 @@ from PyQt5.QtNetwork import (
 )
 from PyQt5.QtWidgets import QDialog
 
+from vasoanalyzer.services.version import is_newer_version
+
 log = logging.getLogger(__name__)
 
 _API_URL = "https://api.github.com/repos/vr-oj/VasoAnalyzer/releases/latest"
@@ -121,7 +123,7 @@ class UpdateChecker(QObject):
                 if (
                     isinstance(latest_version, str)
                     and latest_version
-                    and latest_version != self._current_version
+                    and is_newer_version(latest_version, self._current_version or "")
                 ):
                     latest = latest_version
             except (ValueError, TypeError) as exc:
