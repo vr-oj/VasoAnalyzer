@@ -56,12 +56,10 @@ class WelcomeGuideDialog(QDialog):
         root.setSpacing(20)
 
         self._page_definitions = [
-            ("Overview", self._page_intro),
-            ("Projects & Files", self._page_bundle_format),
-            ("Your Data", self._page_anatomy),
-            ("Data Details", self._page_understanding_data),
-            ("Workflow", self._page_workflow),
-            ("Tips", self._page_pro_tips),
+            ("Welcome", self._page_welcome),
+            ("Getting Started", self._page_getting_started),
+            ("Your Data", self._page_your_data),
+            ("Navigation", self._page_navigation),
             ("Shortcuts", self._page_shortcuts),
         ]
 
@@ -376,7 +374,7 @@ class WelcomeGuideDialog(QDialog):
     # ------------------------------------------------------------------
     # Page builders
     # ------------------------------------------------------------------
-    def _page_intro(self) -> QWidget:
+    def _page_welcome(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 0, 4, 0)
@@ -385,14 +383,8 @@ class WelcomeGuideDialog(QDialog):
         title = QLabel("What is VasoAnalyzer?")
         title.setProperty("va-h1", True)
         blurb = QLabel(
-            "<p>VasoAnalyzer is a cross-platform <b>desktop app</b> (Windows / macOS) for analyzing pressure myography experiments. It focuses on:</p>"
-            "<ul>"
-            "<li>fast, responsive trace visualization</li>"
-            "<li>rich event annotation</li>"
-            "<li>careful point editing with an audit trail</li>"
-            "<li>export-ready figures and tables</li>"
-            "</ul>"
-            "<p>Everything for an experiment lives in a single project file (<code>.vaso</code>) so you can send a whole analysis to a collaborator as one file.</p>"
+            "<p>VasoAnalyzer is a desktop app for analyzing pressure myography experiments. "
+            "Everything lives in a single <code>.vaso</code> project file you can share with collaborators.</p>"
         )
         blurb.setWordWrap(True)
         blurb.setProperty("va-body", True)
@@ -402,24 +394,22 @@ class WelcomeGuideDialog(QDialog):
 
         for heading, body in (
             (
-                "Multi-track trace viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure stacked in a synchronized view. Level-of-detail rendering keeps navigation smooth even for long recordings. Event strip above the trace shows numbered event markers aligned in time, with optional per-channel event labels drawn inline on each track.",
+                "Trace viewer",
+                "Inner diameter, outer diameter, pressure, and set-pressure in a synchronized, "
+                "multi-track view with event markers. Smooth panning and zooming, even for long recordings.",
             ),
             (
-                "Point Editor with audit history",
-                "Interactive editor for cleaning artefacts and spikes in diameter traces. Connect-across and delete-with-NaN operations are recorded as structured actions and summarized in the dataset Edit History panel.",
+                "Point Editor",
+                "Clean artefacts and spikes interactively. All edits are recorded in an audit trail.",
             ),
             (
-                "Event management",
-                "CSV-based event import (time + label, plus optional metadata). Events stay tied to the trace and appear in both the Event Table and plots, with default labels using numbered indices that match the table.",
-            ),
-            (
-                "Excel Mapper",
-                "Map event- and trace-level data into your lab’s Excel templates and reuse mappings so you don’t have to redo column wiring every time. A flexible writer supports non-standard workbooks: pick a sheet and column, preview the result, and write without overwriting formulas.",
+                "Events and Excel Mapper",
+                "Import event files, view them as plot markers and table rows, then map results "
+                "into your lab’s Excel templates for export.",
             ),
             (
                 "Figure export",
-                "Export publication-ready plots (PNG/TIFF/SVG) and synchronized vessel + trace GIF animations from your traces, kept inside the .vaso project for reproducibility.",
+                "Export publication-ready plots (PNG/TIFF/SVG) and vessel + trace GIF animations.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -427,140 +417,17 @@ class WelcomeGuideDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    def _page_bundle_format(self) -> QWidget:
+    def _page_getting_started(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(16)
 
-        title = QLabel("Projects vs single files")
+        title = QLabel("Getting started")
         title.setProperty("va-h1", True)
 
         intro = QLabel(
-            "Use VasoAnalyzer as a full project hub or as a quick viewer for individual traces."
-        )
-        intro.setWordWrap(True)
-        intro.setProperty("va-body", True)
-
-        layout.addWidget(title)
-        layout.addWidget(intro)
-
-        for heading, body in (
-            (
-                "Projects (recommended)",
-                "Create a project to keep traces, events, TIFF snapshots, notes, and figures together. Projects are saved as .vaso files and, when enabled, .vasopack bundles for cloud-friendly storage.",
-            ),
-            (
-                "Single-file sessions",
-                "Open a trace CSV, event file, or TIFF stack directly when you just want to inspect or sanity-check a dataset without setting up a full project.",
-            ),
-            (
-                "Save when it matters",
-                "You can start from single files and later choose Save Project to capture your datasets, edits, and layout inside a new .vaso project file.",
-            ),
-        ):
-            layout.addWidget(self._make_callout(heading, body))
-
-        layout.addStretch(1)
-        return page
-
-    def _page_anatomy(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(16)
-
-        title = QLabel("Where your data lives")
-        title.setProperty("va-h1", True)
-
-        intro = QLabel(
-            "VasoAnalyzer keeps your analysis state inside the project file while reading your raw VasoTracker outputs as-is."
-        )
-        intro.setWordWrap(True)
-        intro.setProperty("va-body", True)
-
-        layout.addWidget(title)
-        layout.addWidget(intro)
-
-        for heading, body in (
-            (
-                "Project files (.vaso / .vasopack)",
-                "A .vaso project is a ZIP container that holds metadata, a staging database, views and settings, snapshots, and edit history—all bundled together for portability.",
-            ),
-            (
-                "Raw VasoTracker files",
-                "Trace CSVs contain time and diameter/pressure columns; TIFF stacks contain the original frames. VasoAnalyzer reads these inputs but never overwrites them.",
-            ),
-            (
-                "Safe to backup and share",
-                "You can back up or version a project by copying the .vaso file. Advanced users can even unzip it for debugging with standard ZIP tools.",
-            ),
-            (
-                "Cloud-friendly bundles",
-                ".vasopack bundles are designed for Dropbox, iCloud, and Google Drive and reduce the risk of corruption when syncing between machines.",
-            ),
-        ):
-            layout.addWidget(self._make_callout(heading, body))
-
-        layout.addStretch(1)
-        return page
-
-    def _page_understanding_data(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(16)
-
-        title = QLabel("Understanding your data")
-        title.setProperty("va-h1", True)
-
-        intro = QLabel(
-            "Know what each input file contributes so you can interpret plots and statistics with confidence."
-        )
-        intro.setWordWrap(True)
-        intro.setProperty("va-body", True)
-
-        layout.addWidget(title)
-        layout.addWidget(intro)
-
-        for heading, body in (
-            (
-                "Trace CSVs",
-                "Traces come from CSV files that contain a time column and at least an inner diameter column, plus optional outer diameter, pressure channels, and extra numeric or categorical fields.",
-            ),
-            (
-                "Event files",
-                "Event CSV/TXT files include Time, Label, and optional metadata columns (e.g., Temp, P1, P2, Caliper). Events appear in the Event Table and as markers on the plot.",
-            ),
-            (
-                "TIFF snapshots",
-                "TIFF stacks provide image context. VasoAnalyzer down-samples large stacks for preview so you can browse frames without slowing down navigation.",
-            ),
-            (
-                "Multi-track viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure are stacked in a synchronized view, with an event strip above the trace and optional per-channel event labels drawn inline so events and responses stay aligned in time.",
-            ),
-            (
-                "Interpolation and timing",
-                "When events fall between samples, diameters are interpolated from neighboring points to keep event timing consistent with your protocol.",
-            ),
-        ):
-            layout.addWidget(self._make_callout(heading, body))
-
-        layout.addStretch(1)
-        return page
-
-    def _page_workflow(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 0, 4, 0)
-        layout.setSpacing(16)
-
-        title = QLabel("From VasoTracker to results")
-        title.setProperty("va-h1", True)
-
-        intro = QLabel(
-            "A typical workflow from a fresh recording to export-ready figures and tables."
+            "A typical workflow from a fresh VasoTracker recording to export-ready results."
         )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
@@ -571,35 +438,23 @@ class WelcomeGuideDialog(QDialog):
         for heading, body in (
             (
                 "1. Create or open a project",
-                "From the Home screen, start a new project/experiment or open an existing .vaso file.",
+                "Start a new project from the Home screen, or open an existing .vaso file. "
+                "You can also open a single trace CSV for a quick look without creating a project.",
             ),
             (
-                "2. Import traces",
-                "Use Open Data… to load trace CSVs with time and diameter (and optionally pressure) channels. The trace viewer will show stacked tracks and an event strip.",
+                "2. Import your data",
+                "Load trace CSVs (time + diameter/pressure), event files (time + label), "
+                "and optionally a TIFF stack for image context.",
             ),
             (
-                "3. Import events and images",
-                "Add event CSV/TXT for protocol markers and, optionally, a TIFF stack for snapshot/preview frames.",
+                "3. Clean and annotate",
+                "Use the Point Editor to remove spikes, and the Events table to adjust labels "
+                "and timing. All changes are tracked.",
             ),
             (
-                "4. Bring datasets from another project",
-                "Use File → Open Data → Import from Project… to browse a source .vaso read-only, select one or more datasets, and import them—optionally preserving their original experiment grouping.",
-            ),
-            (
-                "5. Clean and annotate",
-                "Open the Point Editor to clean spikes and artefacts; edits are recorded in the project’s Edit History. Adjust event times and labels in the Events table.",
-            ),
-            (
-                "6. Adjust plots",
-                "Use plot settings to tweak grid, axes, fonts, and event label appearance until the trace clearly communicates your experiment.",
-            ),
-            (
-                "7. Export tables and figures",
-                "Export event tables, use Excel Mapper to fill your lab templates, or export plots as publication-ready figures.",
-            ),
-            (
-                "8. Save and resume later",
-                "Use Save Project to persist everything into the .vaso file so you can reopen it later and pick up exactly where you left off.",
+                "4. Export and save",
+                "Export figures, fill Excel templates with the Excel Mapper, then save "
+                "your project. Everything is bundled in the .vaso file.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -607,16 +462,19 @@ class WelcomeGuideDialog(QDialog):
         layout.addStretch(1)
         return page
 
-    def _page_pro_tips(self) -> QWidget:
+    def _page_your_data(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(16)
 
-        title = QLabel("Tips & troubleshooting")
+        title = QLabel("Your data")
         title.setProperty("va-h1", True)
 
-        intro = QLabel("Habits that keep projects fast, safe, and reproducible.")
+        intro = QLabel(
+            "VasoAnalyzer reads your raw VasoTracker files as-is and keeps analysis "
+            "state inside the project."
+        )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
 
@@ -625,31 +483,137 @@ class WelcomeGuideDialog(QDialog):
 
         for heading, body in (
             (
-                "Keep raw and analysis separate",
-                "Archive VasoTracker CSVs and TIFFs as your ground truth. Use .vaso / .vasopack project files for analysis so you can always trace back what was done.",
+                "Trace CSVs",
+                "A time column and at least an inner diameter column. Outer diameter, "
+                "pressure, and set-pressure channels are optional.",
             ),
             (
-                "Use projects for real experiments",
-                "Single-file sessions are fine for quick checks; for experiments you care about, create a project early so events, edits, and figures are saved together.",
+                "Event files",
+                "CSV/TXT with Time and Label columns, plus optional metadata "
+                "(e.g., Temp, P1, P2). Events appear as markers on the trace and rows "
+                "in the Event Table.",
             ),
             (
-                "Performance tips",
-                "Large traces and TIFF stacks are most responsive on a local SSD. Closing unused experiments and hiding unnecessary tracks can improve navigation.",
+                "TIFF stacks",
+                "Image frames for visual context. Large stacks are down-sampled "
+                "automatically for smooth preview.",
             ),
             (
-                "Cloud & collaboration",
-                "When using Dropbox, iCloud, or Google Drive, prefer .vasopack bundles and avoid editing the same project on multiple machines before sync finishes.",
-            ),
-            (
-                "Sanity-check before analysis",
-                "Make sure time is continuous, diameters are in a realistic range, and events line up with your protocol before running statistics or exports.",
-            ),
-            (
-                "Local by design",
-                "All analysis happens on your machine—no traces or images are uploaded by default.",
+                "Project files (.vaso)",
+                "A single file that bundles your traces, events, edits, figures, and "
+                "settings. Safe to copy, back up, or share. Use .vasopack for "
+                "cloud-friendly storage (Dropbox, iCloud, Google Drive).",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
+
+        layout.addStretch(1)
+        return page
+
+    def _page_navigation(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(4, 0, 4, 0)
+        layout.setSpacing(16)
+
+        title = QLabel("Navigating the trace viewer")
+        title.setProperty("va-h1", True)
+
+        intro = QLabel(
+            "VasoAnalyzer has two toolbar modes that control how mouse and trackpad "
+            "interactions work on the trace plot."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("va-body", True)
+
+        layout.addWidget(title)
+        layout.addWidget(intro)
+
+        # -- Toolbar modes --
+        modes_title = QLabel("Toolbar modes")
+        modes_title.setProperty("va-h2", True)
+        layout.addWidget(modes_title)
+
+        for heading, body in (
+            (
+                "Pan mode (P)",
+                "The default mode. Drag left/right on the trace to pan through time with "
+                "smooth momentum scrolling. The cursor shows an open hand.",
+            ),
+            (
+                "Select mode (Z)",
+                "Draw a rectangle on the trace to zoom into that time range. "
+                "The cursor shows a crosshair. Press Z or click the Select button in the "
+                "toolbar to activate.",
+            ),
+        ):
+            layout.addWidget(self._make_callout(heading, body))
+
+        # -- Scroll / trackpad --
+        scroll_title = QLabel("Scroll wheel and trackpad")
+        scroll_title.setProperty("va-h2", True)
+        layout.addWidget(scroll_title)
+
+        layout.addWidget(
+            self._make_shortcut_grid(
+                [
+                    (("Scroll",), "Pan left / right through time"),
+                    ((("⌘", "Ctrl"), "Scroll"), "Zoom in / out at cursor position"),
+                    (("Shift", "Scroll"), "Pan the Y-axis up / down"),
+                    (("Alt / Option", "Scroll"), "Zoom the Y-axis in / out"),
+                ]
+            )
+        )
+
+        # -- Y-axis --
+        yaxis_title = QLabel("Y-axis interactions")
+        yaxis_title.setProperty("va-h2", True)
+        layout.addWidget(yaxis_title)
+
+        for heading, body in (
+            (
+                "Drag the Y-axis to scale (Pan mode only)",
+                "In Pan mode, hover over the Y-axis labels on the left edge until the "
+                "cursor changes to a vertical resize arrow (↕), then click and drag "
+                "up or down to scale the amplitude range. This is disabled in Select "
+                "mode so it doesn't interfere with rectangle zoom.",
+            ),
+            (
+                "Shift + Scroll to pan the Y-axis",
+                "Hold Shift and scroll to slide the Y-axis range up or down without "
+                "changing the scale. This works in both Pan and Select modes and is "
+                "the easiest way to reposition the vertical view.",
+            ),
+            (
+                "Double-click the Y-axis",
+                "Double-click the Y-axis to auto-scale it to fit the visible data. "
+                "Works in both Pan and Select modes.",
+            ),
+            (
+                "Right-click the Y-axis",
+                "Right-click the Y-axis to open a context menu with autoscale and "
+                "range options. Works in both modes.",
+            ),
+        ):
+            layout.addWidget(self._make_callout(heading, body))
+
+        # -- Quick zoom --
+        zoom_title = QLabel("Quick zoom shortcuts")
+        zoom_title.setProperty("va-h2", True)
+        layout.addWidget(zoom_title)
+
+        layout.addWidget(
+            self._make_shortcut_grid(
+                [
+                    (("+", "/ ="), "Zoom in"),
+                    (("-",), "Zoom out"),
+                    (("Backspace",), "Undo last zoom (zoom back)"),
+                    (("A",), "Auto-scale Y-axis (one-shot)"),
+                    (("Shift", "A"), "Toggle persistent Y auto-scale"),
+                    (("0",), "Zoom to full range"),
+                ]
+            )
+        )
 
         layout.addStretch(1)
         return page
@@ -660,57 +624,65 @@ class WelcomeGuideDialog(QDialog):
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(16)
 
-        title = QLabel("Keyboard shortcuts")
+        title = QLabel("Essential shortcuts")
         title.setProperty("va-h1", True)
         intro = QLabel(
-            "Use shortcuts for common actions like importing data, editing points, and reopening this guide."
+            "The shortcuts you'll use most often. For the complete list, "
+            "use Help → Keyboard Shortcuts from the menu bar."
         )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
 
         layout.addWidget(title)
         layout.addWidget(intro)
+
+        # -- File --
+        file_title = QLabel("File")
+        file_title.setProperty("va-h2", True)
+        layout.addWidget(file_title)
         layout.addWidget(
             self._make_shortcut_grid(
                 [
-                    ((("⌘", "Ctrl"), "Shift", "N"), "Create new project"),
                     ((("⌘", "Ctrl"), "O"), "Import trace CSV"),
-                    (
-                        (("⌘", "Ctrl"), "Shift", "O"),
-                        "Open saved project (.vaso / .vasopack)",
-                    ),
-                    ((("⌘", "Ctrl"), "Shift", "S"), "Save project (creates snapshot)"),
-                    ((("⌘", "Ctrl"), "Z"), "Undo last action"),
-                    ((("⌘", "Ctrl"), "Y"), "Redo last undone action"),
-                    ((("⌘", "Ctrl"), "C"), "Copy selected event(s)"),
-                    ((("⌘", "Ctrl"), "V"), "Paste selected event(s)"),
-                    ((("⌘", "Ctrl"), "D"), "Duplicate selected event(s)"),
-                    (("Del",), "Delete selected event(s)"),
-                    ((("⌘", "Ctrl"), "A"), "Select all events"),
-                    ((("⌘", "Ctrl"), "F"), "Fit data to window"),
-                    ((("⌘", "Ctrl"), "R"), "Reset plot view"),
-                    ((("⌘", "Ctrl"), "E"), "Zoom to selection / fit"),
-                    ((("⌘", "Ctrl"), "G"), "Go to time…"),
-                    (("0",), "Zoom to full range"),
-                    (("Left",), "Pan left 10%"),
-                    (("Right",), "Pan right 10%"),
-                    (("Shift", "Left"), "Pan left 50%"),
-                    (("Shift", "Right"), "Pan right 50%"),
-                    (("Home",), "Jump to start"),
-                    (("End",), "Jump to end"),
-                    (("[",), "Previous event"),
-                    (("]",), "Next event"),
-                    (("I",), "Toggle inner diameter"),
-                    (("O",), "Toggle outer diameter"),
-                    (("S",), "Toggle set pressure"),
-                    ((("⌘", "Ctrl"), ","), "Open Preferences"),
-                    ((("⌘", "Ctrl"), "Shift", "T"), "Import TIFF stack"),
-                    ((("⌘", "Ctrl"), "Shift", "H"), "Return to home screen"),
-                    (("F11",), "Toggle full screen"),
-                    ((("⌘", "Ctrl"), "/"), "Reopen this Welcome Guide"),
+                    ((("⌘", "Ctrl"), "Shift", "O"), "Open project (.vaso)"),
+                    ((("⌘", "Ctrl"), "Shift", "S"), "Save project"),
                 ]
             )
         )
+
+        # -- Navigation --
+        nav_title = QLabel("Navigation")
+        nav_title.setProperty("va-h2", True)
+        layout.addWidget(nav_title)
+        layout.addWidget(
+            self._make_shortcut_grid(
+                [
+                    (("P",), "Pan mode"),
+                    (("Z",), "Select / rectangle zoom mode"),
+                    (("0",), "Zoom to full range"),
+                    (("A",), "Auto-scale Y-axis"),
+                    (("Backspace",), "Undo last zoom"),
+                    (("[", "]"), "Previous / next event"),
+                    (("Left", "Right"), "Pan left / right"),
+                ]
+            )
+        )
+
+        # -- Editing --
+        edit_title = QLabel("Editing")
+        edit_title.setProperty("va-h2", True)
+        layout.addWidget(edit_title)
+        layout.addWidget(
+            self._make_shortcut_grid(
+                [
+                    ((("⌘", "Ctrl"), "Z"), "Undo"),
+                    ((("⌘", "Ctrl"), "Y"), "Redo"),
+                    ((("⌘", "Ctrl"), "F"), "Fit data to window"),
+                    ((("⌘", "Ctrl"), "/"), "Reopen this guide"),
+                ]
+            )
+        )
+
         layout.addStretch(1)
         return page
 
