@@ -1,3 +1,4 @@
+# macOS
 .DS_Store
 
 # Python bytecode/cache
@@ -9,11 +10,21 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Coverage reports
+.coverage
+htmlcov/
+
 # Packaging/build artifacts
 build/
 dist/
 *.egg-info/
 .eggs/
+*.spec.bak
+
+# Installer outputs
+*.dmg
+*.exe
+*.app
 
 # Runtime logs
 *.log
@@ -26,8 +37,12 @@ Samples/
 # Virtual environments
 .venv/
 venv/
+.vaso/
+
+# Tool output files
 mypy.txt
 pytest.txt
 ruff.txt
-/ExcelTemplates
-installer/macos/output/VasoAnalyzer-v3.0.0.dmg
+
+# Project-specific ignores
+ExcelTemplates/

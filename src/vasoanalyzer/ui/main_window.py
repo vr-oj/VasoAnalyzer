@@ -4718,7 +4718,7 @@ class VasoAnalyzerApp(QMainWindow):
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
         elif isinstance(obj, Experiment):
-            add_n = menu.addAction("Add N")
+            add_n = menu.addAction("Add Sample")
             import_folder = menu.addAction("Import Folder…")
             del_exp = menu.addAction("Delete Experiment")
             action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
@@ -5482,7 +5482,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_add_experiment.triggered.connect(self.add_experiment)
         project_menu.addAction(self.action_add_experiment)
 
-        self.action_add_sample = QAction("Add N", self)
+        self.action_add_sample = QAction("Add Sample", self)
         self.action_add_sample.triggered.connect(self.add_sample_to_current_experiment)
         project_menu.addAction(self.action_add_sample)
 
@@ -5647,38 +5647,10 @@ class VasoAnalyzerApp(QMainWindow):
 
         edit_menu.addSeparator()
 
-        # Event manipulation
-        self.action_copy_events = QAction("Copy Event(s)", self)
-        self.action_copy_events.setShortcut(QKeySequence.Copy)
-        self.action_copy_events.triggered.connect(self.copy_selected_events)
-        edit_menu.addAction(self.action_copy_events)
-
-        self.action_paste_events = QAction("Paste Event(s)", self)
-        self.action_paste_events.setShortcut(QKeySequence.Paste)
-        self.action_paste_events.triggered.connect(self.paste_events)
-        edit_menu.addAction(self.action_paste_events)
-
-        self.action_duplicate_event = QAction("Duplicate Event", self)
-        self.action_duplicate_event.setShortcut("Ctrl+D")
-        self.action_duplicate_event.triggered.connect(self.duplicate_selected_event)
-        edit_menu.addAction(self.action_duplicate_event)
-
         self.action_delete_event = QAction("Delete Event", self)
         self.action_delete_event.setShortcut(QKeySequence.Delete)
         self.action_delete_event.triggered.connect(self.delete_selected_events)
         edit_menu.addAction(self.action_delete_event)
-
-        edit_menu.addSeparator()
-
-        self.action_select_all_events = QAction("Select All Events", self)
-        self.action_select_all_events.setShortcut(QKeySequence.SelectAll)
-        self.action_select_all_events.triggered.connect(self.select_all_events)
-        edit_menu.addAction(self.action_select_all_events)
-
-        self.action_find_event = QAction("Find Event…", self)
-        # No shortcut assigned here: Ctrl+F is used by View → Fit to Data.
-        self.action_find_event.triggered.connect(self.find_event_dialog)
-        edit_menu.addAction(self.action_find_event)
 
         edit_menu.addSeparator()
 
@@ -5699,11 +5671,6 @@ class VasoAnalyzerApp(QMainWindow):
         view_menu.addAction(home_act)
 
         view_menu.addSeparator()
-
-        # Renderer note (PyQtGraph is always used in the main window)
-        renderer_note = QAction("Renderer: PyQtGraph (locked for performance)", self)
-        renderer_note.setEnabled(False)
-        view_menu.addAction(renderer_note)
 
         # Color scheme selection
         theme_menu = view_menu.addMenu("Color Theme")
@@ -5863,11 +5830,6 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _build_window_menu(self, menubar):
         window_menu = menubar.addMenu("&Window")
-
-        home_act = QAction("Home Dashboard", self)
-        home_act.triggered.connect(self.show_home_dashboard)
-        window_menu.addAction(home_act)
-        window_menu.addSeparator()
 
         minimize_act = QAction("Minimize", self)
         minimize_act.setShortcut("Ctrl+M" if sys.platform != "darwin" else "Meta+M")
@@ -7993,31 +7955,6 @@ class VasoAnalyzerApp(QMainWindow):
 
     # ========================= NEW MENU ACTIONS ======================================
 
-    # Edit Menu Actions
-    def copy_selected_events(self, checked: bool = False):
-        """Copy selected events to clipboard."""
-        QMessageBox.information(
-            self,
-            "Copy Events",
-            "Copying selected events to clipboard.\n\nThis feature will copy event data in a format that can be pasted into other samples or projects.",
-        )
-
-    def paste_events(self, checked: bool = False):
-        """Paste events from clipboard."""
-        QMessageBox.information(
-            self,
-            "Paste Events",
-            "Pasting events from clipboard.\n\nThis feature will insert copied events at the current time position or selection.",
-        )
-
-    def duplicate_selected_event(self, checked: bool = False):
-        """Duplicate the currently selected event."""
-        QMessageBox.information(
-            self,
-            "Duplicate Event",
-            "Duplicating selected event.\n\nThis feature will create a copy of the selected event at the same time position.",
-        )
-
     def delete_selected_events(self, checked: bool = False, *, indices: list[int] | None = None):
         """Delete selected events."""
         if indices is None:
@@ -8072,35 +8009,6 @@ class VasoAnalyzerApp(QMainWindow):
         self.update_plot()
         self._update_excel_controls()
         self.mark_session_dirty()
-
-    def select_all_events(self, checked: bool = False):
-        """Select all events in the event table."""
-        QMessageBox.information(
-            self,
-            "Select All",
-            "Selecting all events.\n\nThis feature will select all events in the event table for bulk operations.",
-        )
-
-    def find_event_dialog(self, checked: bool = False):
-        """Open find event dialog."""
-        QMessageBox.information(
-            self,
-            "Find Event",
-            "Find events by label, time, or other criteria.\n\nThis feature will help you quickly locate specific events in large datasets.",
-        )
-
-    # View Menu Actions
-    def set_renderer(self, renderer: str):
-        """Ensure the main window stays on the PyQtGraph renderer."""
-        # Matplotlib is reserved for offline exports; force PyQtGraph here.
-        self.action_use_pyqtgraph.setChecked(True)
-        self.action_use_matplotlib.setChecked(False)
-        self.action_use_matplotlib.setEnabled(False)
-        if renderer != "pyqtgraph":
-            self.statusBar().showMessage(
-                "Main view is locked to PyQtGraph for performance; use export tools for Matplotlib output.",
-                4000,
-            )
 
     def _update_theme_action_checks(self, mode: str) -> None:
         """Sync Color Theme menu checkboxes with the active mode."""
@@ -8261,53 +8169,6 @@ class VasoAnalyzerApp(QMainWindow):
         """Set application color scheme (light or dark)."""
         # Apply immediately; no restart required
         self.apply_theme(scheme, persist=True)
-
-    # Tools Menu Actions
-    def show_statistics_dialog(self, checked: bool = False):
-        """Show statistical analysis dialog."""
-        QMessageBox.information(
-            self,
-            "Calculate Statistics",
-            "Statistical Analysis\n\n"
-            "This tool will calculate:\n"
-            "• Mean, median, std dev of diameter values\n"
-            "• Event frequency and duration statistics\n"
-            "• Baseline vs. response comparisons\n"
-            "• Custom time window analysis\n\n"
-            "Results can be exported to CSV or Excel.\n\n"
-            "Note: This feature will be fully implemented in a future update.",
-        )
-
-    def show_batch_analysis_dialog(self, checked: bool = False):
-        """Show batch analysis dialog for processing multiple files."""
-        QMessageBox.information(
-            self,
-            "Batch Analysis",
-            "Batch Processing\n\n"
-            "This tool will allow you to:\n"
-            "• Process multiple .vaso or .vasopack projects at once\n"
-            "• Apply consistent analysis parameters across datasets\n"
-            "• Generate summary statistics for all samples\n"
-            "• Export combined results to Excel\n\n"
-            "Ideal for analyzing entire experiments with many samples.\n\n"
-            "Note: This feature will be fully implemented in a future update.",
-        )
-
-    def show_data_validation_dialog(self, checked: bool = False):
-        """Show data validation dialog."""
-        QMessageBox.information(
-            self,
-            "Data Validation",
-            "Quality Control\n\n"
-            "This tool will check for:\n"
-            "• Missing or corrupted data points\n"
-            "• Unusual gaps in time series\n"
-            "• Statistical outliers\n"
-            "• Inconsistent sampling rates\n"
-            "• Frame synchronization issues\n\n"
-            "Helps ensure data quality before analysis.\n\n"
-            "Note: This feature will be fully implemented in a future update.",
-        )
 
     # Window Menu Actions
     def toggle_maximize(self, checked: bool = False):
