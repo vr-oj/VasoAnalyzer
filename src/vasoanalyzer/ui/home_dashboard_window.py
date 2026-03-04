@@ -485,7 +485,7 @@ QPushButton[isGhost="true"]:pressed {{
                 if os.path.exists(candidate):
                     return candidate
         except Exception:
-            pass
+            log.debug("Dark theme icon lookup failed", exc_info=True)
 
         return resource_path("icons", filename)
 

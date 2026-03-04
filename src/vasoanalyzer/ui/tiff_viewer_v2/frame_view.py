@@ -7,12 +7,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from vasoanalyzer.ui import theme as theme_module
+
+log = logging.getLogger(__name__)
 
 FrameData = Any
 
@@ -90,7 +93,7 @@ def _snapshot_background_color() -> QtGui.QColor:
             if value:
                 return QtGui.QColor(value)
     except Exception:
-        pass
+        log.debug("Failed to get snapshot background color from theme", exc_info=True)
     app = QtWidgets.QApplication.instance()
     if app is not None:
         return app.palette().color(QtGui.QPalette.Window)

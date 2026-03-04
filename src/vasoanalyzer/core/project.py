@@ -1216,7 +1216,7 @@ def _load_project_legacy_zip(path: str) -> Project:
 
                                 snapshots = tifffile.imread(tiff)
                             except Exception:
-                                pass
+                                log.warning("Failed to load TIFF snapshots", exc_info=True)
 
                         events_loaded = events_user_df if events_user_df is not None else events_df
 
@@ -3606,7 +3606,7 @@ def _project_timezone() -> str:
         if tzname:
             return tzname
     except Exception:
-        pass
+        log.debug("Failed to get timezone name", exc_info=True)
     return "UTC"
 
 
@@ -3698,7 +3698,7 @@ def _normalise_json_data(value: Any) -> Any:
         try:
             return value.tolist()
         except Exception:
-            pass
+            log.debug("Failed to convert value via tolist()", exc_info=True)
     return value
 
 

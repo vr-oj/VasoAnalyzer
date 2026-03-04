@@ -131,11 +131,11 @@ class PyQtGraphEventStripTrack:
             try:
                 axis.setStyle(showValues=False, tickLength=0)
             except Exception:
-                pass
+                log.debug("Failed to set axis style", exc_info=True)
             try:
                 axis.setLabel("")
             except Exception:
-                pass
+                log.debug("Failed to set axis label", exc_info=True)
             with contextlib.suppress(Exception):
                 axis.setTicks([])
             with contextlib.suppress(Exception):
@@ -160,7 +160,7 @@ class PyQtGraphEventStripTrack:
         try:
             vb.wheelEvent = lambda ev: ev.accept()
         except Exception:
-            pass
+            log.debug("Failed to override mousewheel event", exc_info=True)
         self._plot_item.hideButtons()
         with contextlib.suppress(Exception):
             self._plot_item.setMenuEnabled(False)
@@ -796,4 +796,4 @@ class PyQtGraphEventStripTrack:
             self._plot_item.update()
             QApplication.processEvents()
         except Exception:
-            pass
+            log.debug("Failed to update plot", exc_info=True)

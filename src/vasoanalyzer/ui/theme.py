@@ -953,7 +953,7 @@ def set_theme_mode(mode: str, *, persist: bool = True) -> str:
             settings = QSettings("TykockiLab", "VasoAnalyzer")
             settings.setValue("appearance/themeMode", requested)
     except Exception:
-        pass
+        log.warning("Failed to persist theme setting", exc_info=True)
 
     # Use complete theme presets (no OS palette dependency)
     global CURRENT_THEME

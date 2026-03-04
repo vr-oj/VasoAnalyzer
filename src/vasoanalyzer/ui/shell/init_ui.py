@@ -46,7 +46,7 @@ class _PlotLeaveFilter(QObject):
             try:
                 self._on_leave()
             except Exception:
-                pass
+                log.debug("Leave event handler failed", exc_info=True)
         return False
 
 

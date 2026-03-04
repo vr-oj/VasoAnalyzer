@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from dataclasses import dataclass, field
 
 import pyqtgraph as pg
@@ -16,6 +17,8 @@ from vasoanalyzer.ui.plots.event_display_mode import (
 )
 from vasoanalyzer.ui.plots.pyqtgraph_style import get_pyqtgraph_style
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 __all__ = ["PyQtGraphEventMarkerLayer"]
 
@@ -70,12 +73,12 @@ class PyQtGraphEventMarkerLayer:
             try:
                 self._plot_item.removeItem(item.line)
             except Exception:
-                pass
+                log.debug("Failed to remove event marker line", exc_info=True)
             if item.label is not None:
                 try:
                     self._plot_item.removeItem(item.label)
                 except Exception:
-                    pass
+                    log.debug("Failed to remove event marker label", exc_info=True)
         self._items.clear()
         self._last_view = None
 

@@ -87,7 +87,7 @@ def detect_project_format(path: Path) -> str:
                             if fmt == "sqlite-v3":
                                 return "sqlite-v3"
                     except Exception:
-                        pass
+                        log.debug("Failed to detect format from SQLite header", exc_info=True)
 
                 # Fallback to user_version
                 version_map = {3: "sqlite-v3", 2: "sqlite-v2", 1: "sqlite-v1"}

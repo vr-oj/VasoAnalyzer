@@ -1304,7 +1304,7 @@ class PlotHost:
 
             QToolTip.hideText()
         except Exception:
-            pass
+            log.debug("Failed to hide tooltip", exc_info=True)
         if self._hover_annot is not None:
             hover = self._hover_annot
             hover.set_visible(False)
@@ -1366,7 +1366,7 @@ class PlotHost:
             rgba = to_rgba(color)
             return (float(rgba[0]), float(rgba[1]), float(rgba[2]), float(rgba[3]))
         except Exception:
-            pass
+            log.debug("Failed to convert color to RGBA", exc_info=True)
         if isinstance(color, Sequence):
             try:
                 values = [float(component) for component in color]

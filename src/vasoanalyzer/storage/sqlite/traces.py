@@ -17,6 +17,7 @@ __all__ = [
     "nullable_float",
     "prepare_trace_rows",
     "fetch_trace_dataframe",
+    "count_trace_rows",
 ]
 
 
@@ -281,10 +282,12 @@ def prepare_trace_rows(dataset_id: int, df: pd.DataFrame | None) -> Iterable[tup
     try:
         for idx, t_val in enumerate(t_values, start=1):
             pos = idx - 1
+            t_sec = float(t_val)
             rows.append(
                 (
                     dataset_id,
-                    float(t_val),
+                    t_sec,
+                    int(round(t_sec * 1_000_000)),
                     nullable_float(inner_values[pos]) if inner_values is not None else None,
                     nullable_float(outer_values[pos]) if outer_values is not None else None,
                     nullable_float(p_avg_values[pos]) if p_avg_values is not None else None,
@@ -358,9 +361,19 @@ def fetch_trace_dataframe(
     dataset_id: int,
     t0: float | None = None,
     t1: float | None = None,
+    *,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> pd.DataFrame:
     """
     Load trace samples for ``dataset_id`` optionally filtered to ``[t0, t1]``.
+
+    Parameters
+    ----------
+    limit : int, optional
+        Maximum number of rows to return (prevents OOM on huge traces).
+    offset : int, optional
+        Number of rows to skip before returning results.
     """
 
     query = [
@@ -377,6 +390,12 @@ def fetch_trace_dataframe(
         query.append("AND t_seconds <= ?")
         params.append(float(t1))
     query.append("ORDER BY t_seconds ASC")
+    if limit is not None:
+        query.append("LIMIT ?")
+        params.append(int(limit))
+        if offset is not None:
+            query.append("OFFSET ?")
+            params.append(int(offset))
     df = pd.read_sql_query(" ".join(query), conn, params=params)
     log.debug(
         "fetch_trace_dataframe: dataset=%s rows=%s columns=%s",
@@ -400,3 +419,23 @@ def fetch_trace_dataframe(
             list(df.columns),
         )
     return df
+
+
+def count_trace_rows(
+    conn: sqlite3.Connection,
+    dataset_id: int,
+    t0: float | None = None,
+    t1: float | None = None,
+) -> int:
+    """Return the number of trace rows for *dataset_id*, optionally within [t0, t1]."""
+
+    query = ["SELECT COUNT(*) FROM trace WHERE dataset_id = ?"]
+    params: list[object] = [dataset_id]
+    if t0 is not None:
+        query.append("AND t_seconds >= ?")
+        params.append(float(t0))
+    if t1 is not None:
+        query.append("AND t_seconds <= ?")
+        params.append(float(t1))
+    row = conn.execute(" ".join(query), params).fetchone()
+    return int(row[0]) if row else 0

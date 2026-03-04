@@ -25,7 +25,7 @@ if os.environ.get("VA_FAULTHANDLER", "1") != "0":
             _fh_file = open(_fh_path, "w")  # noqa: WPS515
             faulthandler.enable(file=_fh_file)
         except Exception:
-            pass
+            pass  # logging not configured yet
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def _configure_sip_exit_behavior() -> None:
             try:
                 setter(False)
             except Exception:
-                pass
+                pass  # logging not configured yet
             break
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Sequence
 
 import pyqtgraph as pg
@@ -12,6 +13,8 @@ from PyQt5.QtWidgets import QFrame, QHBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
+
+log = logging.getLogger(__name__)
 
 
 class OverviewStrip(QFrame):
@@ -215,7 +218,7 @@ QFrame#OverviewStrip {{
             if ev.isAccepted():
                 return
         except Exception:
-            pass
+            log.debug("Failed to check event acceptance", exc_info=True)
         if ev.button() != Qt.LeftButton:
             return
         if self._full_range is None:

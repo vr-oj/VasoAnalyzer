@@ -411,7 +411,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             if c.isValid():
                 return c
         except Exception:
-            pass
+            log.debug("Failed to parse QColor value", exc_info=True)
         fallback_color = QColor(fallback)
         return fallback_color if fallback_color.isValid() else QColor("#000000")
 
@@ -1877,7 +1877,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             try:
                 handler(new_index)
             except Exception:
-                pass
+                log.warning("Handler invocation failed", exc_info=True)
 
     def _build_hover_text(self, window: TraceWindow, idx: int) -> str:
         precision = max(0, int(self._hover_tooltip_precision))

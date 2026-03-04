@@ -6,10 +6,13 @@ to enable gradual migration of code from matplotlib to PyQtGraph.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
 import pyqtgraph as pg
+
+log = logging.getLogger(__name__)
 
 __all__ = ["PyQtGraphAxesCompat"]
 
@@ -49,7 +52,7 @@ class PyQtGraphAxesCompat:
                 if requester(float(left), float(right), "axes_compat"):
                     return
             except Exception:
-                pass
+                log.debug("Failed to request x-range change", exc_info=True)
         self._viewbox.setXRange(float(left), float(right), padding=0)
 
     def set_xlim(

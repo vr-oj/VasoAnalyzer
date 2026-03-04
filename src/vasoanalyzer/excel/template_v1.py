@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 from openpyxl import load_workbook
 from openpyxl.utils import range_boundaries
@@ -43,7 +46,7 @@ def _resolve_defined_name_value(workbook, name: str) -> str | None:
             ws = workbook[title]
             return ws[coord].value
     except Exception:
-        pass
+        log.debug("Failed to look up defined name in workbook", exc_info=True)
     attr_text = getattr(defined, "attr_text", None)
     if isinstance(attr_text, str):
         return attr_text.strip().strip('"')

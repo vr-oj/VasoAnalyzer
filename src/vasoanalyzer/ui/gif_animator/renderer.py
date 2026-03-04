@@ -4,11 +4,14 @@ This module provides the core rendering logic for creating animated GIFs,
 following the spec-based architecture pattern used across the UI.
 """
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import matplotlib
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import matplotlib.pyplot as plt
@@ -223,7 +226,8 @@ class AnimationRenderer:
         # Try to use a nice font, fall back to default
         try:
             font = ImageFont.truetype("Arial.ttf", int(self.spec.vessel_timestamp_fontsize))
-        except:
+        except Exception:
+            log.debug("Failed to load Arial font, using default", exc_info=True)
             font = ImageFont.load_default()
 
         # Build overlay text

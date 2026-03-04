@@ -88,7 +88,7 @@ class UnifiedPlotSettingsDialog(QDialog):
                 if isinstance(current, dict):
                     self.style.update(current)
         except Exception:
-            pass
+            log.debug("Failed to get current plot style from parent", exc_info=True)
 
         self._x_axis_target = self._resolve_shared_x_axis()
         current_xlabel = self._current_xlabel()
@@ -365,7 +365,7 @@ class UnifiedPlotSettingsDialog(QDialog):
                 if bottom_axis is not None:
                     candidates.append(bottom_axis)
             except Exception:
-                pass
+                log.debug("Failed to get bottom axis", exc_info=True)
         if self.ax is not None and self.ax not in candidates:
             candidates.append(self.ax)
         try:
@@ -373,7 +373,7 @@ class UnifiedPlotSettingsDialog(QDialog):
                 if axis not in candidates:
                     candidates.append(axis)
         except Exception:
-            pass
+            log.debug("Failed to collect axes from figure", exc_info=True)
         for axis in candidates:
             xlabel = (axis.get_xlabel() or "").strip()
             if xlabel:
@@ -413,13 +413,13 @@ class UnifiedPlotSettingsDialog(QDialog):
                     axes.append(axis)
                     continue
             except Exception:
-                pass
+                log.debug("Failed to check shared axes (matplotlib)", exc_info=True)
             try:
                 if target.get_shared_x_axes().joined(axis, target):
                     axes.append(axis)
                     continue
             except Exception:
-                pass
+                log.debug("Failed to check shared axes (pyqt5)", exc_info=True)
         if target not in axes:
             axes.append(target)
         # preserve order but ensure uniqueness
@@ -439,7 +439,7 @@ class UnifiedPlotSettingsDialog(QDialog):
                 else:
                     axis.set_xlabel("")
             except Exception:
-                pass
+                log.debug("Failed to set x-axis label", exc_info=True)
 
     def _primary_trace_line(self):
         parent = getattr(self, "parent_window", None)

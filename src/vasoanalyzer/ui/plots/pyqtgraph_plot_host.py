@@ -249,7 +249,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 plot_item = track.view.get_widget().getPlotItem()
                 plot_item.getViewBox().setBorder(pg.mkPen(None))
             except Exception:
-                pass
+                log.debug("Failed to apply theme to channel track", exc_info=True)
 
         self._apply_grid_to_all_tracks(alpha=self._grid_alpha)
 
@@ -265,7 +265,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 vb = self._event_strip_track.plot_item.getViewBox()
                 vb.setBorder(self._lane_border_pen)
             except Exception:
-                pass
+                log.debug("Failed to apply theme to event strip track", exc_info=True)
 
         if self._event_top_lane_track is not None:
             try:
@@ -276,7 +276,7 @@ class PyQtGraphPlotHost(InteractionHost):
                     self._event_top_lane_gutter.setStyleSheet(f"background-color: {bg};")
                 self._event_top_lane_track.apply_theme()
             except Exception:
-                pass
+                log.debug("Failed to apply theme to event top lane", exc_info=True)
         self._update_top_lane_separator_style()
 
         for overlay in (
@@ -1266,7 +1266,7 @@ class PyQtGraphPlotHost(InteractionHost):
             if hasattr(axis, "isVisible") and not axis.isVisible():
                 return 0
         except Exception:
-            pass
+            log.debug("Failed to check axis visibility", exc_info=True)
         for getter in (
             lambda: axis.width(),
             lambda: axis.size().width(),
@@ -1286,11 +1286,11 @@ class PyQtGraphPlotHost(InteractionHost):
         try:
             axis.setStyle(showValues=False, tickLength=0)
         except Exception:
-            pass
+            log.debug("Failed to set axis style", exc_info=True)
         try:
             axis.setLabel("")
         except Exception:
-            pass
+            log.debug("Failed to set axis label", exc_info=True)
         with contextlib.suppress(Exception):
             axis.setTicks([])
         with contextlib.suppress(Exception):
@@ -1699,7 +1699,7 @@ class PyQtGraphPlotHost(InteractionHost):
             if actual_height > 0:
                 return actual_height
         except Exception:
-            pass
+            log.debug("Failed to get widget height", exc_info=True)
 
         # Fallback: estimate using equal-height stacked rows.
         container_height = float(max(self._widget.height(), self.layout.geometry().height(), 1))
