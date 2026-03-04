@@ -106,6 +106,7 @@ def ensure_schema(
         CREATE TABLE IF NOT EXISTS trace (
             dataset_id INTEGER NOT NULL REFERENCES dataset(id) ON DELETE CASCADE,
             t_seconds REAL NOT NULL,
+            t_us INTEGER,
             inner_diam REAL,
             outer_diam REAL,
             p_avg REAL,
@@ -120,6 +121,7 @@ def ensure_schema(
         ) WITHOUT ROWID;
 
         CREATE INDEX IF NOT EXISTS trace_ds_t ON trace(dataset_id, t_seconds);
+        CREATE INDEX IF NOT EXISTS trace_ds_tus ON trace(dataset_id, t_us);
 
         CREATE TABLE IF NOT EXISTS event (
             id INTEGER PRIMARY KEY,
@@ -147,6 +149,7 @@ def ensure_schema(
 
         CREATE INDEX IF NOT EXISTS event_ds_t ON event(dataset_id, t_seconds);
         CREATE INDEX IF NOT EXISTS event_ds_tus ON event(dataset_id, t_us);
+        CREATE INDEX IF NOT EXISTS event_not_deleted ON event(dataset_id) WHERE deleted_utc IS NULL;
 
         CREATE TABLE IF NOT EXISTS event_audit (
             id INTEGER PRIMARY KEY,
@@ -344,6 +347,34 @@ def run_migrations(
                 "WHERE validation_status IS NULL OR validation_status = ''"
             )
             version = 6
+
+        elif version == 6:
+            # Migration from v6 to v7: add t_us to trace table, soft-delete index
+            log.info("Migrating schema from v6 to v7 (trace t_us, soft-delete index)")
+            try:
+                conn.execute("ALTER TABLE trace ADD COLUMN t_us INTEGER")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
+
+            # Populate t_us from t_seconds for existing rows
+            conn.execute(
+                "UPDATE trace SET t_us = CAST(ROUND(t_seconds * 1000000.0) AS INTEGER) "
+                "WHERE t_seconds IS NOT NULL AND t_us IS NULL"
+            )
+
+            # Add index for efficient soft-delete queries on events
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS event_not_deleted "
+                "ON event(dataset_id) WHERE deleted_utc IS NULL"
+            )
+
+            # Add index on trace t_us for microsecond-precision lookups
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS trace_ds_tus ON trace(dataset_id, t_us)"
+            )
+
+            version = 7
 
         else:
             raise RuntimeError(f"Unknown schema version {version}. Cannot migrate.")

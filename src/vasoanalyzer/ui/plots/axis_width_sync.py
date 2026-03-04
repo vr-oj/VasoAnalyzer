@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import math
 import time
 import weakref
@@ -11,6 +12,8 @@ from collections.abc import Iterable
 from PyQt5.QtCore import QObject, QTimer
 from PyQt5.QtGui import QFontMetricsF
 from PyQt5.QtWidgets import QApplication
+
+log = logging.getLogger(__name__)
 
 __all__ = ["AxisWidthSync"]
 
@@ -158,7 +161,7 @@ class AxisWidthSync(QObject):
             if hasattr(axis, "isVisible") and not axis.isVisible():
                 return 0
         except Exception:
-            pass
+            log.debug("Failed to check axis visibility", exc_info=True)
 
         tick_text_widths: list[float] = []
 

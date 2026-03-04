@@ -576,7 +576,7 @@ def list_snapshots(bundle_path: Path) -> list[SnapshotInfo]:
         head = json.loads((bundle_path / "HEAD.json").read_text(encoding="utf-8"))
         current_name = head.get("current")
     except Exception:
-        pass
+        log.warning("Failed to parse HEAD.json in bundle", exc_info=True)
 
     snapshots = []
     for snap_path in snaps_dir.glob("*.sqlite"):

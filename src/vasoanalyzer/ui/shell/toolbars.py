@@ -84,7 +84,7 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
             )
             log.debug("[THEME-DEBUG] PlotToolbar theme toolbar_bg=%r", toolbar_bg)
         except Exception:
-            pass
+            log.debug("Failed to apply theme to toolbar", exc_info=True)
 
     toolbar.apply_theme = apply_theme
 

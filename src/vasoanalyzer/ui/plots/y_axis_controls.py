@@ -176,6 +176,12 @@ def _template_svg_icon(
     painter.end()
 
     image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+
+    # Guard: if SVG rendered as fully transparent (e.g. fill="currentColor" on
+    # Windows), return empty icon so the caller can fall back to text.
+    if _alpha_bbox(image) is None:
+        return QIcon()
+
     image = _trim_and_rescale_icon(
         image,
         render_px=render_px,

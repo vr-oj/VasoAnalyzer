@@ -4,6 +4,8 @@ Application preferences dialog for VasoAnalyzer.
 
 from __future__ import annotations
 
+import logging
+
 from PyQt5.QtCore import QSettings
 from PyQt5.QtWidgets import (
     QCheckBox,
@@ -22,6 +24,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+log = logging.getLogger(__name__)
 
 __all__ = ["PreferencesDialog"]
 
@@ -481,6 +485,6 @@ class PreferencesDialog(QDialog):
             try:
                 theme_module.apply_theme(mode, persist=True)
             except Exception:
-                pass
+                log.warning("Failed to apply theme", exc_info=True)
 
         super().accept()

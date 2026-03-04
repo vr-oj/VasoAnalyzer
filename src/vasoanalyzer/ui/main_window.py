@@ -349,7 +349,7 @@ class _SampleLoadJob(QRunnable):
                         if p is not None:
                             db_path = str(p)
                 except Exception:
-                    pass
+                    log.debug("Failed to extract db path from existing store", exc_info=True)
 
                 if db_path:
                     log.debug(
@@ -1038,6 +1038,17 @@ class VasoAnalyzerApp(QMainWindow):
         theme_manager = get_theme_manager()
         theme_manager.themeChanged.connect(self.apply_theme)
 
+        # ===== Instantiate Manager Delegates =====
+        from vasoanalyzer.ui.managers.export_manager import ExportManager
+        from vasoanalyzer.ui.managers.navigation_manager import NavigationManager
+        from vasoanalyzer.ui.managers.project_manager import ProjectManager
+        from vasoanalyzer.ui.managers.snapshot_manager import SnapshotManager
+
+        self._export_mgr = ExportManager(self, parent=self)
+        self._project_mgr = ProjectManager(self, parent=self)
+        self._snapshot_mgr = SnapshotManager(self, parent=self)
+        self._navigation_mgr = NavigationManager(self, parent=self)
+
         QTimer.singleShot(0, self._maybe_run_onboarding)
 
     def initUI(self):
@@ -1721,6 +1732,7 @@ class VasoAnalyzerApp(QMainWindow):
         path_obj = Path(path).expanduser().resolve(strict=False)
         path = str(path_obj)
 
+        self.show_progress("Opening project…", maximum=0)
         self._clear_canvas_and_table()
 
         project: Project | None = None
@@ -1751,6 +1763,7 @@ class VasoAnalyzerApp(QMainWindow):
                     "Bundle Import Error",
                     f"Could not unpack bundle:\n{exc}",
                 )
+                self.hide_progress()
                 return
         else:
             autosave_candidate = pending_autosave_path(path)
@@ -1818,6 +1831,7 @@ class VasoAnalyzerApp(QMainWindow):
                     )
                     if choice != QMessageBox.Yes:
                         self.statusBar().showMessage("Conversion cancelled.", 5000)
+                        self.hide_progress()
                         return
                     try:
                         from vasoanalyzer.core.project import convert_project
@@ -1835,6 +1849,7 @@ class VasoAnalyzerApp(QMainWindow):
                             "Project Conversion Failed",
                             f"Could not convert project:\n{exc}",
                         )
+                        self.hide_progress()
                         return
                 except Exception as exc:
                     error_msg = str(exc)
@@ -1888,8 +1903,10 @@ class VasoAnalyzerApp(QMainWindow):
                             "Project Load Error",
                             f"Could not open project:\n{exc}",
                         )
+                    self.hide_progress()
                     return
 
+        self.hide_progress()
         self._replace_current_project(project)
         self.apply_ui_state(getattr(self.current_project, "ui_state", None))
         self.refresh_project_tree()
@@ -2363,9 +2380,12 @@ class VasoAnalyzerApp(QMainWindow):
             self.project_state[id(self.current_sample)] = state
 
         try:
+            self.show_progress("Exporting bundle…", maximum=0)
             export_project_bundle(self.current_project, path)
+            self.hide_progress()
             self.statusBar().showMessage(f"\u2713 Bundle saved: {path}", 5000)
         except Exception as exc:
+            self.hide_progress()
             QMessageBox.critical(
                 self,
                 "Export Failed",
@@ -2414,12 +2434,14 @@ class VasoAnalyzerApp(QMainWindow):
         dest_path = dest_path.resolve(strict=False)
 
         try:
+            self.show_progress("Exporting shareable project…", maximum=0)
             exported = export_project_single_file(
                 self.current_project,
                 destination=dest_path.as_posix(),
                 ensure_saved=False,
             )
         except Exception as exc:
+            self.hide_progress()
             QMessageBox.critical(
                 self,
                 "Export Failed",
@@ -2427,6 +2449,7 @@ class VasoAnalyzerApp(QMainWindow):
             )
             return
 
+        self.hide_progress()
         self.statusBar().showMessage(f"\u2713 Shareable project saved: {exported}", 5000)
 
     def export_dataset_package_action(self, checked: bool = False):
@@ -5373,7 +5396,7 @@ class VasoAnalyzerApp(QMainWindow):
                 if os.path.exists(candidate):
                     return candidate
         except Exception:
-            pass
+            log.debug("Dark theme icon lookup failed for %s", dark_filename, exc_info=True)
 
         return resource_path("icons", filename)
 
@@ -7117,7 +7140,7 @@ class VasoAnalyzerApp(QMainWindow):
                     if np.isfinite(id_val):
                         tooltip_parts.append(f"ID {id_val:.2f} µm")
                 except Exception:
-                    pass
+                    log.debug("Failed to parse inner diameter value", exc_info=True)
                 od_idx = 3 if has_outer and len(row) >= 5 else None
                 if od_idx is not None:
                     try:
@@ -7125,7 +7148,7 @@ class VasoAnalyzerApp(QMainWindow):
                         if np.isfinite(od_val):
                             tooltip_parts.append(f"OD {od_val:.2f} µm")
                     except Exception:
-                        pass
+                        log.debug("Failed to parse outer diameter value", exc_info=True)
             metadata_entries.append(
                 {
                     "time": time_val,
@@ -7914,6 +7937,9 @@ class VasoAnalyzerApp(QMainWindow):
         if getattr(self, "_onboarding_checked", False):
             return
         self._onboarding_checked = True
+        # Skip if launched via WindowManager (home dashboard handles onboarding)
+        if self.window_manager is not None:
+            return
         if onboarding_needed(self.onboarding_settings):
             self.show_welcome_guide(modal=False)
 
@@ -8621,7 +8647,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self._pending_plot_layout = None
                 return
         except Exception:
-            pass
+            log.debug("Plot layout update check failed", exc_info=True)
         specs_map = {spec.track_id: spec for spec in self.plot_host.channel_specs()}
         order = None
         height_ratios = None
@@ -11417,7 +11443,7 @@ QPushButton[isGhost="true"]:pressed {{
                     self.current_sample.snapshots = np.stack(self.snapshot_frames)
                     self.current_sample.snapshot_path = os.path.abspath(file_path)
                 except Exception:
-                    pass
+                    log.warning("Failed to stack snapshot frames", exc_info=True)
                 self.mark_session_dirty()
                 self.auto_save_project(reason="snapshot")
 
@@ -11591,6 +11617,49 @@ QPushButton[isGhost="true"]:pressed {{
 
         if unsynced_events:
             log.warning("Events: %d rows had frame numbers with no trace match", unsynced_events)
+
+        # --- Event time range validation ---
+        if resolved_times and trace_time_series is not None and not trace_time_series.empty:
+            trace_min = float(trace_time_series.min())
+            trace_max = float(trace_time_series.max())
+            valid_event_times = [t for t in resolved_times if not pd.isna(t)]
+            if valid_event_times:
+                ev_min = min(valid_event_times)
+                ev_max = max(valid_event_times)
+                out_of_range = [
+                    t for t in valid_event_times if t < trace_min or t > trace_max
+                ]
+                if out_of_range:
+                    pct = len(out_of_range) / len(valid_event_times) * 100
+                    log.warning(
+                        "Event validation: %d of %d events (%.0f%%) are outside "
+                        "trace time range [%.1f, %.1f] s",
+                        len(out_of_range), len(valid_event_times), pct,
+                        trace_min, trace_max,
+                    )
+                    if pct > 50:
+                        ratio = ev_max / trace_max if trace_max > 0 else 0
+                        hint = ""
+                        if 55 < ratio < 65:
+                            hint = (
+                                "\n\nHint: Event times appear to be in minutes "
+                                "while the trace is in seconds."
+                            )
+                        elif 900 < ratio < 1100:
+                            hint = (
+                                "\n\nHint: Event times appear to be in "
+                                "milliseconds while the trace is in seconds."
+                            )
+                        QMessageBox.warning(
+                            self,
+                            "Event Time Mismatch",
+                            f"{len(out_of_range)} of {len(valid_event_times)} events "
+                            f"fall outside the trace time range "
+                            f"({trace_min:.1f}\u2013{trace_max:.1f} s).\n\n"
+                            f"Event time range: {ev_min:.1f}\u2013{ev_max:.1f} s.\n"
+                            f"Events may be in different time units or reference "
+                            f"a different recording.{hint}",
+                        )
 
         # Canonical event times prefer trace["Time (s)"] mapped via FrameNumber; event CSV strings are fallback only.
         self.event_times = resolved_times
@@ -13291,6 +13360,34 @@ QPushButton[isGhost="true"]:pressed {{
             trace_path,
             tiff_path or "auto-prompt",
         )
+
+        # Show data preview for user-initiated imports (file dialog or drag-drop)
+        if source in ("file_dialog", "manual", "drag_drop") and not prefetched_payload:
+            single_path = trace_path if isinstance(trace_path, str) else trace_path[0]
+            try:
+                preview_df = pd.read_csv(single_path, nrows=100)
+                from vasoanalyzer.ui.dialogs.data_preview_dialog import DataPreviewDialog
+
+                events_path = find_matching_event_file(single_path)
+                events_df = None
+                if events_path:
+                    try:
+                        events_df = pd.read_csv(events_path, nrows=100)
+                    except Exception:
+                        log.warning("Failed to load events CSV preview from %s", events_path, exc_info=True)
+
+                dlg = DataPreviewDialog(
+                    self,
+                    trace_path=single_path,
+                    trace_df=preview_df,
+                    events_df=events_df,
+                    source_format=source,
+                )
+                if dlg.exec_() != QDialog.Accepted:
+                    return
+            except Exception:
+                log.debug("Could not show data preview, proceeding with import", exc_info=True)
+
         self.load_trace_and_events(
             file_path=trace_path,
             tiff_path=tiff_path,
@@ -13671,7 +13768,7 @@ QPushButton[isGhost="true"]:pressed {{
             try:
                 return self.trace_model.full_range
             except Exception:
-                pass
+                log.debug("Failed to get trace model full range", exc_info=True)
         if self.trace_data is not None and "Time (s)" in self.trace_data.columns:
             series = self.trace_data["Time (s)"]
             with contextlib.suppress(Exception):
@@ -14361,7 +14458,7 @@ QPushButton[isGhost="true"]:pressed {{
                     self.open_legend_settings_dialog()
                     return True
             except Exception:
-                pass
+                log.debug("Legend click detection failed", exc_info=True)
 
         trace_targets = []
         if getattr(self, "trace_line", None) is not None:
@@ -15825,7 +15922,7 @@ QPushButton[isGhost="true"]:pressed {{
                 style["tick_length"] = float(major_ticks[0].tick1line.get_markersize())
                 style["tick_width"] = float(major_ticks[0].tick1line.get_linewidth())
         except Exception:
-            pass
+            log.debug("Failed to extract tick style from axes", exc_info=True)
 
         if ax.lines:
             style["line_width"] = ax.lines[0].get_linewidth()
@@ -16827,7 +16924,7 @@ QPushButton[isGhost="true"]:pressed {{
             if import_button and hasattr(self, "load_trace_action"):
                 import_button.setIcon(self.load_trace_action.icon())
         except Exception:
-            pass
+            log.debug("Failed to assign icon to import button", exc_info=True)
 
         # Reapply shared button styles
         if hasattr(self, "_shared_button_css"):

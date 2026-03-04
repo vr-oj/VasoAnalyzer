@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
   pull_request:
-    branches: [main]
+    branches: [main, beta]
 
 jobs:
   test:
@@ -43,3 +43,34 @@ jobs:
           # Use Qt's built-in offscreen renderer — no display required
           QT_QPA_PLATFORM: offscreen
         run: pytest
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install security tools
+        run: pip install bandit safety
+
+      - name: Run Bandit security scan
+        run: bandit -r src/ -c pyproject.toml --severity-level medium -f json -o bandit-report.json || true
+
+      - name: Display Bandit results
+        run: bandit -r src/ -c pyproject.toml --severity-level medium || true
+
+      - name: Check dependencies for vulnerabilities
+        run: pip install -e . && safety check --output text || true
+
+      - name: Upload Bandit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-security-report
+          path: bandit-report.json
+          if-no-files-found: ignore

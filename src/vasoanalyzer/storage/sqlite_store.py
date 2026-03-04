@@ -70,7 +70,7 @@ __all__ = [
     "convert_legacy_project",
 ]
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 DEFAULT_CHUNK_SIZE = 2 * 1024 * 1024  # 2 MiB
 
 
@@ -535,6 +535,7 @@ def add_dataset(
                             INSERT INTO trace(
                                 dataset_id,
                                 t_seconds,
+                                t_us,
                                 inner_diam,
                                 outer_diam,
                                 p_avg,
@@ -546,7 +547,7 @@ def add_dataset(
                                 table_marker,
                                 caliper_length
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             trace_rows,
                         )

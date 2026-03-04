@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 from PyQt5.QtCore import QSettings, Qt, pyqtSignal
@@ -26,6 +27,8 @@ from PyQt5.QtWidgets import (
 
 from utils import resource_path
 from utils.config import APP_VERSION
+
+log = logging.getLogger(__name__)
 
 from .. import resources_rc  # noqa: F401 - ensure Qt resources loaded
 from .. import theme as ui_theme
@@ -145,7 +148,7 @@ class WelcomeGuideDialog(QDialog):
                 label.setAlignment(Qt.AlignCenter)
                 return label
             except Exception:
-                pass
+                log.debug("Failed to load welcome dialog icon", exc_info=True)
 
         if icon_path and icon_ext.lower() == ".svg":
             try:
@@ -263,6 +266,7 @@ class WelcomeGuideDialog(QDialog):
         self.prev_btn.setEnabled(index > 0)
         last_page = index == self.stack.count() - 1
 
+        self.skip_btn.setVisible(not last_page)
         self.next_btn.setVisible(not last_page)
         self.next_btn.setDefault(not last_page)
         self.next_btn.setAutoDefault(not last_page)
@@ -664,8 +668,6 @@ class WelcomeGuideDialog(QDialog):
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
 
-        self.chk_hide = QCheckBox("Don’t show this at startup")
-
         layout.addWidget(title)
         layout.addWidget(intro)
         layout.addWidget(
@@ -710,7 +712,6 @@ class WelcomeGuideDialog(QDialog):
             )
         )
         layout.addStretch(1)
-        layout.addWidget(self.chk_hide, alignment=Qt.AlignLeft)
         return page
 
     # ------------------------------------------------------------------
@@ -721,6 +722,9 @@ class WelcomeGuideDialog(QDialog):
         nav.setContentsMargins(0, 12, 0, 0)
         nav.setSpacing(10)
 
+        self.chk_hide = QCheckBox("Don't show at startup")
+        nav.addWidget(self.chk_hide, 0, Qt.AlignVCenter)
+
         support = QLabel(
             '<a href="https://github.com/vr-oj/VasoAnalyzer">Documentation & updates</a>'
         )
@@ -730,6 +734,12 @@ class WelcomeGuideDialog(QDialog):
         nav.addWidget(support, 0, Qt.AlignVCenter)
 
         nav.addStretch(1)
+
+        self.skip_btn = QPushButton("Skip")
+        self.skip_btn.setProperty("va-role", "secondary")
+        self.skip_btn.setAutoDefault(False)
+        self.skip_btn.clicked.connect(self._finish)
+        nav.addWidget(self.skip_btn)
 
         self.prev_btn = QPushButton("Back")
         self.prev_btn.setProperty("va-role", "secondary")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -14,6 +15,8 @@ from matplotlib.transforms import blended_transform_factory
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -300,7 +303,7 @@ class TraceView:
             elif colors.size:
                 self.event_collection.set_colors([colors[0]])
         except Exception:
-            pass
+            log.debug("Failed to set event collection colors", exc_info=True)
 
     def current_window(self) -> TraceWindow | None:
         """Return the most recently rendered window."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QDoubleValidator, QKeyEvent, QKeySequence
 from PyQt5.QtWidgets import (
@@ -20,6 +22,8 @@ from PyQt5.QtWidgets import (
 )
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
+
+log = logging.getLogger(__name__)
 
 # Review state constants (matching event_review_wizard.py)
 REVIEW_UNREVIEWED = "UNREVIEWED"
@@ -541,7 +545,7 @@ class EventReviewPanel(QWidget):
                     try:
                         controller._review_states = list(load_states())
                     except Exception:
-                        pass
+                        log.warning("Failed to load review states", exc_info=True)
             is_active = getattr(controller, "is_active", None)
             controller_active = bool(is_active()) if callable(is_active) else True
             navigate_to_event = getattr(controller, "navigate_to_event", None)

@@ -596,7 +596,7 @@ class GifAnimatorWindow(QMainWindow):
             try:
                 self.parent().mark_session_dirty(reason="gif_crop")
             except Exception:
-                pass
+                logger.debug("Failed to mark parent session dirty", exc_info=True)
 
     def _set_crop_roi(self) -> None:
         if not isinstance(self.sample.snapshots, np.ndarray) or self.sample.snapshots.size == 0:
@@ -728,7 +728,7 @@ class GifAnimatorWindow(QMainWindow):
                 if not time_td.isna().all():
                     time_numeric = time_td.dt.total_seconds()
             except Exception:
-                pass
+                logger.warning("Failed to convert time series to timedelta", exc_info=True)
 
         # Get TIFF time range for annotation
         tiff_start = self.frame_times[0] if self.frame_times else 0

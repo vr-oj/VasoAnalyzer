@@ -567,5 +567,5 @@ class AnnotationTool:
             try:
                 artist.remove()
             except Exception:
-                pass
+                log.debug("Failed to remove annotation artist", exc_info=True)
         shape._artists.clear()

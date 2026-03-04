@@ -17,12 +17,15 @@ Usage:
 
 from __future__ import annotations
 
+import logging
 import queue
 import sqlite3
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 from typing import Any
 
 __all__ = ["DbWriter", "WriterClosed"]
@@ -121,7 +124,7 @@ class DbWriter:
             try:
                 self.conn.close()
             except Exception:
-                pass
+                log.debug("Failed to close database connection", exc_info=True)
 
     # ------------------------------------------------------------------ #
     # Internal worker                                                    #
