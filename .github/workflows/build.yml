@@ -9,7 +9,7 @@ on:
 jobs:
   # ── macOS ──────────────────────────────────────────────────────────────────
   build-macos:
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - uses: actions/checkout@v4
@@ -18,6 +18,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+
+      - name: Inject version from tag
+        run: |
+          sed -i '' 's/^APP_VERSION = .*/APP_VERSION = "${{ github.ref_name }}"/' src/utils/config.py
 
       - name: Install dependencies
         run: pip install -e . pyinstaller
@@ -42,6 +46,13 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+
+      - name: Inject version from tag
+        shell: pwsh
+        run: |
+          (Get-Content src/utils/config.py) `
+            -replace '^APP_VERSION = .*', "APP_VERSION = `"${{ github.ref_name }}`"" |
+            Set-Content src/utils/config.py
 
       - name: Install dependencies
         run: pip install -e . pyinstaller
@@ -104,4 +115,6 @@ jobs:
           | macOS | \`.dmg\` — open it and drag VasoAnalyzer to Applications |
           | Windows | \`.exe\` — run the installer |
 
-          **macOS note:** This is an unsigned build. On first launch, right-click the app → Open to bypass Gatekeeper. This is normal for open-source apps without an Apple Developer account."
+          **macOS note:** This is an unsigned build. On first launch, right-click the app → Open to bypass Gatekeeper. This is normal for open-source apps without an Apple Developer account.
+
+          Runs natively on Apple Silicon (M1/M2/M3/M4). Intel Macs are supported via Rosetta 2."
