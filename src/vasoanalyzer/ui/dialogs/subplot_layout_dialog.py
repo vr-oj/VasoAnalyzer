@@ -35,7 +35,7 @@ class SubplotLayoutDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("Subplot Layout")
-        self.setWindowIcon(QIcon(resource_path("icons", "Subplots.svg")))
+        self.setWindowIcon(QIcon(resource_path("resources", "icons", "Subplots.svg")))
         self.setFont(QFont("Arial", 10))
 
         self.fig = fig

@@ -65,9 +65,11 @@ src/
     export/                        # Export utilities
 tests/                             # Test suite (178 tests)
 docs/                              # User guide, architecture docs, audit logs
-icons/                             # 68 SVG icons for the UI
-packaging/                         # macOS Info.plist and build configs
-installer/                         # Platform-specific installer scripts
+resources/                         # Static assets (icons, art, stylesheet)
+  icons/                           # 68 toolbar SVGs, snapshot icons, document icons
+  art/                             # Workspace map SVG
+  style.qss                        # Qt stylesheet
+packaging/                         # PyInstaller spec, installer scripts, platform configs
 schemas/                           # Data/schema definitions and validation
 scripts/                           # Maintenance and developer utilities
 ```
@@ -135,7 +137,7 @@ VasoAnalyzer is packaged with **PyInstaller** for distribution.
 
 ```bash
 pip install pyinstaller
-pyinstaller --noconfirm VasoAnalyzer.spec
+pyinstaller --noconfirm packaging/VasoAnalyzer.spec
 ```
 
 - **Windows**: produces `dist/VasoAnalyzer/VasoAnalyzer.exe`

@@ -109,13 +109,13 @@ QCheckBox::indicator:pressed {
 QCheckBox::indicator:checked {
   background-color: palette(highlight);
   border: 2px solid palette(highlight);
-  image: url(icons/checkmark.svg);
+  image: url(resources/icons/checkmark.svg);
 }
 
 QCheckBox::indicator:checked:hover {
   background-color: palette(highlight);
   border: 2px solid palette(dark);
-  image: url(icons/checkmark.svg);
+  image: url(resources/icons/checkmark.svg);
 }
 
 QScrollBar#TimeScrollbar:horizontal {

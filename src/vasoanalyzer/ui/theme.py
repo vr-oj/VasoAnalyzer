@@ -896,22 +896,34 @@ def _load_light_stylesheet() -> str:
     candidates: list[Path] = []
     if resource_path is not None:
         with contextlib.suppress(Exception):
-            candidates.append(Path(resource_path("style.qss")))
+            candidates.append(Path(resource_path("resources", "style.qss")))
 
     # Fallbacks: source root and project root
     resolved = Path(__file__).resolve()
     with contextlib.suppress(IndexError):
-        candidates.append(resolved.parents[2] / "style.qss")
+        candidates.append(resolved.parents[2] / "resources" / "style.qss")
     with contextlib.suppress(IndexError):
-        candidates.append(resolved.parents[3] / "style.qss")
+        candidates.append(resolved.parents[3] / "resources" / "style.qss")
 
+    content = ""
     for path in candidates:
         try:
             if path.exists():
-                return path.read_text()
+                content = path.read_text()
+                break
         except Exception:
             continue
-    return ""
+
+    # Resolve relative icon url() paths to absolute paths so the stylesheet
+    # works regardless of the application's working directory.
+    if content and resource_path is not None:
+        with contextlib.suppress(Exception):
+            icons_abs = resource_path("resources", "icons").replace("\\", "/")
+            content = content.replace(
+                "url(resources/icons/", f"url({icons_abs}/"
+            )
+
+    return content
 
 
 def _build_complete_stylesheet(theme: dict) -> str:

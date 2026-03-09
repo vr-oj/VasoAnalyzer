@@ -1,4 +1,4 @@
-"""Multi-panel experiment report figure for SciNote / lab notebook export.
+"""Multi-panel experiment report figure for data report / lab notebook export.
 
 Layout (landscape):
 ┌──────────────────────────────────────────────────────────┐

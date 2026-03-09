@@ -65,7 +65,7 @@ def snapshot_icon_path(name: str) -> str:
         return candidate
 
     fallback = _SNAPSHOT_ICON_FALLBACKS.get(name, name)
-    fallback_path = resource_path("icons", fallback)
+    fallback_path = resource_path("resources", "icons", fallback)
     if os.path.exists(fallback_path):
         return fallback_path
     return ""

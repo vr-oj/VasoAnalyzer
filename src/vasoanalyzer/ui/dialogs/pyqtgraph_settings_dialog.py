@@ -89,6 +89,7 @@ class PyQtGraphSettingsDialog(QDialog):
 
         # Create group boxes
         content_layout.addWidget(self._create_tracks_group())
+        content_layout.addWidget(self._create_line_width_group())
         content_layout.addWidget(self._create_grid_group())
         content_layout.addWidget(self._create_tooltips_group())
         content_layout.addWidget(self._create_event_labels_group())
@@ -135,6 +136,24 @@ class PyQtGraphSettingsDialog(QDialog):
             grid.addWidget(widgets["y_min"], row, 3)
             grid.addWidget(widgets["y_max"], row, 4)
             row += 1
+
+        return group
+
+    def _create_line_width_group(self) -> QGroupBox:
+        """Create universal trace line width control."""
+        group = QGroupBox("Trace Style")
+        form = QFormLayout(group)
+
+        self.line_width_spin = QDoubleSpinBox()
+        self.line_width_spin.setRange(0.5, 10.0)
+        self.line_width_spin.setSingleStep(0.2)
+        self.line_width_spin.setDecimals(1)
+        self.line_width_spin.setSuffix(" px")
+        self.line_width_spin.setToolTip("Line width applied to all traces")
+        self.line_width_spin.setValue(
+            getattr(self.plot_host, "_default_line_width", 1.6)
+        )
+        form.addRow("Line Width:", self.line_width_spin)
 
         return group
 
@@ -289,6 +308,9 @@ class PyQtGraphSettingsDialog(QDialog):
 
                 # Visibility
                 self.plot_host.set_channel_visible(track_id, widgets["visible"].isChecked())
+
+            # Apply line width to all traces
+            self.plot_host.set_default_line_width(self.line_width_spin.value())
 
             # Apply grid (simple on/off, no alpha parameter)
             self._apply_grid_settings()

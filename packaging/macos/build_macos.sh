@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # macOS build script for VasoAnalyzer
 #
-# Produces: installer/macos/output/<AppName>.dmg
+# Produces: packaging/macos/output/<AppName>.dmg
 #
 # No code signing or notarization — this is an unsigned open-source build.
 # On first launch, users must right-click → Open to bypass Gatekeeper.
@@ -13,9 +13,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-SPEC="$ROOT/VasoAnalyzer.spec"
+SPEC="$ROOT/packaging/VasoAnalyzer.spec"
 DIST_DIR="$ROOT/dist"
-OUT_DIR="$ROOT/installer/macos/output"
+OUT_DIR="$ROOT/packaging/macos/output"
 
 echo "==> Building VasoAnalyzer .app with PyInstaller"
 cd "$ROOT"

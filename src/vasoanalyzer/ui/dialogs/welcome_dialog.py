@@ -116,11 +116,9 @@ class WelcomeGuideDialog(QDialog):
     def _brand_icon_widget(self) -> QWidget:
         search_roots = [
             ("src", "vasoanalyzer", "VasoAnalyzerIcon_hero.png"),
+            ("vasoanalyzer", "VasoAnalyzerIcon_hero.png"),
             ("vasoanalyzer", "VasoAnalyzerIcon.png"),
-            ("icons", "VasoAnalyzerIcon_hero.png"),
-            ("icons", "VasoAnalyzerIcon.png"),
             ("vasoanalyzer", "VasoAnalyzerIcon.svg"),
-            ("icons", "VasoAnalyzerIcon.svg"),
             ("src", "vasoanalyzer", "VasoAnalyzerIcon.svg"),
         ]
 

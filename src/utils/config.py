@@ -3,4 +3,4 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-APP_VERSION = "v3.0.1"
+APP_VERSION = "v3.0.2"

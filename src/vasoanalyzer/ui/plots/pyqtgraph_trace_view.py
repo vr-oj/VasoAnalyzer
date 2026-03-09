@@ -433,7 +433,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             trace_name = "Inner Diameter"
 
         self.inner_curve = self._plot_item.plot(
-            pen=pg.mkPen(color=theme_color, width=1.2),
+            pen=pg.mkPen(color=theme_color, width=1.6),
             antialias=False,
             name=None,
         )
@@ -448,7 +448,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if self._mode == "dual":
             outer_color = "#FF8C00"  # Orange for outer diameter (fixed, doesn't change with theme)
             self.outer_curve = self._plot_item.plot(
-                pen=pg.mkPen(color=outer_color, width=1.1),
+                pen=pg.mkPen(color=outer_color, width=1.6),
                 antialias=False,
                 name=None,
             )
@@ -483,7 +483,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         # Other traces (outer, pressure, set_pressure) keep their fixed colors
         if self.inner_curve is not None and self._mode in ("inner", "dual"):
             inner_color = CURRENT_THEME.get("trace_color", "#000000")
-            pen = pg.mkPen(color=inner_color, width=1.2)
+            current_width = self.inner_curve.opts.get("pen", pg.mkPen()).widthF() or 1.2
+            pen = pg.mkPen(color=inner_color, width=current_width)
             self.inner_curve.setPen(pen)
 
         # Outer diameter trace always stays orange (doesn't change with theme)

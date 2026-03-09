@@ -299,9 +299,9 @@ class YAxisControls(QWidget):
         self._menu_icon_resource = ":/icons/chevron-down.svg"
         self._plus_icon_resource = ":/icons/plus.svg"
         self._minus_icon_resource = ":/icons/minus.svg"
-        self._menu_icon_path = resource_path("icons", "chevron-down.svg")
-        self._plus_icon_path = resource_path("icons", "plus.svg")
-        self._minus_icon_path = resource_path("icons", "minus.svg")
+        self._menu_icon_path = resource_path("resources", "icons", "chevron-down.svg")
+        self._plus_icon_path = resource_path("resources", "icons", "plus.svg")
+        self._minus_icon_path = resource_path("resources", "icons", "minus.svg")
         initial_dpr = self._current_dpr()
         btn_px = _logical_size(BUTTON_PX, initial_dpr)
         icon_px = _logical_size(ICON_PX, initial_dpr)

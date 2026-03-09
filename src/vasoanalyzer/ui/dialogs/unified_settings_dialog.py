@@ -98,7 +98,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         self._initialize_event_sources(parent)
 
         self.setWindowTitle("Plot Settings")
-        self.setWindowIcon(QIcon(resource_path("icons", "Aa.svg")))
+        self.setWindowIcon(QIcon(resource_path("resources", "icons", "Aa.svg")))
         self.setFont(QFont("Arial", 10))
         self.setMinimumWidth(720)
         self.setMinimumHeight(500)

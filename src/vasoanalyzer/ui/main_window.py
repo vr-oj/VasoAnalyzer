@@ -5466,13 +5466,13 @@ class VasoAnalyzerApp(QMainWindow):
             ):
                 name, ext = os.path.splitext(filename)
                 dark_filename = f"{name}_Dark{ext}"
-                candidate = resource_path("icons", dark_filename)
+                candidate = resource_path("resources", "icons", dark_filename)
                 if os.path.exists(candidate):
                     return candidate
         except Exception:
             log.debug("Dark theme icon lookup failed for %s", dark_filename, exc_info=True)
 
-        return resource_path("icons", filename)
+        return resource_path("resources", "icons", filename)
 
     def _brand_icon_path(self, extension: str) -> str:
         """Return the absolute path to the main VasoAnalyzer app icon."""
@@ -5483,7 +5483,6 @@ class VasoAnalyzerApp(QMainWindow):
 
         filename = f"VasoAnalyzerIcon.{extension}"
         search_roots = [
-            ("icons", filename),
             ("vasoanalyzer", filename),
             ("src", "vasoanalyzer", filename),
         ]
@@ -5708,11 +5707,11 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_export_tiff.triggered.connect(self.export_high_res_plot)
         export_menu.addAction(self.action_export_tiff)
 
-        self.action_export_report = QAction("SciNote Report…", self)
+        self.action_export_report = QAction("Data Report…", self)
         self.action_export_report.setToolTip(
             "Export a composite figure with trace, event table, and metadata"
         )
-        self.action_export_report.triggered.connect(self._export_scinote_report)
+        self.action_export_report.triggered.connect(self._export_data_report)
         export_menu.addAction(self.action_export_report)
 
         self.action_export_bundle = QAction("Project Bundle (.vaso)…", self)
@@ -15346,7 +15345,7 @@ QPushButton[isGhost="true"]:pressed {{
         )
         dialog.exec_()
 
-    def _export_scinote_report(self) -> None:
+    def _export_data_report(self) -> None:
         import matplotlib.pyplot as plt
 
         from vasoanalyzer.export.report_figure import render_report_figure

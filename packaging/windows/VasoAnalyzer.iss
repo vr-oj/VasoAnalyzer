@@ -1,5 +1,5 @@
 #define MyAppName "VasoAnalyzer"
-#define MyAppVersion "3.0.1"
+#define MyAppVersion "3.0.2"
 #define MyAppPublisher "Tykocki Lab"
 #define MyAppExeName "VasoAnalyzer.exe"
 #define MyAppId "{{C7E28CDA-3B4A-4C42-9DD4-84B0437D0B5E}}"
@@ -21,7 +21,7 @@ SetupIconFile=..\..\src\vasoanalyzer\VasoAnalyzerIcon.ico
 
 [Files]
 Source: "..\..\dist\VasoAnalyzer\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\..\assets\icons\VasoDocument.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\resources\icons\VasoDocument.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\VasoAnalyzer"; Filename: "{app}\{#MyAppExeName}"

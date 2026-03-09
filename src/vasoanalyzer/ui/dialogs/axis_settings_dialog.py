@@ -36,7 +36,7 @@ class AxisSettingsDialog(QDialog):
         self.canvas = canvas
 
         self.setWindowTitle("Axis Settings")
-        self.setWindowIcon(QIcon(resource_path("icons", "Customize_edit_axis_ranges.svg")))
+        self.setWindowIcon(QIcon(resource_path("resources", "icons", "Customize_edit_axis_ranges.svg")))
         self.setFont(QFont("Arial", 10))
 
         main = QVBoxLayout(self)

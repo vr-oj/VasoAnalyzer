@@ -1,4 +1,4 @@
-# VasoAnalyzer v3.0.0
+# VasoAnalyzer v3.0.2
 
 **Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
 
@@ -210,12 +210,12 @@ project to regenerate views.
   - `io/` — trace and event file importers
   - `services/` — project repository, cache, and folder-import services
 - `docs/` — user guide, welcome tour, and import documentation
-- `icons/`, `resources/`, `style.qss` — application assets and styling
+- `resources/` — application assets (icons, art, stylesheet)
 - `schemas/` — data/schema definitions and validation helpers
 - `scripts/` — maintenance and developer utilities
 - `tests/` — test suite
-- `packaging/` — PyInstaller / macOS bundle configs (if present)
-- `VasoAnalyzer.spec` — PyInstaller spec for Windows packaging
+- `resources/` — static assets (icons, art, stylesheet)
+- `packaging/` — PyInstaller spec, installer scripts, platform configs
 - `README.md` — this file
 - `LICENSE`, `CITATION.cff` — licensing and citation info
 

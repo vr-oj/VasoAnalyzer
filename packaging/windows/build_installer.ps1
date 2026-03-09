@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 $root = Resolve-Path "$PSScriptRoot/../.."
-$specPath = Join-Path $root "VasoAnalyzer.spec"
-$installerScript = Join-Path $root "installer/windows/VasoAnalyzer.iss"
+$specPath = Join-Path $root "packaging/VasoAnalyzer.spec"
+$installerScript = Join-Path $root "packaging/windows/VasoAnalyzer.iss"
 $distDir = Join-Path $root "dist/VasoAnalyzer"
 
 Write-Host "==> Building VasoAnalyzer onedir bundle with PyInstaller"
@@ -13,8 +13,8 @@ if (-not (Test-Path $distDir)) {
 }
 
 Write-Host "==> Copying document icons into dist"
-Copy-Item (Join-Path $root "assets/icons/VasoDocument.ico") $distDir -Force
-Copy-Item (Join-Path $root "assets/icons/VasoDocument.icns") $distDir -Force
+Copy-Item (Join-Path $root "resources/icons/VasoDocument.ico") $distDir -Force
+Copy-Item (Join-Path $root "resources/icons/VasoDocument.icns") $distDir -Force
 
 Write-Host "==> Compiling Inno Setup installer"
 $iscc = Get-Command iscc -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source

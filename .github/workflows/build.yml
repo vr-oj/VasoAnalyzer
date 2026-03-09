@@ -1,6 +1,6 @@
 name: Build
 
-# Triggered when you push a version tag, e.g.: git tag v3.0.0 && git push --tags
+# Triggered when you push a version tag, e.g.: git tag v3.0.2 && git push --tags
 on:
   push:
     tags:
@@ -34,7 +34,7 @@ jobs:
         run: pip install -e . pyinstaller
 
       - name: Build macOS DMG
-        run: bash installer/macos/build_macos.sh
+        run: bash packaging/macos/build_macos.sh
         env:
           ARCH_LABEL: ${{ matrix.label }}
 
@@ -51,7 +51,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-${{ matrix.label }}
-          path: installer/macos/output/*.dmg
+          path: packaging/macos/output/*.dmg
 
   # ── Windows ────────────────────────────────────────────────────────────────
   build-windows:
@@ -82,13 +82,13 @@ jobs:
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}" -replace '^v', ''
-          (Get-Content installer\windows\VasoAnalyzer.iss) `
+          (Get-Content packaging\windows\VasoAnalyzer.iss) `
             -replace '#define MyAppVersion ".*"', "#define MyAppVersion `"$ver`"" |
-            Set-Content installer\windows\VasoAnalyzer.iss
+            Set-Content packaging\windows\VasoAnalyzer.iss
 
       - name: Build Windows installer
         shell: pwsh
-        run: .\installer\windows\build_installer.ps1
+        run: .\packaging\windows\build_installer.ps1
 
       - name: Smoke-test Windows exe
         shell: pwsh
@@ -105,7 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: installer/windows/output/*.exe
+          path: packaging/windows/output/*.exe
 
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:

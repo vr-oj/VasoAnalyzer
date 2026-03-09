@@ -481,13 +481,13 @@ QPushButton[isGhost="true"]:pressed {{
             ):
                 name, ext = os.path.splitext(filename)
                 dark_filename = f"{name}_Dark{ext}"
-                candidate = resource_path("icons", dark_filename)
+                candidate = resource_path("resources", "icons", dark_filename)
                 if os.path.exists(candidate):
                     return candidate
         except Exception:
             log.debug("Dark theme icon lookup failed", exc_info=True)
 
-        return resource_path("icons", filename)
+        return resource_path("resources", "icons", filename)
 
     def _brand_icon_path(self, extension: str) -> str:
         from utils import resource_path
@@ -497,7 +497,6 @@ QPushButton[isGhost="true"]:pressed {{
 
         filename = f"VasoAnalyzerIcon.{extension}"
         search_roots = [
-            ("icons", filename),
             ("vasoanalyzer", filename),
             ("src", "vasoanalyzer", filename),
         ]
