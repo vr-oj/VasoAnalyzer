@@ -167,7 +167,7 @@ class WindowManager(QObject):
             parent,
             "Open Project",
             "",
-            "Vaso Projects (*.vaso *.vasopack);;All Files (*)",
+            "Vaso Projects (*.vaso);;All Files (*)",
         )
         if not path:
             return None

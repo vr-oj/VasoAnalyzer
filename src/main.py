@@ -45,8 +45,27 @@ def _configure_sip_exit_behavior() -> None:
             break
 
 
+def _smoke_test() -> None:
+    """Quick import & init check used by CI to verify the build is functional."""
+    print("smoke-test: importing core modules...")
+    from PyQt5.QtWidgets import QApplication  # noqa: F401
+    from vasoanalyzer.app.launcher import VasoAnalyzerLauncher  # noqa: F401
+    from vasoanalyzer.core.logging_config import setup_production_logging  # noqa: F401
+    from vasoanalyzer.core.single_instance import SingleInstanceManager  # noqa: F401
+
+    app = QApplication(sys.argv)
+    from utils.config import APP_VERSION
+
+    print(f"smoke-test: VasoAnalyzer {APP_VERSION} — all imports OK")
+    app.quit()
+    sys.exit(0)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Bootstrap the Qt application and block until it exits."""
+    if "--smoke-test" in sys.argv:
+        _smoke_test()
+
     _configure_sip_exit_behavior()
     from vasoanalyzer.app.launcher import VasoAnalyzerLauncher
     from vasoanalyzer.core.logging_config import setup_production_logging

@@ -531,7 +531,7 @@ class ExportManager(QObject):
     # ------------------------------------------------------------------
 
     def export_project_bundle_action(self, checked: bool = False):
-        """Export project as .vasopack bundle.
+        """Export project as a shareable .vaso file.
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
@@ -551,20 +551,20 @@ class ExportManager(QObject):
         default_stem = Path(host.current_project.path).with_suffix("").name
         default_path = (
             Path(host.current_project.path)
-            .with_name(f"{default_stem}.vasopack")
+            .with_name(f"{default_stem}.vaso")
             .as_posix()
         )
         path, _ = QFileDialog.getSaveFileName(
             host,
             "Export Project Bundle",
             default_path,
-            "Vaso Bundles (*.vasopack)",
+            "Vaso Projects (*.vaso)",
         )
         if not path:
             return
         path_obj = Path(path).expanduser()
-        if path_obj.suffix.lower() != ".vasopack":
-            path_obj = path_obj.with_suffix(".vasopack")
+        if path_obj.suffix.lower() != ".vaso":
+            path_obj = path_obj.with_suffix(".vaso")
         path = str(path_obj.resolve(strict=False))
 
         host.current_project.ui_state = host.gather_ui_state()

@@ -308,9 +308,29 @@ def pack_temp_bundle_to_container(
         except Exception:
             log.debug("fsync(target_dir) best-effort failed", exc_info=True)
 
+        # Verify ZIP is valid and non-empty before replacing
+        try:
+            with zipfile.ZipFile(temp_target, "r") as zf_check:
+                entries = zf_check.namelist()
+                if not entries:
+                    raise OSError("Container ZIP is empty — no files were packed")
+                has_snapshot = any("snapshots/" in e and e.endswith(".sqlite") for e in entries)
+                if not has_snapshot:
+                    raise OSError("Container ZIP has no snapshot — project data is missing")
+                bad = zf_check.testzip()
+                if bad is not None:
+                    raise OSError(f"Container ZIP has corrupt entry: {bad}")
+        except zipfile.BadZipFile as e:
+            raise OSError(f"Container ZIP is corrupt: {e}") from e
+
         # Atomic replace: temp -> final
         os.replace(temp_target, target_path)
-        log.info(f"Container created successfully: {target_path}")
+
+        # Verify final file size
+        final_size = target_path.stat().st_size
+        if final_size == 0:
+            raise OSError("Container file is 0 bytes after write")
+        log.info(f"Container created successfully: {target_path} ({final_size} bytes)")
 
     except Exception as e:
         # Clean up temp file on error

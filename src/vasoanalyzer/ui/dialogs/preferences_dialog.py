@@ -174,7 +174,7 @@ class PreferencesDialog(QDialog):
         migration_layout.addWidget(self.keep_legacy_checkbox)
 
         migration_help = QLabel(
-            "<small>When opening old .vaso or .vasopack projects, automatically convert them "
+            "<small>When opening old .vaso projects, automatically convert them "
             "to the new format and keep backups for safety.</small>"
         )
         migration_help.setWordWrap(True)

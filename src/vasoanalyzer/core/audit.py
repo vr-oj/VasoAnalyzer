@@ -1,4 +1,4 @@
-"""Audit log helpers for manual trace editing."""
+"""Audit log helpers for manual trace editing and change tracking."""
 
 from __future__ import annotations
 
@@ -10,10 +10,14 @@ from typing import Any
 
 __all__ = [
     "EditAction",
+    "ChangeEntry",
     "compress_indices",
     "expand_ranges",
     "serialize_edit_log",
     "deserialize_edit_log",
+    "serialize_change_log",
+    "deserialize_change_log",
+    "edit_action_to_change_entry",
 ]
 
 
@@ -202,3 +206,97 @@ def deserialize_edit_log(payload: Iterable[dict[str, Any]]) -> tuple[EditAction,
         except Exception:
             continue
     return tuple(actions)
+
+
+# ---------------------------------------------------------------------------
+# Unified change log
+# ---------------------------------------------------------------------------
+
+# Valid categories for ChangeEntry
+CATEGORY_POINT_EDIT = "point_edit"
+CATEGORY_EVENT_EDIT = "event_edit"
+CATEGORY_EVENT_LABEL = "event_label"
+CATEGORY_EVENT_ADD = "event_add"
+CATEGORY_EVENT_DELETE = "event_delete"
+CATEGORY_REVIEW_STATUS = "review_status"
+
+_CATEGORY_LABELS: dict[str, str] = {
+    CATEGORY_POINT_EDIT: "Point Edit",
+    CATEGORY_EVENT_EDIT: "Event Edit",
+    CATEGORY_EVENT_LABEL: "Event Label",
+    CATEGORY_EVENT_ADD: "Event Add",
+    CATEGORY_EVENT_DELETE: "Event Delete",
+    CATEGORY_REVIEW_STATUS: "Review Status",
+}
+
+
+@dataclass(frozen=True)
+class ChangeEntry:
+    """A single auditable change to sample data."""
+
+    category: str
+    description: str
+    timestamp: datetime = field(
+        default_factory=lambda: datetime.utcnow().replace(tzinfo=timezone.utc)
+    )
+    user: str = field(default_factory=_default_user)
+    details: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def category_label(self) -> str:
+        return _CATEGORY_LABELS.get(self.category, self.category)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "type": "change",
+            "category": self.category,
+            "description": self.description,
+            "timestamp": _ensure_utc(self.timestamp).isoformat().replace("+00:00", "Z"),
+            "user": self.user,
+            "details": dict(self.details),
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> ChangeEntry:
+        timestamp_raw = payload.get("timestamp")
+        if timestamp_raw:
+            try:
+                ts = datetime.fromisoformat(str(timestamp_raw).replace("Z", "+00:00"))
+            except Exception:
+                ts = datetime.utcnow().replace(tzinfo=timezone.utc)
+        else:
+            ts = datetime.utcnow().replace(tzinfo=timezone.utc)
+        return cls(
+            category=str(payload.get("category", "")),
+            description=str(payload.get("description", "")),
+            timestamp=_ensure_utc(ts),
+            user=payload.get("user") or _default_user(),
+            details=dict(payload.get("details") or {}),
+        )
+
+
+def edit_action_to_change_entry(action: EditAction) -> ChangeEntry:
+    """Convert an EditAction into a ChangeEntry for the unified log."""
+    return ChangeEntry(
+        category=CATEGORY_POINT_EDIT,
+        description=action.summary(),
+        timestamp=action.timestamp,
+        user=action.user,
+        details=action.to_dict(),
+    )
+
+
+def serialize_change_log(entries: Sequence[ChangeEntry]) -> list[dict[str, Any]]:
+    return [entry.to_dict() for entry in entries]
+
+
+def deserialize_change_log(
+    payload: Iterable[dict[str, Any]],
+) -> list[ChangeEntry]:
+    entries: list[ChangeEntry] = []
+    for item in payload:
+        try:
+            entries.append(ChangeEntry.from_dict(item))
+        except Exception:
+            continue
+    return entries

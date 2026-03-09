@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QDoubleValidator, QKeyEvent, QKeySequence
+from PyQt5.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt5.QtGui import QDoubleValidator, QKeyEvent
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QFormLayout,
@@ -16,7 +16,6 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
-    QShortcut,
     QVBoxLayout,
     QWidget,
 )
@@ -130,23 +129,16 @@ class EventReviewPanel(QWidget):
         layout.addStretch()
 
     def _install_shortcuts(self) -> None:
-        """Install panel-scoped shortcuts that work for child widgets."""
-        self._shortcuts: list[QShortcut] = []
-        bindings: tuple[tuple[QKeySequence, object], ...] = (
-            (QKeySequence(Qt.Key_Left), self._on_previous),
-            (QKeySequence(Qt.Key_Right), self._on_next),
-            (QKeySequence(Qt.Key_S), self._on_sample_requested),
-            (QKeySequence(Qt.Key_Delete), self._delete_current_event),
-            (QKeySequence(Qt.Key_Backspace), self._delete_current_event),
-            (QKeySequence(Qt.Key_E), self._edit_current_label),
-            (QKeySequence(Qt.Key_T), self._edit_current_time),
-        )
+        """Install event filter on all child widgets for panel-wide key handling.
 
-        for sequence, handler in bindings:
-            shortcut = QShortcut(sequence, self)
-            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
-            shortcut.activated.connect(handler)
-            self._shortcuts.append(shortcut)
+        Arrow keys and letter keys (N, P, S, etc.) are consumed by child
+        widgets (QLineEdit cursor movement, button focus traversal) before
+        QShortcut or keyPressEvent can see them.  An event filter on every
+        focusable child lets us intercept them reliably while still allowing
+        normal text editing in the ID/OD input fields.
+        """
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
 
     def _build_header(self) -> QWidget:
         """Build header with title and progress."""
@@ -287,12 +279,12 @@ class EventReviewPanel(QWidget):
         nav_row.setSpacing(8)
 
         self.prev_button = QPushButton("← Previous")
-        self.prev_button.setToolTip("Previous event (←)")
+        self.prev_button.setToolTip("Previous event (↑)")
         self.prev_button.clicked.connect(self._on_previous)
         nav_row.addWidget(self.prev_button)
 
         self.next_button = QPushButton("Next →")
-        self.next_button.setToolTip("Next event (→ or N)")
+        self.next_button.setToolTip("Next event (↓ or N)")
         self.next_button.clicked.connect(self._on_next)
         nav_row.addWidget(self.next_button)
 
@@ -467,12 +459,12 @@ class EventReviewPanel(QWidget):
             highlighted_text = CURRENT_THEME.get("highlighted_text", "#FFFFFF")
             self.sample_button.setText("Sampling... (click trace)")
             self.sample_button.setStyleSheet(f"""
-                QPushButton {
+                QPushButton {{
                     background-color: {accent_fill};
                     border: 1px solid {accent};
                     color: {highlighted_text};
                     font-weight: bold;
-                }
+                }}
             """)
         else:
             self.sample_button.setText("Sample from Trace")
@@ -773,52 +765,70 @@ class EventReviewPanel(QWidget):
 
     # ---- Keyboard shortcuts ------------------------------------------------
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        """Handle keyboard shortcuts.
+    # ---- Event filter (replaces keyPressEvent) ------------------------------
 
-        Args:
-            event: Key press event
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+        """Intercept key events from child widgets for panel-wide shortcuts.
+
+        When a QLineEdit has focus, letter keys and arrows are passed through
+        so the user can type/edit values normally.  All other focusable children
+        (buttons, radio buttons, etc.) have their key events intercepted for
+        navigation and action shortcuts.
         """
-        key = event.key()
+        if event.type() != QEvent.KeyPress:
+            return super().eventFilter(obj, event)
 
-        # Navigation
-        if key == Qt.Key_Right or key == Qt.Key_N:
-            self._on_next()
-        elif key == Qt.Key_Left or key == Qt.Key_P:
-            self._on_previous()
-        # Confirm review (confirm all and close panel)
-        elif key == Qt.Key_C:
-            self._on_confirm_review()
-        # Sample mode toggle
-        elif key == Qt.Key_S:
-            self._on_sample_requested()
-        # Edit current event fields
-        elif key == Qt.Key_E:
-            self._edit_current_label()
-        elif key == Qt.Key_T:
-            self._edit_current_time()
-        # Delete current event (with confirm)
-        elif key == Qt.Key_Delete or key == Qt.Key_Backspace:
-            self._delete_current_event()
-        # Exit sampling mode or close panel
-        elif key == Qt.Key_Escape:
+        key = event.key()
+        in_line_edit = isinstance(obj, QLineEdit)
+
+        # Always let Escape through regardless of focus
+        if key == Qt.Key_Escape:
             if self._sampling_mode:
-                self._on_sample_requested()  # Toggle off
+                self._on_sample_requested()
             else:
                 self._on_close_review()
-        # Number keys for review state
-        elif key == Qt.Key_1:
-            self._set_review_state(REVIEW_UNREVIEWED)
+            return True
+
+        # When typing in a line edit, only intercept Escape (above)
+        # and Enter/Return (commit value, then let default handling proceed).
+        if in_line_edit:
+            return False
+
+        # Navigation (up/down = previous/next, matching table row order)
+        if key in (Qt.Key_Down, Qt.Key_N):
+            self._on_next()
+            return True
+        if key in (Qt.Key_Up, Qt.Key_P):
+            self._on_previous()
+            return True
+
+        # Actions
+        if key == Qt.Key_C:
+            self._on_confirm_review()
+            return True
+        if key == Qt.Key_S:
+            self._on_sample_requested()
+            return True
+        if key == Qt.Key_E:
+            self._edit_current_label()
+            return True
+        if key == Qt.Key_T:
+            self._edit_current_time()
+            return True
+        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+            self._delete_current_event()
+            return True
+
+        # Review state number keys
+        _state_keys = {
+            Qt.Key_1: REVIEW_UNREVIEWED,
+            Qt.Key_2: REVIEW_CONFIRMED,
+            Qt.Key_3: REVIEW_EDITED,
+            Qt.Key_4: REVIEW_NEEDS_FOLLOWUP,
+        }
+        if key in _state_keys:
+            self._set_review_state(_state_keys[key])
             self._on_state_changed()
-        elif key == Qt.Key_2:
-            self._set_review_state(REVIEW_CONFIRMED)
-            self._on_state_changed()
-        elif key == Qt.Key_3:
-            self._set_review_state(REVIEW_EDITED)
-            self._on_state_changed()
-        elif key == Qt.Key_4:
-            self._set_review_state(REVIEW_NEEDS_FOLLOWUP)
-            self._on_state_changed()
-        else:
-            # Default handling
-            super().keyPressEvent(event)
+            return True
+
+        return super().eventFilter(obj, event)

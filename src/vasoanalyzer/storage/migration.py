@@ -308,15 +308,24 @@ def auto_migrate_if_needed(path: Path, *, keep_legacy: bool = True) -> tuple[Pat
         log.info(f"Found existing bundle: {bundle_path}")
         return bundle_path, False
 
-    # Check if legacy format
+    # Check if legacy format — migrate to .vaso container (single file)
     if is_legacy_project(path):
-        log.info(f"Legacy project detected, migrating to bundle format: {path}")
+        log.info(f"Legacy project detected, migrating to container format: {path}")
         try:
             bundle_path = migrate_to_bundle(path, keep_legacy=keep_legacy)
+            # Convert the intermediate .vasopack folder to a .vaso container
+            from .container_fs import convert_vasopack_to_container
+
+            container_path = path.with_suffix(".vaso")
+            if not container_path.exists():
+                container_path = convert_vasopack_to_container(bundle_path, container_path)
+                shutil.rmtree(bundle_path)
+                log.info(f"Migration produced container: {container_path}")
+                return container_path, True
+            # If a .vaso already exists at that path, return the bundle as-is
             return bundle_path, True
         except Exception as e:
             log.error(f"Migration failed: {e}")
-            # Fall back to opening legacy file
             log.warning("Migration failed, falling back to legacy format")
             return path, False
 

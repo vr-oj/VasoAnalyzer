@@ -202,6 +202,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._hover_tooltip_enabled: bool = False
         self._hover_tooltip_precision: int = 2
         self._hover_connection_active: bool = False
+        self._raw_sampler: Callable[[float], tuple] | None = None
         self._hover_last_text: str = ""
         self._last_hover_index: int | None = None
         self._last_hover_text: str = ""
@@ -1728,6 +1729,18 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._hover_tooltip_precision = max(0, int(precision))
         self._ensure_hover_tracking()
 
+    def set_raw_sampler(self, sampler: Callable[[float], tuple] | None) -> None:
+        """Set a raw-data sampler callback for accurate tooltip values.
+
+        When set, the hover tooltip reads values from raw trace data instead
+        of decimated display bins. This ensures tooltip values match what
+        gets recorded during sampling.
+
+        Args:
+            sampler: Callback ``(time_sec) -> (id, od, avg_p, set_p)`` or None
+        """
+        self._raw_sampler = sampler
+
     # Click handling ----------------------------------------------------
     def set_click_handler(
         self, handler: Callable[[float, float, int, str, Any], None] | None
@@ -1822,13 +1835,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             idx == self._last_hover_index
             and self._last_hover_text
             and self._hover_text_item is not None
+            and self._raw_sampler is None
         ):
             self._last_hover_index = idx
             with contextlib.suppress(Exception):
                 self._hover_text_item.setPos(float(mouse_point.x()), float(mouse_point.y()))
             self._hover_text_item.setVisible(True)
             return
-        text = self._build_hover_text(window, idx)
+        text = self._build_hover_text(window, idx, x_value=x_value)
         if not text:
             self._hide_hover_tooltip()
             return
@@ -1894,7 +1908,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             except Exception:
                 log.warning("Handler invocation failed", exc_info=True)
 
-    def _build_hover_text(self, window: TraceWindow, idx: int) -> str:
+    def _build_hover_text(
+        self, window: TraceWindow, idx: int, *, x_value: float | None = None
+    ) -> str:
         precision = max(0, int(self._hover_tooltip_precision))
         fmt = f"{{:.{precision}f}}"
         lines: list[str] = []
@@ -1914,7 +1930,20 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             except Exception:
                 return
 
-        add("Time", window.time[idx] if window.time.size > idx else None, "s")
+        # When a raw sampler is active, read from raw trace data so
+        # tooltip values match what gets recorded during sampling.
+        raw = None
+        if self._raw_sampler is not None and x_value is not None:
+            try:
+                raw = self._raw_sampler(x_value)
+            except Exception:
+                raw = None
+
+        if raw is not None and len(raw) >= 2:
+            add("Time", x_value, "s")
+        else:
+            add("Time", window.time[idx] if window.time.size > idx else None, "s")
+
         hovered_idx = self._hovered_event_index
         if hovered_idx is not None and 0 <= hovered_idx < len(self._event_entries):
             event_entry = self._event_entries[hovered_idx]
@@ -1928,25 +1957,33 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             if event_time is not None and np.isfinite(event_time):
                 lines.append(f"Event time: {fmt.format(event_time)} s")
 
-        if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
-            add(
-                "ID",
-                window.inner_mean[idx] if window.inner_mean.size > idx else None,
-                "µm",
-            )
-
-        if (
-            self._mode in {"outer", "dual"}
-            and window.outer_mean is not None
-            and window.outer_mean.size > idx
-        ):
-            add("OD", window.outer_mean[idx], "µm")
-
-        if window.avg_pressure_mean is not None and window.avg_pressure_mean.size > idx:
-            add("Avg P", window.avg_pressure_mean[idx], "mmHg")
-
-        if window.set_pressure_mean is not None and window.set_pressure_mean.size > idx:
-            add("Set P", window.set_pressure_mean[idx], "mmHg")
+        if raw is not None and len(raw) >= 2:
+            # Raw sampler returns (id, od, avg_p, set_p)
+            if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
+                add("ID", raw[0], "µm")
+            if self._mode in {"outer", "dual"} and len(raw) > 1:
+                add("OD", raw[1], "µm")
+            if len(raw) > 2:
+                add("Avg P", raw[2], "mmHg")
+            if len(raw) > 3:
+                add("Set P", raw[3], "mmHg")
+        else:
+            if self._mode not in {"outer", "avg_pressure", "set_pressure"}:
+                add(
+                    "ID",
+                    window.inner_mean[idx] if window.inner_mean.size > idx else None,
+                    "µm",
+                )
+            if (
+                self._mode in {"outer", "dual"}
+                and window.outer_mean is not None
+                and window.outer_mean.size > idx
+            ):
+                add("OD", window.outer_mean[idx], "µm")
+            if window.avg_pressure_mean is not None and window.avg_pressure_mean.size > idx:
+                add("Avg P", window.avg_pressure_mean[idx], "mmHg")
+            if window.set_pressure_mean is not None and window.set_pressure_mean.size > idx:
+                add("Set P", window.set_pressure_mean[idx], "mmHg")
 
         return "\n".join(lines)
 

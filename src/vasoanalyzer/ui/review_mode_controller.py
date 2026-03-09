@@ -62,6 +62,8 @@ class ReviewModeController(QObject):
         self._active: bool = False
         self._current_index: int = 0
         self._sampling_mode: bool = False
+        self._saving: bool = False
+        self._last_sample_time: float | None = None  # debounce duplicate clicks
         self._events: list[tuple] = []
         self._review_states: list[str] = []
 
@@ -206,11 +208,21 @@ class ReviewModeController(QObject):
         # Update panel visual state
         self._panel.set_sampling_mode(self._sampling_mode)
 
+        # Set raw sampler on plot host so tooltips show raw data values
+        # that match what gets recorded during sampling
+        if self._plot_host is not None:
+            sampler = self._main_window._sample_values_at_time if self._sampling_mode else None
+            self._plot_host.set_raw_sampler(sampler)
+
         # Emit signal for plot host to update visual feedback
         self.sampling_mode_changed.emit(self._sampling_mode)
 
     def handle_trace_click(self, time_sec: float) -> None:
         """Handle trace click during sampling mode.
+
+        Samples ID/OD values at the clicked time position and persists them
+        for the current event. The user stays on the current event so they
+        can verify the sampled values before navigating with Next/Previous.
 
         Args:
             time_sec: Time value where user clicked
@@ -218,10 +230,16 @@ class ReviewModeController(QObject):
         if not self._sampling_mode or not self._active:
             return
 
-        log.debug(f"Sampling values at time {time_sec:.2f}s")
+        # Debounce: both ID and OD tracks fire for the same click
+        if self._last_sample_time is not None and abs(time_sec - self._last_sample_time) < 0.01:
+            return
+        self._last_sample_time = time_sec
+
+        idx = self._current_index
+
+        log.debug(f"Sampling values at time {time_sec:.2f}s for event {idx + 1}")
 
         try:
-            # Sample values from main window
             sampled = self._main_window._sample_values_at_time(time_sec)
 
             if not sampled or len(sampled) < 2:
@@ -234,15 +252,13 @@ class ReviewModeController(QObject):
             if self._plot_host is not None:
                 self._plot_host.show_sampling_crosshair(time_sec, id_val, od_val)
 
-            # Update panel with sampled values
-            self._panel.set_sampled_values(id_val, od_val)
-
-            # Auto-advance to next event for efficient workflow
-            # (sampling mode stays active so user can keep clicking through events)
-            if self._current_index < len(self._events) - 1:
-                self.navigate_next()
-            else:
-                log.debug("Reached last event - staying in place")
+            # Persist values directly to avoid signal timing issues
+            self._saving = True
+            try:
+                self._save_event_values(idx, id_val, od_val, REVIEW_EDITED)
+                self._panel.set_sampled_values(id_val, od_val)
+            finally:
+                self._saving = False
 
         except Exception as e:
             log.error(f"Error sampling values at time {time_sec}: {e}", exc_info=True)
@@ -319,16 +335,14 @@ class ReviewModeController(QObject):
 
         return states
 
-    def _on_values_changed(
+    def _save_event_values(
         self,
         index: int,
         id_val: float | None,
         od_val: float | None,
         state: str,
     ) -> None:
-        """Handle value changes from panel.
-
-        Immediately persists changes to main window data structures.
+        """Persist event values to main window data structures.
 
         Args:
             index: Event index
@@ -336,9 +350,6 @@ class ReviewModeController(QObject):
             od_val: New OD value (or None)
             state: New review state
         """
-        if not self._active or index != self._current_index:
-            return
-
         log.debug(f"Saving changes for event {index + 1}: ID={id_val}, OD={od_val}, state={state}")
 
         try:
@@ -371,3 +382,26 @@ class ReviewModeController(QObject):
 
         except Exception as e:
             log.error(f"Error saving event changes for index {index}: {e}", exc_info=True)
+
+    def _on_values_changed(
+        self,
+        index: int,
+        id_val: float | None,
+        od_val: float | None,
+        state: str,
+    ) -> None:
+        """Handle value changes from panel.
+
+        Immediately persists changes to main window data structures.
+        Skipped when _saving is True (values already persisted by caller).
+
+        Args:
+            index: Event index
+            id_val: New ID value (or None)
+            od_val: New OD value (or None)
+            state: New review state
+        """
+        if not self._active or self._saving or index != self._current_index:
+            return
+
+        self._save_event_values(index, id_val, od_val, state)

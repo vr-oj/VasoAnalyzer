@@ -231,6 +231,7 @@ class SampleN:
     snapshot_format: str | None = None
     analysis_result_keys: list[str] | None = None
     edit_history: list[dict[str, Any]] | None = None
+    change_log: list[dict[str, Any]] | None = None
     import_metadata: dict[str, Any] | None = None
     """
     VasoTracker import provenance metadata:
@@ -301,6 +302,7 @@ class SampleN:
                 else self.analysis_result_keys
             ),
             edit_history=(list(self.edit_history) if isinstance(self.edit_history, list) else None),
+            change_log=(list(self.change_log) if isinstance(self.change_log, list) else None),
         )
 
 
@@ -692,6 +694,8 @@ def sample_to_dict(sample: SampleN, base_dir: str | None = None) -> dict:
         data.pop("analysis_results", None)
     if sample.edit_history:
         data["edit_history"] = sample.edit_history
+    if sample.change_log:
+        data["change_log"] = sample.change_log
     if sample.notes is None:
         data.pop("notes", None)
     if sample.attachments:
@@ -859,6 +863,10 @@ def sample_from_dict(data: dict) -> SampleN:
     if not isinstance(edit_history, list):
         edit_history = None
 
+    change_log = data.get("change_log")
+    if not isinstance(change_log, list):
+        change_log = None
+
     analysis_payload = data.get("analysis_results")
     analysis_results = None
     if isinstance(analysis_payload, dict):
@@ -903,6 +911,7 @@ def sample_from_dict(data: dict) -> SampleN:
         analysis_results=analysis_results,
         attachments=attachments,
         edit_history=edit_history,
+        change_log=change_log,
     )
 
 
@@ -1688,7 +1697,7 @@ def _save_project_sqlite(project: Project, path: str, *, skip_optimize: bool = F
             f"  • Windows: C:\\Users\\YourName\\Documents\\VasoAnalyzer\\\n"
             f"  • macOS: /Users/YourName/Documents/VasoAnalyzer/\n"
             f"  • Linux: /home/yourname/Documents/VasoAnalyzer/\n\n"
-            f"You can export .vasopack bundles to cloud storage for backup/sharing."
+            f"You can copy .vaso files to cloud storage for backup/sharing."
         )
         log.error(f"BLOCKED save to cloud storage: {dest} ({cloud_service})")
         raise ValueError(error_msg)
@@ -2560,6 +2569,8 @@ def _build_sample_extra(
 
     if sample.edit_history:
         payload["edit_history"] = sample.edit_history
+    if sample.change_log:
+        payload["change_log"] = sample.change_log
 
     return cast(dict[str, Any], _normalise_json_data(payload))
 
@@ -3318,6 +3329,9 @@ def _dataset_to_sample(
     edit_history = extra.get("edit_history") if isinstance(extra, dict) else None
     if not isinstance(edit_history, list):
         edit_history = None
+    change_log = extra.get("change_log") if isinstance(extra, dict) else None
+    if not isinstance(change_log, list):
+        change_log = None
 
     sample = SampleN(
         name=dataset.get("name", f"Dataset {dataset_id}"),
@@ -3342,6 +3356,7 @@ def _dataset_to_sample(
         snapshot_format=extra.get("snapshot_format"),
         analysis_result_keys=analysis_result_keys,
         edit_history=edit_history,
+        change_log=change_log,
     )
 
     _populate_link_metadata(sample, "trace", trace_path, trace_link_meta, base_dir)

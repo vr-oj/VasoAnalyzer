@@ -73,7 +73,7 @@ class ProjectManager(QObject):
 
         path_obj = Path(path).expanduser()
         if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
-            path_obj = path_obj.with_suffix(".vasopack")
+            path_obj = path_obj.with_suffix(".vaso")
         normalised_path = str(path_obj.resolve(strict=False))
 
         log.info(
@@ -93,7 +93,7 @@ class ProjectManager(QObject):
                 "Cloud Storage - Known Limitation",
                 f"<b>You are creating a project in {cloud_service}</b>\n\n"
                 f"<b>Technical Limitation:</b>\n"
-                f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
+                f"SQLite databases (like .vaso project files) can become corrupted when cloud sync services"
                 f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
                 f"database writes, breaking integrity.\n\n"
                 f"<b>Mitigations in place:</b>\n"
@@ -101,7 +101,7 @@ class ProjectManager(QObject):
                 f"• Automatic recovery attempts if corruption occurs\n"
                 f"• Risk is highest during active editing and autosaves\n\n"
                 f"<b>Best practice:</b>\n"
-                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vaso "
                 f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue creating project in {cloud_service}?</b>",
                 QMessageBox.Yes | QMessageBox.No,
@@ -159,7 +159,7 @@ class ProjectManager(QObject):
                 host,
                 "Open Project",
                 "",
-                "Vaso Projects (*.vaso *.vasopack);;All Files (*)",
+                "Vaso Projects (*.vaso);;All Files (*)",
             )
             if not path:
                 return
@@ -668,14 +668,14 @@ class ProjectManager(QObject):
             host,
             "Save Project As",
             host.current_project.path or "",
-            "Vaso Bundles (*.vasopack)",
+            "Vaso Projects (*.vaso)",
         )
         if not path:
             return
 
         path_obj = Path(path).expanduser()
-        if path_obj.suffix.lower() != ".vasopack":
-            path_obj = path_obj.with_suffix(".vasopack")
+        if path_obj.suffix.lower() != ".vaso":
+            path_obj = path_obj.with_suffix(".vaso")
         path = str(path_obj.resolve(strict=False))
 
         # Check if user is trying to save to cloud storage
@@ -688,7 +688,7 @@ class ProjectManager(QObject):
                 "Cloud Storage - Known Limitation",
                 f"<b>You are saving to {cloud_service}</b>\n\n"
                 f"<b>Technical Limitation:</b>\n"
-                f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
+                f"SQLite databases (like .vaso project files) can become corrupted when cloud sync services"
                 f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
                 f"database writes, breaking integrity.\n\n"
                 f"<b>Mitigations in place:</b>\n"
@@ -696,7 +696,7 @@ class ProjectManager(QObject):
                 f"• Automatic recovery attempts if corruption occurs\n"
                 f"• Risk is highest during active editing and autosaves\n\n"
                 f"<b>Best practice:</b>\n"
-                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vaso "
                 f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue saving to {cloud_service}?</b>",
                 QMessageBox.Yes | QMessageBox.No,

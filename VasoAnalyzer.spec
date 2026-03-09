@@ -7,7 +7,6 @@
 import os
 import sys
 from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
-from PyQt5.QtCore import QLibraryInfo
 
 # ensure project root on path for helper scripts
 spec_path = os.path.abspath(sys.argv[0])
@@ -77,17 +76,13 @@ doc_icon_dir = os.path.join(project_dir, 'assets', 'icons')
 doc_icon_ico = os.path.join(doc_icon_dir, 'VasoDocument.ico')
 doc_icon_icns = os.path.join(doc_icon_dir, 'VasoDocument.icns')
 
-# Add Qt platform plugins for macOS
-qt_plugins_dir = QLibraryInfo.location(QLibraryInfo.PluginsPath)
-qt_plugin_datas = [(os.path.join(qt_plugins_dir, 'platforms'), 'PyQt5/Qt/plugins/platforms')]
-
 datas = [
     (os.path.join(project_dir, 'style.qss'), '.'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerSplashScreen.png'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.svg'), 'vasoanalyzer'),
-] + icon_datas + resources_icon_datas + qt_plugin_datas + mpl_datas
+] + icon_datas + resources_icon_datas + mpl_datas
 
 if os.path.isfile(doc_icon_icns):
     datas.append((doc_icon_icns, '.'))

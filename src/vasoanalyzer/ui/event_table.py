@@ -432,7 +432,11 @@ class EventTableModel(QAbstractTableModel):
         return list(self._review_states)
 
     def to_dataframe(self) -> pd.DataFrame:
-        return pd.DataFrame(self._rows, columns=self._headers)
+        n_cols = len(self._headers)
+        # Row tuples may contain trailing fields (e.g. frame number) not
+        # covered by headers; truncate to match.
+        trimmed = [row[:n_cols] for row in self._rows]
+        return pd.DataFrame(trimmed, columns=self._headers)
 
     def insert_row(self, index: int, row: tuple) -> None:
         self.beginInsertRows(QModelIndex(), index, index)
@@ -804,6 +808,12 @@ class EventTableWidget(QTableView):
             event.accept()
             return
 
+        # Ctrl+V: Paste from clipboard into selected cells
+        if event.matches(QKeySequence.Paste):
+            self._paste_from_clipboard()
+            event.accept()
+            return
+
         # F2: Edit current cell (any editable column)
         if event.key() == Qt.Key_F2:
             current = self.currentIndex()
@@ -991,6 +1001,62 @@ class EventTableWidget(QTableView):
             lines.append("\t".join(values))
 
         QApplication.clipboard().setText("\n".join(lines))
+
+    def _paste_from_clipboard(self) -> None:
+        """Paste clipboard values into selected cells, Excel-style.
+
+        Supports single-column or multi-column paste:
+        - Select cells in one column, paste a column of values
+        - Select a rectangular region, paste tab-separated rows
+        - Values are matched top-to-bottom to the selected rows
+        """
+        model = self.model()
+        if model is None:
+            return
+
+        clipboard = QApplication.clipboard()
+        text = clipboard.text()
+        if not text or not text.strip():
+            return
+
+        indexes = self.selectedIndexes()
+        if not indexes:
+            return
+
+        # Parse clipboard: rows separated by newlines, columns by tabs
+        clip_rows = [line.split("\t") for line in text.strip().split("\n")]
+
+        # Get unique selected rows and columns, sorted
+        selected_rows = sorted({idx.row() for idx in indexes})
+        selected_cols = sorted({idx.column() for idx in indexes})
+
+        # Skip non-editable columns (status column)
+        selected_cols = [
+            c for c in selected_cols
+            if c >= EVENT_COLUMN_INDEX
+        ]
+        if not selected_cols:
+            return
+
+        paste_count = 0
+        for r_offset, row in enumerate(selected_rows):
+            if r_offset >= len(clip_rows):
+                break
+            clip_values = clip_rows[r_offset]
+            for c_offset, col in enumerate(selected_cols):
+                if c_offset >= len(clip_values):
+                    break
+                value_text = clip_values[c_offset].strip()
+                if not value_text:
+                    continue
+                idx = model.index(row, col)
+                if not (model.flags(idx) & Qt.ItemIsEditable):
+                    continue
+                if model.setData(idx, value_text, Qt.EditRole):
+                    paste_count += 1
+
+        if paste_count > 0:
+            log.info(f"Pasted {paste_count} value(s) into event table")
 
     def _start_editing_event_column(self) -> None:
         model = self.model()

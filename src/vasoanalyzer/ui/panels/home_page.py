@@ -165,7 +165,7 @@ class HomePage(QWidget):
                 "<b>Storage recommendation</b><br>"
                 "Store active projects on your local drive (Documents, Desktop) for best reliability. "
                 "Cloud storage sync can interrupt database writes, potentially causing corruption. "
-                "Use .vasopack exports for backup and sharing."
+                "Copy .vaso files to cloud storage for backup and sharing."
             ),
             cloud_warning,
         )

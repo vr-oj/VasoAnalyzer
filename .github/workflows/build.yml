@@ -38,6 +38,15 @@ jobs:
         env:
           ARCH_LABEL: ${{ matrix.label }}
 
+      - name: Smoke-test macOS app
+        run: |
+          APP=$(find dist -maxdepth 2 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then echo "No .app found in dist/"; exit 1; fi
+          EXE="$APP/Contents/MacOS/$(ls "$APP/Contents/MacOS/" | head -1)"
+          echo "==> Running smoke test: $EXE"
+          "$EXE" --smoke-test
+          echo "==> Smoke test passed"
+
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
@@ -80,6 +89,16 @@ jobs:
       - name: Build Windows installer
         shell: pwsh
         run: .\installer\windows\build_installer.ps1
+
+      - name: Smoke-test Windows exe
+        shell: pwsh
+        run: |
+          $exe = "dist\VasoAnalyzer\VasoAnalyzer.exe"
+          if (-not (Test-Path $exe)) { throw "EXE not found at $exe" }
+          Write-Host "==> Running smoke test..."
+          & $exe --smoke-test
+          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed (exit code $LASTEXITCODE)" }
+          Write-Host "==> Smoke test passed"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

@@ -209,6 +209,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._move_handlers: list[Callable[[MoveContext], None]] = []
         self._scroll_handlers: list[Callable[[ScrollContext], None]] = []
         self._sampling_mode_active: bool = False
+        self._raw_sampler: Callable[[float], tuple] | None = None
 
         # Install resize event filter to refresh axes/fonts when geometry changes
         self._resize_filter = _ResizeEventFilter(self)
@@ -344,6 +345,19 @@ class PyQtGraphPlotHost(InteractionHost):
                 )
             )
 
+    def set_raw_sampler(self, sampler: Callable[[float], tuple] | None) -> None:
+        """Set a raw-data sampler used by tooltips during sampling mode.
+
+        Args:
+            sampler: ``(time_sec) -> (id, od, avg_p, set_p)`` or None
+        """
+        self._raw_sampler = sampler
+        for track in self._tracks.values():
+            try:
+                track.view.set_raw_sampler(sampler)
+            except Exception:
+                pass
+
     def set_sampling_mode(self, enabled: bool) -> None:
         """Enable/disable sampling mode visual feedback.
 
@@ -352,14 +366,9 @@ class PyQtGraphPlotHost(InteractionHost):
         """
         self._sampling_mode_active = enabled
 
-        if enabled:
-            # Add visual indicators for sampling mode
-            # TODO: Add plot border glow, cursor change, badge overlay
-            pass
-        else:
-            # Remove visual indicators
-            # TODO: Remove border glow, restore cursor, hide badge
-            pass
+        # Clear raw sampler when exiting sampling mode
+        if not enabled and self._raw_sampler is not None:
+            self.set_raw_sampler(None)
 
     def set_review_mode_highlighting(self, enabled: bool) -> None:
         """Enable/disable enhanced highlighting for review mode.

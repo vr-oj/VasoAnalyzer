@@ -501,8 +501,7 @@ class WelcomeGuideDialog(QDialog):
             (
                 "Project files (.vaso)",
                 "A single file that bundles your traces, events, edits, figures, and "
-                "settings. Safe to copy, back up, or share. Use .vasopack for "
-                "cloud-friendly storage (Dropbox, iCloud, Google Drive).",
+                "settings. Safe to copy, back up, or share.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))

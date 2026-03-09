@@ -97,6 +97,7 @@ from PyQt5.QtWidgets import (
 import vasoanalyzer.core.project as project_module
 from utils.config import APP_VERSION
 from vasoanalyzer.core.audit import serialize_edit_log
+from vasoanalyzer.core.change_log_manager import ChangeLogManager
 from vasoanalyzer.core.project import (
     Attachment,
     Experiment,
@@ -965,6 +966,7 @@ class VasoAnalyzerApp(QMainWindow):
         self.menu_event_lines_action: QAction | None = None
         # ——— undo/redo ———
         self.undo_stack = QUndoStack(self)
+        self._change_log = ChangeLogManager()
         self._thread_pool = QThreadPool.globalInstance()
         self._current_sample_token: object | None = None
         self._loading_dataset_ids: set[int] = set()  # Track in-flight dataset loads
@@ -1238,9 +1240,10 @@ class VasoAnalyzerApp(QMainWindow):
         if not self.review_controller.is_active():
             return
 
-        # During review mode, handle sampling clicks
+        # During review mode, handle sampling clicks (press only, not release)
         if self.review_controller.sampling_mode:
-            # Forward click to controller with time value for sampling
+            if getattr(ctx, "pressed", False) is not True:
+                return
             if hasattr(ctx, "x_data") and ctx.x_data is not None:
                 self.review_controller.handle_trace_click(ctx.x_data)
         # Otherwise, just consume the click to prevent accidental actions
@@ -1647,7 +1650,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         path_obj = Path(path).expanduser()
         if path_obj.suffix.lower() not in [".vaso", ".vasopack"]:
-            path_obj = path_obj.with_suffix(".vasopack")
+            path_obj = path_obj.with_suffix(".vaso")
         normalised_path = str(path_obj.resolve(strict=False))
 
         log.info(
@@ -1667,7 +1670,7 @@ class VasoAnalyzerApp(QMainWindow):
                 "Cloud Storage - Known Limitation",
                 f"<b>You are creating a project in {cloud_service}</b>\n\n"
                 f"<b>Technical Limitation:</b>\n"
-                f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
+                f"SQLite databases (like .vaso project files) can become corrupted when cloud sync services"
                 f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
                 f"database writes, breaking integrity.\n\n"
                 f"<b>Mitigations in place:</b>\n"
@@ -1675,7 +1678,7 @@ class VasoAnalyzerApp(QMainWindow):
                 f"• Automatic recovery attempts if corruption occurs\n"
                 f"• Risk is highest during active editing and autosaves\n\n"
                 f"<b>Best practice:</b>\n"
-                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vaso "
                 f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue creating project in {cloud_service}?</b>",
                 QMessageBox.Yes | QMessageBox.No,
@@ -1724,7 +1727,7 @@ class VasoAnalyzerApp(QMainWindow):
                 self,
                 "Open Project",
                 "",
-                "Vaso Projects (*.vaso *.vasopack);;All Files (*)",
+                "Vaso Projects (*.vaso);;All Files (*)",
             )
             if not path:
                 return
@@ -1990,6 +1993,10 @@ class VasoAnalyzerApp(QMainWindow):
             state = self.gather_sample_state()
             self.current_sample.ui_state = state
             self.project_state[id(self.current_sample)] = state
+            # Persist change log so it survives across sessions
+            change_log = getattr(self, "_change_log", None)
+            if change_log is not None:
+                self.current_sample.change_log = change_log.serialize()
 
     def _project_snapshot_for_save(self, project: Project) -> Project:
         """Create a lightweight snapshot of ``project`` suitable for background save."""
@@ -2190,6 +2197,50 @@ class VasoAnalyzerApp(QMainWindow):
         self._progress_bar.setFormat(f"{message}... %p%")
         self.statusBar().showMessage(message)
 
+    def _verify_saved_file(self, path: str, mode: str) -> None:
+        """Check that a saved file exists and is non-empty. Show critical warning on failure."""
+        if not path:
+            return
+        try:
+            p = Path(path)
+            if not p.exists():
+                self._show_save_integrity_warning(path, "File does not exist after save")
+                return
+            size = p.stat().st_size
+            if size == 0:
+                self._show_save_integrity_warning(path, "File is empty (0 bytes) after save")
+                return
+            # For .vaso containers, verify ZIP structure
+            if p.suffix.lower() == ".vaso" and p.is_file():
+                import zipfile
+
+                try:
+                    with zipfile.ZipFile(p, "r") as zf:
+                        if not zf.namelist():
+                            self._show_save_integrity_warning(
+                                path, "Project file contains no data"
+                            )
+                except zipfile.BadZipFile:
+                    # Could be a legacy SQLite .vaso — not an error
+                    pass
+        except Exception as exc:
+            log.warning("Post-save verification error: %s", exc, exc_info=True)
+
+    def _show_save_integrity_warning(self, path: str, detail: str) -> None:
+        """Show a critical dialog when saved file integrity check fails."""
+        log.critical("SAVE INTEGRITY FAILURE: %s — %s", path, detail)
+        QMessageBox.critical(
+            self,
+            "Save Verification Failed",
+            f"<b>Your project may not have saved correctly.</b>\n\n"
+            f"<b>Problem:</b> {detail}\n"
+            f"<b>File:</b> {path}\n\n"
+            f"<b>What to do:</b>\n"
+            f"• Do NOT close the application — your data is still in memory\n"
+            f"• Use <b>File → Save As</b> to save to a different location\n"
+            f"• If this keeps happening, please report the issue",
+        )
+
     def _on_save_error(self, details: str) -> None:
         self._last_save_error = details
         mode = self._active_save_mode or "manual"
@@ -2198,6 +2249,16 @@ class VasoAnalyzerApp(QMainWindow):
         if mode == "autosave":
             self._autosave_in_progress = False
             self._active_autosave_ctx = None
+        else:
+            # Show a blocking dialog for manual save failures so the user can't miss it
+            QMessageBox.warning(
+                self,
+                f"{prefix} Failed",
+                f"<b>Your project could not be saved.</b>\n\n"
+                f"{details}\n\n"
+                f"Your data is still in memory. Try <b>File → Save As</b> to "
+                f"save to a different location.",
+            )
         self.statusBar().showMessage(f"{prefix} failed: {details}", 5000)
 
     def _on_save_finished(self, ok: bool, duration_sec: float, path: str) -> None:
@@ -2215,6 +2276,9 @@ class VasoAnalyzerApp(QMainWindow):
                 mode,
                 duration_sec,
             )
+            # Verify saved file integrity
+            if resolved_path:
+                self._verify_saved_file(resolved_path, mode)
             if self.current_project and reason == "save_as" and resolved_path:
                 self.current_project.path = resolved_path
             if mode == "autosave":
@@ -2299,14 +2363,14 @@ class VasoAnalyzerApp(QMainWindow):
             self,
             "Save Project As",
             self.current_project.path or "",
-            "Vaso Bundles (*.vasopack)",
+            "Vaso Projects (*.vaso)",
         )
         if not path:
             return
 
         path_obj = Path(path).expanduser()
-        if path_obj.suffix.lower() != ".vasopack":
-            path_obj = path_obj.with_suffix(".vasopack")
+        if path_obj.suffix.lower() != ".vaso":
+            path_obj = path_obj.with_suffix(".vaso")
         path = str(path_obj.resolve(strict=False))
 
         # Check if user is trying to save to cloud storage
@@ -2319,7 +2383,7 @@ class VasoAnalyzerApp(QMainWindow):
                 "Cloud Storage - Known Limitation",
                 f"<b>You are saving to {cloud_service}</b>\n\n"
                 f"<b>Technical Limitation:</b>\n"
-                f"SQLite databases (like .vasopack files) can become corrupted when cloud sync services "
+                f"SQLite databases (like .vaso project files) can become corrupted when cloud sync services"
                 f"upload the file mid-transaction. This happens because the sync daemon may interrupt "
                 f"database writes, breaking integrity.\n\n"
                 f"<b>Mitigations in place:</b>\n"
@@ -2327,7 +2391,7 @@ class VasoAnalyzerApp(QMainWindow):
                 f"• Automatic recovery attempts if corruption occurs\n"
                 f"• Risk is highest during active editing and autosaves\n\n"
                 f"<b>Best practice:</b>\n"
-                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vasopack "
+                f"Store active projects locally (~/Documents, ~/Desktop), then copy .vaso "
                 f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue saving to {cloud_service}?</b>",
                 QMessageBox.Yes | QMessageBox.No,
@@ -2340,7 +2404,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._start_background_save(path, skip_optimize=False, reason="save_as")
 
     def export_project_bundle_action(self, checked: bool = False):
-        """Export project as .vasopack bundle.
+        """Export project as a shareable .vaso file.
 
         Args:
             checked: Unused boolean from Qt signal (ignored)
@@ -2358,19 +2422,19 @@ class VasoAnalyzerApp(QMainWindow):
 
         default_stem = Path(self.current_project.path).with_suffix("").name
         default_path = (
-            Path(self.current_project.path).with_name(f"{default_stem}.vasopack").as_posix()
+            Path(self.current_project.path).with_name(f"{default_stem}.vaso").as_posix()
         )
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Export Project Bundle",
             default_path,
-            "Vaso Bundles (*.vasopack)",
+            "Vaso Projects (*.vaso)",
         )
         if not path:
             return
         path_obj = Path(path).expanduser()
-        if path_obj.suffix.lower() != ".vasopack":
-            path_obj = path_obj.with_suffix(".vasopack")
+        if path_obj.suffix.lower() != ".vaso":
+            path_obj = path_obj.with_suffix(".vaso")
         path = str(path_obj.resolve(strict=False))
 
         self.current_project.ui_state = self.gather_ui_state()
@@ -3707,6 +3771,8 @@ class VasoAnalyzerApp(QMainWindow):
                 state = self.gather_sample_state()
                 self.current_sample.ui_state = state
                 self.project_state[id(self.current_sample)] = state
+                # Persist change log before switching away
+                self.current_sample.change_log = self._change_log.serialize()
 
             self.current_sample = sample
             self._sample_summary_logged = False
@@ -4117,6 +4183,14 @@ class VasoAnalyzerApp(QMainWindow):
         self._finish_sample_load_progress()
 
     def _render_sample(self, sample: SampleN) -> None:
+        # Restore change log for this sample
+        self._change_log.clear()
+        saved_log = getattr(sample, "change_log", None)
+        if isinstance(saved_log, list):
+            self._change_log.load(saved_log)
+        # Also import any existing edit_history entries not yet in the change log
+        self._change_log.merge_edit_history(getattr(sample, "edit_history", None))
+
         # Prevent review prompts from firing during intermediate sample rendering steps.
         self._suppress_review_prompt = True
         try:
@@ -5634,7 +5708,14 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_export_tiff.triggered.connect(self.export_high_res_plot)
         export_menu.addAction(self.action_export_tiff)
 
-        self.action_export_bundle = QAction("Project Bundle (.vasopack)…", self)
+        self.action_export_report = QAction("SciNote Report…", self)
+        self.action_export_report.setToolTip(
+            "Export a composite figure with trace, event table, and metadata"
+        )
+        self.action_export_report.triggered.connect(self._export_scinote_report)
+        export_menu.addAction(self.action_export_report)
+
+        self.action_export_bundle = QAction("Project Bundle (.vaso)…", self)
         self.action_export_bundle.triggered.connect(self.export_project_bundle_action)
         export_menu.addAction(self.action_export_bundle)
 
@@ -5850,6 +5931,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_relink_assets.setEnabled(False)
         self.action_relink_assets.triggered.connect(self.show_relink_dialog)
         tools_menu.addAction(self.action_relink_assets)
+
+        tools_menu.addSeparator()
+
+        self.action_change_log = QAction("Change Log…", self)
+        self.action_change_log.triggered.connect(self._show_change_log_dialog)
+        tools_menu.addAction(self.action_change_log)
 
     def _build_window_menu(self, menubar):
         window_menu = menubar.addMenu("&Window")
@@ -6902,7 +6989,13 @@ class VasoAnalyzerApp(QMainWindow):
             self.event_label_meta = []
         self._normalize_event_label_meta(len(self.event_table_data))
         if 0 <= index < len(self.event_label_meta):
+            old_state = self.event_label_meta[index].get("review_state", "UNREVIEWED")
             self.event_label_meta[index]["review_state"] = state
+            if old_state != state:
+                event_label = ""
+                if hasattr(self, "event_table_data") and index < len(self.event_table_data):
+                    event_label = self.event_table_data[index][0] if self.event_table_data[index] else ""
+                self._change_log.record_review_status_change(index, old_state, state, event_label)
             # CRITICAL FIX (Bug #2): Mark sample state dirty when review state changes
             self._sample_state_dirty = True
             self._update_review_notice_visibility()
@@ -9390,6 +9483,7 @@ QPushButton[isGhost="true"]:pressed {{
 
         if self.current_sample is not None:
             self.current_sample.edit_history = serialized_log
+            self.current_sample.change_log = self._change_log.serialize()
             synchronized = self.trace_data.copy()
             synchronized.attrs = dict(self.trace_data.attrs)
             self.current_sample.trace_data = synchronized
@@ -9426,6 +9520,7 @@ QPushButton[isGhost="true"]:pressed {{
         if self.trace_model is None or not actions:
             return
         self.trace_model.apply_actions(actions)
+        self._change_log.record_point_edits(actions)
         self._sync_trace_dataframe_from_model()
         self._refresh_views_after_edit()
         self.mark_session_dirty()
@@ -14143,6 +14238,8 @@ QPushButton[isGhost="true"]:pressed {{
         cmd = ReplaceEventCommand(self, row, old_val, rounded_val)
         self.undo_stack.push(cmd)
         log.info("ID updated at %.2fs → %.2f µm", time, rounded_val)
+        event_label = row_data[0] if row_data else ""
+        self._change_log.record_event_value_edit(row, old_val, rounded_val, event_label)
         self._mark_row_edited(row)
         self.mark_session_dirty()
         self._sync_event_data_from_table()
@@ -14158,6 +14255,7 @@ QPushButton[isGhost="true"]:pressed {{
 
         row_data[0] = label_text
         self.event_table_data[row] = tuple(row_data)
+        self._change_log.record_event_label_edit(row, old_label, label_text)
 
         if not hasattr(self, "event_labels") or self.event_labels is None:
             self.event_labels = []
@@ -14624,6 +14722,12 @@ QPushButton[isGhost="true"]:pressed {{
                 wizard.handle_trace_click(x)
             except Exception:
                 log.debug("Wizard trace click handling failed", exc_info=True)
+
+        # Skip normal click handling when review sampling mode is active —
+        # sampling clicks are handled separately by _handle_review_sampling_click
+        review_ctrl = getattr(self, "review_controller", None)
+        if review_ctrl is not None and review_ctrl.is_active() and review_ctrl.sampling_mode:
+            return
 
         # Focus nearest event if click is close
         if is_left and self.event_times:
@@ -15228,6 +15332,174 @@ QPushButton[isGhost="true"]:pressed {{
         """Open axis settings dialog - redirects to unified dialog."""
         # Redirect to unified dialog, open Axis tab
         self.open_unified_plot_settings_dialog(tab_name="axis")
+
+    def _show_change_log_dialog(self) -> None:
+        from vasoanalyzer.ui.dialogs.change_log_dialog import ChangeLogDialog
+
+        sample_name = ""
+        if hasattr(self, "current_sample") and self.current_sample is not None:
+            sample_name = getattr(self.current_sample, "name", "")
+        dialog = ChangeLogDialog(
+            self._change_log.entries,
+            sample_name=sample_name,
+            parent=self,
+        )
+        dialog.exec_()
+
+    def _export_scinote_report(self) -> None:
+        import matplotlib.pyplot as plt
+
+        from vasoanalyzer.export.report_figure import render_report_figure
+        from vasoanalyzer.ui.dialogs.report_export_dialog import ReportExportDialog
+
+        if self.trace_model is None:
+            QMessageBox.warning(self, "Export Error", "No trace data loaded.")
+            return
+
+        # Detect what data is available
+        has_snapshot = bool(getattr(self, "snapshot_frames", None))
+        has_events = bool(getattr(self, "event_table_data", None))
+
+        # Show settings dialog
+        dlg = ReportExportDialog(
+            self,
+            has_snapshot=has_snapshot,
+            has_events=has_events,
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        settings = dlg.get_settings()
+        if settings is None:
+            return
+
+        # ---- Gather data ----
+
+        # View range
+        plot_host = getattr(self, "plot_host", None)
+        xlim = self.trace_model.full_range
+        if plot_host is not None and hasattr(plot_host, "current_window"):
+            window = plot_host.current_window()
+            if window:
+                xlim = window
+
+        # Visible traces — query with the channel_kind keys used by set_channel_visible
+        _channel_keys = ["inner", "outer", "avg_pressure", "set_pressure"]
+        visible_traces = None
+        if plot_host is not None:
+            visible_traces = [
+                key for key in _channel_keys
+                if plot_host.is_channel_visible(key)
+            ]
+            if not visible_traces:
+                visible_traces = None  # fall back to auto-detect
+            log.info("Report export visible_traces=%s", visible_traces)
+
+        # Event data
+        event_times = []
+        event_labels_list = []
+        events_df = None
+        if settings["include_table"] and self.event_table_data:
+            for row in self.event_table_data:
+                if len(row) >= 2:
+                    event_labels_list.append(str(row[0]) if row[0] else "")
+                    try:
+                        event_times.append(float(row[1]))
+                    except (ValueError, TypeError):
+                        event_times.append(0.0)
+            controller = getattr(self, "event_table_controller", None)
+            if controller is not None:
+                events_df = controller.to_dataframe()
+        elif self.event_table_data:
+            # Still show event markers even if table panel is off
+            for row in self.event_table_data:
+                if len(row) >= 2:
+                    event_labels_list.append(str(row[0]) if row[0] else "")
+                    try:
+                        event_times.append(float(row[1]))
+                    except (ValueError, TypeError):
+                        event_times.append(0.0)
+
+        # Snapshot frame
+        snapshot_image = None
+        if settings["include_frame"] and has_snapshot:
+            frames = self.snapshot_frames
+            frame_idx = getattr(self, "current_frame", 0)
+            # Use current frame, or middle frame as fallback
+            if 0 <= frame_idx < len(frames):
+                snapshot_image = frames[frame_idx]
+            elif frames:
+                snapshot_image = frames[len(frames) // 2]
+
+        # Metadata
+        sample_name = ""
+        experiment_name = ""
+        if self.current_sample is not None:
+            sample_name = getattr(self.current_sample, "name", "")
+        if hasattr(self, "current_experiment") and self.current_experiment is not None:
+            experiment_name = getattr(self.current_experiment, "name", "")
+
+        metadata = {
+            "sample_name": sample_name,
+            "experiment": experiment_name,
+            "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+
+        # ---- Render ----
+        figsize = (settings["width"], settings["height"])
+        dpi = settings["dpi"]
+        try:
+            fig = render_report_figure(
+                trace_model=self.trace_model,
+                xlim=xlim,
+                visible_traces=visible_traces,
+                events_df=events_df if settings["include_table"] else None,
+                event_times=event_times or None,
+                event_labels=event_labels_list or None,
+                snapshot_image=snapshot_image,
+                metadata=metadata,
+                figsize=figsize,
+                dpi=dpi,
+                include_frame=settings["include_frame"],
+                include_table=settings["include_table"],
+            )
+        except Exception as exc:
+            log.exception("Failed to render experiment report")
+            QMessageBox.critical(
+                self, "Export Error", f"Failed to render report:\n{exc}"
+            )
+            return
+
+        # ---- Save ----
+        fmt = settings["format"]
+        ext_map = {"png": "png", "tiff": "tiff", "pdf": "pdf"}
+        ext = ext_map.get(fmt, "png")
+        filter_map = {
+            "png": "PNG Image (*.png)",
+            "tiff": "TIFF Image (*.tiff *.tif)",
+            "pdf": "PDF Document (*.pdf)",
+        }
+        default_name = f"{sample_name or 'report'}_report.{ext}"
+        base_dir = os.path.dirname(self.trace_file_path) if self.trace_file_path else ""
+        save_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Experiment Report",
+            os.path.join(base_dir, default_name),
+            filter_map.get(fmt, f"*.{ext}"),
+        )
+        if not save_path:
+            plt.close(fig)
+            return
+
+        try:
+            fig.savefig(save_path, dpi=dpi, bbox_inches="tight", facecolor="white")
+            self.statusBar().showMessage(f"Report saved: {save_path}", 5000)
+        except Exception as exc:
+            log.exception("Failed to save experiment report")
+            QMessageBox.critical(
+                self, "Save Error", f"Failed to save report:\n{exc}"
+            )
+        finally:
+            plt.close(fig)
 
     def open_plot_settings_dialog(self, tab_name=None):
         """Open plot settings dialog - automatically routes to correct backend dialog.
@@ -17235,6 +17507,11 @@ QPushButton[isGhost="true"]:pressed {{
 
     # ---------- UI State Persistence ----------
     def gather_ui_state(self):
+        # Close review dock before capturing state so it doesn't reopen on restart
+        review_dock = getattr(self, "review_dock", None)
+        if review_dock is not None and review_dock.isVisible():
+            review_dock.hide()
+
         state = {
             "geometry": self.saveGeometry().data().hex(),
             "window_state": self.saveState().data().hex(),
