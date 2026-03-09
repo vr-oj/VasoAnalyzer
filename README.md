@@ -32,10 +32,8 @@ can send a whole analysis to a collaborator as one file.
 
 ## ✨ Key Features
 
-- **Single-file projects (`.vaso` / `.vasopack`)**
+- **Single-file projects (`.vaso`)**
   - All datasets, analysis state, and configuration are stored inside one file.
-  - `.vaso` for everyday use; `.vasopack` for cloud-sync scenarios (Dropbox,
-    iCloud, Google Drive).
   - Designed to be portable between machines and OSes.
 
 - **Multi-track trace viewer**
@@ -74,15 +72,12 @@ can send a whole analysis to a collaborator as one file.
 
 ---
 
-## 🧬 Project Files (`.vaso` / `.vasopack`)
+## 🧬 Project Files (`.vaso`)
 
 VasoAnalyzer stores entire experiments as a single project file.
 
-- **`.vaso`** — the standard format: a ZIP container you can open with any ZIP
-  tool for debugging and share freely between machines.
-- **`.vasopack`** — a cloud-friendly bundle optimised for Dropbox, iCloud, and
-  Google Drive; reduces corruption risk when syncing between machines. Use
-  **File → Export as Bundle…** to create one.
+- **`.vaso`** — a ZIP container you can open with any ZIP tool for debugging
+  and share freely between machines.
 
 A `.vaso` project typically includes:
 
@@ -169,11 +164,29 @@ project to regenerate views.
 - Later, double-click a `.vaso` or open from within the app to resume exactly
   where you left off (including plots, events, edit history, and figures).
 
-### 7. Import datasets between projects
+### 7. Share datasets between projects
 
-- Use **File → Open Data → Import from Project…** to browse another `.vaso` project in read-only mode, select one or more datasets, and import them into your current project.
-- Optionally preserve the source experiment grouping or import everything into a single destination experiment.
-- Transfers use the portable `.vasods` dataset package format with validation and clear success/partial-failure reporting.
+Individual datasets can be shared between projects using **dataset packages**
+(`.vasods`) — lightweight ZIP archives containing a single dataset's trace,
+events, results, and metadata.
+
+**Export a dataset:**
+
+1. Select the dataset you want to share in the project tree.
+2. Go to **File → Export → Export Dataset Package…**
+3. Choose a destination and save the `.vasods` file.
+
+**Import a dataset:**
+
+- **From a `.vasods` file:** Go to **File → Open Data → Import Dataset
+  Package…**, select the `.vasods` file, and choose which experiment to import
+  it into.
+- **From another project:** Go to **File → Open Data → Import from Project…**
+  to browse another `.vaso` project in read-only mode, select one or more
+  datasets, and import them into your current project.
+
+Imported datasets preserve their original metadata and optionally keep the
+source experiment grouping. Name collisions are handled automatically.
 
 ---
 
@@ -209,12 +222,14 @@ project to regenerate views.
   - `excel/` — Excel template reading and flexible writer
   - `io/` — trace and event file importers
   - `services/` — project repository, cache, and folder-import services
+  - `analysis/` — analysis and metrics modules
+  - `export/` — export generators and reports
+  - `utils/` — utility modules
 - `docs/` — user guide, welcome tour, and import documentation
 - `resources/` — application assets (icons, art, stylesheet)
 - `schemas/` — data/schema definitions and validation helpers
 - `scripts/` — maintenance and developer utilities
 - `tests/` — test suite
-- `resources/` — static assets (icons, art, stylesheet)
 - `packaging/` — PyInstaller spec, installer scripts, platform configs
 - `README.md` — this file
 - `LICENSE`, `CITATION.cff` — licensing and citation info

@@ -188,6 +188,7 @@ class PyQtGraphChannelTrack:
             autoscale_once=self.autoscale_y_once,
             open_menu=self._open_y_axis_menu_at,
             scale_about=self.scale_y_about,
+            pan_y=self.pan_y,
             drag_started=self._on_y_axis_drag_started,
             drag_finished=self._on_y_axis_drag_finished,
         )
@@ -523,6 +524,20 @@ class PyQtGraphChannelTrack:
         self._sticky_ylim = (float(new_min), float(new_max))
         self._autoscale_shrink_since = None
         self.view.set_autoscale_y(False)
+        self.view.set_ylim(new_min, new_max)
+        self._sync_header_state()
+
+    def pan_y(self, delta: float) -> None:
+        """Translate the Y range by *delta* data-space units."""
+        if not math.isfinite(float(delta)):
+            return
+        if self.view.is_autoscale_enabled():
+            self.view.set_autoscale_y(False)
+        ymin, ymax = self.view.get_ylim()
+        new_min = float(ymin) + float(delta)
+        new_max = float(ymax) + float(delta)
+        self._sticky_ylim = (new_min, new_max)
+        self._autoscale_shrink_since = None
         self.view.set_ylim(new_min, new_max)
         self._sync_header_state()
 

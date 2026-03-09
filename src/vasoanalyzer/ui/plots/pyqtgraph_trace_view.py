@@ -44,9 +44,13 @@ BOTTOM_PAD = 3
 INTER_TRACK_GAP_MIN = 6
 
 
-def y_axis_scale_factor_for_drag_delta(dy_px: float, *, gain: float = 0.006) -> float:
+def y_axis_scale_factor_for_drag_delta(dy_px: float, *, gain: float = 0.004) -> float:
     """Convert axis drag delta (pixels) into multiplicative Y span factor."""
     return float(math.exp(float(dy_px) * float(gain)))
+
+
+# Pixel tolerance for detecting a click near a tick label.
+_TICK_HIT_TOLERANCE_PX = 10
 
 
 class PyQtGraphTraceView(AbstractTraceRenderer):
@@ -183,6 +187,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._y_axis_drag_finished_handler: Callable[[], None] | None = None
         self._y_axis_drag_active = False
         self._y_axis_drag_last_pos: QPoint | None = None
+        self._y_axis_drag_mode: str = "zoom"  # "pan" or "zoom"
+        self._y_axis_pan_handler: Callable[[float], None] | None = None
         self._y_axis_cursor_forced = False
         self._y_axis_saved_cursor_explicit = False
         self._y_axis_saved_cursor = QCursor()
@@ -596,6 +602,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         autoscale_once: Callable[[], None] | None = None,
         open_menu: Callable[[QPoint], None] | None = None,
         scale_about: Callable[[float | None, float], None] | None = None,
+        pan_y: Callable[[float], None] | None = None,
         drag_started: Callable[[], None] | None = None,
         drag_finished: Callable[[], None] | None = None,
     ) -> None:
@@ -603,6 +610,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._y_axis_autoscale_once_handler = autoscale_once
         self._y_axis_menu_handler = open_menu
         self._y_axis_scale_about_handler = scale_about
+        self._y_axis_pan_handler = pan_y
         self._y_axis_drag_started_handler = drag_started
         self._y_axis_drag_finished_handler = drag_finished
 
@@ -725,7 +733,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 return y_value
         return None
 
-    def _set_y_axis_cursor_feedback(self, enabled: bool) -> None:
+    def _set_y_axis_cursor_feedback(
+        self, enabled: bool, mode: str | None = None
+    ) -> None:
         enabled_flag = bool(enabled)
         if enabled_flag:
             if not self._y_axis_cursor_forced:
@@ -733,7 +743,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     self._plot_widget.testAttribute(Qt.WA_SetCursor)
                 )
                 self._y_axis_saved_cursor = QCursor(self._plot_widget.cursor())
-            cursor = QCursor(Qt.SizeVerCursor)
+            # Pan → open-hand grab cursor; zoom → vertical resize cursor.
+            if mode == "pan":
+                cursor = QCursor(Qt.OpenHandCursor)
+            else:
+                cursor = QCursor(Qt.SizeVerCursor)
             self._plot_widget.setCursor(cursor)
             with contextlib.suppress(Exception):
                 self._plot_widget.viewport().setCursor(cursor)
@@ -762,7 +776,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if self.mouse_mode() == "rect":
             self._set_y_axis_cursor_feedback(False)
             return
-        self._set_y_axis_cursor_feedback(self._point_in_left_axis(widget_pos))
+        if self._point_in_left_axis(widget_pos):
+            mode = "pan" if self._is_near_y_axis_tick(widget_pos) else "zoom"
+            self._set_y_axis_cursor_feedback(True, mode)
+        else:
+            self._set_y_axis_cursor_feedback(False)
 
     def _update_cursor_for_position(self, scene_pos: QPointF | None) -> None:
         """Update Y-axis cursor feedback from a scene-coordinate position."""
@@ -774,7 +792,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return
         with contextlib.suppress(Exception):
             widget_pos = self._plot_widget.mapFromScene(scene_pos)
-            self._set_y_axis_cursor_feedback(self._point_in_left_axis(widget_pos))
+            if self._point_in_left_axis(widget_pos):
+                mode = "pan" if self._is_near_y_axis_tick(widget_pos) else "zoom"
+                self._set_y_axis_cursor_feedback(True, mode)
+            else:
+                self._set_y_axis_cursor_feedback(False)
             return
         self._set_y_axis_cursor_feedback(False)
 
@@ -828,6 +850,65 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     return True
         return False
 
+    def _is_near_y_axis_tick(self, pos: QPoint) -> bool:
+        """Return True if *pos* (widget coords) is near a *labelled* major tick."""
+        axis = self._plot_item.getAxis("left")
+        if axis is None:
+            return False
+        view_box = self._plot_item.getViewBox()
+        if view_box is None:
+            return False
+        try:
+            y_range = view_box.viewRange()[1]
+            vb_height = view_box.height()
+            all_levels = axis.tickValues(y_range[0], y_range[1], vb_height)
+            if not all_levels:
+                return False
+            # Only use the first (coarsest / major) tick level — these are the
+            # ticks that actually have visible labels.
+            major = all_levels[0]
+            if not isinstance(major, (list, tuple)) or len(major) < 2:
+                return False
+            tick_values = major[1]
+            if not tick_values:
+                return False
+            for tv in tick_values:
+                scene_pt = view_box.mapViewToScene(QPointF(0.0, float(tv)))
+                widget_pt = self._plot_widget.mapFromScene(scene_pt)
+                if abs(widget_pt.y() - pos.y()) <= _TICK_HIT_TOLERANCE_PX:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _apply_y_axis_drag_pan(self, dy_px: float) -> bool:
+        """Translate the Y range by *dy_px* pixels worth of data-space distance."""
+        if not self._chart_parity_v1:
+            return False
+        handler = self._y_axis_pan_handler
+        if not callable(handler):
+            return False
+        view_box = self._plot_item.getViewBox()
+        if view_box is None:
+            return False
+        try:
+            # Convert pixel delta to data-space delta.
+            # In widget coords, +Y is downward, but in data coords +Y is upward,
+            # so we negate to get the correct pan direction.
+            vb_height = view_box.height()
+            if vb_height <= 0:
+                return False
+            y_range = view_box.viewRange()[1]
+            data_span = y_range[1] - y_range[0]
+            data_delta = -(dy_px / vb_height) * data_span
+            if not np.isfinite(data_delta) or data_delta == 0.0:
+                return False
+            handler(float(data_delta))
+            self.refresh_y_axis_controls()
+            return True
+        except Exception:
+            return False
+
     def _end_y_axis_drag(self) -> None:
         if self._y_axis_drag_active:
             handler = self._y_axis_drag_finished_handler
@@ -836,6 +917,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     handler()
         self._y_axis_drag_active = False
         self._y_axis_drag_last_pos = None
+        self._y_axis_drag_mode = "zoom"
         self._set_y_axis_cursor_feedback(False)
 
     def _apply_y_axis_drag_scale(self, dy_px: float, center_y: float | None) -> bool:
@@ -876,7 +958,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             pos = self._event_pos_in_plot_widget(obj, event)
             if pos is None:
                 return False
-            self._set_y_axis_cursor_feedback(True)
+            self._set_y_axis_cursor_feedback(True, self._y_axis_drag_mode)
             last_pos = self._y_axis_drag_last_pos
             self._y_axis_drag_last_pos = QPoint(pos)
             if last_pos is None:
@@ -886,10 +968,15 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             if dy_px == 0.0:
                 event.accept()
                 return True
-            center_y = self._data_y_for_widget_pos(pos)
-            if self._apply_y_axis_drag_scale(dy_px, center_y):
-                event.accept()
-                return True
+            if self._y_axis_drag_mode == "pan":
+                if self._apply_y_axis_drag_pan(dy_px):
+                    event.accept()
+                    return True
+            else:
+                # Zoom mode: centre on the range midpoint for stability.
+                if self._apply_y_axis_drag_scale(dy_px, None):
+                    event.accept()
+                    return True
             return False
 
         if event_type == QEvent.MouseMove:
@@ -935,7 +1022,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             ):
                 self._y_axis_drag_active = True
                 self._y_axis_drag_last_pos = QPoint(pos)
-                self._set_y_axis_cursor_feedback(True)
+                # Decide drag mode: near a tick → pan, otherwise → zoom.
+                self._y_axis_drag_mode = (
+                    "pan" if self._is_near_y_axis_tick(pos) else "zoom"
+                )
+                self._set_y_axis_cursor_feedback(True, self._y_axis_drag_mode)
                 handler = self._y_axis_drag_started_handler
                 if callable(handler):
                     with contextlib.suppress(Exception):

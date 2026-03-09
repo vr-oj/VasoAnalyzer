@@ -5701,6 +5701,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.action_gif_animator.setEnabled(False)
         export_menu.addAction(self.action_gif_animator)
 
+        self.action_export_dataset_pkg = QAction("Export Dataset Package…", self)
+        self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
+        export_menu.addAction(self.action_export_dataset_pkg)
+
         export_menu.addSeparator()
 
         self.action_export_tiff = QAction("High-Res Plot…", self)
