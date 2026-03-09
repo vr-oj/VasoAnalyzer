@@ -24,17 +24,8 @@ src_dir = os.path.join(project_dir, 'src')
 package_assets_dir = os.path.join(src_dir, 'vasoanalyzer')
 sys.path.insert(0, src_dir)
 
-# App version for naming
-try:
-    from utils.config import APP_VERSION
-except Exception:
-    APP_VERSION = "0.0.0"
-
-version_label = APP_VERSION
-if not version_label.lower().startswith("v"):
-    version_label = f"v{version_label}"
-APP_BASENAME = "VasoAnalyzer"
-APP_NAME = f"{APP_BASENAME} {version_label}"
+# App name — version-free so new installs replace the old one
+APP_NAME = "VasoAnalyzer"
 
 # generate version-stamped icons at build time
 # decide platform‐specific icon (base icon only; no version overlay)
@@ -135,6 +126,8 @@ a = Analysis(
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
+
+APP_BASENAME = APP_NAME  # kept for Windows branch below
 
 exe_common_kwargs = dict(
     name=APP_NAME,

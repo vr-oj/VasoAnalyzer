@@ -30,6 +30,32 @@ if os.environ.get("VA_FAULTHANDLER", "1") != "0":
 log = logging.getLogger(__name__)
 
 
+def _eject_dmg_if_needed() -> None:
+    """On macOS, eject the VasoAnalyzer DMG if it is still mounted.
+
+    Only runs when the app is launched from /Applications (i.e. after
+    the user dragged the .app out of the DMG).
+    """
+    if sys.platform != "darwin":
+        return
+    # Only eject when running from the installed location
+    if not sys.executable.startswith("/Applications"):
+        return
+    import glob
+    import subprocess
+
+    for vol in glob.glob("/Volumes/VasoAnalyzer*"):
+        if os.path.isdir(vol):
+            try:
+                subprocess.Popen(
+                    ["diskutil", "eject", vol],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception:
+                pass  # best-effort, don't block startup
+
+
 def _configure_sip_exit_behavior() -> None:
     for module_name in ("sip", "PyQt5.sip", "PyQt6.sip"):
         try:
@@ -84,6 +110,8 @@ def main(argv: list[str] | None = None) -> None:
     single_instance = SingleInstanceManager()
     if single_instance.forward_to_primary(vaso_paths):
         return
+
+    _eject_dmg_if_needed()
 
     # Setup production logging with file rotation and INFO console output
     try:
