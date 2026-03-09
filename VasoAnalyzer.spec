@@ -121,6 +121,8 @@ a = Analysis(
         # Pillow
         'PIL',
         'PIL.Image',
+        # charset detection for requests
+        'charset_normalizer',
     ] + req_subs + xl_subs + mpl_hiddenimports,
     hookspath=[],
     hooksconfig={},

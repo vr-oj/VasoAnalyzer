@@ -96,8 +96,9 @@ jobs:
           $exe = "dist\VasoAnalyzer\VasoAnalyzer.exe"
           if (-not (Test-Path $exe)) { throw "EXE not found at $exe" }
           Write-Host "==> Running smoke test..."
-          & $exe --smoke-test
-          if ($LASTEXITCODE -ne 0) { throw "Smoke test failed (exit code $LASTEXITCODE)" }
+          $output = & $exe --smoke-test 2>&1 | Out-String
+          Write-Host $output
+          if ($output -notmatch "all imports OK") { throw "Smoke test failed — expected output not found" }
           Write-Host "==> Smoke test passed"
 
       - name: Upload installer artifact
