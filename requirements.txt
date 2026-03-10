@@ -2,6 +2,7 @@
 matplotlib>=3.0
 numpy>=1.18
 pandas>=1.0
+pytz>=2023.3          # explicit pin: pandas checks pytz.__version__ at init (PyInstaller fix)
 tifffile>=2020.7
 imagecodecs>=2021.3
 h5py>=3.14.0

@@ -4,6 +4,7 @@
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QDrag
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
@@ -19,9 +20,28 @@ from vasoanalyzer.ui.theme import CURRENT_THEME
 
 
 class ExperimentTreeWidget(QTreeWidget):
-    """QTreeWidget that emits experiment_reordered after a drag-move of an experiment node."""
+    """QTreeWidget that supports experiment reorder and dataset drag-to-comparison."""
 
     experiment_reordered = pyqtSignal()
+
+    def startDrag(self, supported_actions):
+        """Emit a dataset MIME drag for sample items; fall back to default for experiments."""
+        item = self.currentItem()
+        if item is not None:
+            parent = item.parent()
+            # Sample item = grandchild of root (parent is experiment, parent.parent is root)
+            if parent is not None and parent.parent() is not None:
+                sample = item.data(0, Qt.UserRole)
+                dataset_id = getattr(sample, "dataset_id", None)
+                if dataset_id is not None:
+                    from vasoanalyzer.ui.drag_drop import encode_dataset_mime
+                    name = getattr(sample, "name", "") or ""
+                    mime = encode_dataset_mime(dataset_id, name)
+                    drag = QDrag(self)
+                    drag.setMimeData(mime)
+                    drag.exec_(Qt.CopyAction)
+                    return
+        super().startDrag(supported_actions)
 
     def dropEvent(self, event):
         dragged = self.currentItem()
@@ -29,8 +49,8 @@ class ExperimentTreeWidget(QTreeWidget):
             event.ignore()
             return
         parent = dragged.parent()
-        # Only allow drag for direct children of the root item (experiment level).
-        # Reject drags of the root itself or of sample items (grandchildren).
+        # Only allow internal drops for direct children of the root (experiment level).
+        # Reject drops of the root itself or of sample items (grandchildren).
         if parent is None or parent.parent() is not None:
             event.ignore()
             return

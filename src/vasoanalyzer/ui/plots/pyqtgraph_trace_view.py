@@ -204,6 +204,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         with contextlib.suppress(Exception):
             self._plot_widget.viewport().installEventFilter(self._hover_hide_filter)
 
+        # Full crosshair (vertical + horizontal infinite lines)
+        self._crosshair_vline: pg.InfiniteLine | None = None
+        self._crosshair_hline: pg.InfiniteLine | None = None
+        self._crosshair_sync_handler: Callable[[float | None], None] | None = None
+        self._init_crosshair()
+
         # Hover tooltip state
         self._hover_tooltip_enabled: bool = False
         self._hover_tooltip_precision: int = 2
@@ -403,6 +409,55 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         except Exception:
             self._hover_text_item = None
 
+    def _init_crosshair(self) -> None:
+        """Create (or recreate) the full-extent crosshair InfiniteLines."""
+        raw_color = CURRENT_THEME.get("cursor_line", CURRENT_THEME.get("grid_color", "#888888"))
+        try:
+            color = self._to_qcolor(raw_color, "#888888")
+        except Exception:
+            color = self._to_qcolor("#888888", "#888888")
+        pen = pg.mkPen(color=color, width=1, style=Qt.SolidLine)
+
+        # Remove existing lines before re-creating (theme refresh path)
+        for attr in ("_crosshair_vline", "_crosshair_hline"):
+            old = getattr(self, attr, None)
+            if old is not None:
+                with contextlib.suppress(Exception):
+                    self._plot_item.removeItem(old)
+                setattr(self, attr, None)
+
+        try:
+            vline = pg.InfiniteLine(angle=90, movable=False, pen=pen)
+            hline = pg.InfiniteLine(angle=0, movable=False, pen=pen)
+            vline.setZValue(9e4)
+            hline.setZValue(9e4)
+            vline.setVisible(False)
+            hline.setVisible(False)
+            self._plot_item.addItem(vline, ignoreBounds=True)
+            self._plot_item.addItem(hline, ignoreBounds=True)
+            self._crosshair_vline = vline
+            self._crosshair_hline = hline
+        except Exception:
+            self._crosshair_vline = None
+            self._crosshair_hline = None
+
+    def set_crosshair_sync_handler(self, handler: "Callable[[float | None], None] | None") -> None:
+        """Register a callback invoked with the current X position when the mouse moves."""
+        self._crosshair_sync_handler = handler
+
+    def set_crosshair_x(self, x: float | None) -> None:
+        """Reposition (or hide) only the vertical crosshair line — used for cross-track sync."""
+        vline = self._crosshair_vline
+        if vline is None:
+            return
+        if x is None:
+            with contextlib.suppress(Exception):
+                vline.setVisible(False)
+        else:
+            with contextlib.suppress(Exception):
+                vline.setPos(x)
+                vline.setVisible(True)
+
     @staticmethod
     def _to_qcolor(value: str, fallback: str) -> QColor:
         """Best-effort conversion of CSS-like color strings to QColor."""
@@ -524,6 +579,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         with contextlib.suppress(Exception):
             apply_selection_box_style(self._view_box, get_pyqtgraph_style().selection_box)
         self._init_hover_label()
+        self._init_crosshair()
         self._reposition_y_axis_controls()
 
         # Force immediate visual update
@@ -1902,8 +1958,6 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
     def _handle_mouse_moved(self, point) -> None:
         self._update_cursor_for_position(point)
-        if not self._hover_tooltip_enabled:
-            return
         if self._plot_item.scene() is None:
             return
         if not self._plot_item.sceneBoundingRect().contains(point):
@@ -1914,6 +1968,13 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return
         mouse_point = view_box.mapSceneToView(point)
         x_value = float(mouse_point.x())
+
+        # --- Update full crosshair ---
+        self._update_crosshair(x_value)
+
+        if not self._hover_tooltip_enabled:
+            return
+
         self._update_hovered_event_from_x(x_value)
         window = self._current_window
         if window is None or window.time.size == 0:
@@ -1948,6 +2009,42 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._last_hover_index = idx
         self._last_hover_text = text
         self._show_hover_tooltip(text, mouse_point)
+
+    def _update_crosshair(self, x_value: float) -> None:
+        """Reposition and show both crosshair lines; notify sync handler."""
+        window = self._current_window
+        vline = self._crosshair_vline
+        hline = self._crosshair_hline
+
+        if vline is not None:
+            with contextlib.suppress(Exception):
+                vline.setPos(x_value)
+                vline.setVisible(True)
+
+        if hline is not None and window is not None and window.time.size > 0:
+            idx = self._index_at_time(window.time, x_value)
+            y_val: float | None = None
+            if idx is not None:
+                if self._mode == "outer" and window.outer_mean is not None and window.outer_mean.size > idx:
+                    y_val = float(window.outer_mean[idx])
+                elif self._mode == "avg_pressure" and window.avg_pressure_mean is not None and window.avg_pressure_mean.size > idx:
+                    y_val = float(window.avg_pressure_mean[idx])
+                elif self._mode == "set_pressure" and window.set_pressure_mean is not None and window.set_pressure_mean.size > idx:
+                    y_val = float(window.set_pressure_mean[idx])
+                elif window.inner_mean is not None and window.inner_mean.size > idx:
+                    y_val = float(window.inner_mean[idx])
+            if y_val is not None and np.isfinite(y_val):
+                with contextlib.suppress(Exception):
+                    hline.setPos(y_val)
+                    hline.setVisible(True)
+            else:
+                with contextlib.suppress(Exception):
+                    hline.setVisible(False)
+
+        sync = self._crosshair_sync_handler
+        if callable(sync):
+            with contextlib.suppress(Exception):
+                sync(x_value)
 
     def _index_at_time(self, samples: np.ndarray, target: float) -> int | None:
         sample_count = int(samples.size)
@@ -2108,6 +2205,16 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     handler(None)
         if self._hover_text_item is not None:
             self._hover_text_item.setVisible(False)
+        # Hide crosshair lines and notify sync handler
+        with contextlib.suppress(Exception):
+            if self._crosshair_vline is not None:
+                self._crosshair_vline.setVisible(False)
+            if self._crosshair_hline is not None:
+                self._crosshair_hline.setVisible(False)
+        sync = self._crosshair_sync_handler
+        if callable(sync):
+            with contextlib.suppress(Exception):
+                sync(None)
 
 
 class _HoverHideFilter(QObject):
