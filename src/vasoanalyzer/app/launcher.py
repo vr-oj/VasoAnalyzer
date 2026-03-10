@@ -110,7 +110,10 @@ class VasoAnalyzerLauncher:
         # Force a hard exit on macOS to avoid SIP teardown segfaults on exit.
         if sys.platform == "darwin":
             self.app.setStyle("macintosh")
-        # Windows uses default style which is already native
+        elif sys.platform.startswith("win"):
+            # Fusion gives a modern, flat look consistent with macOS on Windows.
+            # The default "windows" style looks dated and visually mismatches macOS.
+            self.app.setStyle("Fusion")
 
     # ------------------------------------------------------------------
     def _show_splash(self) -> None:

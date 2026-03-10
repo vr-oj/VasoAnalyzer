@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import math
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
@@ -118,8 +119,10 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         self._plot_widget.viewport().installEventFilter(pinch_blocker)
         self._pinch_blocker = pinch_blocker  # Keep reference to prevent garbage collection
 
-        # Enable OpenGL acceleration for better performance
-        if self._enable_opengl:
+        # Enable OpenGL acceleration for better performance.
+        # Disabled on Windows: PyQtGraph's OpenGL path has known rendering
+        # inconsistencies there (incomplete grids, missing axis lines).
+        if self._enable_opengl and not sys.platform.startswith("win"):
             with contextlib.suppress(Exception):
                 self._plot_widget.useOpenGL(True)
 

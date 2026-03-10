@@ -8,6 +8,7 @@ import contextlib
 import inspect
 import logging
 import re
+import sys
 from pathlib import Path
 from typing import cast
 
@@ -662,9 +663,18 @@ DARK_THEME = {
 # Currently applied theme; initialized from light preset to avoid KeyErrors
 CURRENT_THEME = dict(LIGHT_THEME)
 
+def _platform_ui_font() -> str:
+    """Return the best available UI font for the current platform."""
+    if sys.platform == "darwin":
+        return "Avenir Next"
+    if sys.platform.startswith("win"):
+        return "Segoe UI"
+    return "Arial"
+
+
 # Font settings
 FONTS = {
-    "family": "Avenir Next",
+    "family": _platform_ui_font(),
     "axis_size": 14,
     "tick_size": 12,
     "event_size": 10,
