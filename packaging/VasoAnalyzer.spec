@@ -110,7 +110,7 @@ a = Analysis(
     ] + req_subs + xl_subs + mpl_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[os.path.join(spec_dir, 'hooks', 'rthook_fix_pytz.py')],
     excludes=[
         'matplotlib.tests',
         'matplotlib.testing',

@@ -74,6 +74,8 @@ def _configure_sip_exit_behavior() -> None:
 def _smoke_test() -> None:
     """Quick import & init check used by CI to verify the build is functional."""
     print("smoke-test: importing core modules...")
+    import pandas  # noqa: F401  # must come first — catches pytz version bug on Windows
+    import numpy  # noqa: F401
     from PyQt5.QtWidgets import QApplication  # noqa: F401
     from vasoanalyzer.app.launcher import VasoAnalyzerLauncher  # noqa: F401
     from vasoanalyzer.core.logging_config import setup_production_logging  # noqa: F401
