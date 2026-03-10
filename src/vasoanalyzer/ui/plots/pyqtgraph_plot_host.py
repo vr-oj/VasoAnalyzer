@@ -814,6 +814,7 @@ class PyQtGraphPlotHost(InteractionHost):
 
         self._tracks = new_tracks
         self.layout.setSpacing(0)
+        self._wire_crosshair_sync()
 
         for key in list(self._channel_visible.keys()):
             if key not in self._tracks:
@@ -888,6 +889,29 @@ class PyQtGraphPlotHost(InteractionHost):
             show_divider = bool(track.is_visible() and spec.track_id != bottom_visible_id)
             with contextlib.suppress(Exception):
                 track.set_divider_visible(show_divider)
+
+    def _wire_crosshair_sync(self) -> None:
+        """Register crosshair sync callbacks so a hover in one track drives V-lines in all others."""
+        track_list = list(self._tracks.values())
+        if len(track_list) < 2:
+            # Single track — no cross-track sync needed; just clear any stale handler
+            for track in track_list:
+                with contextlib.suppress(Exception):
+                    track.view.set_crosshair_sync_handler(None)
+            return
+
+        def make_sync(source_track: "PyQtGraphChannelTrack"):
+            def _sync(x_value: "float | None") -> None:
+                for other in track_list:
+                    if other is source_track:
+                        continue
+                    with contextlib.suppress(Exception):
+                        other.view.set_crosshair_x(x_value)
+            return _sync
+
+        for t in track_list:
+            with contextlib.suppress(Exception):
+                t.view.set_crosshair_sync_handler(make_sync(t))
 
     def _connect_track_signals(
         self, track: PyQtGraphChannelTrack, *, bind_range: bool = True
