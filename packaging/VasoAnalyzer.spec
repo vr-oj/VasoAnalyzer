@@ -109,16 +109,12 @@ a = Analysis(
         'matplotlib.backends.backend_qt5agg',
         # Numpy
         'numpy',
-        'numpy.core._methods',
         'numpy.lib.format',
         # Pillow
         'PIL',
         'PIL.Image',
         # charset detection for requests
         'charset_normalizer',
-        # pytz must be importable + its metadata present for pandas version check
-        'pytz',
-        'tzdata',
     ] + req_subs + xl_subs + mpl_hiddenimports,
     hookspath=[],
     hooksconfig={},
