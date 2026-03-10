@@ -1393,7 +1393,9 @@ class PyQtGraphPlotHost(InteractionHost):
                     bottom_axis.setTextPen(pg.mkPen(style.tick_label_color))
                 with contextlib.suppress(AttributeError):
                     bottom_axis.setTickFont(tick_font)
+                with contextlib.suppress(AttributeError):
                     bottom_axis.setTickDensity(tick_style.density)
+                with contextlib.suppress(AttributeError):
                     bottom_axis.setStyle(
                         showValues=True,
                         tickLength=5,
@@ -1816,8 +1818,11 @@ class PyQtGraphPlotHost(InteractionHost):
         left_axis.label.setFont(ylabel_font)
         with contextlib.suppress(AttributeError):
             left_axis.setTickFont(tick_font)
+        with contextlib.suppress(AttributeError):
             left_axis.setTickLength(5, 0)
+        with contextlib.suppress(AttributeError):
             left_axis.setTickDensity(tick_style.density)
+        with contextlib.suppress(AttributeError):
             left_axis.setStyle(
                 tickTextOffset=self._LEFT_AXIS_TICK_TEXT_OFFSET_PX,
                 tickTextWidth=self._LEFT_AXIS_TICK_TEXT_WIDTH_PX,
@@ -1834,7 +1839,9 @@ class PyQtGraphPlotHost(InteractionHost):
                 right_axis.enableAutoSIPrefix(False)
             with contextlib.suppress(AttributeError):
                 right_axis.setTickFont(tick_font)
+            with contextlib.suppress(AttributeError):
                 right_axis.setTickDensity(tick_style.density)
+            with contextlib.suppress(AttributeError):
                 right_axis.setStyle(
                     tickTextOffset=self._LEFT_AXIS_TICK_TEXT_OFFSET_PX,
                     tickTextWidth=self._LEFT_AXIS_TICK_TEXT_WIDTH_PX,
@@ -1852,12 +1859,18 @@ class PyQtGraphPlotHost(InteractionHost):
             bottom_axis.label.setFont(xlabel_font)
             with contextlib.suppress(AttributeError):
                 bottom_axis.setTickFont(tick_font)
+            with contextlib.suppress(AttributeError):
                 bottom_axis.setTickDensity(tick_style.density)
+            with contextlib.suppress(AttributeError):
                 bottom_axis.setStyle(
                     tickTextOffset=tick_style.text_offset,
                     tickTextWidth=tick_style.text_width,
                     tickTextHeight=tick_style.text_height,
                 )
+            # Force axis height recalculation after font change so tick
+            # labels have the space they need to render (critical on Windows).
+            with contextlib.suppress(Exception):
+                bottom_axis.setHeight(None)
             self._recenter_bottom_label(bottom_axis)
 
     def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:
