@@ -6,7 +6,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files, collect_all, copy_metadata
 
 # ensure project root on path for helper scripts
 spec_path = os.path.abspath(sys.argv[0])
@@ -39,6 +39,15 @@ else:
 req_subs = collect_submodules('requests')
 xl_subs = collect_submodules('openpyxl')
 
+# Copy package metadata so importlib.metadata.version() works at runtime
+# (pandas checks pytz version during init; without this it crashes on Windows)
+metadata_datas = []
+for pkg in ('pytz', 'pandas', 'numpy', 'tzdata'):
+    try:
+        metadata_datas += copy_metadata(pkg)
+    except Exception:
+        pass
+
 # Collect matplotlib data files carefully - exclude tests to avoid bytecode errors
 try:
     mpl_datas = collect_data_files('matplotlib', includes=['**/*.ttf', '**/*.afm', '**/*mplstyle'])
@@ -66,7 +75,7 @@ datas = [
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.icns'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.ico'), 'vasoanalyzer'),
     (os.path.join(package_assets_dir, 'VasoAnalyzerIcon.svg'), 'vasoanalyzer'),
-] + icon_datas + mpl_datas
+] + icon_datas + mpl_datas + metadata_datas
 
 if os.path.isfile(doc_icon_icns):
     datas.append((doc_icon_icns, '.'))
@@ -100,7 +109,6 @@ a = Analysis(
         'matplotlib.backends.backend_qt5agg',
         # Numpy
         'numpy',
-        'numpy.core._methods',
         'numpy.lib.format',
         # Pillow
         'PIL',

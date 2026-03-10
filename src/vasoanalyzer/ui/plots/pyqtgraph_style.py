@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 import pyqtgraph as pg
@@ -30,8 +31,10 @@ class SelectionBoxStyle:
     brush_alpha: float
 
 
-PLOT_AXIS_FONT_SIZE = 8.5
-PLOT_TICK_FONT_SIZE = 7.0
+# macOS: small sizes look great on Retina with Avenir Next.
+# Windows: Segoe UI needs slightly larger sizes to render clearly.
+PLOT_AXIS_FONT_SIZE = 8.5 if sys.platform == "darwin" else 10.0
+PLOT_TICK_FONT_SIZE = 7.0 if sys.platform == "darwin" else 9.0
 PLOT_AXIS_LABELS = {
     "inner": "ID (µm)",
     "outer": "OD (µm)",
