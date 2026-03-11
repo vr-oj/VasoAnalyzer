@@ -1870,7 +1870,11 @@ class PyQtGraphPlotHost(InteractionHost):
         # Use cached bottom track ID (single source of truth)
         bottom_visible_id = self._bottom_visible_track_id or track.id
         is_bottom = track.id == bottom_visible_id
-        if is_bottom:
+        # When the shared footer owns the time axis, skip per-track bottom axis
+        # styling entirely — the footer is already configured by _sync_event_strip_axes.
+        # Applying setHeight(None) here would undo the setHeight(0) that
+        # set_bottom_axis_visible(False) set, causing a blank axis gap (duplicate).
+        if is_bottom and not self._shared_time_axis_footer_enabled:
             bottom_axis = plot_item.getAxis("bottom")
             bottom_axis.label.setFont(xlabel_font)
             with contextlib.suppress(AttributeError):
