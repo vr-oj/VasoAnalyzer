@@ -6,6 +6,7 @@ import contextlib
 import logging
 import math
 import os
+import sys
 import traceback
 from collections.abc import Callable, Iterable
 from typing import Any, cast
@@ -79,7 +80,7 @@ class PyQtGraphPlotHost(InteractionHost):
     _SHARED_TIME_AXIS_FOOTER_ENABLED = False
     _EVENT_LABEL_TRACKS_ENABLED = False
     _LEFT_AXIS_TICK_TEXT_OFFSET_PX = 6
-    _LEFT_AXIS_TICK_TEXT_WIDTH_PX = 40
+    _LEFT_AXIS_TICK_TEXT_WIDTH_PX = 34
     _LEFT_AXIS_TICK_TEXT_HEIGHT_PX = 16
 
     def __init__(self, *, dpi: int = 100, enable_opengl: bool = True) -> None:
@@ -1778,6 +1779,10 @@ class PyQtGraphPlotHost(InteractionHost):
             br = label.boundingRect()
             width = float(axis.size().width())
             height = float(axis.size().height())
+            # Guard: if layout hasn't settled yet (height=0) skip repositioning.
+            # A negative y would place the label over the tick region, hiding ticks.
+            if height <= 0:
+                return
             nudge = 5
             x = width / 2.0 - br.width() / 2.0
             y = height - br.height() + nudge
@@ -1801,6 +1806,16 @@ class PyQtGraphPlotHost(InteractionHost):
         ylabel_font = QFont(self._axis_font_family, max(label_size - 2, 7))
         xlabel_font = QFont(self._axis_font_family, label_size)
         tick_font = QFont(self._axis_font_family, tick_size)
+        # Windows: Qt's default ClearType hinting makes tick labels and axis
+        # titles look grid-fitted and heavy compared to macOS CoreText.
+        # PreferNoHinting + PreferAntialias gives smooth, proportional rendering
+        # that closely matches the macOS Avenir Next appearance.
+        if sys.platform.startswith("win"):
+            for _f in (ylabel_font, xlabel_font, tick_font):
+                _f.setHintingPreference(QFont.PreferNoHinting)
+                _f.setStyleStrategy(
+                    QFont.PreferAntialias | QFont.PreferOutline  # type: ignore[operator]
+                )
         self._axis_width_sync.set_min_from_sample_text("-999.9", tick_font)
 
         left_axis = plot_item.getAxis("left")
@@ -1863,14 +1878,17 @@ class PyQtGraphPlotHost(InteractionHost):
                 bottom_axis.setTickDensity(tick_style.density)
             with contextlib.suppress(AttributeError):
                 bottom_axis.setStyle(
+                    showValues=True,
                     tickTextOffset=tick_style.text_offset,
                     tickTextWidth=tick_style.text_width,
                     tickTextHeight=tick_style.text_height,
+                    autoReduceTextSpace=False,
+                    stopAxisAtTick=(False, False),
                 )
-            # Force axis height recalculation after font change so tick
-            # labels have the space they need to render (critical on Windows).
             with contextlib.suppress(Exception):
                 bottom_axis.setHeight(None)
+            with contextlib.suppress(Exception):
+                bottom_axis.update()
             self._recenter_bottom_label(bottom_axis)
 
     def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:

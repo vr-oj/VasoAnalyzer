@@ -271,6 +271,7 @@ class TraceNavBar(QFrame):
 QFrame#TraceNavBar {{
     background: {bg};
     border: 1px solid {border};
+    border-top: none;
     border-radius: {radius}px;
 }}
 QPushButton#TraceNavButton {{

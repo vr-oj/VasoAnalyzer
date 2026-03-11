@@ -46,3 +46,4 @@ ruff.txt
 
 # Project-specific ignores
 ExcelTemplates/
+/.claude

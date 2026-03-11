@@ -126,6 +126,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             with contextlib.suppress(Exception):
                 self._plot_widget.useOpenGL(True)
 
+        # On Windows without OpenGL, Qt's raster engine uses MinimalViewportUpdate
+        # which can leave grid lines at viewport edges unpainted. FullViewportUpdate
+        # ensures the entire plot area is redrawn on each frame, preventing clipping.
+        if sys.platform.startswith("win"):
+            with contextlib.suppress(Exception):
+                from PyQt5.QtWidgets import QGraphicsView
+                self._plot_widget.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+
         # Configure plot appearance
         self._plot_item.showGrid(x=True, y=True, alpha=0.10)
 
@@ -315,12 +323,15 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             with contextlib.suppress(AttributeError):
                 axis.enableAutoSIPrefix(False)
             axis.setVisible(True)
-            axis.setStyle(showValues=True)
+            axis.setStyle(
+                showValues=True,
+                autoReduceTextSpace=False,
+            )
             axis.setLabel(self._time_axis_label())
-            with contextlib.suppress(AttributeError):
-                axis.setTickLength(5, 0)
             with contextlib.suppress(Exception):
                 axis.setHeight(None)
+            with contextlib.suppress(Exception):
+                axis.update()
             with contextlib.suppress(AttributeError):
                 axis.label.show()
                 axis.showLabel(True)
