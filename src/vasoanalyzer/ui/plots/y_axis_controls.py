@@ -8,8 +8,8 @@ import os
 from collections.abc import Callable
 
 from PyQt5 import QtSvg
-from PyQt5.QtCore import QEvent, QFile, QPoint, QRectF, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap
+from PyQt5.QtCore import QEvent, QFile, QPoint, QPointF, QRectF, QSize, Qt
+from PyQt5.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap, QPolygonF
 from PyQt5.QtWidgets import QApplication, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from utils import resource_path
@@ -23,6 +23,7 @@ OUTER_GUTTER_PX = BUTTON_PX + 2
 _BTN_SIZE = QSize(BUTTON_PX, BUTTON_PX)
 _ICON_SIZE = QSize(ICON_PX, ICON_PX)
 _SVG_ICON_CACHE: dict[tuple[str, int, int, float, float, float], QIcon] = {}
+_DRAWN_ICON_CACHE: dict[tuple[str, int, int, float], QIcon] = {}
 _ICON_RENDER_DEBUG_LOGGED: set[tuple[str, int, float, float, float]] = set()
 _ICON_REFRESH_EVENT_TYPES = {
     QEvent.PaletteChange,
@@ -131,6 +132,99 @@ def _trim_and_rescale_icon(
     painter.drawImage(x, y, scaled)
     painter.end()
     return normalized
+
+
+def _draw_simple_icon(shape: str, px: int, color: QColor, dpr: float) -> QIcon:
+    """Draw a geometric button icon with QPainter — no SVG dependency.
+
+    Guaranteed to work on all platforms (Windows, macOS, Linux).  Shape is
+    one of 'plus', 'minus', or 'chevron'.
+    """
+    color_value = QColor(color) if color.isValid() else QColor(127, 127, 127)
+    dpr_value = max(float(dpr), 1.0)
+    px_value = max(int(px), 4)
+    key = (shape, px_value, int(color_value.rgba()), round(dpr_value, 2))
+    cached = _DRAWN_ICON_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    render_px = max(4, int(round(px_value * dpr_value)))
+    pixmap = QPixmap(render_px, render_px)
+    pixmap.fill(Qt.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color_value)
+
+    # Proportional geometry — all values relative to render_px
+    bar_t = max(2, int(round(render_px * 0.22)))   # bar/stroke thickness
+    margin = max(1, int(round(render_px * 0.15)))  # edge margin
+    radius = max(1, int(round(bar_t * 0.4)))       # corner radius for bars
+
+    if shape == "plus":
+        cx = (render_px - bar_t) // 2
+        # Horizontal bar
+        painter.drawRoundedRect(margin, cx, render_px - 2 * margin, bar_t, radius, radius)
+        # Vertical bar
+        painter.drawRoundedRect(cx, margin, bar_t, render_px - 2 * margin, radius, radius)
+
+    elif shape == "minus":
+        cy = (render_px - bar_t) // 2
+        painter.drawRoundedRect(margin, cy, render_px - 2 * margin, bar_t, radius, radius)
+
+    elif shape == "chevron":
+        # Downward-pointing filled triangle
+        top_y = max(0.0, render_px * 0.28)
+        bot_y = min(float(render_px - 1), render_px * 0.72)
+        left_x = float(margin)
+        right_x = float(render_px - margin)
+        mid_x = render_px / 2.0
+        polygon = QPolygonF([
+            QPointF(left_x, top_y),
+            QPointF(right_x, top_y),
+            QPointF(mid_x, bot_y),
+        ])
+        painter.drawPolygon(polygon)
+
+    painter.end()
+    pixmap.setDevicePixelRatio(dpr_value)
+
+    icon = QIcon()
+    icon.addPixmap(pixmap, QIcon.Normal, QIcon.Off)
+    icon.addPixmap(pixmap, QIcon.Active, QIcon.Off)
+    icon.addPixmap(pixmap, QIcon.Selected, QIcon.Off)
+
+    disabled_color = QColor(color_value)
+    disabled_color.setAlpha(max(40, int(round(color_value.alpha() * 0.5))))
+    disabled_px = QPixmap(render_px, render_px)
+    disabled_px.fill(Qt.transparent)
+    dp = QPainter(disabled_px)
+    dp.setRenderHint(QPainter.Antialiasing, True)
+    dp.setPen(Qt.NoPen)
+    dp.setBrush(disabled_color)
+    if shape == "plus":
+        cx = (render_px - bar_t) // 2
+        dp.drawRoundedRect(margin, cx, render_px - 2 * margin, bar_t, radius, radius)
+        dp.drawRoundedRect(cx, margin, bar_t, render_px - 2 * margin, radius, radius)
+    elif shape == "minus":
+        cy = (render_px - bar_t) // 2
+        dp.drawRoundedRect(margin, cy, render_px - 2 * margin, bar_t, radius, radius)
+    elif shape == "chevron":
+        top_y = max(0.0, render_px * 0.28)
+        bot_y = min(float(render_px - 1), render_px * 0.72)
+        polygon = QPolygonF([
+            QPointF(float(margin), top_y),
+            QPointF(float(render_px - margin), top_y),
+            QPointF(render_px / 2.0, bot_y),
+        ])
+        dp.drawPolygon(polygon)
+    dp.end()
+    disabled_px.setDevicePixelRatio(dpr_value)
+    icon.addPixmap(disabled_px, QIcon.Disabled, QIcon.Off)
+
+    _DRAWN_ICON_CACHE[key] = icon
+    return icon
 
 
 def _template_svg_icon(
@@ -263,6 +357,60 @@ def required_outer_gutter_px() -> int:
     return int(_logical_size(BUTTON_PX, dpr) + padding_px)
 
 
+class _ShapeButton(QToolButton):
+    """QToolButton that paints a geometric shape directly in its paintEvent.
+
+    Bypasses setIcon / QIcon completely, which can silently fail to render
+    on Windows when a stylesheet is applied to the button.
+    """
+
+    def __init__(self, shape: str = "", *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._shape: str = shape
+        self._shape_color: QColor = QColor(0, 0, 0, 217)
+
+    def set_shape_color(self, color: QColor) -> None:
+        self._shape_color = QColor(color) if color.isValid() else QColor(0, 0, 0, 217)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        super().paintEvent(event)
+        if not self._shape:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(self._shape_color)
+
+        w = self.width()
+        h = self.height()
+        s = min(w, h)
+        m = max(2, int(round(s * 0.18)))        # margin from edge
+        bar_t = max(2, int(round(s * 0.22)))     # bar/stroke thickness
+        radius = max(1, int(round(bar_t * 0.4))) # corner radius
+
+        if self._shape == "plus":
+            cy = (h - bar_t) // 2
+            cx = (w - bar_t) // 2
+            painter.drawRoundedRect(m, cy, w - 2 * m, bar_t, radius, radius)
+            painter.drawRoundedRect(cx, m, bar_t, h - 2 * m, radius, radius)
+        elif self._shape == "minus":
+            cy = (h - bar_t) // 2
+            painter.drawRoundedRect(m, cy, w - 2 * m, bar_t, radius, radius)
+        elif self._shape == "chevron":
+            top_y = float(max(0, int(round(h * 0.28))))
+            bot_y = float(min(h - 1, int(round(h * 0.72))))
+            polygon = QPolygonF([
+                QPointF(float(m), top_y),
+                QPointF(float(w - m), top_y),
+                QPointF(w / 2.0, bot_y),
+            ])
+            painter.drawPolygon(polygon)
+
+        painter.end()
+
+
 class YAxisControls(QWidget):
     """Axis-adjacent Y controls with top menu and bottom +/- scaling buttons."""
 
@@ -315,7 +463,7 @@ class YAxisControls(QWidget):
         menu_layout.setContentsMargins(0, 0, 0, 0)
         menu_layout.setSpacing(0)
 
-        self.scale_menu_btn = QToolButton(self.menu_button_widget)
+        self.scale_menu_btn = _ShapeButton("chevron", parent=self.menu_button_widget)
         self.scale_menu_btn.setObjectName("YAxisScaleMenuButton")
         self.scale_menu_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.scale_menu_btn.setAutoRaise(True)
@@ -333,7 +481,7 @@ class YAxisControls(QWidget):
         scale_layout.setContentsMargins(0, 0, 0, 0)
         scale_layout.setSpacing(2)
 
-        self.zoom_in_btn = QToolButton(self.scale_buttons_widget)
+        self.zoom_in_btn = _ShapeButton("plus", parent=self.scale_buttons_widget)
         self.zoom_in_btn.setObjectName("YAxisZoomInButton")
         self.zoom_in_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.zoom_in_btn.setAutoRaise(True)
@@ -344,7 +492,7 @@ class YAxisControls(QWidget):
         self.zoom_in_btn.clicked.connect(self._handle_zoom_in_triggered)
         scale_layout.addWidget(self.zoom_in_btn)
 
-        self.zoom_out_btn = QToolButton(self.scale_buttons_widget)
+        self.zoom_out_btn = _ShapeButton("minus", parent=self.scale_buttons_widget)
         self.zoom_out_btn.setObjectName("YAxisZoomOutButton")
         self.zoom_out_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         self.zoom_out_btn.setAutoRaise(True)
@@ -497,32 +645,9 @@ class YAxisControls(QWidget):
     def _apply_icons(self) -> None:
         self._apply_dpr_sizes()
         color = self._icon_tint_color()
-        dpr = self._current_dpr()
-
-        self._apply_button_icon(
-            self.scale_menu_btn,
-            resource_name=self._menu_icon_resource,
-            fallback_path=self._menu_icon_path,
-            fallback_text="",
-            color=color,
-            dpr=dpr,
-        )
-        self._apply_button_icon(
-            self.zoom_in_btn,
-            resource_name=self._plus_icon_resource,
-            fallback_path=self._plus_icon_path,
-            fallback_text="+",
-            color=color,
-            dpr=dpr,
-        )
-        self._apply_button_icon(
-            self.zoom_out_btn,
-            resource_name=self._minus_icon_resource,
-            fallback_path=self._minus_icon_path,
-            fallback_text="-",
-            color=color,
-            dpr=dpr,
-        )
+        self.scale_menu_btn.set_shape_color(color)
+        self.zoom_in_btn.set_shape_color(color)
+        self.zoom_out_btn.set_shape_color(color)
 
     def _apply_dpr_sizes(self) -> None:
         dpr = self._current_dpr()
@@ -549,6 +674,24 @@ class YAxisControls(QWidget):
         dpr: float,
     ) -> None:
         px = max(int(button.iconSize().width()), ICON_PX)
+
+        # Map fallback_text to shape name for programmatic drawing.
+        if fallback_text == "+":
+            shape = "plus"
+        elif fallback_text == "-":
+            shape = "minus"
+        else:
+            shape = "chevron"
+
+        # Draw the icon directly with QPainter — always works on all platforms.
+        icon = _draw_simple_icon(shape, px, color, dpr)
+        if not icon.isNull():
+            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setText("")
+            button.setIcon(icon)
+            return
+
+        # Fallback: try SVG-based tinted icon (may not work on all platforms).
         if fallback_text == "+":
             min_bbox_width_ratio = 0.70
             min_bbox_height_ratio = 0.70
