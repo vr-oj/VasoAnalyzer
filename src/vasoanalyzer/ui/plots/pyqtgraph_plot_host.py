@@ -6,6 +6,7 @@ import contextlib
 import logging
 import math
 import os
+import sys
 import traceback
 from collections.abc import Callable, Iterable
 from typing import Any, cast
@@ -1867,10 +1868,15 @@ class PyQtGraphPlotHost(InteractionHost):
                     tickTextWidth=tick_style.text_width,
                     tickTextHeight=tick_style.text_height,
                 )
-            # Force axis height recalculation after font change so tick
-            # labels have the space they need to render (critical on Windows).
-            with contextlib.suppress(Exception):
-                bottom_axis.setHeight(None)
+            # Force axis height so tick labels have space to render.
+            # On Windows, setHeight(None) auto-calc runs before textHeight is
+            # populated (no ticks drawn yet) and returns ~0, clipping labels.
+            if sys.platform.startswith("win"):
+                with contextlib.suppress(Exception):
+                    bottom_axis.setHeight(40)
+            else:
+                with contextlib.suppress(Exception):
+                    bottom_axis.setHeight(None)
             self._recenter_bottom_label(bottom_axis)
 
     def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:

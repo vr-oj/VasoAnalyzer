@@ -315,12 +315,20 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             with contextlib.suppress(AttributeError):
                 axis.enableAutoSIPrefix(False)
             axis.setVisible(True)
-            axis.setStyle(showValues=True)
+            # Restore showValues AND tickLength together: the hide path sets
+            # tickLength=0 via setStyle, and setTickLength() doesn't exist in
+            # PyQtGraph so there's no other way to restore it.
+            axis.setStyle(showValues=True, tickLength=5)
             axis.setLabel(self._time_axis_label())
-            with contextlib.suppress(AttributeError):
-                axis.setTickLength(5, 0)
-            with contextlib.suppress(Exception):
-                axis.setHeight(None)
+            # On Windows, setHeight(None) auto-calculation runs before textHeight
+            # is populated (no ticks drawn yet), returning ~0 and clipping labels.
+            # Use an explicit height that guarantees space for tick text.
+            if sys.platform.startswith("win"):
+                with contextlib.suppress(Exception):
+                    axis.setHeight(40)
+            else:
+                with contextlib.suppress(Exception):
+                    axis.setHeight(None)
             with contextlib.suppress(AttributeError):
                 axis.label.show()
                 axis.showLabel(True)
