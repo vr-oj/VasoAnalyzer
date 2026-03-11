@@ -1399,14 +1399,17 @@ class PyQtGraphPlotHost(InteractionHost):
                 with contextlib.suppress(AttributeError):
                     bottom_axis.setStyle(
                         showValues=True,
-                        tickLength=5,
+                        tickLength=-5,
                         tickTextOffset=tick_style.text_offset,
                         tickTextWidth=tick_style.text_width,
                         tickTextHeight=tick_style.text_height,
-                        autoExpandTextSpace=False,
                         autoReduceTextSpace=False,
                         stopAxisAtTick=(False, False),
                     )
+                # Reset accumulated textHeight so stale values don't inflate
+                # the density check or cause containment failures after a mode change.
+                with contextlib.suppress(AttributeError):
+                    bottom_axis.textHeight = tick_style.text_height
                 # Clear the strip's muted explicit tick list so the shared footer
                 # axis can auto-generate visible ticks/labels.
                 with contextlib.suppress(Exception):
@@ -1414,11 +1417,9 @@ class PyQtGraphPlotHost(InteractionHost):
                 with contextlib.suppress(Exception):
                     bottom_axis.setLabel(self._footer_xlabel_text())
                 with contextlib.suppress(AttributeError):
-                    bottom_axis.label.setFont(label_font)
-                    bottom_axis.label.show()
-                    bottom_axis.showLabel(True)
+                    bottom_axis.showLabel(False)
                 with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX)
+                    bottom_axis.setHeight(None)
                 self._recenter_bottom_label(bottom_axis)
             else:
                 self._hide_axis_visuals(bottom_axis)

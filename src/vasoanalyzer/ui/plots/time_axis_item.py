@@ -23,6 +23,9 @@ class TimeAxisItem(pg.AxisItem):
 
     def set_time_mode(self, mode: TimeMode | str) -> None:
         self._formatter.set_mode(coerce_time_mode(mode))
+        # Reset accumulated textHeight so stale values don't poison
+        # the textFillLimits density check in generateDrawSpecs.
+        self.textHeight = self.style.get("tickTextHeight", 18)
         self.picture = None
         self.update()
 
