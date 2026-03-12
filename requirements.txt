@@ -9,7 +9,12 @@ h5py>=3.14.0
 Pillow>=9.0
 
 # GUI
-PyQt6>=6.4
+# PyQt6 6.10.2 bindings were compiled against Qt 6.10.0; PyQt6-Qt6 6.10.2 bundles Qt 6.10.2.
+# Pinning PyQt6-Qt6 to 6.10.0 aligns the runtime Qt version with what the bindings expect.
+# Do not bump PyQt6-Qt6 past 6.10.0 without verifying QT_VERSION_STR still matches.
+PyQt6==6.10.2
+PyQt6-Qt6==6.10.0
+PyQt6-sip>=13.9
 pyqtgraph>=0.13.0
 
 # Excel export
