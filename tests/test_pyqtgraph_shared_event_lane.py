@@ -227,35 +227,16 @@ def test_hover_clear_propagates_to_top_lane(qt_app) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy footer strip unaffected
+# Event strip hidden in default top-lane mode
 # ---------------------------------------------------------------------------
 
-def test_footer_strip_still_visible_when_shared_time_axis_enabled(qt_app) -> None:
+def test_footer_strip_hidden_in_default_top_lane_mode(qt_app) -> None:
     host = _build_host()
     widget = host.get_widget()
     try:
         widget.resize(800, 400)
         widget.show()
         qt_app.processEvents()
-        host.set_shared_time_axis_footer_enabled(True)
-        host.set_events([10.0], labels=["A"])
-        host.set_event_display_mode(EventDisplayMode.NAMES_ALWAYS)
-        qt_app.processEvents()
-        assert host._event_strip_widget is not None
-        assert host._event_strip_widget.isVisible() is True
-    finally:
-        widget.close()
-        qt_app.processEvents()
-
-
-def test_footer_strip_hidden_in_default_top_lane_mode_with_no_footer(qt_app) -> None:
-    host = _build_host()
-    widget = host.get_widget()
-    try:
-        widget.resize(800, 400)
-        widget.show()
-        qt_app.processEvents()
-        assert not host._shared_time_axis_footer_enabled
         host.set_events([10.0], labels=["A"])
         host.set_event_display_mode(EventDisplayMode.NAMES_ALWAYS)
         qt_app.processEvents()

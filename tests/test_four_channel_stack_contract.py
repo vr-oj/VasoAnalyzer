@@ -10,7 +10,7 @@ from vasoanalyzer.ui.plots.pyqtgraph_plot_host import PyQtGraphPlotHost
 from vasoanalyzer.ui.plots.track_frame import TRACK_DIVIDER_THICKNESS_PX
 
 
-def _build_host_with_four_channels(*, shared_footer_axis: bool = False) -> PyQtGraphPlotHost:
+def _build_host_with_four_channels() -> PyQtGraphPlotHost:
     t = np.linspace(0.0, 30.0, 301)
     df = pd.DataFrame(
         {
@@ -32,7 +32,6 @@ def _build_host_with_four_channels(*, shared_footer_axis: bool = False) -> PyQtG
             ChannelTrackSpec(track_id="set_pressure", component="set_pressure", label="Set P"),
         ]
     )
-    host.set_shared_time_axis_footer_enabled(bool(shared_footer_axis))
     host.set_trace_model(model)
     return host
 
@@ -114,75 +113,6 @@ def test_four_channel_left_axis_spans_viewbox_height(qt_app) -> None:
             view_rect = view_box.sceneBoundingRect()
             assert abs(float(axis_rect.top()) - float(view_rect.top())) <= tolerance_px
             assert abs(float(axis_rect.bottom()) - float(view_rect.bottom())) <= tolerance_px
-    finally:
-        widget.close()
-        qt_app.processEvents()
-
-
-def test_shared_footer_axis_keeps_channel_viewboxes_equal_height(qt_app) -> None:
-    host = _build_host_with_four_channels(shared_footer_axis=True)
-    widget = host.get_widget()
-    try:
-        widget.resize(960, 720)
-        widget.show()
-        qt_app.processEvents()
-
-        ordered_ids = ("inner", "outer", "avg_pressure", "set_pressure")
-        viewbox_heights: list[float] = []
-        for track_id in ordered_ids:
-            track = host.track(track_id)
-            assert track is not None
-            assert track.view.bottom_axis_visible() is False
-            vb = track.view.get_widget().getPlotItem().getViewBox()
-            viewbox_heights.append(float(vb.sceneBoundingRect().height()))
-
-        assert viewbox_heights
-        assert max(viewbox_heights) - min(viewbox_heights) <= 2.0
-
-        assert host._event_strip_widget is not None
-        assert host._event_strip_widget.isVisible() is True
-    finally:
-        widget.close()
-        qt_app.processEvents()
-
-
-def test_shared_footer_axis_uses_auto_ticks(qt_app) -> None:
-    host = _build_host_with_four_channels(shared_footer_axis=True)
-    widget = host.get_widget()
-    try:
-        widget.resize(960, 720)
-        widget.show()
-        qt_app.processEvents()
-
-        assert host._event_strip_track is not None
-        bottom_axis = host._event_strip_track.plot_item.getAxis("bottom")
-        assert bottom_axis is not None
-        assert bool(bottom_axis.style.get("showValues", False)) is True
-        # Auto ticks must be enabled; explicit [] suppresses tick rendering.
-        assert getattr(bottom_axis, "_tickLevels", None) is None
-    finally:
-        widget.close()
-        qt_app.processEvents()
-
-
-def test_shared_footer_axis_viewbox_fills_track_plot_widget_height(qt_app) -> None:
-    host = _build_host_with_four_channels(shared_footer_axis=True)
-    widget = host.get_widget()
-    try:
-        widget.resize(960, 720)
-        widget.show()
-        qt_app.processEvents()
-
-        ordered_ids = ("inner", "outer", "avg_pressure", "set_pressure")
-        tolerance_px = 2
-        for track_id in ordered_ids:
-            track = host.track(track_id)
-            assert track is not None
-            plot_widget = track.view.get_widget()
-            viewbox_rect = track.view._viewbox_rect_in_widget()
-            assert viewbox_rect is not None
-            assert abs(int(viewbox_rect.top()) - 0) <= tolerance_px
-            assert abs(int(viewbox_rect.bottom()) - int(plot_widget.height())) <= tolerance_px
     finally:
         widget.close()
         qt_app.processEvents()

@@ -76,8 +76,6 @@ class PyQtGraphPlotHost(InteractionHost):
 
     _AXIS_WIDTH_PX = 62
     _EVENT_STRIP_HEIGHT_PX = 22
-    _SHARED_TIME_AXIS_FOOTER_HEIGHT_PX = 30
-    _SHARED_TIME_AXIS_FOOTER_ENABLED = False
     _EVENT_LABEL_TRACKS_ENABLED = False
     _LEFT_AXIS_TICK_TEXT_OFFSET_PX = 6
     _LEFT_AXIS_TICK_TEXT_WIDTH_PX = 34
@@ -142,7 +140,6 @@ class PyQtGraphPlotHost(InteractionHost):
         self._channel_event_labels_visible: bool = False
         self._channel_event_label_font_size: float = 9.0
         self._use_top_event_lane: bool = True
-        self._shared_time_axis_footer_enabled: bool = bool(self._SHARED_TIME_AXIS_FOOTER_ENABLED)
         self._event_label_tracks_enabled: bool = bool(self._EVENT_LABEL_TRACKS_ENABLED)
         self._selected_event_index: int | None = None
 
@@ -322,20 +319,6 @@ class PyQtGraphPlotHost(InteractionHost):
 
         # Refresh axis ownership and fonts after visibility change
         self.refresh_axes_and_fonts(reason="channel-visible-changed")
-
-    def set_shared_time_axis_footer_enabled(self, enabled: bool) -> None:
-        """Toggle dedicated footer X-axis row to keep channel viewports equal."""
-        value = bool(enabled)
-        if value == self._shared_time_axis_footer_enabled:
-            return
-        self._shared_time_axis_footer_enabled = value
-        self.refresh_axes_and_fonts(reason="shared-time-axis-footer-toggle")
-        self._apply_event_label_options()
-        self._sync_event_strip_axes()
-
-    def shared_time_axis_footer_enabled(self) -> bool:
-        """Return whether dedicated footer X-axis row is enabled."""
-        return bool(self._shared_time_axis_footer_enabled)
 
     def set_click_handler(self, handler: Callable[[str, float, float, int, Any], None] | None):
         """Assign a global click handler for all tracks."""
@@ -1178,21 +1161,11 @@ class PyQtGraphPlotHost(InteractionHost):
         is_bottom_track: bool,
     ) -> None:
         """Ensure only the bottom track shows X-axis labels/ticks."""
-        if self._shared_time_axis_footer_enabled:
-            with contextlib.suppress(Exception):
-                track.view.set_bottom_axis_visible(False)
-            with contextlib.suppress(Exception):
-                track.view.get_widget().getPlotItem().setLabel("bottom", "")
-            return
         with contextlib.suppress(Exception):
             track.view.set_bottom_axis_visible(bool(is_bottom_track))
         # Keep X-axis title hidden; show only ticks/values.
         with contextlib.suppress(Exception):
             track.view.get_widget().getPlotItem().setLabel("bottom", "")
-
-    def _footer_xlabel_text(self) -> str:
-        # Keep footer X-axis title hidden; show only ticks/values.
-        return ""
 
     def _resolved_bottom_track_id(self) -> str | None:
         """Resolve the active bottom track ID honoring visibility."""
@@ -1408,58 +1381,14 @@ class PyQtGraphPlotHost(InteractionHost):
         bottom_axis = strip_plot_item.getAxis("bottom")
         if bottom_axis is not None:
             strip_plot_item.showAxis("bottom")
-            if self._shared_time_axis_footer_enabled:
-                style = get_pyqtgraph_style()
-                tick_style = tick_style_for_trace_count(max(self._count_visible_tracks(), 1))
-                tick_font = QFont(self._axis_font_family, int(round(self._tick_font_size)))
-                label_font = QFont(self._axis_font_family, int(round(self._axis_font_size)))
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.enableAutoSIPrefix(False)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setPen(pg.mkPen(style.axis_pen_color))
-                with contextlib.suppress(Exception):
-                    bottom_axis.setTextPen(pg.mkPen(style.tick_label_color))
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.setTickFont(tick_font)
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.setTickDensity(tick_style.density)
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.setStyle(
-                        showValues=True,
-                        tickLength=-5,
-                        tickTextOffset=tick_style.text_offset,
-                        tickTextWidth=tick_style.text_width,
-                        tickTextHeight=tick_style.text_height,
-                        autoReduceTextSpace=False,
-                        stopAxisAtTick=(False, False),
-                    )
-                # Reset accumulated textHeight so stale values don't inflate
-                # the density check or cause containment failures after a mode change.
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.textHeight = tick_style.text_height
-                # Clear the strip's muted explicit tick list so the shared footer
-                # axis can auto-generate visible ticks/labels.
-                with contextlib.suppress(Exception):
-                    bottom_axis.setTicks(None)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setLabel(self._footer_xlabel_text())
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.showLabel(False)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(None)
-                self._recenter_bottom_label(bottom_axis)
-            else:
-                self._hide_axis_visuals(bottom_axis)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(0)
+            self._hide_axis_visuals(bottom_axis)
+            with contextlib.suppress(Exception):
+                bottom_axis.setHeight(0)
 
     def _on_event_strip_height_requested(self, height_px: int) -> None:
         if self._event_strip_widget is None:
             return
-        if self._shared_time_axis_footer_enabled and not self._event_label_tracks_enabled:
-            target = max(int(self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX), 14)
-        else:
-            target = max(int(height_px), 14)
+        target = max(int(height_px), 14)
         current = int(self._event_strip_widget.height())
         if abs(target - current) <= 2:
             return
@@ -1572,13 +1501,10 @@ class PyQtGraphPlotHost(InteractionHost):
 
         if self._event_strip_track is not None and self._event_strip_widget is not None:
             show_strip = (
-                bool(self._shared_time_axis_footer_enabled)
-                or (
-                    not self._use_top_event_lane
-                    and bool(self._event_label_tracks_enabled)
-                    and bool(self._event_entries)
-                    and self._event_display_mode != EventDisplayMode.OFF
-                )
+                not self._use_top_event_lane
+                and bool(self._event_label_tracks_enabled)
+                and bool(self._event_entries)
+                and self._event_display_mode != EventDisplayMode.OFF
             )
             self._event_strip_widget.setVisible(show_strip)
             self._event_strip_track.set_visible(show_strip)
@@ -1594,11 +1520,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 self._event_strip_track.set_display_mode(EventDisplayMode.OFF)
                 self._event_strip_track.set_selected_event(None)
                 self._event_strip_track.set_hovered_event(None)
-                self._on_event_strip_height_requested(
-                    self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX
-                    if self._shared_time_axis_footer_enabled
-                    else self._EVENT_STRIP_HEIGHT_PX
-                )
+                self._on_event_strip_height_requested(self._EVENT_STRIP_HEIGHT_PX)
 
     def _on_track_event_hover(self, index: int | None) -> None:
         resolved = None if index is None else int(index)
@@ -1899,11 +1821,7 @@ class PyQtGraphPlotHost(InteractionHost):
         # Use cached bottom track ID (single source of truth)
         bottom_visible_id = self._bottom_visible_track_id or track.id
         is_bottom = track.id == bottom_visible_id
-        # When the shared footer owns the time axis, skip per-track bottom axis
-        # styling entirely — the footer is already configured by _sync_event_strip_axes.
-        # Applying setHeight(None) here would undo the setHeight(0) that
-        # set_bottom_axis_visible(False) set, causing a blank axis gap (duplicate).
-        if is_bottom and not self._shared_time_axis_footer_enabled:
+        if is_bottom:
             bottom_axis = plot_item.getAxis("bottom")
             bottom_axis.label.setFont(xlabel_font)
             with contextlib.suppress(AttributeError):
@@ -2484,13 +2402,6 @@ class PyQtGraphPlotHost(InteractionHost):
         self._shared_xlabel_text = str(text)
         with contextlib.suppress(Exception):
             self._update_bottom_axis_assignments()
-
-        if self._shared_time_axis_footer_enabled:
-            for track in self._tracks.values():
-                with contextlib.suppress(Exception):
-                    track.view.get_widget().getPlotItem().setLabel("bottom", "")
-            self._sync_event_strip_axes()
-            return
 
         bottom_track_id = self._resolved_bottom_track_id()
         if bottom_track_id is None:

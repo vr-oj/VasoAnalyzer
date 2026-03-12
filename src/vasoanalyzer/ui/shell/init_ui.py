@@ -80,9 +80,6 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.fig = window.plot_host.figure if not use_pyqtgraph else None
     window.canvas = window.plot_host.canvas if not use_pyqtgraph else window.plot_host.canvas
     window.trace_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
-    if use_pyqtgraph and hasattr(window.plot_host, "set_shared_time_axis_footer_enabled"):
-        with contextlib.suppress(Exception):
-            window.plot_host.set_shared_time_axis_footer_enabled(True)
     if hasattr(window.plot_host, "set_click_handler"):
         window.plot_host.set_click_handler(window._handle_pyqtgraph_click)
     target_mouse_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
