@@ -548,6 +548,66 @@ class _MissingAssetScanJob(QRunnable):
         self.signals.finished.emit(self._token, payload)
 
 
+class _ProgressAnimator(QObject):
+    """Animates a QProgressBar with an asymptotic crawl toward a cap, then snaps to 100% on finish.
+
+    While a job is running the bar smoothly moves from 0 toward _CAP (never quite reaching it),
+    giving users honest "something is happening" feedback without fake percentages.
+    Calling finish() stops the crawl, jumps to 100%, and auto-hides after a short delay.
+    """
+
+    _CAP = 85          # asymptote: bar naturally approaches but never reaches this %
+    _EASING = 0.07     # fraction of remaining gap closed each tick (higher = faster start)
+    _INTERVAL_MS = 50  # tick rate in ms (50ms ≈ 20 fps, smooth without thrashing)
+
+    def __init__(self, bar: "QProgressBar", parent: "QObject | None" = None) -> None:
+        super().__init__(parent)
+        self._bar = bar
+        self._current = 0.0
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setInterval(self._INTERVAL_MS)
+        self._tick_timer.timeout.connect(self._tick)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._bar.hide)
+
+    def start(self, message: str = "") -> None:
+        """Show the bar and begin crawling toward the cap."""
+        self._hide_timer.stop()
+        self._tick_timer.stop()
+        self._current = 0.0
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._set_format(message)
+        self._bar.show()
+        self._tick_timer.start()
+
+    def update_label(self, label: str) -> None:
+        """Update the text label without touching the animated value."""
+        if self._bar.isVisible():
+            self._set_format(label)
+
+    def finish(self) -> None:
+        """Stop crawling, snap to 100%, then auto-hide after a short pause."""
+        self._tick_timer.stop()
+        self._bar.setValue(100)
+        self._hide_timer.start(400)
+
+    def stop(self) -> None:
+        """Immediately hide without completing the animation (e.g. on error)."""
+        self._tick_timer.stop()
+        self._hide_timer.stop()
+        self._bar.hide()
+
+    def _tick(self) -> None:
+        remaining = self._CAP - self._current
+        self._current += remaining * self._EASING
+        self._bar.setValue(int(self._current))
+
+    def _set_format(self, message: str) -> None:
+        self._bar.setFormat(f"{message} %p%" if message else "%p%")
+
+
 class _SaveJobSignals(QObject):
     progressChanged = pyqtSignal(int, str)
     finished = pyqtSignal(bool, float, str)
@@ -903,6 +963,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._progress_bar.setTextVisible(True)
         self._progress_bar.hide()  # Hidden by default
         self.statusBar().addPermanentWidget(self._progress_bar)
+        self._progress_animator = _ProgressAnimator(self._progress_bar, self)
         self._storage_mode_label = QLabel("")
         self._storage_mode_label.setVisible(False)
         self._storage_mode_label.setContentsMargins(8, 0, 8, 0)
@@ -4592,9 +4653,15 @@ class VasoAnalyzerApp(QMainWindow):
         outer_on: bool,
         *,
         outer_supported: bool | None = None,
+        avg_pressure_supported: bool | None = None,
+        set_pressure_supported: bool | None = None,
     ) -> None:
         if outer_supported is None:
             outer_supported = self._outer_channel_available()
+        if avg_pressure_supported is None:
+            avg_pressure_supported = self._avg_pressure_channel_available()
+        if set_pressure_supported is None:
+            set_pressure_supported = self._set_pressure_channel_available()
         if self.id_toggle_act is not None and self.id_toggle_act.isChecked() != inner_on:
             self.id_toggle_act.blockSignals(True)
             self.id_toggle_act.setChecked(inner_on)
@@ -4606,6 +4673,18 @@ class VasoAnalyzerApp(QMainWindow):
                 self.od_toggle_act.blockSignals(True)
                 self.od_toggle_act.setChecked(desired_checked)
                 self.od_toggle_act.blockSignals(False)
+        if self.avg_pressure_toggle_act is not None:
+            self.avg_pressure_toggle_act.setEnabled(avg_pressure_supported)
+            if not avg_pressure_supported and self.avg_pressure_toggle_act.isChecked():
+                self.avg_pressure_toggle_act.blockSignals(True)
+                self.avg_pressure_toggle_act.setChecked(False)
+                self.avg_pressure_toggle_act.blockSignals(False)
+        if self.set_pressure_toggle_act is not None:
+            self.set_pressure_toggle_act.setEnabled(set_pressure_supported)
+            if not set_pressure_supported and self.set_pressure_toggle_act.isChecked():
+                self.set_pressure_toggle_act.blockSignals(True)
+                self.set_pressure_toggle_act.setChecked(False)
+                self.set_pressure_toggle_act.blockSignals(False)
 
     def _reset_channel_view_defaults(self) -> None:
         self._plot_mgr._reset_channel_view_defaults()
@@ -4859,6 +4938,9 @@ class VasoAnalyzerApp(QMainWindow):
         self.home_action.triggered.connect(self.show_home_dashboard)
         self.home_action.setVisible(False)
         toolbar.addAction(self.home_action)
+        home_btn = toolbar.widgetForAction(self.home_action)
+        if isinstance(home_btn, QToolButton):
+            home_btn.setObjectName("HomeButton")
 
         self.load_trace_action = QAction(
             QIcon(self.icon_path("folder-open.svg")), "Import Trace CSV…", self
@@ -4906,8 +4988,8 @@ class VasoAnalyzerApp(QMainWindow):
 
         import_button = QToolButton(self)
         import_button.setObjectName("ImportDataButton")
-        import_button.setText("Open Data…")
-        import_button.setToolTip("Open Data…")
+        import_button.setText("Open Data")
+        import_button.setToolTip("Open Data")
         import_button.setToolButtonStyle(toolbar.toolButtonStyle())
         import_button.setIconSize(toolbar.iconSize())
         if not self.load_trace_action.icon().isNull():
@@ -4941,6 +5023,9 @@ class VasoAnalyzerApp(QMainWindow):
 
         toolbar.addWidget(import_button)
         toolbar.addAction(self.save_session_action)
+        save_btn = toolbar.widgetForAction(self.save_session_action)
+        if isinstance(save_btn, QToolButton):
+            save_btn.setObjectName("SaveProjectButton")
         toolbar.addSeparator()
         toolbar.addAction(self.review_events_action)
         if edit_points_action is not None:
@@ -4961,6 +5046,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         toolbar.addWidget(self.trace_file_label)
 
+        toolbar.setStyleSheet(self._primary_toolbar_css())
         return toolbar
 
     def _update_toolbar_compact_mode(self, width: int | None = None) -> None:
@@ -4975,14 +5061,8 @@ class VasoAnalyzerApp(QMainWindow):
             if toolbar is None:
                 continue
             toolbar.setToolButtonStyle(style)
-        plot_toolbar = getattr(self, "toolbar", None)
-        if plot_toolbar is not None:
-            view_button = getattr(plot_toolbar, "_view_menu_button", None)
-            if isinstance(view_button, QToolButton):
-                view_button.setToolButtonStyle(style)
-                view_button.setIconSize(plot_toolbar.iconSize())
         self._update_primary_toolbar_button_widths(compact)
-        self._update_plot_toolbar_signal_button_widths(compact)
+        self._normalize_plot_toolbar_group_widths(compact)
         self._normalize_plot_toolbar_button_geometry()
 
     def _primary_toolbar_buttons(self) -> list[QToolButton]:
@@ -5017,6 +5097,9 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _update_plot_toolbar_signal_button_widths(self, compact: bool) -> None:
         self._plot_mgr._update_plot_toolbar_signal_button_widths(compact)
+
+    def _normalize_plot_toolbar_group_widths(self, compact: bool) -> None:
+        self._plot_mgr._normalize_plot_toolbar_group_widths(compact)
 
     def _update_primary_toolbar_button_widths(self, compact: bool) -> None:
         buttons = self._primary_toolbar_buttons()
@@ -5302,6 +5385,69 @@ class VasoAnalyzerApp(QMainWindow):
         button.style().unpolish(button)
         button.style().polish(button)
 
+    def _primary_toolbar_css(self) -> str:
+        bg = CURRENT_THEME.get("toolbar_bg", CURRENT_THEME.get("window_bg", "#FFFFFF"))
+        border_color = CURRENT_THEME.get("panel_border", CURRENT_THEME["grid_color"])
+        separator_color = CURRENT_THEME.get("grid_color", border_color)
+        button_bg = CURRENT_THEME.get("button_bg", bg)
+        hover_bg = CURRENT_THEME.get("button_hover_bg", CURRENT_THEME.get("selection_bg", bg))
+        pressed_bg = CURRENT_THEME.get("button_active_bg", hover_bg)
+        text_color = CURRENT_THEME["text"]
+        disabled_text = CURRENT_THEME.get("text_disabled", text_color)
+        radius = int(CURRENT_THEME.get("panel_radius", 6))
+        chevron_path = self.icon_path("chevron-down.svg").replace("\\", "/")
+        return f"""
+QToolBar#PrimaryToolbar {{
+    background: {bg};
+    border: none;
+    spacing: 2px;
+    padding: 2px 4px;
+}}
+QToolBar#PrimaryToolbar::separator {{
+    background: {border_color};
+    width: 2px;
+    border-radius: 1px;
+    margin: 3px 8px;
+}}
+QToolBar#PrimaryToolbar QToolButton {{
+    background: {button_bg};
+    border: 1px solid {border_color};
+    border-radius: {radius}px;
+    padding: 2px 10px 6px 10px;
+    color: {text_color};
+    min-width: 52px;
+}}
+QToolBar#PrimaryToolbar QToolButton:hover {{
+    background: {hover_bg};
+}}
+QToolBar#PrimaryToolbar QToolButton:pressed {{
+    background: {pressed_bg};
+}}
+QToolBar#PrimaryToolbar QToolButton:disabled {{
+    background: {bg};
+    border-color: {separator_color};
+    color: {disabled_text};
+}}
+QToolBar#PrimaryToolbar QToolButton#HomeButton,
+QToolBar#PrimaryToolbar QToolButton#ImportDataButton,
+QToolBar#PrimaryToolbar QToolButton#SaveProjectButton {{
+    font-weight: 600;
+}}
+QToolBar#PrimaryToolbar QToolButton::menu-indicator {{
+    width: 0;
+    height: 0;
+    image: none;
+}}
+QToolBar#PrimaryToolbar QToolButton#ImportDataButton::menu-indicator {{
+    image: url("{chevron_path}");
+    subcontrol-position: bottom center;
+    subcontrol-origin: padding;
+    bottom: 1px;
+    width: 10px;
+    height: 6px;
+}}
+"""
+
     def _shared_button_css(self) -> str:
         border = CURRENT_THEME["grid_color"]
         text = CURRENT_THEME["text"]
@@ -5487,28 +5633,17 @@ QPushButton[isGhost="true"]:pressed {{
 
     # ------------------------------------------------------------------ progress bar helpers
     def show_progress(self, message: str = "", maximum: int = 100) -> None:
-        """Show progress bar in status bar with optional message."""
-        self._progress_bar.setMaximum(maximum)
-        self._progress_bar.setValue(0)
-        (
-            self._progress_bar.setFormat(f"{message} %p%")
-            if message
-            else self._progress_bar.setFormat("%p%")
-        )
-        self._progress_bar.show()
+        """Show an animated progress bar. The bar crawls smoothly toward ~85% while work runs."""
+        self._progress_animator.start(message)
         if message:
             self.statusBar().showMessage(message)
 
     def update_progress(self, value: int) -> None:
-        """Update progress bar value."""
-        if self._progress_bar.isVisible():
-            self._progress_bar.setValue(value)
-            # Progress bar updates automatically - no need to force event processing
+        """No-op: the animator owns the visual value. Use show_progress/hide_progress."""
 
     def hide_progress(self) -> None:
-        """Hide progress bar."""
-        self._progress_bar.hide()
-        self._progress_bar.setValue(0)
+        """Snap bar to 100% and auto-hide after a short pause."""
+        self._progress_animator.finish()
 
     def _start_sample_load_progress(self, sample_name: str) -> None:
         self._sample_mgr._start_sample_load_progress(sample_name)

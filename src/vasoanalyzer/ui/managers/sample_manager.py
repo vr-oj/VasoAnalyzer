@@ -1577,32 +1577,27 @@ class SampleManager(QObject):
         return (id_val, od_val, avg_val, set_val)
 
     def _start_sample_load_progress(self, sample_name: str) -> None:
-        """Begin status-bar progress indication for sample load."""
+        """Begin animated progress bar for sample load."""
         h = self._host
         if h._progress_bar is None:
             return
-        h._progress_bar.setRange(0, 0)
-        h._progress_bar.setVisible(True)
-        h._progress_bar.setFormat(f"Loading {sample_name}…")
+        h.show_progress(f"Loading {sample_name}…")
         if h.statusBar() is not None:
             h.statusBar().showMessage(f"Loading {sample_name}…")
 
     def _update_sample_load_progress(self, percent: int, label: str) -> None:
-        """Update status-bar sample load progress."""
+        """Update the progress label during sample load (animator owns the value)."""
         h = self._host
         if h._progress_bar is None:
             return
-        if h._progress_bar.minimum() == 0 and h._progress_bar.maximum() == 0:
-            h._progress_bar.setRange(0, 100)
-        h._progress_bar.setValue(max(0, min(percent, 100)))
-        h._progress_bar.setFormat(f"{label}… %p%")
+        h._progress_animator.update_label(f"{label}…")
 
     def _finish_sample_load_progress(self) -> None:
-        """Hide status-bar sample load progress."""
+        """Complete the animated progress bar after sample load."""
         h = self._host
         if h._progress_bar is None:
             return
-        h._progress_bar.setVisible(False)
+        h.hide_progress()
         if h.statusBar() is not None:
             h.statusBar().clearMessage()
 
@@ -2150,27 +2145,40 @@ class SampleManager(QObject):
                     (h.od_toggle_act.isChecked() if h.od_toggle_act is not None else False),
                 )
                 outer_supported = h._outer_channel_available()
-                h._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)
+                avg_supported = h._avg_pressure_channel_available()
+                set_supported = h._set_pressure_channel_available()
+                h._apply_toggle_state(
+                    inner_on,
+                    outer_on,
+                    outer_supported=outer_supported,
+                    avg_pressure_supported=avg_supported,
+                    set_pressure_supported=set_supported,
+                )
                 h._rebuild_channel_layout(inner_on, outer_on, redraw=False)
             # Apply avg/set visibility after layout so ancillary tracks stay in sync
+            # Clamp to availability so stale saved state can't re-enable missing channels
+            avg_supported = h._avg_pressure_channel_available()
+            set_supported = h._set_pressure_channel_available()
             if (
                 "avg_pressure_visible" in state
                 and hasattr(h, "avg_pressure_toggle_act")
                 and h.avg_pressure_toggle_act is not None
             ):
+                effective_avg = state["avg_pressure_visible"] and avg_supported
                 h.avg_pressure_toggle_act.blockSignals(True)
-                h.avg_pressure_toggle_act.setChecked(state["avg_pressure_visible"])
+                h.avg_pressure_toggle_act.setChecked(effective_avg)
                 h.avg_pressure_toggle_act.blockSignals(False)
-                h._apply_channel_toggle("avg_pressure", state["avg_pressure_visible"])
+                h._apply_channel_toggle("avg_pressure", effective_avg)
             if (
                 "set_pressure_visible" in state
                 and hasattr(h, "set_pressure_toggle_act")
                 and h.set_pressure_toggle_act is not None
             ):
+                effective_set = state["set_pressure_visible"] and set_supported
                 h.set_pressure_toggle_act.blockSignals(True)
-                h.set_pressure_toggle_act.setChecked(state["set_pressure_visible"])
+                h.set_pressure_toggle_act.setChecked(effective_set)
                 h.set_pressure_toggle_act.blockSignals(False)
-                h._apply_channel_toggle("set_pressure", state["set_pressure_visible"])
+                h._apply_channel_toggle("set_pressure", effective_set)
 
             legend_settings = state.get("legend_settings")
             if isinstance(legend_settings, dict):

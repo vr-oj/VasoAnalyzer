@@ -538,13 +538,9 @@ class ProjectManager(QObject):
     # ------------------------------------------------------------------
 
     def _on_save_progress_changed(self, percent: int, message: str) -> None:
-        """Update main progress bar from save worker signals."""
+        """Update the progress label from save worker step signals."""
         host = self._host
-
-        if not host._progress_bar.isVisible():
-            host.show_progress("", maximum=100)
-        host._progress_bar.setValue(percent)
-        host._progress_bar.setFormat(f"{message}... %p%")
+        host._progress_animator.update_label(message)
         host.statusBar().showMessage(message)
 
     def _on_save_error(self, details: str) -> None:

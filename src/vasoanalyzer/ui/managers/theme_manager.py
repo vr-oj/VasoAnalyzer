@@ -376,9 +376,11 @@ class ThemeManager(QObject):
         except Exception:
             log.debug("Failed to assign icon to import button", exc_info=True)
 
-        if hasattr(h, "_shared_button_css"):
+        if hasattr(h, "_primary_toolbar_css"):
+            toolbar.setStyleSheet(h._primary_toolbar_css())
+        elif hasattr(h, "_shared_button_css"):
             toolbar.setStyleSheet(h._shared_button_css())
-            for action in toolbar.actions():
-                widget = toolbar.widgetForAction(action)
-                if isinstance(widget, QPushButton):
-                    h._apply_button_style(widget)
+        for action in toolbar.actions():
+            widget = toolbar.widgetForAction(action)
+            if isinstance(widget, QPushButton) and hasattr(h, "_apply_button_style"):
+                h._apply_button_style(widget)

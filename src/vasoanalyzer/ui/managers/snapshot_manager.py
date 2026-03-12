@@ -1648,6 +1648,7 @@ class SnapshotManager(QObject):
         )
         job.signals.progressChanged.connect(h._update_sample_load_progress)
         job.signals.finished.connect(self._on_snapshot_load_finished)
+        h.show_progress("Loading snapshots\u2026")
         h.statusBar().showMessage("Loading snapshots\u2026", 0)
         h._thread_pool.start(job)
         return None
@@ -1665,6 +1666,7 @@ class SnapshotManager(QObject):
 
         h._snapshot_load_token = None
         h._snapshot_loading_sample = None
+        h.hide_progress()
         if stack is not None:
             sample.snapshots = stack
             h.statusBar().showMessage("Snapshots ready", 2000)
