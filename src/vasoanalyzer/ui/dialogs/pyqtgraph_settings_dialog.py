@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -90,6 +91,7 @@ class PyQtGraphSettingsDialog(QDialog):
         # Create group boxes
         content_layout.addWidget(self._create_tracks_group())
         content_layout.addWidget(self._create_line_width_group())
+        content_layout.addWidget(self._create_time_axis_group())
         content_layout.addWidget(self._create_grid_group())
         content_layout.addWidget(self._create_tooltips_group())
         content_layout.addWidget(self._create_event_labels_group())
@@ -154,6 +156,36 @@ class PyQtGraphSettingsDialog(QDialog):
             getattr(self.plot_host, "_default_line_width", 1.6)
         )
         form.addRow("Line Width:", self.line_width_spin)
+
+        return group
+
+    # (label, seconds) — None seconds means "Auto"
+    _TICK_SPACING_OPTIONS: list[tuple[str, float | None]] = [
+        ("Auto", None),
+        ("Every 10 s", 10.0),
+        ("Every 20 s", 20.0),
+        ("Every 30 s", 30.0),
+        ("Every 1 min", 60.0),
+        ("Every 2 min", 120.0),
+        ("Every 5 min", 300.0),
+        ("Every 10 min", 600.0),
+        ("Every 15 min", 900.0),
+        ("Every 30 min", 1800.0),
+    ]
+
+    def _create_time_axis_group(self) -> QGroupBox:
+        """Create time-axis tick-spacing control."""
+        group = QGroupBox("Time Axis")
+        form = QFormLayout(group)
+
+        self.tick_spacing_combo = QComboBox()
+        for label, _ in self._TICK_SPACING_OPTIONS:
+            self.tick_spacing_combo.addItem(label)
+        self.tick_spacing_combo.setToolTip(
+            "Set how often major tick marks appear on the time axis. "
+            "'Auto' lets PyQtGraph choose based on the visible range."
+        )
+        form.addRow("Tick interval:", self.tick_spacing_combo)
 
         return group
 
@@ -280,6 +312,15 @@ class PyQtGraphSettingsDialog(QDialog):
             event_enabled = self.plot_host.event_labels_visible()
             self.event_text_labels_cb.setChecked(bool(event_enabled))
 
+            # Tick spacing
+            current_spacing = self.plot_host.bottom_tick_spacing_s()
+            best_idx = 0
+            for i, (_, seconds) in enumerate(self._TICK_SPACING_OPTIONS):
+                if seconds == current_spacing:
+                    best_idx = i
+                    break
+            self.tick_spacing_combo.setCurrentIndex(best_idx)
+
         except Exception as e:
             log.warning(f"Could not load current settings: {e}")
 
@@ -320,6 +361,9 @@ class PyQtGraphSettingsDialog(QDialog):
 
             # Apply trace-embedded event text labels
             self._apply_event_label_settings()
+
+            # Apply time-axis tick spacing
+            self._apply_tick_spacing()
 
             # Notify parent window
             if hasattr(self.parent_window, "on_plot_settings_changed"):
@@ -373,3 +417,12 @@ class PyQtGraphSettingsDialog(QDialog):
 
         except Exception as e:
             log.error(f"Failed to apply event label settings: {e}", exc_info=True)
+
+    def _apply_tick_spacing(self):
+        """Apply time-axis tick spacing."""
+        try:
+            idx = self.tick_spacing_combo.currentIndex()
+            _, spacing_s = self._TICK_SPACING_OPTIONS[idx]
+            self.plot_host.set_bottom_tick_spacing(spacing_s)
+        except Exception as e:
+            log.error(f"Failed to apply tick spacing: {e}", exc_info=True)

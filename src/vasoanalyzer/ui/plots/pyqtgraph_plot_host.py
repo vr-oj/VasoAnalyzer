@@ -168,6 +168,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_font_size = float(style.font_size)
         self._tick_font_size = float(style.tick_font_size)
         self._time_mode = TimeMode.AUTO
+        self._bottom_tick_spacing_s: float | None = None
         self._default_line_width: float = 1.6
         self._xrange_debug_connected = False
         self._xrange_debug_view_box = None
@@ -1623,6 +1624,25 @@ class PyQtGraphPlotHost(InteractionHost):
     def time_mode(self) -> str:
         return str(self._time_mode.value)
 
+    def set_bottom_tick_spacing(self, spacing_s: float | None) -> None:
+        """Set fixed major tick spacing on the bottom time axis (seconds). None = auto."""
+        self._bottom_tick_spacing_s = spacing_s if (spacing_s and spacing_s > 0) else None
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view._time_axis.set_tick_spacing(self._bottom_tick_spacing_s)
+        for widget in (self._event_strip_widget, self._event_top_lane_widget):
+            if widget is None:
+                continue
+            with contextlib.suppress(Exception):
+                axis = widget.getPlotItem().getAxis("bottom")
+                set_tick_spacing = getattr(axis, "set_tick_spacing", None)
+                if callable(set_tick_spacing):
+                    set_tick_spacing(self._bottom_tick_spacing_s)
+
+    def bottom_tick_spacing_s(self) -> float | None:
+        """Return the current fixed tick spacing in seconds, or None for auto."""
+        return self._bottom_tick_spacing_s
+
     def set_grid_visible(self, enabled: bool, *, alpha: float | None = None) -> None:
         """Show/hide the shared grid across all tracks."""
         self._apply_grid_to_all_tracks(x_enabled=enabled, y_enabled=enabled, alpha=alpha)
@@ -1833,12 +1853,17 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(AttributeError):
                 bottom_axis.setStyle(
                     showValues=True,
+                    tickLength=5,
                     tickTextOffset=tick_style.text_offset,
                     tickTextWidth=tick_style.text_width,
                     tickTextHeight=tick_style.text_height,
                     autoReduceTextSpace=False,
                     stopAxisAtTick=(False, False),
                 )
+            with contextlib.suppress(Exception):
+                set_tick_spacing = getattr(bottom_axis, "set_tick_spacing", None)
+                if callable(set_tick_spacing):
+                    set_tick_spacing(self._bottom_tick_spacing_s)
             with contextlib.suppress(Exception):
                 bottom_axis.setHeight(None)
             with contextlib.suppress(Exception):
