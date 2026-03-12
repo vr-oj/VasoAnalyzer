@@ -369,6 +369,10 @@ class PyQtGraphChannelTrack:
         """Return whether the bottom divider line is visible."""
         return self._frame.divider_visible()
 
+    def set_divider_left_offset(self, px: int) -> None:
+        """Inset the divider bar by px from the left (gutter + axis width)."""
+        self._frame.set_divider_left_offset(int(px))
+
     def set_click_handler(self, handler) -> None:
         """Assign click handler callback for this track's view."""
         self.view.set_click_handler(handler)

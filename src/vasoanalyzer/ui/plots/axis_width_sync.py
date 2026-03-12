@@ -217,12 +217,9 @@ class AxisWidthSync(QObject):
         else:
             measured = 0.0
         measured = max(measured, style_text_width)
-        if measured <= 0.0:
-            with contextlib.suppress(Exception):
-                measured = max(measured, float(axis.width()))
-            with contextlib.suppress(Exception):
-                measured = max(measured, float(axis.size().width()))
-            with contextlib.suppress(Exception):
-                measured = max(measured, float(axis.boundingRect().width()))
         measured += tick_text_offset + self._axis_padding_px
+        with contextlib.suppress(Exception):
+            actual = float(axis.width())
+            if actual > 0:
+                measured = max(measured, actual)
         return max(int(math.ceil(measured)), 0)

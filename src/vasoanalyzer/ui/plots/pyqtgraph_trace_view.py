@@ -343,20 +343,23 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             with contextlib.suppress(AttributeError):
                 axis.label.show()
                 axis.showLabel(True)
-            return
-
-        with contextlib.suppress(Exception):
-            self._plot_item.hideAxis("bottom")
-        axis.setVisible(False)
-        with contextlib.suppress(Exception):
-            axis.setStyle(showValues=False, tickLength=0)
-        with contextlib.suppress(Exception):
-            axis.setLabel("")
-        with contextlib.suppress(Exception):
-            axis.setHeight(0)
-        with contextlib.suppress(AttributeError):
-            axis.label.hide()
-            axis.showLabel(False)
+        else:
+            with contextlib.suppress(Exception):
+                self._plot_item.hideAxis("bottom")
+            axis.setVisible(False)
+            with contextlib.suppress(Exception):
+                axis.setStyle(showValues=False, tickLength=0)
+            with contextlib.suppress(Exception):
+                axis.setLabel("")
+            with contextlib.suppress(Exception):
+                axis.setHeight(0)
+            with contextlib.suppress(AttributeError):
+                axis.label.hide()
+                axis.showLabel(False)
+        # Re-apply layout margins: PyQtGraph's showAxis/hideAxis calls
+        # layout.invalidate() which can reset the PlotItem's QGraphicsGridLayout
+        # margins to non-zero defaults, shifting the ViewBox horizontally.
+        self._apply_plot_item_layout()
 
     def bottom_axis_visible(self) -> bool:
         """Return whether the bottom axis is currently visible."""

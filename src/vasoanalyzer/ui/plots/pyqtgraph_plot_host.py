@@ -876,6 +876,7 @@ class PyQtGraphPlotHost(InteractionHost):
             show_divider = bool(track.is_visible() and spec.track_id != bottom_visible_id)
             with contextlib.suppress(Exception):
                 track.set_divider_visible(show_divider)
+        self._update_divider_left_offsets()
 
     def _wire_crosshair_sync(self) -> None:
         """Register crosshair sync callbacks so a hover in one track drives V-lines in all others."""
@@ -1268,6 +1269,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
+        self._update_divider_left_offsets()
         for track in self._tracks.values():
             track.view.refresh_event_markers()
 
@@ -1921,6 +1923,18 @@ class PyQtGraphPlotHost(InteractionHost):
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
 
+    def _update_divider_left_offsets(self) -> None:
+        """Inset each track's divider bar to start at the plot ViewBox left edge.
+
+        The divider only covers the plot area (right of gutter + left axis),
+        so the y-axis areas of adjacent channels flow visually as one column.
+        """
+        axis_width = self._axis_width_sync.axis_width_px()
+        for track in self._tracks.values():
+            gutter_px = track.gutter_width_px()
+            with contextlib.suppress(Exception):
+                track.set_divider_left_offset(gutter_px + axis_width)
+
     def _on_axis_width_changed(self, _width_px: int) -> None:
         """Called whenever AxisWidthSync applies a new axis width (including deferred shrink).
 
@@ -1929,6 +1943,7 @@ class PyQtGraphPlotHost(InteractionHost):
         """
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
+        self._update_divider_left_offsets()
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
