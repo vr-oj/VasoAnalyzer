@@ -221,6 +221,7 @@ class SampleN:
     ui_state: dict | None = None
     snapshots: np.ndarray | None = None
     notes: str | None = None
+    subfolder: str | None = None  # UI grouping within an experiment
     analysis_results: dict[str, Any] | None = None
     attachments: list[Attachment] = field(default_factory=list)
     dataset_id: int | None = None
@@ -286,6 +287,7 @@ class SampleN:
             ui_state=copy.deepcopy(self.ui_state) if self.ui_state is not None else None,
             snapshots=self.snapshots.copy() if isinstance(self.snapshots, np.ndarray) else None,
             notes=self.notes,
+            subfolder=self.subfolder,
             analysis_results=copy.deepcopy(self.analysis_results)
             if isinstance(self.analysis_results, dict)
             else self.analysis_results,
@@ -908,6 +910,7 @@ def sample_from_dict(data: dict) -> SampleN:
         ui_state=data.get("ui_state"),
         snapshots=None,
         notes=data.get("notes"),
+        subfolder=data.get("subfolder"),
         analysis_results=analysis_results,
         attachments=attachments,
         edit_history=edit_history,

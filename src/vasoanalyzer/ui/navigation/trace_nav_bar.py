@@ -89,8 +89,8 @@ class TraceNavBar(QFrame):
 
     def _build_ui(self) -> None:
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(3)
 
         self.btn_step_left = self._make_button("<", "Step left by one window")
         self.btn_step_right = self._make_button(">", "Step right by one window")
@@ -108,7 +108,7 @@ class TraceNavBar(QFrame):
             self.preset_combo.addItem(label, seconds)
         self.preset_combo.setCurrentText("10s")
         self.preset_combo.setToolTip("Time compression presets")
-        self.preset_combo.setMinimumWidth(74)
+        self.preset_combo.setMinimumWidth(60)
 
         self.time_mode_combo = QComboBox(self)
         self.time_mode_combo.setObjectName("TraceNavTimeModeCombo")
@@ -116,7 +116,7 @@ class TraceNavBar(QFrame):
         self.time_mode_combo.addItem("Seconds", TimeMode.SECONDS.value)
         self.time_mode_combo.addItem("MM:SS", TimeMode.MMSS.value)
         self.time_mode_combo.addItem("HH:MM:SS", TimeMode.HHMMSS.value)
-        self.time_mode_combo.setMinimumWidth(94)
+        self.time_mode_combo.setMinimumWidth(78)
 
         self.scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
         self.scrollbar.setObjectName("TraceNavTimeScrollbar")
@@ -127,13 +127,12 @@ class TraceNavBar(QFrame):
         self.scrollbar.setTracking(True)
         self.scrollbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        self.duration_label = QLabel("Dur --", self)
+        self.duration_label = QLabel("", self)
         self.duration_label.setObjectName("TraceNavDurationLabel")
-        self.duration_label.setMinimumWidth(92)
-        self.duration_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        self.view_label = QLabel("View --", self)
+        self.duration_label.hide()
+        self.view_label = QLabel("–", self)
         self.view_label.setObjectName("TraceNavViewLabel")
-        self.view_label.setMinimumWidth(260)
+        self.view_label.setMinimumWidth(160)
         self.view_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.view_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
@@ -159,7 +158,6 @@ class TraceNavBar(QFrame):
         layout.addWidget(self.time_mode_combo)
         layout.addWidget(self.btn_all)
         layout.addWidget(self.scrollbar, 1)
-        layout.addWidget(self.duration_label)
         layout.addWidget(self.view_label)
         layout.addWidget(self.btn_autoscale_all)
 
@@ -187,7 +185,7 @@ class TraceNavBar(QFrame):
         return max(int(round(float(base_px) * factor)), 1)
 
     def _apply_logical_control_sizes(self) -> None:
-        button_h = self._logical_size(24)
+        button_h = self._logical_size(20)
         for button in (
             self.btn_step_left,
             self.btn_step_right,
@@ -197,10 +195,10 @@ class TraceNavBar(QFrame):
             self.btn_autoscale_all,
         ):
             button.setMinimumHeight(button_h)
-            button.setMinimumWidth(self._logical_size(24))
+            button.setMinimumWidth(self._logical_size(20))
         self.preset_combo.setMinimumHeight(button_h)
         self.time_mode_combo.setMinimumHeight(button_h)
-        self.scrollbar.setFixedHeight(max(self._logical_size(14), 12))
+        self.scrollbar.setFixedHeight(max(self._logical_size(10), 8))
 
     def _make_button(self, text: str, tooltip: str) -> QPushButton:
         button = QPushButton(text, self)
@@ -279,8 +277,9 @@ QPushButton#TraceNavButton {{
     color: {text};
     border: 1px solid {border};
     border-radius: {radius}px;
-    padding: 1px 7px;
+    padding: 1px 5px;
     font-weight: 500;
+    font-size: 9pt;
 }}
 QPushButton#TraceNavButton:hover {{
     background: {button_hover};
@@ -297,7 +296,8 @@ QComboBox#TraceNavTimeModeCombo {{
     color: {text};
     border: 1px solid {border};
     border-radius: {radius}px;
-    padding: 1px 6px;
+    padding: 1px 4px;
+    font-size: 9pt;
 }}
 QComboBox#TraceNavPresetCombo:hover,
 QComboBox#TraceNavTimeModeCombo:hover {{
@@ -310,16 +310,16 @@ QComboBox#TraceNavTimeModeCombo QAbstractItemView {{
     selection-background-color: {selection};
 }}
 QScrollBar#TraceNavTimeScrollbar:horizontal {{
-    height: 14px;
+    height: 10px;
     border: 1px solid {border};
-    border-radius: 6px;
+    border-radius: 4px;
     background: {button_bg};
 }}
 QScrollBar#TraceNavTimeScrollbar::handle:horizontal {{
     background: {selection};
     border: 1px solid {border};
-    border-radius: 5px;
-    min-width: 26px;
+    border-radius: 3px;
+    min-width: 20px;
 }}
 QScrollBar#TraceNavTimeScrollbar::add-line:horizontal,
 QScrollBar#TraceNavTimeScrollbar::sub-line:horizontal {{
@@ -331,8 +331,8 @@ QScrollBar#TraceNavTimeScrollbar::sub-page:horizontal {{
 }}
 QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
     color: {text};
-    font-size: 9.5pt;
-    font-weight: 500;
+    font-size: 9pt;
+    font-weight: 400;
 }}
 """
         )
@@ -363,9 +363,9 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         units_per_second = self._units_per_second(total_span)
         self._current_units_per_second = units_per_second
 
-        self.duration_label.setText(f"Dur {self._format_seconds(duration)}")
         self.view_label.setText(
-            f"View {self._format_seconds(t0)} - {self._format_seconds(t1)} / {self._format_seconds(total_span)}"
+            f"{self._format_seconds(t0)} – {self._format_seconds(t1)}"
+            f"  ({self._format_seconds(duration)} / {self._format_seconds(total_span)})"
         )
         self.btn_all.setToolTip(f"All ({self._format_seconds(total_span)})")
 
@@ -410,8 +410,7 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
                 widget.setEnabled(enabled)
 
     def _set_disabled_state(self) -> None:
-        self.duration_label.setText("Dur --")
-        self.view_label.setText("View --")
+        self.view_label.setText("–")
         self.btn_all.setToolTip("Show full recording")
         self._scrollbar_dragging = False
         self._updating_slider = True
@@ -476,7 +475,7 @@ QLabel#TraceNavDurationLabel, QLabel#TraceNavViewLabel {{
         if callable(getter):
             with contextlib.suppress(Exception):
                 track_count = int(getter())
-        self.btn_autoscale_all.setText("Auto Y (All)")
+        self.btn_autoscale_all.setText("Auto Y")
         if track_count is None:
             self.btn_autoscale_all.setToolTip("Autoscale all visible channels once")
         else:

@@ -500,6 +500,25 @@ class SampleManager(QObject):
                 return value
         return None
 
+    @staticmethod
+    def _iter_sample_items(exp_item):
+        """Yield all sample QTreeWidgetItems under an experiment item, including inside subfolders."""
+        for k in range(exp_item.childCount()):
+            child = exp_item.child(k)
+            if child is None:
+                continue
+            obj = child.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(obj, SampleN):
+                yield child
+            else:
+                # Subfolder item — search its children
+                for m in range(child.childCount()):
+                    sample_child = child.child(m)
+                    if sample_child is not None and isinstance(
+                        sample_child.data(0, Qt.ItemDataRole.UserRole), SampleN
+                    ):
+                        yield sample_child
+
     def _update_tree_icons_for_samples(self, samples: Sequence[SampleN]) -> None:
         h = self._host
         if not h.project_tree:
@@ -514,10 +533,7 @@ class SampleManager(QObject):
                     exp_item = project_item.child(j)
                     if exp_item is None:
                         continue
-                    for k in range(exp_item.childCount()):
-                        sample_item = exp_item.child(k)
-                        if sample_item is None:
-                            continue
+                    for sample_item in self._iter_sample_items(exp_item):
                         if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
                             quality = h._get_sample_data_quality(sample)
                             sample_item.setIcon(0, h._data_quality_icon(quality))
@@ -578,12 +594,8 @@ class SampleManager(QObject):
                 exp_item = project_item.child(j)
                 if exp_item is None:
                     continue
-                for k in range(exp_item.childCount()):
-                    sample_item = exp_item.child(k)
-                    if sample_item is None:
-                        continue
-                    item_sample = sample_item.data(0, Qt.ItemDataRole.UserRole)
-                    if item_sample is sample:
+                for sample_item in self._iter_sample_items(exp_item):
+                    if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
                         tree.blockSignals(True)
                         tree.setCurrentItem(sample_item)
                         tree.blockSignals(False)

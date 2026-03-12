@@ -16,8 +16,8 @@ from utils import resource_path
 
 log = logging.getLogger(__name__)
 
-BUTTON_PX = 18
-ICON_PX = 14
+BUTTON_PX = 11
+ICON_PX = 7
 OUTER_GUTTER_PX = BUTTON_PX + 2
 
 _BTN_SIZE = QSize(BUTTON_PX, BUTTON_PX)
@@ -357,6 +357,10 @@ def required_outer_gutter_px() -> int:
     return int(_logical_size(BUTTON_PX, dpr) + padding_px)
 
 
+_REST_ALPHA = 80      # ~31% opacity at rest
+_HOVER_ALPHA = 217    # ~85% opacity on hover
+
+
 class _ShapeButton(QToolButton):
     """QToolButton that paints a geometric shape directly in its paintEvent.
 
@@ -367,21 +371,36 @@ class _ShapeButton(QToolButton):
     def __init__(self, shape: str = "", *, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._shape: str = shape
-        self._shape_color: QColor = QColor(0, 0, 0, 217)
+        self._shape_color: QColor = QColor(0, 0, 0, _HOVER_ALPHA)
+        self._hovered: bool = False
+        self.setMouseTracking(False)
 
     def set_shape_color(self, color: QColor) -> None:
-        self._shape_color = QColor(color) if color.isValid() else QColor(0, 0, 0, 217)
+        self._shape_color = QColor(color) if color.isValid() else QColor(0, 0, 0, _HOVER_ALPHA)
         self.update()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         super().paintEvent(event)
         if not self._shape:
             return
 
+        color = QColor(self._shape_color)
+        color.setAlpha(_HOVER_ALPHA if self._hovered else _REST_ALPHA)
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._shape_color)
+        painter.setBrush(color)
 
         w = self.width()
         h = self.height()
@@ -479,7 +498,7 @@ class YAxisControls(QWidget):
         self.scale_buttons_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         scale_layout = QVBoxLayout(self.scale_buttons_widget)
         scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.setSpacing(2)
+        scale_layout.setSpacing(1)
 
         self.zoom_in_btn = _ShapeButton("plus", parent=self.scale_buttons_widget)
         self.zoom_in_btn.setObjectName("YAxisZoomInButton")
@@ -540,15 +559,14 @@ class YAxisControls(QWidget):
                 padding: 0px;
                 margin: 0px;
                 background: transparent;
+                border: none;
             }
             QToolButton#YAxisScaleMenuButton,
             QToolButton#YAxisZoomInButton,
             QToolButton#YAxisZoomOutButton {
-                border: 1px solid palette(mid);
-                background: palette(base);
-                border-radius: 2px;
-                font-weight: 600;
-                font-size: 11px;
+                border: 1px solid transparent;
+                background: transparent;
+                border-radius: 3px;
             }
             QToolButton#YAxisScaleMenuButton[continuousEnabled="true"] {
                 border: 1px solid palette(highlight);
@@ -565,11 +583,13 @@ class YAxisControls(QWidget):
             QToolButton#YAxisScaleMenuButton:hover,
             QToolButton#YAxisZoomInButton:hover,
             QToolButton#YAxisZoomOutButton:hover {
+                border: 1px solid palette(mid);
                 background: palette(button);
             }
             QToolButton#YAxisScaleMenuButton:pressed,
             QToolButton#YAxisZoomInButton:pressed,
             QToolButton#YAxisZoomOutButton:pressed {
+                border: 1px solid palette(mid);
                 background: palette(midlight);
             }
             """

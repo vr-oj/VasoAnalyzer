@@ -1949,16 +1949,10 @@ class PyQtGraphPlotHost(InteractionHost):
         self._sync_event_top_lane_axes()
 
     def _update_divider_left_offsets(self) -> None:
-        """Inset each track's divider bar to start at the plot ViewBox left edge.
-
-        The divider only covers the plot area (right of gutter + left axis),
-        so the y-axis areas of adjacent channels flow visually as one column.
-        """
-        axis_width = self._axis_width_sync.axis_width_px()
+        """Extend each track's divider bar across the full row width (gutter + axis + plot)."""
         for track in self._tracks.values():
-            gutter_px = track.gutter_width_px()
             with contextlib.suppress(Exception):
-                track.set_divider_left_offset(gutter_px + axis_width)
+                track.set_divider_left_offset(0)
 
     def _on_axis_width_changed(self, _width_px: int) -> None:
         """Called whenever AxisWidthSync applies a new axis width (including deferred shrink).

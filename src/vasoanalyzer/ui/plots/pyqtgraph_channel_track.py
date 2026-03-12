@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QInputDialog, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
@@ -146,7 +146,17 @@ class PyQtGraphChannelTrack:
             width_px=self._gutter_width_px,
             parent=self._container,
         )
+        self._gutter_separator = QFrame(self._container)
+        self._gutter_separator.setObjectName("GutterSeparator")
+        self._gutter_separator.setFrameShape(QFrame.Shape.VLine)
+        self._gutter_separator.setFrameShadow(QFrame.Shadow.Plain)
+        self._gutter_separator.setFixedWidth(1)
+        self._gutter_separator.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self._gutter_separator.setStyleSheet(
+            "QFrame#GutterSeparator { color: palette(mid); }"
+        )
         self._container_layout.addWidget(self._gutter_widget, 0)
+        self._container_layout.addWidget(self._gutter_separator, 0)
         self._container_layout.addWidget(self.view.get_widget(), 1)
         self._frame = TrackFrame(self._container)
 

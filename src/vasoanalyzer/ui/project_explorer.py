@@ -3,6 +3,10 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
+import sys
+from dataclasses import dataclass
+from typing import Any
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDrag
 from PyQt6.QtWidgets import (
@@ -18,6 +22,17 @@ from PyQt6.QtWidgets import (
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
+_IS_MACOS = sys.platform == "darwin"
+_IS_WINDOWS = sys.platform == "win32"
+
+
+@dataclass
+class SubfolderRef:
+    """Sentinel stored as UserRole data on subfolder tree items."""
+
+    name: str
+    experiment: Any  # vasoanalyzer.core.project.Experiment
+
 
 class ExperimentTreeWidget(QTreeWidget):
     """QTreeWidget that supports experiment reorder and dataset drag-to-comparison."""
@@ -28,18 +43,19 @@ class ExperimentTreeWidget(QTreeWidget):
         """Emit a dataset MIME drag for sample items; fall back to default for experiments."""
         item = self.currentItem()
         if item is not None:
-            parent = item.parent()
-            # Sample item = grandchild of root (parent is experiment, parent.parent is root)
-            if parent is not None and parent.parent() is not None:
-                sample = item.data(0, Qt.ItemDataRole.UserRole)
-                dataset_id = getattr(sample, "dataset_id", None)
+            obj = item.data(0, Qt.ItemDataRole.UserRole)
+            from vasoanalyzer.core.project import SampleN
+
+            if isinstance(obj, SampleN):
+                dataset_id = getattr(obj, "dataset_id", None)
                 if dataset_id is not None:
                     from vasoanalyzer.ui.drag_drop import encode_dataset_mime
-                    name = getattr(sample, "name", "") or ""
+
+                    name = getattr(obj, "name", "") or ""
                     mime = encode_dataset_mime(dataset_id, name)
                     drag = QDrag(self)
                     drag.setMimeData(mime)
-                    drag.exec_(Qt.DropAction.CopyAction)
+                    drag.exec(Qt.DropAction.CopyAction)
                     return
         super().startDrag(supported_actions)
 
@@ -50,7 +66,7 @@ class ExperimentTreeWidget(QTreeWidget):
             return
         parent = dragged.parent()
         # Only allow internal drops for direct children of the root (experiment level).
-        # Reject drops of the root itself or of sample items (grandchildren).
+        # Reject drops of the root itself, subfolder items, or sample items.
         if parent is None or parent.parent() is not None:
             event.ignore()
             return
@@ -59,11 +75,10 @@ class ExperimentTreeWidget(QTreeWidget):
 
 
 class ProjectExplorerWidget(QDockWidget):
-    """Simple dock with a tree widget for project exploration."""
+    """Dock widget containing the hierarchical project tree."""
 
     def __init__(self, parent=None):
         super().__init__("Project", parent)
-        # ``objectName`` must be set for QMainWindow.saveState() to work
         self.setObjectName("ProjectDock")
         self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         empty_title = QWidget(self)
@@ -94,14 +109,16 @@ class ProjectExplorerWidget(QDockWidget):
         separator = QFrame(card)
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setFrameShadow(QFrame.Shadow.Sunken)
+        separator.setObjectName("ProjectSeparator")
 
         self.tree = ExperimentTreeWidget()
         self.tree.setObjectName("ProjectTree")
         self.tree.setHeaderHidden(True)
         self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree.setUniformRowHeights(True)
-        self.tree.setIndentation(14)
+        self.tree.setUniformRowHeights(False)
+        self.tree.setIndentation(16)
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.tree.setAnimated(True)
 
         self.empty_state_label = QLabel("No datasets yet. Open Data… or Import Folder…", card)
         self.empty_state_label.setObjectName("ProjectEmptyState")
@@ -118,28 +135,43 @@ class ProjectExplorerWidget(QDockWidget):
         self.apply_theme()
 
     def set_open(self, open_: bool):
-        """Show or hide the dock; keep API consistent with toolbar toggle."""
+        """Show or hide the dock."""
         if open_:
             self.show()
+            self.raise_()
         else:
             self.hide()
-        if open_:
-            self.raise_()
 
     def apply_theme(self) -> None:
         """Apply palette-derived colors to the dock contents."""
-
-        border = CURRENT_THEME.get("grid_color", "#d0d0d0")
         bg = CURRENT_THEME.get("table_bg", "#ffffff")
         panel_bg = CURRENT_THEME.get("panel_bg", bg)
-        panel_border = CURRENT_THEME.get("panel_border", border)
+        panel_border = CURRENT_THEME.get("panel_border", "#D1D5DB")
         panel_radius = int(CURRENT_THEME.get("panel_radius", 6))
-        text = CURRENT_THEME.get("text", "#000000")
-        alt = CURRENT_THEME.get("alternate_bg", bg)
-        hover = CURRENT_THEME.get("table_hover", alt)
-        selection = CURRENT_THEME.get("selection_bg", hover)
-        selection_text = CURRENT_THEME.get("highlighted_text", text)
-        muted = CURRENT_THEME.get("text_disabled", text)
+        text = CURRENT_THEME.get("text", "#111827")
+        hover = CURRENT_THEME.get("table_hover", "#F3F4F6")
+        selection = CURRENT_THEME.get("selection_bg", "#3B82F6")
+        selection_text = CURRENT_THEME.get("highlighted_text", "#FFFFFF")
+        muted = CURRENT_THEME.get("text_disabled", "#9CA3AF")
+
+        # Platform tweaks
+        if _IS_MACOS:
+            base_font_size = "10.5pt"
+            header_font_size = "11pt"
+            item_padding = "3px 6px"
+            item_min_height = "22px"
+        elif _IS_WINDOWS:
+            base_font_size = "9pt"
+            header_font_size = "9.5pt"
+            item_padding = "3px 6px"
+            item_min_height = "20px"
+        else:
+            base_font_size = "10pt"
+            header_font_size = "10.5pt"
+            item_padding = "3px 6px"
+            item_min_height = "20px"
+
+        item_radius = max(3, panel_radius - 1)
 
         self.setStyleSheet(
             f"""
@@ -147,51 +179,75 @@ class ProjectExplorerWidget(QDockWidget):
                 background: {panel_bg};
                 border: none;
             }}
-            QDockWidget#ProjectDock QWidget {{
+            QDockWidget#ProjectDock > QWidget {{
                 background: {panel_bg};
-                color: {text};
             }}
             QFrame#ProjectCard {{
                 background: {panel_bg};
                 border: 1px solid {panel_border};
                 border-radius: {panel_radius}px;
-                padding: 3px 3px 4px 3px;
+            }}
+            QFrame#ProjectSeparator {{
+                border: none;
+                border-top: 1px solid {panel_border};
+                margin: 0px 2px;
+                max-height: 1px;
             }}
             QLabel#ProjectHeaderLabel {{
                 color: {text};
-                font-size: 10.5pt;
+                font-size: {header_font_size};
                 font-weight: 600;
+                background: transparent;
+                padding: 0px 2px;
             }}
             QTreeWidget#ProjectTree {{
                 background: {panel_bg};
+                color: {text};
                 border: none;
-                font-size: 10.5pt;
+                font-size: {base_font_size};
+                outline: none;
                 padding: 2px 0px;
+                show-decoration-selected: 1;
             }}
             QTreeWidget#ProjectTree::item {{
-                background: transparent;
                 color: {text};
                 border: 1px solid transparent;
-                border-radius: {max(2, panel_radius)}px;
-                margin: 1px 3px;
-                padding: 3px 8px;
-                min-height: 21px;
+                border-radius: {item_radius}px;
+                margin: 1px 4px 1px 0px;
+                padding: {item_padding};
+                min-height: {item_min_height};
             }}
             QTreeWidget#ProjectTree::item:hover {{
                 background: {hover};
-            }}
-            QTreeWidget#ProjectTree::item:alternate {{
-                background: {alt};
+                border-color: transparent;
             }}
             QTreeWidget#ProjectTree::item:selected {{
                 background: {selection};
                 color: {selection_text};
-                border: 1px solid {panel_border};
+                border-color: transparent;
+            }}
+            QTreeWidget#ProjectTree::item:selected:hover {{
+                background: {selection};
+                color: {selection_text};
+            }}
+            QTreeWidget#ProjectTree::branch {{
+                background: {panel_bg};
+            }}
+            QTreeWidget#ProjectTree::branch:has-children:!has-siblings:closed,
+            QTreeWidget#ProjectTree::branch:closed:has-children:has-siblings {{
+                border-image: none;
+                image: none;
+            }}
+            QTreeWidget#ProjectTree::branch:open:has-children:!has-siblings,
+            QTreeWidget#ProjectTree::branch:open:has-children:has-siblings {{
+                border-image: none;
+                image: none;
             }}
             QLabel#ProjectEmptyState {{
                 color: {muted};
-                font-size: 10pt;
-                padding: 4px 6px 6px 6px;
+                font-size: {base_font_size};
+                background: transparent;
+                padding: 6px 4px 8px 4px;
             }}
         """
         )

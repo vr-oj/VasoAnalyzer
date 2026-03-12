@@ -188,6 +188,7 @@ from .constants import DEFAULT_STYLE, PREVIOUS_PLOT_PATH
 from .dialogs.new_project_dialog import NewProjectDialog
 from .dialogs.welcome_dialog import WelcomeGuideDialog
 from .metadata_panel import MetadataDock
+from .project_explorer import SubfolderRef
 from .plotting import auto_export_editable_plot, export_high_res_plot, toggle_grid
 from .project_management import (
     open_excel_mapping_dialog,
@@ -1855,25 +1856,34 @@ class VasoAnalyzerApp(QMainWindow):
             exp_item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
             exp_item.setData(0, Qt.ItemDataRole.FontRole, self._bold_font(size_delta=1))
             root.addChild(exp_item)
-            samples = sorted(
+            all_samples = sorted(
                 exp.samples,
                 key=lambda sample: (sample.name or "").lower(),
             )
-            for s in samples:
-                has_data = bool(
-                    s.trace_path or s.trace_data is not None or s.dataset_id is not None
+            ungrouped = [s for s in all_samples if not getattr(s, "subfolder", None)]
+            subfolder_map: dict[str, list[SampleN]] = {}
+            for s in all_samples:
+                sf = getattr(s, "subfolder", None)
+                if sf:
+                    subfolder_map.setdefault(sf, []).append(s)
+
+            for s in ungrouped:
+                exp_item.addChild(self._make_tree_sample_item(s))
+
+            for sf_name, sf_samples in subfolder_map.items():
+                sf_item = QTreeWidgetItem([sf_name])
+                sf_item.setData(0, Qt.ItemDataRole.UserRole, SubfolderRef(name=sf_name, experiment=exp))
+                sf_item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+                sf_item.setData(0, Qt.ItemDataRole.FontRole, self._bold_font(size_delta=0))
+                sf_item.setFlags(
+                    (sf_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    & ~Qt.ItemFlag.ItemIsDragEnabled
                 )
-                status = "✓" if has_data else "✗"
-                quality = self._get_sample_data_quality(s)
-                item = QTreeWidgetItem([f"{s.name} {status}"])
-                item.setData(0, Qt.ItemDataRole.UserRole, s)
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                item.setIcon(0, self._data_quality_icon(quality))
-                item.setToolTip(
-                    0,
-                    f"Data quality: {self._data_quality_label(quality)}",
-                )
-                exp_item.addChild(item)
+                exp_item.addChild(sf_item)
+                for s in sf_samples:
+                    sf_item.addChild(self._make_tree_sample_item(s))
+                sf_item.setExpanded(True)
+
             # Restore expand state; default to expanded for experiments seen for the first time
             exp_item.setExpanded(expanded_state.get(exp.name, True))
         root.setExpanded(True)
@@ -1881,6 +1891,18 @@ class VasoAnalyzerApp(QMainWindow):
         self._schedule_missing_asset_scan()
         if self.current_sample:
             self._select_tree_item_for_sample(self.current_sample)
+
+    def _make_tree_sample_item(self, s: SampleN) -> QTreeWidgetItem:
+        """Create a QTreeWidgetItem for a sample node."""
+        has_data = bool(s.trace_path or s.trace_data is not None or s.dataset_id is not None)
+        status = "✓" if has_data else "✗"
+        quality = self._get_sample_data_quality(s)
+        item = QTreeWidgetItem([f"{s.name} {status}"])
+        item.setData(0, Qt.ItemDataRole.UserRole, s)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        item.setIcon(0, self._data_quality_icon(quality))
+        item.setToolTip(0, f"Data quality: {self._data_quality_label(quality)}")
+        return item
 
     def _on_tree_experiment_expand_changed(self, item) -> None:
         """Persist experiment expand/collapse state to project.ui_state."""
@@ -2041,14 +2063,20 @@ class VasoAnalyzerApp(QMainWindow):
             if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
                 return
 
+            # Resolve parent experiment: parent may be an Experiment or a SubfolderRef
             experiment = None
             parent = item.parent()
             if parent:
                 parent_obj = parent.data(0, Qt.ItemDataRole.UserRole)
                 if isinstance(parent_obj, Experiment):
                     experiment = parent_obj
+                elif isinstance(parent_obj, SubfolderRef):
+                    experiment = parent_obj.experiment
             self._activate_sample(obj, experiment)
             # Metadata panel is updated in _render_sample, no need to update here
+            return
+        if isinstance(obj, SubfolderRef):
+            # Clicking a subfolder — just update context, don't load data
             return
         if isinstance(obj, Experiment):
             self.current_experiment = obj
@@ -2101,6 +2129,14 @@ class VasoAnalyzerApp(QMainWindow):
             self.project_tree.blockSignals(True)
             item.setText(0, f"{name} {status}")
             self.project_tree.blockSignals(False)
+        elif isinstance(obj, SubfolderRef):
+            old_name = obj.name
+            if name and name != old_name:
+                for s in obj.experiment.samples:
+                    if getattr(s, "subfolder", None) == old_name:
+                        s.subfolder = name
+                obj.name = name
+                self.mark_session_dirty()
         elif isinstance(obj, Experiment | Project):
             obj.name = name
 
@@ -2558,6 +2594,7 @@ class VasoAnalyzerApp(QMainWindow):
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
         menu = QMenu()
+        global_pos = self.project_tree.viewport().mapToGlobal(pos)
 
         selected_samples = [
             it.data(0, Qt.ItemDataRole.UserRole)
@@ -2573,7 +2610,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         if item is None:
             add_exp = menu.addAction("Add Experiment")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == add_exp:
                 self.add_experiment()
             elif action == open_act:
@@ -2585,7 +2622,7 @@ class VasoAnalyzerApp(QMainWindow):
         obj = item.data(0, Qt.ItemDataRole.UserRole)
         if isinstance(obj, Project):
             add_exp = menu.addAction("Add Experiment")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == add_exp:
                 self.add_experiment()
             elif action == open_act:
@@ -2595,21 +2632,43 @@ class VasoAnalyzerApp(QMainWindow):
         elif isinstance(obj, Experiment):
             add_n = menu.addAction("Add Sample")
             import_folder = menu.addAction("Import Folder…")
+            menu.addSeparator()
+            add_sf = menu.addAction("Add Subfolder…")
+            menu.addSeparator()
             del_exp = menu.addAction("Delete Experiment")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == add_n:
                 self.add_sample(obj)
             elif action == import_folder:
                 self._handle_import_folder(target_experiment=obj)
+            elif action == add_sf:
+                self._add_subfolder_to_experiment(obj)
             elif action == del_exp:
                 self.delete_experiment(obj)
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
+        elif isinstance(obj, SubfolderRef):
+            del_sf = menu.addAction("Delete Subfolder")
+            del_sf.setToolTip("Remove subfolder — datasets are moved back to the experiment")
+            action = menu.exec(global_pos)
+            if action == del_sf:
+                self._delete_subfolder(obj)
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save Data As…")
+            menu.addSeparator()
+            # Subfolder assignment
+            _current_sf = getattr(obj, "subfolder", None)
+            move_to_sf = menu.addAction(
+                "Move to Subfolder…" if not _current_sf else f'Move from "{_current_sf}"…'
+            )
+            if _current_sf:
+                remove_from_sf = menu.addAction("Remove from Subfolder")
+            else:
+                remove_from_sf = None
+            menu.addSeparator()
             _del_targets = selected_samples if len(selected_samples) > 1 else [obj]
             _del_label = (
                 f"Delete {len(_del_targets)} Datasets"
@@ -2628,11 +2687,20 @@ class VasoAnalyzerApp(QMainWindow):
                 self._data_quality_icon("questionable"), "Questionable data (yellow)"
             )
             quality_bad = quality_menu.addAction(self._data_quality_icon("bad"), "Bad data (red)")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == load_data:
                 self.load_data_into_sample(obj)
             elif action == save_n:
                 self.save_sample_as(obj)
+            elif action == move_to_sf:
+                _targets = selected_samples if len(selected_samples) > 1 else [obj]
+                self._move_samples_to_subfolder(_targets)
+            elif action == remove_from_sf and remove_from_sf is not None:
+                _targets = selected_samples if len(selected_samples) > 1 else [obj]
+                for s in _targets:
+                    s.subfolder = None
+                self.refresh_project_tree()
+                self.mark_session_dirty()
             elif action == del_n:
                 self.delete_samples(_del_targets)
             elif action in {
@@ -2706,6 +2774,66 @@ class VasoAnalyzerApp(QMainWindow):
         self.auto_save_project(reason="delete_experiment")
         self._update_home_resume_button()
         self._update_metadata_panel(self.current_project)
+
+    def _add_subfolder_to_experiment(self, experiment: Experiment) -> None:
+        """Prompt for a subfolder name and create it under the given experiment."""
+        name, ok = QInputDialog.getText(self, "New Subfolder", "Subfolder name:")
+        name = name.strip()
+        if not ok or not name:
+            return
+        # Check for duplicate
+        existing = {getattr(s, "subfolder", None) for s in experiment.samples}
+        if name in existing:
+            QMessageBox.information(self, "Subfolder Exists", f'A subfolder named "{name}" already exists.')
+            return
+        # Move selected samples into the new subfolder if they belong to this experiment
+        targets = [
+            it.data(0, Qt.ItemDataRole.UserRole)
+            for it in self.project_tree.selectedItems()
+            if isinstance(it.data(0, Qt.ItemDataRole.UserRole), SampleN)
+            and it.data(0, Qt.ItemDataRole.UserRole) in experiment.samples
+        ]
+        if targets:
+            for s in targets:
+                s.subfolder = name
+        self.refresh_project_tree()
+        self.mark_session_dirty()
+
+    def _delete_subfolder(self, sf_ref: SubfolderRef) -> None:
+        """Remove a subfolder and move its samples back to the experiment level."""
+        for s in sf_ref.experiment.samples:
+            if getattr(s, "subfolder", None) == sf_ref.name:
+                s.subfolder = None
+        self.refresh_project_tree()
+        self.mark_session_dirty()
+
+    def _move_samples_to_subfolder(self, samples: list[SampleN]) -> None:
+        """Prompt for a subfolder name and assign it to the given samples."""
+        if not samples:
+            return
+        # Find the experiment for the first sample to suggest existing subfolders
+        experiment = None
+        if self.current_project:
+            for exp in self.current_project.experiments:
+                if samples[0] in exp.samples:
+                    experiment = exp
+                    break
+        existing_sfs = sorted({
+            getattr(s, "subfolder", None)
+            for s in (experiment.samples if experiment else [])
+            if getattr(s, "subfolder", None)
+        })
+        prompt = "Subfolder name:"
+        if existing_sfs:
+            prompt += f"\n(Existing: {', '.join(existing_sfs)})"
+        name, ok = QInputDialog.getText(self, "Move to Subfolder", prompt)
+        name = name.strip()
+        if not ok or not name:
+            return
+        for s in samples:
+            s.subfolder = name
+        self.refresh_project_tree()
+        self.mark_session_dirty()
 
     def add_sample(self, experiment):
         self._sample_mgr.add_sample(experiment)
@@ -9394,9 +9522,8 @@ QPushButton[isGhost="true"]:pressed {{
                 root = self.project_tree.topLevelItem(0)
                 if root is not None:
                     for i in range(root.childCount()):
-                        child = root.child(i)
-                        for j in range(child.childCount()):
-                            sample_child = child.child(j)
+                        exp_child = root.child(i)
+                        for sample_child in self._sample_mgr._iter_sample_items(exp_child):
                             sample_obj = sample_child.data(0, Qt.ItemDataRole.UserRole)
                             if (
                                 isinstance(sample_obj, SampleN)
@@ -9426,11 +9553,10 @@ QPushButton[isGhost="true"]:pressed {{
             if isinstance(obj, Experiment) and obj.name == last_exp:
                 exp_item = child
                 if last_sample:
-                    for j in range(child.childCount()):
-                        sample_child = child.child(j)
-                        sample_obj = sample_child.data(0, Qt.ItemDataRole.UserRole)
+                    for sc in self._sample_mgr._iter_sample_items(child):
+                        sample_obj = sc.data(0, Qt.ItemDataRole.UserRole)
                         if isinstance(sample_obj, SampleN) and sample_obj.name == last_sample:
-                            sample_item = sample_child
+                            sample_item = sc
                             break
                 break
 
