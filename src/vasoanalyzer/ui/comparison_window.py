@@ -13,11 +13,9 @@ import math
 import os
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QActionGroup, QIcon
+from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -337,7 +335,7 @@ class ComparisonPanel(QWidget):
         layout.addWidget(nav_container, 0)
 
     def _build_track(self) -> None:
-        from PyQt5.QtCore import QTimer
+        from PyQt6.QtCore import QTimer
         from vasoanalyzer.ui.navigation.trace_nav_bar import TraceNavBar
         from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
         from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
@@ -444,8 +442,8 @@ class ComparisonWindow(QWidget):
     """Floating window for side-by-side single-channel comparison of up to 4 datasets."""
 
     def __init__(self, host: "VasoAnalyzerApp"):
-        # Qt.Tool keeps the window above its parent without being system-wide always-on-top.
-        super().__init__(host, Qt.Tool)
+        # Qt.WindowType.Tool keeps the window above its parent without being system-wide always-on-top.
+        super().__init__(host, Qt.WindowType.Tool)
         self._host = host
         self._panels: list[ComparisonPanel] = []
         self._channel = "inner"
@@ -486,7 +484,7 @@ class ComparisonWindow(QWidget):
         layout.addLayout(top)
 
         # ── Panel splitter ────────────────────────────────────────────
-        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(self._splitter, 1)
 
         # ── Empty state ───────────────────────────────────────────────
@@ -494,7 +492,7 @@ class ComparisonWindow(QWidget):
             "Drop datasets from the project tree to compare them\n"
             f"(up to {_MAX_PANELS} datasets — drag the same dataset twice for dual-viewport)"
         )
-        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._empty_label)
 
         self._refresh_state()
@@ -504,7 +502,7 @@ class ComparisonWindow(QWidget):
         tb = QToolBar()
         tb.setObjectName("PlotToolbar")
         tb.setIconSize(QSize(22, 22))
-        tb.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         tb.setMovable(False)
         tb.setFloatable(False)
         _apply_toolbar_style(tb)

@@ -11,7 +11,7 @@ import math
 from collections.abc import Sequence
 
 import numpy as np
-from PyQt5 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
 from .controller import StackPlayerController
 from .frame_cache import FrameCache, qimage_cache_key
@@ -38,16 +38,16 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
 
         self.status_label = QtWidgets.QLabel("Sync unavailable: no data", self)
         self.status_label.setObjectName("SnapshotStatusLabel")
-        self.status_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.status_label.setContentsMargins(0, 0, 0, 0)
         self.status_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed
         )
 
         self.frame_view = FrameView(self)
         self.frame_view.setObjectName("SnapshotPreview")
         self.frame_view.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
+            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Preferred
         )
 
         self.controls = TiffTransportBar(self)

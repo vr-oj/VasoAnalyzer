@@ -4,8 +4,8 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QEvent, QObject, Qt, QTimer
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
+from PyQt6.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
@@ -42,7 +42,7 @@ class _PlotLeaveFilter(QObject):
         self._on_leave = on_leave
 
     def eventFilter(self, obj, ev):
-        if ev.type() == QEvent.Leave:
+        if ev.type() == QEvent.Type.Leave:
             try:
                 self._on_leave()
             except Exception:
@@ -88,7 +88,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     target_mouse_widget = window.plot_host.widget() if use_pyqtgraph else window.canvas
     target_mouse_widget.setMouseTracking(True)
     if use_pyqtgraph:
-        target_mouse_widget.setFocusPolicy(Qt.StrongFocus)
+        target_mouse_widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         # For any legacy draw_idle calls, forward to the native PG redraw.
         if hasattr(window, "plot_host") and hasattr(window.plot_host, "redraw"):
             window.canvas.draw_idle = window.plot_host.redraw  # type: ignore[attr-defined]
@@ -135,7 +135,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window.toolbar = window.build_toolbar_for_canvas(window.canvas)
     window.toolbar.setObjectName("PlotToolbar")
-    window.toolbar.setAllowedAreas(Qt.TopToolBarArea)
+    window.toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
     window.toolbar.setMovable(False)
     window.canvas.toolbar = window.toolbar
     window.toolbar.setMouseTracking(True)
@@ -150,21 +150,21 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.trace_file_label = QLabel("No trace loaded")
     window.trace_file_label.setObjectName("TraceChip")
     window.trace_file_label.setSizePolicy(
-        QSizePolicy.Expanding,
-        QSizePolicy.Preferred,
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Preferred,
     )
-    window.trace_file_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-    window.trace_file_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    window.trace_file_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    window.trace_file_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
     window.trace_file_label.setMinimumWidth(260)
     window.trace_file_label.setContentsMargins(12, 0, 0, 0)
     window._status_base_label = "No trace loaded"
     window.trace_file_label.installEventFilter(window)
 
     window.primary_toolbar = window._create_primary_toolbar()
-    window.primary_toolbar.setAllowedAreas(Qt.TopToolBarArea)
-    window.addToolBar(Qt.TopToolBarArea, window.primary_toolbar)
-    window.addToolBarBreak(Qt.TopToolBarArea)
-    window.addToolBar(Qt.TopToolBarArea, window.toolbar)
+    window.primary_toolbar.setAllowedAreas(Qt.ToolBarArea.TopToolBarArea)
+    window.addToolBar(Qt.ToolBarArea.TopToolBarArea, window.primary_toolbar)
+    window.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+    window.addToolBar(Qt.ToolBarArea.TopToolBarArea, window.toolbar)
     window._interaction_controller = InteractionController(
         window.plot_host,
         interaction_host,
@@ -181,7 +181,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window._update_toolbar_compact_mode(window.width())
 
-    window.scroll_slider = QScrollBar(Qt.Horizontal)
+    window.scroll_slider = QScrollBar(Qt.Orientation.Horizontal)
     window.scroll_slider.setObjectName("TimeScrollbar")
     window.scroll_slider.setMinimum(0)
     window.scroll_slider.setMaximum(1_000_000)
@@ -193,14 +193,14 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.scroll_slider.valueChanged.connect(window._on_scrollbar_value_changed)
     window.scroll_slider.hide()
     window.scroll_slider.setToolTip("Scroll timeline (X-axis)")
-    window.scroll_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    window.scroll_slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     # Canonical snapshot viewer widget (TIFF viewer v2).
     if window.snapshot_widget is not None:
         viewer = window.snapshot_widget
-        viewer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        viewer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         viewer.hide()
-        viewer.setContextMenuPolicy(Qt.CustomContextMenu)
+        viewer.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         viewer.customContextMenuRequested.connect(window.show_snapshot_context_menu)
 
         controls = getattr(viewer, "controls", None)
@@ -239,7 +239,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window.metadata_scroll = QScrollArea()
     window.metadata_scroll.setWidgetResizable(True)
-    window.metadata_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    window.metadata_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     window.metadata_scroll.setObjectName("MetadataScroll")
     metadata_layout.addWidget(window.metadata_scroll)
 
@@ -249,10 +249,10 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     inner_layout.setSpacing(6)
     window.metadata_details_label = QLabel("No metadata available.")
     window.metadata_details_label.setObjectName("MetadataDetails")
-    window.metadata_details_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+    window.metadata_details_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
     window.metadata_details_label.setWordWrap(True)
-    window.metadata_details_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    window.metadata_details_label.setTextFormat(Qt.RichText)
+    window.metadata_details_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+    window.metadata_details_label.setTextFormat(Qt.TextFormat.RichText)
     inner_layout.addWidget(window.metadata_details_label)
     inner_layout.addStretch()
     window.metadata_scroll.setWidget(metadata_inner)
@@ -261,7 +261,7 @@ def init_ui(window: VasoAnalyzerApp) -> None:
 
     window.event_table = EventTableWidget(window)
     window.event_table.setMinimumWidth(0)
-    window.event_table.setContextMenuPolicy(Qt.CustomContextMenu)
+    window.event_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
     window.event_table.customContextMenuRequested.connect(window.show_event_table_context_menu)
     window.event_table.installEventFilter(window)
     window.event_table.cellClicked.connect(window.table_row_clicked)

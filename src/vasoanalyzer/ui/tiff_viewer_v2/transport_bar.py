@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from vasoanalyzer.ui.icons import snapshot_icon
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -17,11 +17,11 @@ class TiffScrubBar(QtWidgets.QSlider):
     """Custom scrub bar with a physical rail + handle."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(QtCore.Qt.Horizontal, parent)
+        super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
         self.setObjectName("TiffScrubBar")
         self.setMouseTracking(True)
         self.setTracking(True)
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.setRange(0, 0)
         self.setFixedHeight(30)
         self._track_height = 10
@@ -88,12 +88,12 @@ class TiffScrubBar(QtWidgets.QSlider):
             handle = self._handle_rect().adjusted(-4, -4, 4, 4)
             hover = handle.contains(pos)
         self.setCursor(
-            QtCore.Qt.SizeHorCursor if hover or self._dragging else QtCore.Qt.ArrowCursor
+            QtCore.Qt.CursorShape.SizeHorCursor if hover or self._dragging else QtCore.Qt.CursorShape.ArrowCursor
         )
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
         palette = self.palette()
         window = palette.window().color()
@@ -121,13 +121,13 @@ class TiffScrubBar(QtWidgets.QSlider):
             clip_path.addRoundedRect(track, radius, radius)
             painter.save()
             painter.setClipPath(clip_path)
-            painter.setPen(QtCore.Qt.NoPen)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(fill)
             painter.drawRoundedRect(progress_rect, radius, radius)
             painter.restore()
 
         handle_rect = self._handle_rect()
-        painter.setPen(QtCore.Qt.NoPen)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.setBrush(shadow)
         painter.drawEllipse(handle_rect.translated(0, 1))
 
@@ -136,30 +136,30 @@ class TiffScrubBar(QtWidgets.QSlider):
         painter.drawEllipse(handle_rect)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._dragging = True
             self.setSliderDown(True)
-            self.setValue(self._value_from_pos(event.localPos()))
-            self._update_cursor(event.localPos())
+            self.setValue(self._value_from_pos(event.position()))
+            self._update_cursor(event.position())
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.buttons() & QtCore.Qt.LeftButton:
+        if event.buttons() & QtCore.Qt.MouseButton.LeftButton:
             self._dragging = True
             self.setSliderDown(True)
-            self.setValue(self._value_from_pos(event.localPos()))
-        self._hovering = self._handle_rect().adjusted(-4, -4, 4, 4).contains(event.localPos())
-        self._update_cursor(event.localPos())
+            self.setValue(self._value_from_pos(event.position()))
+        self._hovering = self._handle_rect().adjusted(-4, -4, 4, 4).contains(event.position())
+        self._update_cursor(event.position())
         self.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._dragging = False
             self.setSliderDown(False)
-            self._update_cursor(event.localPos())
+            self._update_cursor(event.position())
             self.update()
             event.accept()
             return
@@ -172,7 +172,7 @@ class TiffScrubBar(QtWidgets.QSlider):
     def leaveEvent(self, event: QtCore.QEvent) -> None:
         self._hovering = False
         self._dragging = False
-        self.setCursor(QtCore.Qt.ArrowCursor)
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.update()
         super().leaveEvent(event)
 
@@ -207,7 +207,7 @@ class TiffTransportBar(QtWidgets.QFrame):
 
         self.start_button = QtWidgets.QToolButton(self)
         self.start_button.setAutoRaise(False)
-        self.start_button.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
+        self.start_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.start_button.setIconSize(self._icon_size)
         self.start_button.setFixedSize(self._button_size, self._button_size)
         self.start_button.setToolTip("Jump to first frame")
@@ -217,7 +217,7 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.play_button = QtWidgets.QToolButton(self)
         self.play_button.setAutoRaise(False)
         self.play_button.setCheckable(True)
-        self.play_button.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
+        self.play_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.play_button.setIconSize(self._icon_size)
         self.play_button.setFixedSize(self._button_size, self._button_size)
         self.play_button.setToolTip("Play")
@@ -226,7 +226,7 @@ class TiffTransportBar(QtWidgets.QFrame):
 
         self.end_button = QtWidgets.QToolButton(self)
         self.end_button.setAutoRaise(False)
-        self.end_button.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
+        self.end_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.end_button.setIconSize(self._icon_size)
         self.end_button.setFixedSize(self._button_size, self._button_size)
         self.end_button.setToolTip("Jump to last frame")
@@ -239,13 +239,13 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.speed_combo = QtWidgets.QComboBox(self)
         self.speed_combo.setObjectName("SnapshotSpeedCombo")
         self.speed_combo.setToolTip("Playback speed multiplier")
-        self.speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self.speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for value in (0.25, 0.5, 1.0, 2.0, 5.0, 10.0):
             self.speed_combo.addItem(_format_multiplier(value), value)
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
         self.speed_pill = QtWidgets.QFrame(self)
         self.speed_pill.setObjectName("SnapshotSpeedPill")
-        self.speed_pill.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self.speed_pill.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
         speed_layout = QtWidgets.QHBoxLayout(self.speed_pill)
         speed_layout.setContentsMargins(8, 4, 8, 4)
         speed_layout.setSpacing(6)
@@ -254,8 +254,8 @@ class TiffTransportBar(QtWidgets.QFrame):
 
         self.time_label = QtWidgets.QLabel("Frame 0 / 0")
         self.time_label.setObjectName("SnapshotTimeLabel")
-        self.time_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        self.time_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
         row.addWidget(self.time_label)
         layout.addLayout(row)
 
@@ -378,7 +378,7 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
         self.time_label.setStyleSheet(label_style)
 
     def changeEvent(self, event: QtCore.QEvent) -> None:
-        if event.type() == QtCore.QEvent.PaletteChange:
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
             self._apply_control_styles()
             self._apply_icons()
         super().changeEvent(event)

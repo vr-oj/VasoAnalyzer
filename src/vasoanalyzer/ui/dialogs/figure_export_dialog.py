@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -49,8 +49,8 @@ class FigureExportDialog(QDialog):
         layout.setSpacing(10)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight)
-        form.setFormAlignment(Qt.AlignTop)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
 
         # Format selector
         self.format_combo = QComboBox()
@@ -109,7 +109,7 @@ class FigureExportDialog(QDialog):
         layout.addLayout(form)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, Qt.Orientation.Horizontal, self
         )
         buttons.accepted.connect(self._commit)
         buttons.rejected.connect(self.reject)

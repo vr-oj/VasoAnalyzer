@@ -7,15 +7,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QEvent, QObject
-from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
+from PyQt6.QtCore import QEvent, QObject
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QWidget
 
 from vasoanalyzer.ui.dialogs.new_project_dialog import NewProjectDialog
 from vasoanalyzer.ui.home_dashboard_window import HomeDashboardWindow
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 
 if TYPE_CHECKING:  # pragma: no cover
-    from PyQt5.QtWidgets import QMainWindow
+    from PyQt6.QtWidgets import QMainWindow
 
 log = logging.getLogger(__name__)
 
@@ -113,7 +113,7 @@ class WindowManager(QObject):
         home = self.show_dashboard(raise_=True)
         settings = getattr(home, "settings", None)
         dialog = NewProjectDialog(home, settings=settings)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
 
         name = dialog.project_name()
@@ -141,7 +141,7 @@ class WindowManager(QObject):
             return False
         settings = getattr(window, "settings", None)
         dialog = NewProjectDialog(window, settings=settings)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
 
         name = dialog.project_name()
@@ -161,7 +161,7 @@ class WindowManager(QObject):
         if parent is None:
             parent = self.show_dashboard(raise_=False)
 
-        from PyQt5.QtWidgets import QFileDialog
+        from PyQt6.QtWidgets import QFileDialog
 
         path, _ = QFileDialog.getOpenFileName(
             parent,
@@ -177,8 +177,8 @@ class WindowManager(QObject):
         return window
 
     def open_data_from_home(self, parent_window: QWidget | None = None) -> None:
-        from PyQt5.QtCore import QTimer
-        from PyQt5.QtWidgets import QFileDialog
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QFileDialog
 
         parent = parent_window or self._home_window or self.get_active_main_window()
         if parent is None:
@@ -221,7 +221,7 @@ class WindowManager(QObject):
         QTimer.singleShot(0, _dispatch_import)
 
     def import_data(self, anchor: QWidget | None = None) -> VasoAnalyzerApp | None:
-        from PyQt5.QtCore import QTimer
+        from PyQt6.QtCore import QTimer
 
         window = self._get_or_create_main_window()
         if window is None:
@@ -257,11 +257,11 @@ class WindowManager(QObject):
         self._raise_window(window)
 
     def eventFilter(self, obj, event):  # type: ignore[override]
-        if event.type() == QEvent.WindowActivate:
+        if event.type() == QEvent.Type.WindowActivate:
             if isinstance(obj, VasoAnalyzerApp) and obj in self._main_windows:
                 self._active_main_window = obj
                 self._refresh_home_resume()
-        elif event.type() == QEvent.Close:
+        elif event.type() == QEvent.Type.Close:
             if obj is self._home_window:
                 self._home_window = None
             elif isinstance(obj, VasoAnalyzerApp) and obj in self._main_windows:

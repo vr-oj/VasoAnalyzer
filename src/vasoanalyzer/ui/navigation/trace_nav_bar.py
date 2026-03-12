@@ -6,8 +6,8 @@ import contextlib
 import math
 from typing import Any
 
-from PyQt5.QtCore import QSignalBlocker, Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSignalBlocker, Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
@@ -118,24 +118,24 @@ class TraceNavBar(QFrame):
         self.time_mode_combo.addItem("HH:MM:SS", TimeMode.HHMMSS.value)
         self.time_mode_combo.setMinimumWidth(94)
 
-        self.scrollbar = QScrollBar(Qt.Horizontal, self)
+        self.scrollbar = QScrollBar(Qt.Orientation.Horizontal, self)
         self.scrollbar.setObjectName("TraceNavTimeScrollbar")
         self.scrollbar.setMinimum(0)
         self.scrollbar.setMaximum(0)
         self.scrollbar.setSingleStep(1)
         self.scrollbar.setPageStep(1)
         self.scrollbar.setTracking(True)
-        self.scrollbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.scrollbar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.duration_label = QLabel("Dur --", self)
         self.duration_label.setObjectName("TraceNavDurationLabel")
         self.duration_label.setMinimumWidth(92)
-        self.duration_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self.duration_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         self.view_label = QLabel("View --", self)
         self.view_label.setObjectName("TraceNavViewLabel")
         self.view_label.setMinimumWidth(260)
-        self.view_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        self.view_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.view_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self.view_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         self.btn_step_left.clicked.connect(lambda: self._step_pages(-1))
         self.btn_step_right.clicked.connect(lambda: self._step_pages(1))

@@ -3,9 +3,9 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QDrag
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QDrag
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDockWidget,
     QFrame,
@@ -31,7 +31,7 @@ class ExperimentTreeWidget(QTreeWidget):
             parent = item.parent()
             # Sample item = grandchild of root (parent is experiment, parent.parent is root)
             if parent is not None and parent.parent() is not None:
-                sample = item.data(0, Qt.UserRole)
+                sample = item.data(0, Qt.ItemDataRole.UserRole)
                 dataset_id = getattr(sample, "dataset_id", None)
                 if dataset_id is not None:
                     from vasoanalyzer.ui.drag_drop import encode_dataset_mime
@@ -39,7 +39,7 @@ class ExperimentTreeWidget(QTreeWidget):
                     mime = encode_dataset_mime(dataset_id, name)
                     drag = QDrag(self)
                     drag.setMimeData(mime)
-                    drag.exec_(Qt.CopyAction)
+                    drag.exec_(Qt.DropAction.CopyAction)
                     return
         super().startDrag(supported_actions)
 
@@ -65,11 +65,11 @@ class ProjectExplorerWidget(QDockWidget):
         super().__init__("Project", parent)
         # ``objectName`` must be set for QMainWindow.saveState() to work
         self.setObjectName("ProjectDock")
-        self.setFeatures(QDockWidget.NoDockWidgetFeatures)
+        self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
         empty_title = QWidget(self)
         empty_title.setMaximumHeight(0)
         self.setTitleBarWidget(empty_title)
-        self.setAllowedAreas(Qt.LeftDockWidgetArea)
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
         self.setMinimumWidth(240)
 
         container = QWidget(self)
@@ -92,16 +92,16 @@ class ProjectExplorerWidget(QDockWidget):
         header_layout.addStretch(1)
 
         separator = QFrame(card)
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
 
         self.tree = ExperimentTreeWidget()
         self.tree.setObjectName("ProjectTree")
         self.tree.setHeaderHidden(True)
-        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setUniformRowHeights(True)
         self.tree.setIndentation(14)
-        self.tree.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
 
         self.empty_state_label = QLabel("No datasets yet. Open Data… or Import Folder…", card)
         self.empty_state_label.setObjectName("ProjectEmptyState")

@@ -19,11 +19,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QObject, Qt, QTimer
-from PyQt5.QtGui import QColor, QIcon, QKeySequence
-from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
+from PyQt6.QtCore import QObject, Qt, QTimer
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence
+from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QInputDialog,
@@ -369,10 +367,10 @@ class EventManager(QObject):
                 h,
                 "Confirm Replacement",
                 f"Replace ID for '{event_label}' at {event_time:.2f}s with {y:.1f} µm?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
 
-            if confirm == QMessageBox.Yes:
+            if confirm == QMessageBox.StandardButton.Yes:
                 has_od = h.trace_data is not None and "Outer Diameter" in h.trace_data.columns
                 old_value = h.event_table_data[index][2]
                 h.last_replaced_event = (index, old_value)
@@ -423,9 +421,9 @@ class EventManager(QObject):
             h,
             "Delete Event" if len(indices) == 1 else "Delete Events",
             prompt,
-            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        if confirm != QMessageBox.Yes:
+        if confirm != QMessageBox.StandardButton.Yes:
             return
 
         h._delete_events_by_indices(indices)
@@ -1558,9 +1556,9 @@ class EventManager(QObject):
                 h,
                 "Confirm Replacement",
                 f"Replace ID at {t_event:.2f}s with pinned value: {pin_id:.2f} µm?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if confirm == QMessageBox.Yes:
+            if confirm == QMessageBox.StandardButton.Yes:
                 h.last_replaced_event = (row, h.event_table_data[row][2])
                 has_od = h.trace_data is not None and "Outer Diameter" in h.trace_data.columns
                 if has_od:
@@ -1767,8 +1765,8 @@ class EventManager(QObject):
         )
         h._event_review_wizard = dialog
         flags = dialog.windowFlags()
-        dialog.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
-        dialog.setWindowModality(Qt.NonModal)
+        dialog.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.accepted.connect(h._apply_event_review_changes)
         dialog.rejected.connect(h._cleanup_event_review_wizard)
         dialog.finished.connect(h._cleanup_event_review_wizard)
@@ -1821,17 +1819,17 @@ class EventManager(QObject):
 
         if path:
             msg = QMessageBox(h)
-            msg.setIcon(QMessageBox.Question)
+            msg.setIcon(QMessageBox.Icon.Question)
             msg.setWindowTitle("Export updated event table?")
             msg.setText(
                 "You reviewed and updated the event table.\n\n"
                 f"Do you want to save these changes to:\n{path}"
             )
-            overwrite_btn = msg.addButton("Export", QMessageBox.AcceptRole)
-            choose_btn = msg.addButton("Choose different path…", QMessageBox.ActionRole)
-            later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+            overwrite_btn = msg.addButton("Export", QMessageBox.ButtonRole.AcceptRole)
+            choose_btn = msg.addButton("Choose different path…", QMessageBox.ButtonRole.ActionRole)
+            later_btn = msg.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
             msg.setDefaultButton(overwrite_btn)
-            msg.exec_()
+            msg.exec()
             clicked = msg.clickedButton()
 
             if clicked is overwrite_btn:
@@ -1841,16 +1839,16 @@ class EventManager(QObject):
                 h._export_event_table_via_dialog()
         else:
             msg = QMessageBox(h)
-            msg.setIcon(QMessageBox.Question)
+            msg.setIcon(QMessageBox.Icon.Question)
             msg.setWindowTitle("Export updated event table?")
             msg.setText(
                 "You reviewed and updated the event table.\n\n"
                 "Do you want to export these values to a file?"
             )
-            export_btn = msg.addButton("Export…", QMessageBox.AcceptRole)
-            later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+            export_btn = msg.addButton("Export…", QMessageBox.ButtonRole.AcceptRole)
+            later_btn = msg.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
             msg.setDefaultButton(export_btn)
-            msg.exec_()
+            msg.exec()
 
             if msg.clickedButton() is export_btn:
                 h._export_event_table_via_dialog()

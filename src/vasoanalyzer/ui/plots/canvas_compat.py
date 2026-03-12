@@ -7,9 +7,9 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtGui import QMouseEvent, QWheelEvent
-from PyQt5.QtWidgets import QWidget
+from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtGui import QMouseEvent, QWheelEvent
+from PyQt6.QtWidgets import QWidget
 
 log = logging.getLogger(__name__)
 
@@ -96,28 +96,28 @@ class PyQtGraphCanvasCompat(QWidget):
         # WHEEL EVENTS: Translate to matplotlib scroll_event (for compatibility only)
         # Note: PyQtGraph's PanOnlyViewBox handles wheel directly now, so this is mainly
         # for any matplotlib-style event handlers that might be listening
-        if event.type() == QEvent.Wheel and isinstance(event, QWheelEvent):
+        if event.type() == QEvent.Type.Wheel and isinstance(event, QWheelEvent):
             mock_event = self._create_mock_wheel_event(event)
             self._dispatch_event("scroll_event", mock_event)
             return False  # Don't consume - ViewBox will handle it
 
         # Mouse move -> motion_notify_event
-        if event.type() == QEvent.MouseMove and isinstance(event, QMouseEvent):
+        if event.type() == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
             mock_event = self._create_mock_mouse_event(event)
             self._dispatch_event("motion_notify_event", mock_event)
 
         # Mouse press -> button_press_event
-        elif event.type() == QEvent.MouseButtonPress and isinstance(event, QMouseEvent):
+        elif event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
             mock_event = self._create_mock_mouse_event(event)
             self._dispatch_event("button_press_event", mock_event)
 
         # Mouse release -> button_release_event
-        elif event.type() == QEvent.MouseButtonRelease and isinstance(event, QMouseEvent):
+        elif event.type() == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
             mock_event = self._create_mock_mouse_event(event)
             self._dispatch_event("button_release_event", mock_event)
 
         # Leave -> figure_leave_event
-        elif event.type() == QEvent.Leave:
+        elif event.type() == QEvent.Type.Leave:
             mock_event = type("Event", (), {"canvas": self})()
             self._dispatch_event("figure_leave_event", mock_event)
 
@@ -130,8 +130,8 @@ class PyQtGraphCanvasCompat(QWidget):
             "MouseEvent",
             (),
             {
-                "x": qt_event.x(),
-                "y": qt_event.y(),
+                "x": qt_event.position().x(),
+                "y": qt_event.position().y(),
                 "button": self._qt_button_to_mpl(qt_event.button()),
                 "xdata": None,  # Would need axis transformation
                 "ydata": None,  # Would need axis transformation
@@ -150,13 +150,13 @@ class PyQtGraphCanvasCompat(QWidget):
         # Extract modifier keys from Qt event
         modifiers = qt_event.modifiers()
         key_parts = []
-        if modifiers & Qt.ControlModifier:
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
             key_parts.append("ctrl")
-        if modifiers & Qt.ShiftModifier:
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
             key_parts.append("shift")
-        if modifiers & Qt.AltModifier:
+        if modifiers & Qt.KeyboardModifier.AltModifier:
             key_parts.append("alt")
-        if modifiers & Qt.MetaModifier:
+        if modifiers & Qt.KeyboardModifier.MetaModifier:
             key_parts.append("cmd")  # Meta key is Cmd on macOS
         key_str = "+".join(key_parts) if key_parts else None
 
@@ -180,11 +180,11 @@ class PyQtGraphCanvasCompat(QWidget):
 
     def _qt_button_to_mpl(self, qt_button: Qt.MouseButton) -> int:
         """Convert Qt mouse button to matplotlib button number."""
-        if qt_button == Qt.LeftButton:
+        if qt_button == Qt.MouseButton.LeftButton:
             return 1
-        elif qt_button == Qt.MiddleButton:
+        elif qt_button == Qt.MouseButton.MiddleButton:
             return 2
-        elif qt_button == Qt.RightButton:
+        elif qt_button == Qt.MouseButton.RightButton:
             return 3
         return 0
 

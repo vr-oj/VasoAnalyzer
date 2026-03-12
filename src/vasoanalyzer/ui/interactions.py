@@ -7,7 +7,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PyQt5.QtCore import Qt
+from PyQt6.QtCore import Qt
 
 from vasoanalyzer.ui.plots.channel_track import ChannelTrack
 from vasoanalyzer.ui.plots.interactions_base import (
@@ -288,7 +288,7 @@ class InteractionController:
             return
 
         buttons = getattr(ctx, "buttons", None)
-        if buttons is not None and not (buttons & Qt.LeftButton):
+        if buttons is not None and not (buttons & Qt.MouseButton.LeftButton):
             self._on_release()
             return
 

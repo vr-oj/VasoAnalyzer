@@ -11,9 +11,9 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QObject
-from PyQt5.QtGui import QIcon, QPalette
-from PyQt5.QtWidgets import QAction, QApplication, QPushButton, QToolButton
+from PyQt6.QtCore import QObject
+from PyQt6.QtGui import QIcon, QPalette, QAction
+from PyQt6.QtWidgets import QApplication, QPushButton, QToolButton
 
 if TYPE_CHECKING:
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp

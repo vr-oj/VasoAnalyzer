@@ -9,7 +9,7 @@ h5py>=3.14.0
 Pillow>=9.0
 
 # GUI
-PyQt5>=5.15
+PyQt6>=6.4
 pyqtgraph>=0.13.0
 
 # Excel export

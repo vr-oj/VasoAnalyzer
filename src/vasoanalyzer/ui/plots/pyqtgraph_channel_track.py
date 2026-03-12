@@ -8,8 +8,8 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
@@ -40,7 +40,7 @@ class _TrackGutterWidget(QWidget):
         self.setObjectName("ChannelTrackGutter")
         self.setFixedWidth(max(int(width_px), 0))
         self.setContentsMargins(0, 0, 0, 0)
-        self.setAttribute(Qt.WA_PaintUnclipped, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_PaintUnclipped, False)
         self._root_layout = QVBoxLayout(self)
         self._root_layout.setContentsMargins(0, 0, 0, 0)
         self._root_layout.setSpacing(0)
@@ -55,7 +55,7 @@ class _TrackGutterWidget(QWidget):
 
         self._channel_label = QLabel(str(label or ""), self)
         self._channel_label.setObjectName("ChannelTrackGutterLabel")
-        self._channel_label.setAlignment(Qt.AlignCenter)
+        self._channel_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._channel_label.setWordWrap(False)
         font = self._channel_label.font()
         font.setPointSizeF(8.0)
@@ -75,7 +75,7 @@ class _TrackGutterWidget(QWidget):
                 child.setParent(None)
         layout.addStretch(1)
         if widget is not None:
-            layout.addWidget(widget, 0, Qt.AlignHCenter | Qt.AlignTop)
+            layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         layout.addStretch(1)
 
     def attach_control_widgets(

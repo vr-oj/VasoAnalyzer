@@ -6,9 +6,9 @@
 import re
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFontMetrics
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFontMetrics
+from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFileDialog,
@@ -68,8 +68,8 @@ class NewProjectDialog(QDialog):
         main_layout.addWidget(intro)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        form.setFormAlignment(Qt.AlignTop)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
         main_layout.addLayout(form)
@@ -136,7 +136,7 @@ class NewProjectDialog(QDialog):
         self.project_name_edit.setText("Untitled Project")
         self._set_location(self._default_dir)
         self._toggle_experiment_input(self.create_experiment_checkbox.isChecked())
-        self.project_name_edit.setFocus(Qt.OtherFocusReason)
+        self.project_name_edit.setFocus(Qt.FocusReason.OtherFocusReason)
         self.project_name_edit.selectAll()
         self._update_preview()
         self._update_validation()
@@ -200,7 +200,7 @@ class NewProjectDialog(QDialog):
         full_text = f"Will create: {self._preview_path}"
         if self.preview_label.width() > 0:
             metrics = QFontMetrics(self.preview_label.font())
-            display = metrics.elidedText(full_text, Qt.ElideMiddle, self.preview_label.width())
+            display = metrics.elidedText(full_text, Qt.TextElideMode.ElideMiddle, self.preview_label.width())
         else:
             display = full_text
         self.preview_label.setText(display)

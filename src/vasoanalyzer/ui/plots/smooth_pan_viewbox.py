@@ -8,8 +8,8 @@ import math
 import time
 from collections.abc import Callable
 
-from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
-from PyQt5.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
+from PyQt6.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
 
 from vasoanalyzer.ui.plots.pan_only_viewbox import PanOnlyViewBox
 from vasoanalyzer.ui.plots.pyqtgraph_nav_math import (
@@ -206,7 +206,7 @@ class SmoothPanViewBox(PanOnlyViewBox):
             angle_delta = ev.angleDelta().y()
         except Exception:
             try:
-                angle_delta = ev.delta()
+                angle_delta = ev.angleDelta().y()
             except Exception:
                 angle_delta = 0
         if angle_delta == 0:
@@ -282,12 +282,12 @@ class SmoothPanViewBox(PanOnlyViewBox):
             ev.accept()
             return
 
-        modifiers = Qt.NoModifier
+        modifiers = Qt.KeyboardModifier.NoModifier
         with contextlib.suppress(Exception):
             modifiers = ev.modifiers()
-        ctrl_or_cmd = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
-        shift = bool(modifiers & Qt.ShiftModifier)
-        alt = bool(modifiers & Qt.AltModifier)
+        ctrl_or_cmd = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        alt = bool(modifiers & Qt.KeyboardModifier.AltModifier)
 
         if ctrl_or_cmd:
             factor = (ZOOM_STEP_IN ** abs(steps)) if steps > 0 else (ZOOM_STEP_OUT ** abs(steps))

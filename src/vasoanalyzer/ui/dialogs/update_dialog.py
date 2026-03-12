@@ -7,9 +7,9 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -41,8 +41,8 @@ class UpdateDialog(QDialog):
 
         # Title
         title = QLabel("New Version Available!")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
+        title.setFont(QFont("Arial", 16, QFont.Weight.Bold))
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main.addWidget(title)
 
         # Message
@@ -52,7 +52,7 @@ class UpdateDialog(QDialog):
             "Visit GitHub to download the latest release."
         )
         message.setWordWrap(True)
-        message.setAlignment(Qt.AlignCenter)
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main.addWidget(message)
 
         main.addStretch()
@@ -95,5 +95,5 @@ class UpdateDialog(QDialog):
 
     def exec_(self):
         """Override exec_ to return the user's choice."""
-        super().exec_()
+        super().exec()
         return self.user_choice

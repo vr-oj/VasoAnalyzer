@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from PyQt5.QtCore import QByteArray, QMimeData
+from PyQt6.QtCore import QByteArray, QMimeData
 
 DATASET_MIME_TYPE = "application/x-vasoanalyzer-dataset"
 

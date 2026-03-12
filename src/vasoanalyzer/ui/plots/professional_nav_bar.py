@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import math
 
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QWidget
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QWidget
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 

@@ -7,10 +7,10 @@ import logging
 import os
 from collections.abc import Callable
 
-from PyQt5 import QtSvg
-from PyQt5.QtCore import QEvent, QFile, QPoint, QPointF, QRectF, QSize, Qt
-from PyQt5.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap, QPolygonF
-from PyQt5.QtWidgets import QApplication, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PyQt6 import QtSvg
+from PyQt6.QtCore import QEvent, QFile, QPoint, QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import QColor, QIcon, QImage, QPainter, QPalette, QPixmap, QPolygonF
+from PyQt6.QtWidgets import QApplication, QMenu, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from utils import resource_path
 
@@ -26,10 +26,10 @@ _SVG_ICON_CACHE: dict[tuple[str, int, int, float, float, float], QIcon] = {}
 _DRAWN_ICON_CACHE: dict[tuple[str, int, int, float], QIcon] = {}
 _ICON_RENDER_DEBUG_LOGGED: set[tuple[str, int, float, float, float]] = set()
 _ICON_REFRESH_EVENT_TYPES = {
-    QEvent.PaletteChange,
-    QEvent.ApplicationPaletteChange,
-    QEvent.StyleChange,
-    QEvent.Show,
+    QEvent.Type.PaletteChange,
+    QEvent.Type.ApplicationPaletteChange,
+    QEvent.Type.StyleChange,
+    QEvent.Type.Show,
 }
 _SCREEN_CHANGE_EVENT = getattr(QEvent, "ScreenChangeInternal", None)
 if _SCREEN_CHANGE_EVENT is not None:
@@ -105,8 +105,8 @@ def _trim_and_rescale_icon(
     scaled = cropped.scaled(
         content_target,
         content_target,
-        Qt.KeepAspectRatio,
-        Qt.SmoothTransformation,
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
     )
 
     if min_bbox_width_ratio > 0.0 or min_bbox_height_ratio > 0.0:
@@ -120,12 +120,12 @@ def _trim_and_rescale_icon(
             scaled = cropped.scaled(
                 adjusted_w,
                 adjusted_h,
-                Qt.IgnoreAspectRatio,
-                Qt.SmoothTransformation,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
 
-    normalized = QImage(target, target, QImage.Format_ARGB32_Premultiplied)
-    normalized.fill(Qt.transparent)
+    normalized = QImage(target, target, QImage.Format.Format_ARGB32_Premultiplied)
+    normalized.fill(Qt.GlobalColor.transparent)
     painter = QPainter(normalized)
     x = max(0, (target - scaled.width()) // 2)
     y = max(0, (target - scaled.height()) // 2)
@@ -150,11 +150,11 @@ def _draw_simple_icon(shape: str, px: int, color: QColor, dpr: float) -> QIcon:
 
     render_px = max(4, int(round(px_value * dpr_value)))
     pixmap = QPixmap(render_px, render_px)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
 
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setPen(Qt.NoPen)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(color_value)
 
     # Proportional geometry — all values relative to render_px
@@ -191,17 +191,17 @@ def _draw_simple_icon(shape: str, px: int, color: QColor, dpr: float) -> QIcon:
     pixmap.setDevicePixelRatio(dpr_value)
 
     icon = QIcon()
-    icon.addPixmap(pixmap, QIcon.Normal, QIcon.Off)
-    icon.addPixmap(pixmap, QIcon.Active, QIcon.Off)
-    icon.addPixmap(pixmap, QIcon.Selected, QIcon.Off)
+    icon.addPixmap(pixmap, QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(pixmap, QIcon.Mode.Active, QIcon.State.Off)
+    icon.addPixmap(pixmap, QIcon.Mode.Selected, QIcon.State.Off)
 
     disabled_color = QColor(color_value)
     disabled_color.setAlpha(max(40, int(round(color_value.alpha() * 0.5))))
     disabled_px = QPixmap(render_px, render_px)
-    disabled_px.fill(Qt.transparent)
+    disabled_px.fill(Qt.GlobalColor.transparent)
     dp = QPainter(disabled_px)
-    dp.setRenderHint(QPainter.Antialiasing, True)
-    dp.setPen(Qt.NoPen)
+    dp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    dp.setPen(Qt.PenStyle.NoPen)
     dp.setBrush(disabled_color)
     if shape == "plus":
         cx = (render_px - bar_t) // 2
@@ -221,7 +221,7 @@ def _draw_simple_icon(shape: str, px: int, color: QColor, dpr: float) -> QIcon:
         dp.drawPolygon(polygon)
     dp.end()
     disabled_px.setDevicePixelRatio(dpr_value)
-    icon.addPixmap(disabled_px, QIcon.Disabled, QIcon.Off)
+    icon.addPixmap(disabled_px, QIcon.Mode.Disabled, QIcon.State.Off)
 
     _DRAWN_ICON_CACHE[key] = icon
     return icon
@@ -262,14 +262,14 @@ def _template_svg_icon(
 
     render_px = max(1, int(round(px_value * dpr_value)))
     pixmap = QPixmap(render_px, render_px)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing, True)
-    painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
     renderer.render(painter, QRectF(0.0, 0.0, float(render_px), float(render_px)))
     painter.end()
 
-    image = pixmap.toImage().convertToFormat(QImage.Format_ARGB32_Premultiplied)
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
 
     # Guard: if SVG rendered as fully transparent (e.g. fill="currentColor" on
     # Windows), return empty icon so the caller can fall back to text.
@@ -284,9 +284,9 @@ def _template_svg_icon(
     )
 
     tint_painter = QPainter(image)
-    tint_painter.setRenderHint(QPainter.Antialiasing, True)
-    tint_painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-    tint_painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    tint_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    tint_painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    tint_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     tint_painter.fillRect(image.rect(), color_value)
     tint_painter.end()
 
@@ -323,20 +323,20 @@ def _template_svg_icon(
         _ICON_RENDER_DEBUG_LOGGED.add(debug_key)
 
     icon = QIcon()
-    icon.addPixmap(pixmap, QIcon.Normal, QIcon.Off)
-    icon.addPixmap(pixmap, QIcon.Active, QIcon.Off)
-    icon.addPixmap(pixmap, QIcon.Selected, QIcon.Off)
+    icon.addPixmap(pixmap, QIcon.Mode.Normal, QIcon.State.Off)
+    icon.addPixmap(pixmap, QIcon.Mode.Active, QIcon.State.Off)
+    icon.addPixmap(pixmap, QIcon.Mode.Selected, QIcon.State.Off)
 
     disabled = QColor(color_value)
     disabled.setAlpha(max(40, int(round(color_value.alpha() * 0.6))))
     disabled_image = QImage(image)
     disabled_painter = QPainter(disabled_image)
-    disabled_painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+    disabled_painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     disabled_painter.fillRect(disabled_image.rect(), disabled)
     disabled_painter.end()
     disabled_pixmap = QPixmap.fromImage(disabled_image)
     disabled_pixmap.setDevicePixelRatio(dpr_value)
-    icon.addPixmap(disabled_pixmap, QIcon.Disabled, QIcon.Off)
+    icon.addPixmap(disabled_pixmap, QIcon.Mode.Disabled, QIcon.State.Off)
 
     _SVG_ICON_CACHE[key] = icon
     return icon
@@ -379,8 +379,8 @@ class _ShapeButton(QToolButton):
             return
 
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(Qt.NoPen)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(self._shape_color)
 
         w = self.width()
@@ -440,8 +440,8 @@ class YAxisControls(QWidget):
         self._include_in_global_set = include_in_global_set
 
         self.setObjectName("YAxisControls")
-        self.setAttribute(Qt.WA_StyledBackground, False)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.hide()
 
         self._menu_icon_resource = ":/icons/chevron-down.svg"
@@ -458,16 +458,16 @@ class YAxisControls(QWidget):
 
         self.menu_button_widget = QWidget(self)
         self.menu_button_widget.setObjectName("YAxisMenuButtonWidget")
-        self.menu_button_widget.setAttribute(Qt.WA_StyledBackground, False)
+        self.menu_button_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         menu_layout = QVBoxLayout(self.menu_button_widget)
         menu_layout.setContentsMargins(0, 0, 0, 0)
         menu_layout.setSpacing(0)
 
         self.scale_menu_btn = _ShapeButton("chevron", parent=self.menu_button_widget)
         self.scale_menu_btn.setObjectName("YAxisScaleMenuButton")
-        self.scale_menu_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.scale_menu_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.scale_menu_btn.setAutoRaise(True)
-        self.scale_menu_btn.setFocusPolicy(Qt.NoFocus)
+        self.scale_menu_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.scale_menu_btn.setToolTip("Y scale options")
         self.scale_menu_btn.setFixedSize(self._btn_size)
         self.scale_menu_btn.setIconSize(self._icon_size)
@@ -476,16 +476,16 @@ class YAxisControls(QWidget):
 
         self.scale_buttons_widget = QWidget(self)
         self.scale_buttons_widget.setObjectName("YAxisScaleButtonsWidget")
-        self.scale_buttons_widget.setAttribute(Qt.WA_StyledBackground, False)
+        self.scale_buttons_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
         scale_layout = QVBoxLayout(self.scale_buttons_widget)
         scale_layout.setContentsMargins(0, 0, 0, 0)
         scale_layout.setSpacing(2)
 
         self.zoom_in_btn = _ShapeButton("plus", parent=self.scale_buttons_widget)
         self.zoom_in_btn.setObjectName("YAxisZoomInButton")
-        self.zoom_in_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.zoom_in_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.zoom_in_btn.setAutoRaise(True)
-        self.zoom_in_btn.setFocusPolicy(Qt.NoFocus)
+        self.zoom_in_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.zoom_in_btn.setToolTip("Scale up (+): bigger waveform")
         self.zoom_in_btn.setFixedSize(self._btn_size)
         self.zoom_in_btn.setIconSize(self._icon_size)
@@ -494,9 +494,9 @@ class YAxisControls(QWidget):
 
         self.zoom_out_btn = _ShapeButton("minus", parent=self.scale_buttons_widget)
         self.zoom_out_btn.setObjectName("YAxisZoomOutButton")
-        self.zoom_out_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.zoom_out_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.zoom_out_btn.setAutoRaise(True)
-        self.zoom_out_btn.setFocusPolicy(Qt.NoFocus)
+        self.zoom_out_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.zoom_out_btn.setToolTip("Scale down (-): smaller waveform")
         self.zoom_out_btn.setFixedSize(self._btn_size)
         self.zoom_out_btn.setIconSize(self._icon_size)
@@ -686,7 +686,7 @@ class YAxisControls(QWidget):
         # Draw the icon directly with QPainter — always works on all platforms.
         icon = _draw_simple_icon(shape, px, color, dpr)
         if not icon.isNull():
-            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setText("")
             button.setIcon(icon)
             return
@@ -711,13 +711,13 @@ class YAxisControls(QWidget):
             min_bbox_height_ratio=min_bbox_height_ratio,
         )
         if not icon.isNull():
-            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setText("")
             button.setIcon(icon)
             return
 
         if fallback_text:
-            button.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             button.setIcon(QIcon())
             font = button.font()
             font.setBold(True)
@@ -728,7 +728,7 @@ class YAxisControls(QWidget):
             button.setFont(font)
             button.setText(fallback_text)
         else:
-            button.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIcon(QIcon())
             button.setText("")
 
@@ -770,7 +770,7 @@ class YAxisControls(QWidget):
     def _icon_tint_color(self) -> QColor:
         palette = self.palette()
         color = QColor()
-        for role in (QPalette.Text, QPalette.WindowText, QPalette.ButtonText):
+        for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
             candidate = palette.color(role)
             if candidate.isValid() and candidate.alpha() > 0:
                 color = QColor(candidate)

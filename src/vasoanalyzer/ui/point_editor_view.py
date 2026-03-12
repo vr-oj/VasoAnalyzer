@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QGridLayout,
@@ -90,7 +90,7 @@ class PointEditorDialog(QDialog):
             facecolor=theme.CURRENT_THEME.get("window_bg", "#FFFFFF"),
         )
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         vbox.addWidget(self.canvas, stretch=1)
 
         self.ax = self.figure.add_subplot(111)
@@ -144,12 +144,12 @@ class PointEditorDialog(QDialog):
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Idx", "Time (s)", "Raw", "Preview"])
         self.table.verticalHeader().setVisible(False)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         header = self.table.horizontalHeader()
         for col in range(self.table.columnCount()):
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         header.setStretchLastSection(False)
         grid_color = theme.CURRENT_THEME.get("grid_color", "#666666")
         self.table.setStyleSheet(f"QTableWidget {{ gridline-color: {grid_color}; }}")
@@ -253,13 +253,13 @@ class PointEditorDialog(QDialog):
             self._index_to_row[idx] = row
 
             idx_item = QTableWidgetItem(str(idx))
-            idx_item.setFlags(idx_item.flags() & ~Qt.ItemIsEditable)
+            idx_item.setFlags(idx_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             time_item = QTableWidgetItem(_format_float(times[row]))
-            time_item.setFlags(time_item.flags() & ~Qt.ItemIsEditable)
+            time_item.setFlags(time_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             raw_item = QTableWidgetItem(_format_float(raw[row]))
-            raw_item.setFlags(raw_item.flags() & ~Qt.ItemIsEditable)
+            raw_item.setFlags(raw_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             clean_item = QTableWidgetItem(_format_float(clean[row]))
-            clean_item.setFlags(clean_item.flags() & ~Qt.ItemIsEditable)
+            clean_item.setFlags(clean_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
             self.table.setItem(row, 0, idx_item)
             self.table.setItem(row, 1, time_item)

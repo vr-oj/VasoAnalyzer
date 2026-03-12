@@ -9,9 +9,9 @@ from matplotlib import rcParams
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QDialogButtonBox,
@@ -64,20 +64,20 @@ class SubplotLayoutDialog(QDialog):
         dpi = QApplication.primaryScreen().logicalDotsPerInch()
         self.preview_fig = Figure(figsize=(2, 2), facecolor=CURRENT_THEME["window_bg"], dpi=dpi)
         self.preview_canvas = FigureCanvas(self.preview_fig)
-        self.preview_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.preview_ax = self.preview_fig.add_subplot(111)
         self.preview_ax.axis("off")
         main.addWidget(self.preview_canvas, 1)
 
         # --- Buttons -------------------------------------------------------
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Apply
-            | QDialogButtonBox.Reset
-            | QDialogButtonBox.Ok
-            | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Apply
+            | QDialogButtonBox.StandardButton.Reset
+            | QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply_to_fig)
-        buttons.button(QDialogButtonBox.Reset).clicked.connect(self._on_reset)
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.apply_to_fig)
+        buttons.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(self._on_reset)
         buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
         main.addWidget(buttons)
@@ -90,7 +90,7 @@ class SubplotLayoutDialog(QDialog):
         label = QLabel(f"{name.capitalize()}:")
         label.setFixedWidth(60)
 
-        slider = QSlider(Qt.Horizontal)
+        slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, 100)
 
         spin = QDoubleSpinBox()

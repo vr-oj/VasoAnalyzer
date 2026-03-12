@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 import os
 
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal
-from PyQt5.QtSvg import QSvgWidget
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
+from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
@@ -45,7 +45,7 @@ class WelcomeGuideDialog(QDialog):
         self.setWindowTitle("Welcome to VasoAnalyzer")
         self.setMinimumSize(900, 1000)
         self.setMinimumWidth(900)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._centered = False
 
         self.settings = QSettings("VasoAnalyzer", "VasoAnalyzer")
@@ -75,8 +75,8 @@ class WelcomeGuideDialog(QDialog):
             scroll = QScrollArea()
             scroll.setObjectName("va-welcome-scroll")
             scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.NoFrame)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             scroll.setWidget(page)
             scroll.setProperty("va-step-title", title)
 
@@ -133,15 +133,15 @@ class WelcomeGuideDialog(QDialog):
 
         if icon_path and icon_ext.lower() in {".png", ".jpg", ".jpeg"}:
             try:
-                from PyQt5.QtGui import QPixmap
+                from PyQt6.QtGui import QPixmap
 
                 label = QLabel()
                 pixmap = QPixmap(icon_path)
                 if not pixmap.isNull():
-                    scaled = pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    scaled = pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     label.setPixmap(scaled)
                 label.setFixedSize(60, 60)
-                label.setAlignment(Qt.AlignCenter)
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 return label
             except Exception:
                 log.debug("Failed to load welcome dialog icon", exc_info=True)
@@ -156,13 +156,13 @@ class WelcomeGuideDialog(QDialog):
 
         fallback = QLabel("VA")
         fallback.setObjectName("va-badge")
-        fallback.setAlignment(Qt.AlignCenter)
+        fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
         fallback.setFixedSize(60, 60)
         return fallback
 
     def _workspace_illustration(self) -> QSvgWidget:
         svg = QSvgWidget(":/art/workspace_map.svg")
-        svg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        svg.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         svg.setFixedHeight(160)
         return svg
 
@@ -174,7 +174,7 @@ class WelcomeGuideDialog(QDialog):
         layout.setSpacing(16)
 
         icon = self._brand_icon_widget()
-        layout.addWidget(icon, 0, Qt.AlignTop)
+        layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         text_column = QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
@@ -190,11 +190,11 @@ class WelcomeGuideDialog(QDialog):
         version_chip = QLabel(f"Version {APP_VERSION}")
         version_chip.setProperty("va-chip", True)
         version_chip.setFixedHeight(20)
-        version_chip.setAlignment(Qt.AlignCenter)
+        version_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version_chip.setMinimumWidth(96)
 
         title_row.addWidget(title, 1)
-        title_row.addWidget(version_chip, 0, Qt.AlignRight)
+        title_row.addWidget(version_chip, 0, Qt.AlignmentFlag.AlignRight)
 
         subtitle = QLabel(
             "Take a quick tour to load traces, explore events, and share results confidently."
@@ -210,9 +210,9 @@ class WelcomeGuideDialog(QDialog):
         hint = QLabel("Tip: Reopen this guide anytime with ⌘/Ctrl+/.")
         hint.setProperty("va-caption", True)
         hint.setWordWrap(True)
-        hint.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         hint.setMaximumWidth(240)
-        layout.addWidget(hint, 0, Qt.AlignTop)
+        layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignTop)
 
         return hero
 
@@ -233,17 +233,17 @@ class WelcomeGuideDialog(QDialog):
             node_layout.setSpacing(6)
 
             dot = QLabel(str(idx))
-            dot.setAlignment(Qt.AlignCenter)
+            dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
             dot.setFixedSize(28, 28)
             dot.setProperty("va-step-dot", True)
 
             caption = QLabel(title)
-            caption.setAlignment(Qt.AlignCenter)
+            caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
             caption.setWordWrap(True)
             caption.setProperty("va-step-label", True)
 
-            node_layout.addWidget(dot, 0, Qt.AlignCenter)
-            node_layout.addWidget(caption, 0, Qt.AlignCenter)
+            node_layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignCenter)
+            node_layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignCenter)
 
             layout.addWidget(node)
             self._step_widgets.append((dot, caption))
@@ -272,7 +272,7 @@ class WelcomeGuideDialog(QDialog):
         self.done_btn.setAutoDefault(last_page)
 
         if last_page:
-            self.done_btn.setFocus(Qt.TabFocusReason)
+            self.done_btn.setFocus(Qt.FocusReason.TabFocusReason)
 
         self._set_step_active(index)
 
@@ -325,7 +325,7 @@ class WelcomeGuideDialog(QDialog):
             action_label = QLabel(action)
             action_label.setProperty("va-body", True)
             action_label.setWordWrap(True)
-            action_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            action_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             row.addWidget(action_label, 1)
 
             layout.addLayout(row)
@@ -352,14 +352,14 @@ class WelcomeGuideDialog(QDialog):
         for index, token in enumerate(tokens):
             capsule = QLabel(token)
             capsule.setProperty("va-key", True)
-            capsule.setAlignment(Qt.AlignCenter)
-            capsule.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+            capsule.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            capsule.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
             strip.addWidget(capsule)
 
             if index != len(tokens) - 1:
                 plus = QLabel("+")
                 plus.setProperty("va-key-sep", True)
-                plus.setAlignment(Qt.AlignCenter)
+                plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 strip.addWidget(plus)
 
         if not tokens:
@@ -692,15 +692,15 @@ class WelcomeGuideDialog(QDialog):
         nav.setSpacing(10)
 
         self.chk_hide = QCheckBox("Don't show at startup")
-        nav.addWidget(self.chk_hide, 0, Qt.AlignVCenter)
+        nav.addWidget(self.chk_hide, 0, Qt.AlignmentFlag.AlignVCenter)
 
         support = QLabel(
             '<a href="https://github.com/vr-oj/VasoAnalyzer">Documentation & updates</a>'
         )
         support.setOpenExternalLinks(True)
         support.setProperty("va-caption", True)
-        support.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        nav.addWidget(support, 0, Qt.AlignVCenter)
+        support.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        nav.addWidget(support, 0, Qt.AlignmentFlag.AlignVCenter)
 
         nav.addStretch(1)
 

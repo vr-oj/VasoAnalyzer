@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 import numpy as np
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from vasoanalyzer.ui import theme as theme_module
 
@@ -39,7 +39,7 @@ def _numpy_gray_to_qimage(arr: np.ndarray) -> QtGui.QImage:
         width,
         height,
         width,
-        QtGui.QImage.Format_Grayscale8,
+        QtGui.QImage.Format.Format_Grayscale8,
     )
     return qimage.copy()
 
@@ -53,7 +53,7 @@ def _numpy_rgb_to_qimage(arr: np.ndarray) -> QtGui.QImage:
         width,
         height,
         bytes_per_line,
-        QtGui.QImage.Format_RGB888,
+        QtGui.QImage.Format.Format_RGB888,
     )
     return qimage.copy()
 
@@ -96,7 +96,7 @@ def _snapshot_background_color() -> QtGui.QColor:
         log.debug("Failed to get snapshot background color from theme", exc_info=True)
     app = QtWidgets.QApplication.instance()
     if app is not None:
-        return app.palette().color(QtGui.QPalette.Window)
+        return app.palette().color(QtGui.QPalette.ColorRole.Window)
     return QtGui.QColor(30, 30, 30)
 
 
@@ -111,8 +111,8 @@ class FrameView(QtWidgets.QWidget):
         self._scaled_for_dpr = 1.0
         self._scaled_target_rect = QtCore.QRectF()
         self._background_color = _snapshot_background_color()
-        self._transform_mode = QtCore.Qt.SmoothTransformation
-        self.setAttribute(QtCore.Qt.WA_OpaquePaintEvent)
+        self._transform_mode = QtCore.Qt.TransformationMode.SmoothTransformation
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_OpaquePaintEvent)
 
     def sizeHint(self) -> QtCore.QSize:
         if self._frame_qimage is not None and not self._frame_qimage.isNull():
@@ -151,7 +151,7 @@ class FrameView(QtWidgets.QWidget):
         self._scaled_target_rect = QtCore.QRectF()
 
     def changeEvent(self, event: QtCore.QEvent) -> None:
-        if event.type() == QtCore.QEvent.PaletteChange:
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
             self._background_color = _snapshot_background_color()
         super().changeEvent(event)
 
@@ -173,7 +173,7 @@ class FrameView(QtWidgets.QWidget):
             max(1, int(size.width() * dpr)),
             max(1, int(size.height() * dpr)),
         )
-        scaled = self._frame_qimage.scaled(target, QtCore.Qt.KeepAspectRatio, self._transform_mode)
+        scaled = self._frame_qimage.scaled(target, QtCore.Qt.AspectRatioMode.KeepAspectRatio, self._transform_mode)
         scaled.setDevicePixelRatio(dpr)
         self._scaled_qimage = scaled
         self._scaled_for_size = size
@@ -193,7 +193,7 @@ class FrameView(QtWidgets.QWidget):
             painter.end()
             return
 
-        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
         painter.drawImage(self._scaled_target_rect, scaled)
         painter.end()
 

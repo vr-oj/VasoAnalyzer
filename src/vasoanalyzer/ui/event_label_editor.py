@@ -5,9 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypedDict, cast
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -28,7 +28,7 @@ def _color_to_hex(color: QColor) -> str:
     color = QColor(color)
     if not color.isValid():
         return ""
-    return color.name(QColor.HexRgb)
+    return color.name(QColor.NameFormat.HexRgb)
 
 
 def _hex_to_color(value: str) -> QColor:
@@ -94,7 +94,7 @@ class EventLabelEditor(QWidget):
 
         self.color_button = QPushButton("Text Color…")
         self.color_button.setToolTip("Choose a custom color (leave blank for default).")
-        self.color_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.color_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         visibility_row.addWidget(self.color_button)
         visibility_row.addStretch(1)
         root_layout.addLayout(visibility_row)

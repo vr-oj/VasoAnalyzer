@@ -9,9 +9,9 @@ import time
 import weakref
 from collections.abc import Iterable
 
-from PyQt5.QtCore import QObject, QTimer
-from PyQt5.QtGui import QFontMetricsF
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtGui import QFontMetricsF
+from PyQt6.QtWidgets import QApplication
 
 log = logging.getLogger(__name__)
 
@@ -20,6 +20,8 @@ __all__ = ["AxisWidthSync"]
 
 class AxisWidthSync(QObject):
     """Keep all registered axes at the same width with shrink hysteresis."""
+
+    sigAxisWidthChanged = pyqtSignal(int)  # emitted whenever the applied width changes
 
     def __init__(
         self,
@@ -151,10 +153,14 @@ class AxisWidthSync(QObject):
 
     def _apply_axis_width(self, width_px: int, axes: Iterable[object]) -> None:
         target = max(int(width_px), 0)
+        changed = target != self._current_axis_width_px
         self._current_axis_width_px = target
         for axis in axes:
             with contextlib.suppress(Exception):
                 axis.setWidth(target)
+        if changed:
+            with contextlib.suppress(Exception):
+                self.sigAxisWidthChanged.emit(target)
 
     def _measure_axis_width(self, axis: object) -> int:
         try:

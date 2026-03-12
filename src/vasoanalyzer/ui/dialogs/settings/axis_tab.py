@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -38,7 +38,7 @@ def build_axis_tab(dialog: DialogT, window=None) -> QWidget:
     # -- X Axis ---------------------------------------------------
     x_grp = QGroupBox("X Axis")
     x_form = QFormLayout(x_grp)
-    x_form.setLabelAlignment(Qt.AlignRight)
+    x_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
     dialog.x_auto = QCheckBox("Auto range")
     dialog.x_auto.setChecked(dialog.ax.get_autoscalex_on())
     dialog.x_min = QDoubleSpinBox()
@@ -70,7 +70,7 @@ def build_axis_tab(dialog: DialogT, window=None) -> QWidget:
     top_units = dialog._axis_units_suffix(dialog.ax)
     y_grp = QGroupBox(top_title)
     y_form = QFormLayout(y_grp)
-    y_form.setLabelAlignment(Qt.AlignRight)
+    y_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
     dialog.y_auto = QCheckBox("Auto range")
     dialog.y_auto.setChecked(dialog.ax.get_autoscaley_on())
     dialog.yi_min = QDoubleSpinBox()
@@ -105,7 +105,7 @@ def build_axis_tab(dialog: DialogT, window=None) -> QWidget:
         bottom_units = dialog._axis_units_suffix(dialog.ax2)
         yo_grp = QGroupBox(bottom_title)
         yo_form = QFormLayout(yo_grp)
-        yo_form.setLabelAlignment(Qt.AlignRight)
+        yo_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         dialog.yo_auto = QCheckBox("Auto range")
         dialog.yo_auto.setChecked(dialog.ax2.get_autoscaley_on())
         dialog.yo_min = QDoubleSpinBox()
@@ -158,7 +158,7 @@ def build_axis_tab(dialog: DialogT, window=None) -> QWidget:
     grid.setRowStretch(2, 1)
 
     scroll = QScrollArea()
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     scroll.setWidgetResizable(True)
     scroll.setWidget(content)
 

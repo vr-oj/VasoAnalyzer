@@ -14,9 +14,9 @@ from matplotlib.colors import to_hex
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import MaxNLocator
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -108,7 +108,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         if parent:
             screen = parent.screen()
         else:
-            from PyQt5.QtWidgets import QApplication
+            from PyQt6.QtWidgets import QApplication
 
             screen = QApplication.primaryScreen()
 
@@ -154,19 +154,19 @@ class UnifiedPlotSettingsDialog(QDialog):
         actions.addStretch(1)
         qstyle = super().style()
         self.revert_btn = QPushButton("Revert to Snapshot")
-        self.revert_btn.setIcon(qstyle.standardIcon(QStyle.SP_ArrowBack))
+        self.revert_btn.setIcon(qstyle.standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
         self.revert_btn.clicked.connect(self._revert_snapshot)
         self.defaults_btn = QPushButton("Restore Style Defaults")
-        self.defaults_btn.setIcon(qstyle.standardIcon(QStyle.SP_BrowserReload))
+        self.defaults_btn.setIcon(qstyle.standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
         self.defaults_btn.clicked.connect(self._restore_style_defaults)
         actions.addWidget(self.revert_btn)
         actions.addWidget(self.defaults_btn)
         main.addLayout(actions)
 
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Apply | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.Apply).clicked.connect(self.apply_changes)
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.apply_changes)
         buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
         main.addWidget(buttons)
@@ -314,7 +314,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         container_layout.addStretch(1)
 
         scroll = QScrollArea()
-        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setWidgetResizable(True)
         scroll.setWidget(container)
         return scroll
@@ -482,7 +482,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         # -- X Axis ---------------------------------------------------
         x_grp = QGroupBox("X Axis")
         x_form = QFormLayout(x_grp)
-        x_form.setLabelAlignment(Qt.AlignRight)
+        x_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.x_auto = QCheckBox("Auto range")
         self.x_auto.setChecked(self.ax.get_autoscalex_on())
         self.x_min = QDoubleSpinBox(suffix=" s")
@@ -512,7 +512,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         top_units = self._axis_units_suffix(self.ax)
         y_grp = QGroupBox(top_title)
         y_form = QFormLayout(y_grp)
-        y_form.setLabelAlignment(Qt.AlignRight)
+        y_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.y_auto = QCheckBox("Auto range")
         self.y_auto.setChecked(self.ax.get_autoscaley_on())
         self.yi_min = QDoubleSpinBox(suffix=top_units)
@@ -543,7 +543,7 @@ class UnifiedPlotSettingsDialog(QDialog):
             bottom_units = self._axis_units_suffix(self.ax2)
             yo_grp = QGroupBox(bottom_title)
             yo_form = QFormLayout(yo_grp)
-            yo_form.setLabelAlignment(Qt.AlignRight)
+            yo_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
             self.yo_auto = QCheckBox("Auto range")
             self.yo_auto.setChecked(self.ax2.get_autoscaley_on())
             self.yo_min = QDoubleSpinBox(suffix=bottom_units)
@@ -592,7 +592,7 @@ class UnifiedPlotSettingsDialog(QDialog):
         grid.setRowStretch(2, 1)
 
         scroll = QScrollArea()
-        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setWidgetResizable(True)
         scroll.setWidget(content)
 
@@ -1255,17 +1255,17 @@ class UnifiedPlotSettingsDialog(QDialog):
 
         # Validate: figure must fit inside canvas
         if fig_w > canvas_w + 0.01 or fig_h > canvas_h + 0.01:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
 
             reply = QMessageBox.question(
                 self,
                 "Figure Exceeds Canvas",
                 f"Figure size ({fig_w:.1f}×{fig_h:.1f} in) exceeds canvas ({canvas_w:.1f}×{canvas_h:.1f} in).\n\n"
                 f"Resize canvas to fit figure?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
             )
-            if reply == QMessageBox.Yes:
+            if reply == QMessageBox.StandardButton.Yes:
                 # Enlarge canvas to fit figure
                 canvas_w = max(canvas_w, fig_w)
                 canvas_h = max(canvas_h, fig_h)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 
-from PyQt5 import QtCore
+from PyQt6 import QtCore
 
 from .page_time_map import PageTimeMap
 from .stack_source import StackSource
@@ -32,7 +32,7 @@ class StackPlayerController(QtCore.QObject):
         self._playing = False
         self._sync_enabled = True
         self._timer = QtCore.QTimer(self)
-        self._timer.setTimerType(QtCore.Qt.PreciseTimer)
+        self._timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._on_playback_tick)
         self._last_tick: float | None = None
         self._tick_accum = 0.0

@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -68,7 +68,7 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
     origin_layout.addWidget(origin_hint)
 
     origin_form = QFormLayout()
-    origin_form.setLabelAlignment(Qt.AlignRight)
+    origin_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
     origin_form.setHorizontalSpacing(12)
     origin_form.setVerticalSpacing(6)
 
@@ -104,7 +104,7 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
     canvas_layout.addWidget(canvas_hint)
 
     canvas_form = QFormLayout()
-    canvas_form.setLabelAlignment(Qt.AlignRight)
+    canvas_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
     canvas_form.setHorizontalSpacing(12)
     canvas_form.setVerticalSpacing(6)
 
@@ -140,7 +140,7 @@ def create_frame_tab_widgets(dialog: DialogT, window) -> FrameTabRefs:
     fig_layout.addWidget(fig_hint)
 
     fig_form = QFormLayout()
-    fig_form.setLabelAlignment(Qt.AlignRight)
+    fig_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
     fig_form.setHorizontalSpacing(12)
     fig_form.setVerticalSpacing(6)
 

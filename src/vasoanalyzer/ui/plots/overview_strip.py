@@ -7,9 +7,9 @@ import logging
 from collections.abc import Sequence
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QWidget
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.theme import CURRENT_THEME, hex_to_pyqtgraph_color
@@ -219,7 +219,7 @@ QFrame#OverviewStrip {{
                 return
         except Exception:
             log.debug("Failed to check event acceptance", exc_info=True)
-        if ev.button() != Qt.LeftButton:
+        if ev.button() != Qt.MouseButton.LeftButton:
             return
         if self._full_range is None:
             return

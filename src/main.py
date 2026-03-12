@@ -57,7 +57,7 @@ def _eject_dmg_if_needed() -> None:
 
 
 def _configure_sip_exit_behavior() -> None:
-    for module_name in ("sip", "PyQt5.sip", "PyQt6.sip"):
+    for module_name in ("sip", "PyQt6.sip"):
         try:
             sip_module = __import__(module_name, fromlist=["setdestroyonexit"])
         except Exception:
@@ -76,7 +76,7 @@ def _smoke_test() -> None:
     print("smoke-test: importing core modules...")
     import pandas  # noqa: F401  # must come first — catches pytz version bug on Windows
     import numpy  # noqa: F401
-    from PyQt5.QtWidgets import QApplication  # noqa: F401
+    from PyQt6.QtWidgets import QApplication  # noqa: F401
     from vasoanalyzer.app.launcher import VasoAnalyzerLauncher  # noqa: F401
     from vasoanalyzer.core.logging_config import setup_production_logging  # noqa: F401
     from vasoanalyzer.core.single_instance import SingleInstanceManager  # noqa: F401

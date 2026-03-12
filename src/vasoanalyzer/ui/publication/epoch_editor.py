@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
@@ -195,7 +195,7 @@ class EpochEditorDialog(QDialog):
             item = QListWidgetItem(
                 f"{epoch.channel}: {epoch.label} ({epoch.t_start:.1f}s - {epoch.t_end:.1f}s)"
             )
-            item.setData(Qt.UserRole, epoch.id)
+            item.setData(Qt.ItemDataRole.UserRole, epoch.id)
             self._epoch_list.addItem(item)
 
         if self._epochs:
@@ -210,7 +210,7 @@ class EpochEditorDialog(QDialog):
             self._clear_properties()
             return
 
-        epoch_id = current.data(Qt.UserRole)
+        epoch_id = current.data(Qt.ItemDataRole.UserRole)
         epoch = next((e for e in self._epochs if e.id == epoch_id), None)
 
         if epoch is None:

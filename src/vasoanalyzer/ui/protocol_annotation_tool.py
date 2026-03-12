@@ -26,8 +26,8 @@ from typing import Any
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import MouseEvent
 from matplotlib.patches import FancyArrow, FancyBboxPatch
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QColorDialog, QInputDialog, QMenu
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QColorDialog, QInputDialog, QMenu
 
 log = logging.getLogger(__name__)
 

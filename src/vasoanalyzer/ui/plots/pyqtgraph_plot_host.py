@@ -13,9 +13,9 @@ from typing import Any, cast
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPen
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtCore import QEvent, QObject, QPointF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPen
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -202,6 +202,7 @@ class PyQtGraphPlotHost(InteractionHost):
             min_axis_width_px=self._AXIS_WIDTH_PX,
             left_gutter_px=0,
         )
+        self._axis_width_sync.sigAxisWidthChanged.connect(self._on_axis_width_changed)
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
         self._grid_alpha = float(style.grid_alpha)
@@ -455,7 +456,7 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def _sampling_crosshair_pen(self) -> QPen:
         accent = CURRENT_THEME.get("accent", DEFAULT_THEME_ACCENT)
-        return pg.mkPen(color=accent, width=1, style=Qt.DashLine)
+        return pg.mkPen(color=accent, width=1, style=Qt.PenStyle.DashLine)
 
     def _refresh_sampling_crosshair_theme(self) -> None:
         crosshair_pen = self._sampling_crosshair_pen()
@@ -676,6 +677,7 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 self._event_strip_widget.setBackground(hex_to_pyqtgraph_color(bg))
             self._event_strip_widget.setContentsMargins(0, 0, 0, 0)
+            self._tighten_plot_item_layout(self._event_strip_widget.getPlotItem())
             self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
             self._event_strip_track = PyQtGraphEventStripTrack(
                 self._event_strip_widget.getPlotItem()
@@ -694,9 +696,10 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 self._event_top_lane_widget.setBackground(hex_to_pyqtgraph_color(bg))
             with contextlib.suppress(Exception):
-                self._event_top_lane_widget.setFrameStyle(QFrame.NoFrame)
+                self._event_top_lane_widget.setFrameStyle(QFrame.Shape.NoFrame)
             self._event_top_lane_widget.setStyleSheet(f"background-color: {bg};")
             self._event_top_lane_widget.setContentsMargins(0, 0, 0, 0)
+            self._tighten_plot_item_layout(self._event_top_lane_widget.getPlotItem())
             self._event_top_lane_track = PyQtGraphEventStripTrack(
                 self._event_top_lane_widget.getPlotItem(),
                 label_max_chars=20,
@@ -850,7 +853,7 @@ class PyQtGraphPlotHost(InteractionHost):
             if self._top_lane_separator is None:
                 self._top_lane_separator = QFrame()
                 self._top_lane_separator.setFixedHeight(2)
-                self._top_lane_separator.setFrameShape(QFrame.NoFrame)
+                self._top_lane_separator.setFrameShape(QFrame.Shape.NoFrame)
             self.layout.insertWidget(1, self._top_lane_separator, 0)
             self._update_top_lane_separator_style()
 
@@ -1059,7 +1062,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 angle_delta = None
         if angle_delta is None and hasattr(event, "delta"):
             try:
-                angle_delta = event.delta()
+                angle_delta = event.angleDelta().y()
             except Exception:
                 angle_delta = None
         if angle_delta is None:
@@ -1138,22 +1141,22 @@ class PyQtGraphPlotHost(InteractionHost):
             qt_mods = None
         if qt_mods is None:
             return mods
-        if qt_mods & Qt.ShiftModifier:
+        if qt_mods & Qt.KeyboardModifier.ShiftModifier:
             mods.add("shift")
-        if qt_mods & Qt.ControlModifier:
+        if qt_mods & Qt.KeyboardModifier.ControlModifier:
             mods.add("control")
-        if qt_mods & Qt.AltModifier:
+        if qt_mods & Qt.KeyboardModifier.AltModifier:
             mods.add("alt")
-        if qt_mods & Qt.MetaModifier:
+        if qt_mods & Qt.KeyboardModifier.MetaModifier:
             mods.add("meta")
         return mods
 
     def _button_name_from_qt(self, button: Qt.MouseButton) -> str:
-        if button == Qt.LeftButton:
+        if button == Qt.MouseButton.LeftButton:
             return "left"
-        if button == Qt.MiddleButton:
+        if button == Qt.MouseButton.MiddleButton:
             return "middle"
-        if button == Qt.RightButton:
+        if button == Qt.MouseButton.RightButton:
             return "right"
         return str(button)
 
@@ -1286,12 +1289,34 @@ class PyQtGraphPlotHost(InteractionHost):
         for track in self._tracks.values():
             with contextlib.suppress(Exception):
                 track.view.set_left_outer_gutter_px(0)
+            with contextlib.suppress(Exception):
+                track.view.reapply_plot_item_layout()
             self._apply_axis_font_to_track(track, trace_count=trace_count)
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
         for track in self._tracks.values():
             track.view.refresh_event_markers()
+
+    @staticmethod
+    def _tighten_plot_item_layout(plot_item) -> None:
+        """Apply zero-margin, zero-spacing layout to a PlotItem's QGraphicsGridLayout.
+
+        PyQtGraph may set non-zero default ContentsMargins or horizontal spacing
+        on PlotItem layouts.  Channel tracks reset these via _apply_plot_item_layout()
+        in PyQtGraphTraceView, but event-strip and top-lane PlotWidgets are raw
+        pg.PlotWidget instances that never get that treatment.  Any leftover margin
+        shifts their ViewBox to the right and breaks x=0 alignment.
+        """
+        layout = getattr(plot_item, "layout", None)
+        if layout is None:
+            return
+        with contextlib.suppress(Exception):
+            layout.setContentsMargins(0, 0, 0, 0)
+        with contextlib.suppress(Exception):
+            layout.setHorizontalSpacing(0)
+        with contextlib.suppress(Exception):
+            layout.setVerticalSpacing(0)
 
     def _axis_width_px(self, axis) -> int:
         if axis is None:
@@ -1339,6 +1364,8 @@ class PyQtGraphPlotHost(InteractionHost):
     def _sync_event_strip_axes(self) -> None:
         if self._event_strip_track is None or not self._tracks:
             return
+        if self._event_strip_widget is not None:
+            self._tighten_plot_item_layout(self._event_strip_widget.getPlotItem())
         ref_track = None
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
@@ -1441,6 +1468,8 @@ class PyQtGraphPlotHost(InteractionHost):
     def _sync_event_top_lane_axes(self) -> None:
         if self._event_top_lane_track is None or not self._tracks:
             return
+        if self._event_top_lane_widget is not None:
+            self._tighten_plot_item_layout(self._event_top_lane_widget.getPlotItem())
         ref_track = None
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
@@ -1813,9 +1842,9 @@ class PyQtGraphPlotHost(InteractionHost):
         # that closely matches the macOS Avenir Next appearance.
         if sys.platform.startswith("win"):
             for _f in (ylabel_font, xlabel_font, tick_font):
-                _f.setHintingPreference(QFont.PreferNoHinting)
+                _f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
                 _f.setStyleStrategy(
-                    QFont.PreferAntialias | QFont.PreferOutline  # type: ignore[operator]
+                    QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferOutline  # type: ignore[operator]
                 )
         self._axis_width_sync.set_min_from_sample_text("-999.9", tick_font)
 
@@ -1971,6 +2000,15 @@ class PyQtGraphPlotHost(InteractionHost):
     def _on_track_y_range_changed(self, *_args) -> None:
         """Resync shared left-axis width after a Y-range change."""
         self._axis_width_sync.request_sync()
+        self._sync_event_strip_axes()
+        self._sync_event_top_lane_axes()
+
+    def _on_axis_width_changed(self, _width_px: int) -> None:
+        """Called whenever AxisWidthSync applies a new axis width (including deferred shrink).
+
+        Ensures the event strip and top lane stay pixel-aligned with channel tracks
+        even when the shrink timer fires asynchronously.
+        """
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
 
@@ -2966,8 +3004,8 @@ class PyQtGraphPlotHost(InteractionHost):
                         try:
                             modifiers = ev.modifiers()
                         except Exception:
-                            modifiers = Qt.NoModifier
-                        ctrl_or_cmd = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+                            modifiers = Qt.KeyboardModifier.NoModifier
+                        ctrl_or_cmd = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
                         if ctrl_or_cmd:
                             set_source_callable("wheel.ctrl_zoom", None)
 
@@ -3327,7 +3365,7 @@ class _ResizeEventFilter(QObject):
 
     def eventFilter(self, obj, event):  # noqa: N802 - Qt API uses camelCase
         """Filter resize events and schedule axis/font refresh."""
-        if event.type() == QEvent.Resize:
+        if event.type() == QEvent.Type.Resize:
             # Schedule refresh after layout has stabilized
             # Use QTimer.singleShot(0, ...) to ensure refresh happens after
             # Qt has updated widget geometry and layout metrics

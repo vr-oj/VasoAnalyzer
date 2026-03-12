@@ -7,8 +7,8 @@ import logging
 from dataclasses import dataclass, field
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QFont
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QFont
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3
 from vasoanalyzer.ui.plots.event_display_mode import (
@@ -318,11 +318,11 @@ class PyQtGraphEventMarkerLayer:
         if selected:
             qcolor = QColor(self._SELECTED_COLOR)
             qcolor.setAlphaF(1.0)
-            return pg.mkPen(color=qcolor, width=2.5, style=Qt.SolidLine)
+            return pg.mkPen(color=qcolor, width=2.5, style=Qt.PenStyle.SolidLine)
         if hovered:
             qcolor = QColor(self._HOVERED_COLOR)
             qcolor.setAlphaF(0.85)
-            return pg.mkPen(color=qcolor, width=2.0, style=Qt.SolidLine)
+            return pg.mkPen(color=qcolor, width=2.0, style=Qt.PenStyle.SolidLine)
         color = self._line_color_override or self._entry_color(entry) or style.color
         qcolor = QColor(color)
         if not qcolor.isValid():
@@ -333,6 +333,6 @@ class PyQtGraphEventMarkerLayer:
         pen_style = (
             self._line_style_override
             if self._line_style_override is not None
-            else Qt.DashLine
+            else Qt.PenStyle.DashLine
         )
         return pg.mkPen(color=qcolor, width=float(width), style=pen_style)

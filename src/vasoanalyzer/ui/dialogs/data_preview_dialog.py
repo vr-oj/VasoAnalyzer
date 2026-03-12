@@ -11,8 +11,8 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QGroupBox,
@@ -50,7 +50,7 @@ class DataPreviewDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Data Preview")
         self.setMinimumSize(700, 450)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -114,9 +114,9 @@ class DataPreviewDialog(QDialog):
         button_row = QHBoxLayout()
         button_row.addStretch()
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.Ok).setText("Import")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Import")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         button_row.addWidget(buttons)
@@ -133,16 +133,16 @@ class DataPreviewDialog(QDialog):
         if has_more_cols:
             headers.append(f"... +{len(preview.columns) - _MAX_PREVIEW_COLS}")
         table.setHorizontalHeaderLabels(headers)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(True)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
 
         for r in range(len(preview)):
             for c, col_name in enumerate(cols):
                 val = preview.iloc[r][col_name]
                 text = f"{val:.6g}" if isinstance(val, float) else str(val)
                 item = QTableWidgetItem(text)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 table.setItem(r, c, item)
 
         table.resizeColumnsToContents()

@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from matplotlib import rcParams
-from PyQt5.QtWidgets import QFileDialog, QMessageBox
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from vasoanalyzer.ui.dialogs.figure_export_dialog import FigureExportDialog
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -55,7 +55,7 @@ def export_high_res_plot(self, checked: bool = False):
     aspect_ratio = size_h / size_w if size_w else 0.6
 
     dialog = FigureExportDialog(self, default_format="tiff", aspect_ratio=aspect_ratio)
-    if dialog.exec_() != dialog.Accepted:
+    if dialog.exec() != dialog.Accepted:
         return
 
     settings = dialog.get_settings() or {}

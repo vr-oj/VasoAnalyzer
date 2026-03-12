@@ -6,9 +6,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QShowEvent
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QShowEvent
+from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -51,7 +51,7 @@ class RelinkDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Relink Missing Files")
-        self.setWindowModality(Qt.NonModal)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.resize(720, 360)
 
         self._assets: list[MissingAsset] = []
@@ -73,7 +73,7 @@ class RelinkDialog(QDialog):
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Item", "Current Path", "Relative Path", "Status"])
         self.tree.setRootIsDecorated(False)
-        self.tree.setSelectionMode(QTreeWidget.SingleSelection)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
         layout.addWidget(self.tree, stretch=1)
 
         btn_row = QHBoxLayout()
@@ -110,8 +110,8 @@ class RelinkDialog(QDialog):
     def _refresh_tree(self) -> None:
         self.tree.clear()
 
-        ready_brush = QBrush(QColor(Qt.darkGreen))
-        missing_brush = QBrush(QColor(Qt.red))
+        ready_brush = QBrush(QColor(Qt.GlobalColor.darkGreen))
+        missing_brush = QBrush(QColor(Qt.GlobalColor.red))
 
         for asset in self._assets:
             status = asset.status()
@@ -123,7 +123,7 @@ class RelinkDialog(QDialog):
                     status,
                 ]
             )
-            item.setData(0, Qt.UserRole, asset)
+            item.setData(0, Qt.ItemDataRole.UserRole, asset)
             if status == "Ready":
                 item.setForeground(3, ready_brush)
             else:
@@ -171,7 +171,7 @@ class RelinkDialog(QDialog):
         items = self.tree.selectedItems()
         if not items:
             return
-        asset = items[0].data(0, Qt.UserRole)
+        asset = items[0].data(0, Qt.ItemDataRole.UserRole)
         if not isinstance(asset, MissingAsset):
             return
 

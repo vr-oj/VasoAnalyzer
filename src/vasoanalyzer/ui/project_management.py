@@ -5,7 +5,7 @@
 
 
 import pandas as pd
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QInputDialog,
     QMessageBox,
 )
@@ -133,4 +133,4 @@ def open_excel_mapping_dialog(self, checked: bool = False):
         return
 
     wizard = ExcelMapWizard(self, events_df=events_df)
-    wizard.exec_()
+    wizard.exec()

@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QObject, Qt
-from PyQt5.QtWidgets import (
-    QAction,
+from PyQt6.QtCore import QObject, Qt
+from PyQt6.QtGui import QAction
+from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QMessageBox,
@@ -184,10 +184,10 @@ class ExportManager(QObject):
             self.auto_export_table(checked=False, path=path)
         except Exception as exc:
             msg = QMessageBox(self._host)
-            msg.setIcon(QMessageBox.Critical)
+            msg.setIcon(QMessageBox.Icon.Critical)
             msg.setWindowTitle("Failed to export events")
             msg.setText(f"Could not export event table to:\n{path}\n\n{exc}")
-            msg.exec_()
+            msg.exec()
             return False
 
         self._host._event_table_path = path
@@ -260,10 +260,10 @@ class ExportManager(QObject):
         if not warnings:
             return
         msg = QMessageBox(self._host)
-        msg.setIcon(QMessageBox.Warning)
+        msg.setIcon(QMessageBox.Icon.Warning)
         msg.setWindowTitle(f"{profile_name} warnings")
         msg.setText("\n".join(warnings))
-        msg.setStandardButtons(QMessageBox.Ok)
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg.open()
 
     def _copy_event_profile_to_clipboard(
@@ -327,7 +327,7 @@ class ExportManager(QObject):
             QMessageBox.warning(host, "No Data", "No event data available to export.")
             return
         dialog = ExcelTemplateExportDialog(host, event_rows=host.event_table_data)
-        dialog.exec_()
+        dialog.exec()
 
     # ------------------------------------------------------------------
     # GIF Animator / Sync-Clip exporter
@@ -500,7 +500,7 @@ class ExportManager(QObject):
                     )
 
             window = host._sync_clip_window
-            window.setWindowFlag(Qt.Window, True)
+            window.setWindowFlag(Qt.WindowType.Window, True)
             window.show()
             if window.isMinimized():
                 window.showNormal()

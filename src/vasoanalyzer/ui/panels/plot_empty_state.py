@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import sys
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout
 
 
 def _shortcut_prefix() -> str:
@@ -19,11 +19,11 @@ class PlotEmptyState(QFrame):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("PlotEmptyState")
-        self.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
 
         self.title_label = QLabel("No data loaded", self)
         self.title_label.setObjectName("PlotEmptyStateTitle")
-        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.body_label = QLabel(
             "Open a trace file to get started, or import a folder of datasets into this project.",
@@ -31,7 +31,7 @@ class PlotEmptyState(QFrame):
         )
         self.body_label.setObjectName("PlotEmptyStateBody")
         self.body_label.setWordWrap(True)
-        self.body_label.setAlignment(Qt.AlignCenter)
+        self.body_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.primary_button = QPushButton("Open Data\u2026", self)
         self.primary_button.setObjectName("PlotEmptyStatePrimaryButton")
@@ -53,7 +53,7 @@ class PlotEmptyState(QFrame):
             self,
         )
         self.hint_label.setObjectName("PlotEmptyStateHint")
-        self.hint_label.setAlignment(Qt.AlignCenter)
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hint_label.setStyleSheet("color: #888; font-size: 11px; margin-top: 6px;")
 
         layout = QVBoxLayout(self)

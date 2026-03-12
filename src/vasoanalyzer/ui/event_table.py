@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 
 import pandas as pd
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     QAbstractTableModel,
     QEvent,
     QModelIndex,
@@ -14,7 +14,7 @@ from PyQt5.QtCore import (
     Qt,
     pyqtSignal,
 )
-from PyQt5.QtGui import (
+from PyQt6.QtGui import (
     QColor,
     QHelpEvent,
     QKeySequence,
@@ -23,7 +23,7 @@ from PyQt5.QtGui import (
     QPixmap,
     QResizeEvent,
 )
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDoubleSpinBox,
@@ -135,7 +135,7 @@ class EventNameDelegate(QStyledItemDelegate):
     """Delegate for rendering long event labels with elided text and tooltips."""
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
-        text = index.data(Qt.DisplayRole)
+        text = index.data(Qt.ItemDataRole.DisplayRole)
         if text is None:
             super().paint(painter, option, index)
             return
@@ -143,9 +143,9 @@ class EventNameDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         metrics = opt.fontMetrics
-        opt.text = metrics.elidedText(str(text), Qt.ElideRight, opt.rect.width())
+        opt.text = metrics.elidedText(str(text), Qt.TextElideMode.ElideRight, opt.rect.width())
         style = opt.widget.style() if opt.widget is not None else QApplication.style()
-        style.drawControl(QStyle.CE_ItemViewItem, opt, painter)
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter)
 
     def helpEvent(
         self,
@@ -154,8 +154,8 @@ class EventNameDelegate(QStyledItemDelegate):
         option: QStyleOptionViewItem,
         index: QModelIndex,
     ) -> bool:
-        if event.type() == QEvent.ToolTip:
-            text = index.data(Qt.DisplayRole)
+        if event.type() == QEvent.Type.ToolTip:
+            text = index.data(Qt.ItemDataRole.DisplayRole)
             if text:
                 QToolTip.showText(event.globalPos(), str(text), view)
                 return True
@@ -182,7 +182,7 @@ class NumericCellDelegate(QStyledItemDelegate):
 
     def setEditorData(self, editor: QDoubleSpinBox, index: QModelIndex):
         """Load current value into the editor."""
-        value = index.data(Qt.EditRole)
+        value = index.data(Qt.ItemDataRole.EditRole)
         try:
             # Parse display value, removing formatting
             value_str = str(value).replace(",", "").replace("—", "")
@@ -193,12 +193,12 @@ class NumericCellDelegate(QStyledItemDelegate):
     def setModelData(self, editor: QDoubleSpinBox, model: QAbstractTableModel, index: QModelIndex):
         """Save edited value back to the model."""
         editor.interpretText()
-        model.setData(index, editor.value(), Qt.EditRole)
+        model.setData(index, editor.value(), Qt.ItemDataRole.EditRole)
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex):
         """Custom painting with hover states for editable cells."""
         # Hover state for editable cells
-        if option.state & QStyle.State_MouseOver and index.flags() & Qt.ItemIsEditable:
+        if option.state & QStyle.StateFlag.State_MouseOver and index.flags() & Qt.ItemFlag.ItemIsEditable:
             hover = CURRENT_THEME.get(
                 "table_editable_hover", CURRENT_THEME.get("table_hover", "#E5E7EB")
             )
@@ -234,9 +234,9 @@ class EventTableModel(QAbstractTableModel):
         if self.rowCount() > 0 and self.columnCount() > TIME_COLUMN_INDEX:
             top_left = self.index(0, TIME_COLUMN_INDEX)
             bottom_right = self.index(self.rowCount() - 1, TIME_COLUMN_INDEX)
-            self.dataChanged.emit(top_left, bottom_right, [Qt.DisplayRole])
+            self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole])
         if self.columnCount() > TIME_COLUMN_INDEX:
-            self.headerDataChanged.emit(Qt.Horizontal, TIME_COLUMN_INDEX, TIME_COLUMN_INDEX)
+            self.headerDataChanged.emit(Qt.Orientation.Horizontal, TIME_COLUMN_INDEX, TIME_COLUMN_INDEX)
 
     def time_mode(self) -> TimeMode:
         return self._time_mode
@@ -258,32 +258,32 @@ class EventTableModel(QAbstractTableModel):
         # Extra leading status column
         return len(self._headers) + 1
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
-        if orientation == Qt.Horizontal and 0 <= section < self.columnCount():
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < self.columnCount():
             if section == STATUS_COLUMN_INDEX:
-                if role == Qt.DisplayRole:
+                if role == Qt.ItemDataRole.DisplayRole:
                     return " "
-                if role == Qt.ToolTipRole:
+                if role == Qt.ItemDataRole.ToolTipRole:
                     return "Review status"
-                if role == Qt.TextAlignmentRole:
-                    return Qt.AlignHCenter | Qt.AlignVCenter
+                if role == Qt.ItemDataRole.TextAlignmentRole:
+                    return Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
                 return None
 
             data_idx = section - 1
             if 0 <= data_idx < len(self._headers):
                 header = self._headers[data_idx]
-                if role == Qt.DisplayRole:
+                if role == Qt.ItemDataRole.DisplayRole:
                     return self._display_header(header)
-                if role == Qt.ToolTipRole:
+                if role == Qt.ItemDataRole.ToolTipRole:
                     return HEADER_TOOLTIPS.get(header)
-                if role == Qt.TextAlignmentRole:
+                if role == Qt.ItemDataRole.TextAlignmentRole:
                     if section == EVENT_COLUMN_INDEX:
-                        return Qt.AlignLeft | Qt.AlignVCenter
-                    return Qt.AlignHCenter | Qt.AlignVCenter
+                        return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                    return Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter
                 return None
         return super().headerData(section, orientation, role)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
         if not index.isValid():
             return None
         row_idx = index.row()
@@ -293,32 +293,32 @@ class EventTableModel(QAbstractTableModel):
 
         if col == STATUS_COLUMN_INDEX:
             state = self._review_states[row_idx] if row_idx < len(self._review_states) else None
-            if role == Qt.DecorationRole:
+            if role == Qt.ItemDataRole.DecorationRole:
                 return self._status_icon_for(state)
-            if role == Qt.ToolTipRole:
+            if role == Qt.ItemDataRole.ToolTipRole:
                 return self._status_tooltip(state)
-            if role == Qt.DisplayRole:
+            if role == Qt.ItemDataRole.DisplayRole:
                 return ""
-            if role == Qt.TextAlignmentRole:
-                return Qt.AlignCenter
+            if role == Qt.ItemDataRole.TextAlignmentRole:
+                return Qt.AlignmentFlag.AlignCenter
             return None
 
         raw_value = self._value_at(row_idx, col - 1)
 
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             return self._format_display(col, raw_value)
-        if role == Qt.EditRole:
+        if role == Qt.ItemDataRole.EditRole:
             return "" if raw_value is None else str(raw_value)
-        if role == Qt.TextAlignmentRole:
+        if role == Qt.ItemDataRole.TextAlignmentRole:
             if col == EVENT_COLUMN_INDEX:
-                return Qt.AlignVCenter | Qt.AlignLeft
-            return Qt.AlignVCenter | Qt.AlignRight
+                return Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            return Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
         return None
 
     def flags(self, index: QModelIndex):
         if not index.isValid():
-            return Qt.ItemIsEnabled
-        base = Qt.ItemIsSelectable | Qt.ItemIsEnabled
+            return Qt.ItemFlag.ItemIsEnabled
+        base = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
         col = index.column()
 
         # Status column (0): not editable via flags (will be handled by click events)
@@ -327,12 +327,12 @@ class EventTableModel(QAbstractTableModel):
 
         # All data columns (Event, Time, ID, OD, Pressures): editable
         if col >= EVENT_COLUMN_INDEX:
-            base |= Qt.ItemIsEditable
+            base |= Qt.ItemFlag.ItemIsEditable
 
         return base
 
-    def setData(self, index: QModelIndex, value: object, role: int = Qt.EditRole) -> bool:
-        if role not in (Qt.EditRole, Qt.DisplayRole) or not index.isValid():
+    def setData(self, index: QModelIndex, value: object, role: int = Qt.ItemDataRole.EditRole) -> bool:
+        if role not in (Qt.ItemDataRole.EditRole, Qt.ItemDataRole.DisplayRole) or not index.isValid():
             return False
 
         row_idx = index.row()
@@ -360,7 +360,7 @@ class EventTableModel(QAbstractTableModel):
                 return False
             current[0] = new_label
             self._rows[row_idx] = tuple(current)
-            self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
             self.label_edited.emit(row_idx, new_label, old_label)
             return True
 
@@ -385,7 +385,7 @@ class EventTableModel(QAbstractTableModel):
         if tuple_idx < len(current):
             current[tuple_idx] = new_val
             self._rows[row_idx] = tuple(current)
-            self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+            self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
             self.value_edited.emit(row_idx, new_val, float(old_val) if old_val is not None else 0.0)
             return True
 
@@ -458,7 +458,7 @@ class EventTableModel(QAbstractTableModel):
         self._rows[index] = tuple(row)
         left = self.index(index, 0)
         right = self.index(index, self.columnCount() - 1)
-        self.dataChanged.emit(left, right, [Qt.DisplayRole, Qt.EditRole])
+        self.dataChanged.emit(left, right, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
 
     def set_review_states(self, review_states: list[str] | None, *, suppress_layout: bool = False):
         target_len = len(self._rows)
@@ -480,7 +480,7 @@ class EventTableModel(QAbstractTableModel):
                 else QModelIndex()
             )
             if top_left.isValid() and bottom_right.isValid():
-                self.dataChanged.emit(top_left, bottom_right, [Qt.DecorationRole, Qt.ToolTipRole])
+                self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.ToolTipRole])
 
     # Internal helpers -------------------------------------------------
     def _column_to_tuple_index(self, column: int) -> int | None:
@@ -617,11 +617,11 @@ class EventTableModel(QAbstractTableModel):
             else color_map["UNREVIEWED"]
         )
         pix = QPixmap(20, 20)
-        pix.fill(Qt.transparent)
+        pix.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pix)
-        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setBrush(QColor(color_hex))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(2, 2, 16, 16)
         painter.end()
         self._status_icons[label] = pix
@@ -655,14 +655,14 @@ class EventTableWidget(QTableView):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("EventTable")
-        self.setEditTriggers(QAbstractItemView.DoubleClicked)
-        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.setSelectionBehavior(QAbstractItemView.SelectItems)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         self.setAlternatingRowColors(True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.setFrameShape(QFrame.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setSortingEnabled(True)  # Enable column sorting
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # Set up delegates for different column types
         self._event_delegate = EventNameDelegate(self)
@@ -676,20 +676,20 @@ class EventTableWidget(QTableView):
         self._preferred_event_width = DEFAULT_EVENT_COLUMN_WIDTH
 
         h_header = self.horizontalHeader()
-        h_header.setSectionResizeMode(QHeaderView.Fixed)
+        h_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         h_header.setMinimumSectionSize(24)
         h_header.setStretchLastSection(False)
         h_header.setDefaultSectionSize(84)
         h_header.setMinimumHeight(28)
         if h_header.count() > EVENT_COLUMN_INDEX:
             h_header.resizeSection(EVENT_COLUMN_INDEX, self._preferred_event_width)
-            h_header.setSectionResizeMode(EVENT_COLUMN_INDEX, QHeaderView.Interactive)
+            h_header.setSectionResizeMode(EVENT_COLUMN_INDEX, QHeaderView.ResizeMode.Interactive)
 
         v_header = self.verticalHeader()
-        v_header.setSectionResizeMode(QHeaderView.Fixed)
+        v_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         v_header.setDefaultSectionSize(26)
         v_header.setMinimumWidth(STATUS_COLUMN_WIDTH + 4)
-        v_header.setDefaultAlignment(Qt.AlignCenter)
+        v_header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.clicked.connect(self._emit_cell_clicked)
 
@@ -697,18 +697,18 @@ class EventTableWidget(QTableView):
         log.debug("[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)=%s", id(self))
         palette = self.palette()
         header_bg = CURRENT_THEME.get(
-            "panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
+            "panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.ColorRole.Base).name())
         )
-        header_text = CURRENT_THEME.get("text", palette.color(QPalette.Text).name())
+        header_text = CURRENT_THEME.get("text", palette.color(QPalette.ColorRole.Text).name())
         hover = CURRENT_THEME.get("table_hover", CURRENT_THEME.get("button_hover_bg", header_bg))
 
-        base = CURRENT_THEME.get("table_bg", palette.color(QPalette.Base).name())
+        base = CURRENT_THEME.get("table_bg", palette.color(QPalette.ColorRole.Base).name())
         alt = CURRENT_THEME.get("alternate_bg", base)
-        selection = CURRENT_THEME.get("selection_bg", palette.color(QPalette.Highlight).name())
+        selection = CURRENT_THEME.get("selection_bg", palette.color(QPalette.ColorRole.Highlight).name())
         selection_text = CURRENT_THEME.get(
-            "highlighted_text", palette.color(QPalette.HighlightedText).name()
+            "highlighted_text", palette.color(QPalette.ColorRole.HighlightedText).name()
         )
-        grid_base = palette.color(QPalette.Mid)
+        grid_base = palette.color(QPalette.ColorRole.Mid)
         grid = CURRENT_THEME.get("table_header_border", grid_base.name())
         header_border = CURRENT_THEME.get(
             "panel_border", CURRENT_THEME.get("table_header_border", grid_base.name())
@@ -781,7 +781,7 @@ class EventTableWidget(QTableView):
                 if col == STATUS_COLUMN_INDEX:
                     self.setColumnHidden(col, "review" not in visible_keys)
                     continue
-                header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+                header_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
                 key = column_key_for_header(header_label)
                 if key is None:
                     continue
@@ -797,49 +797,49 @@ class EventTableWidget(QTableView):
 
     def keyPressEvent(self, event):
         # Tab/Shift+Tab: Cell navigation
-        if event.key() == Qt.Key_Tab or event.key() == Qt.Key_Backtab:
-            self._handle_tab_navigation(event.key() == Qt.Key_Backtab)
+        if event.key() == Qt.Key.Key_Tab or event.key() == Qt.Key.Key_Backtab:
+            self._handle_tab_navigation(event.key() == Qt.Key.Key_Backtab)
             event.accept()
             return
 
         # Ctrl+C: Copy (preserve existing functionality)
-        if event.matches(QKeySequence.Copy):
+        if event.matches(QKeySequence.StandardKey.Copy):
             self._copy_selection_to_clipboard()
             event.accept()
             return
 
         # Ctrl+V: Paste from clipboard into selected cells
-        if event.matches(QKeySequence.Paste):
+        if event.matches(QKeySequence.StandardKey.Paste):
             self._paste_from_clipboard()
             event.accept()
             return
 
         # F2: Edit current cell (any editable column)
-        if event.key() == Qt.Key_F2:
+        if event.key() == Qt.Key.Key_F2:
             current = self.currentIndex()
-            if current.isValid() and (self.model().flags(current) & Qt.ItemIsEditable):
+            if current.isValid() and (self.model().flags(current) & Qt.ItemFlag.ItemIsEditable):
                 self.edit(current)
             event.accept()
             return
 
         # Shift+Enter: Commit edit and move up
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and event.modifiers() & Qt.ShiftModifier:
-            if self.state() == QAbstractItemView.EditingState:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            if self.state() == QAbstractItemView.State.EditingState:
                 super().keyPressEvent(event)
-                if self.state() != QAbstractItemView.EditingState:
+                if self.state() != QAbstractItemView.State.EditingState:
                     self._move_selection_up()
             event.accept()
             return
 
         # Enter: Edit mode or navigate down
-        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-            if self.state() == QAbstractItemView.EditingState:
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self.state() == QAbstractItemView.State.EditingState:
                 super().keyPressEvent(event)
-                if self.state() != QAbstractItemView.EditingState:
+                if self.state() != QAbstractItemView.State.EditingState:
                     self._move_selection_down()
             else:
                 current = self.currentIndex()
-                if current.isValid() and (self.model().flags(current) & Qt.ItemIsEditable):
+                if current.isValid() and (self.model().flags(current) & Qt.ItemFlag.ItemIsEditable):
                     self.edit(current)
                 else:
                     self._move_selection_down()
@@ -847,8 +847,8 @@ class EventTableWidget(QTableView):
             return
 
         # Escape: Cancel edit OR clear selection
-        if event.key() == Qt.Key_Escape:
-            if self.state() == QAbstractItemView.EditingState:
+        if event.key() == Qt.Key.Key_Escape:
+            if self.state() == QAbstractItemView.State.EditingState:
                 super().keyPressEvent(event)
             else:
                 self.clearSelection()
@@ -857,8 +857,8 @@ class EventTableWidget(QTableView):
 
         # Delete/Backspace: Delete rows
         if (
-            event.key() in (Qt.Key_Delete, Qt.Key_Backspace)
-            and self.state() != QAbstractItemView.EditingState
+            event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and self.state() != QAbstractItemView.State.EditingState
         ):
             selection = self.selectionModel()
             if selection is not None:
@@ -869,7 +869,7 @@ class EventTableWidget(QTableView):
                     return
 
         # Space: Cycle status (when status column focused)
-        if event.key() == Qt.Key_Space and not event.modifiers():
+        if event.key() == Qt.Key.Key_Space and not event.modifiers():
             current = self.currentIndex()
             if current.isValid() and current.column() == STATUS_COLUMN_INDEX:
                 self._cycle_review_status(current.row())
@@ -883,11 +883,11 @@ class EventTableWidget(QTableView):
         """Handle mouse clicks, especially for status column interactions."""
         index = self.indexAt(event.pos())
         if index.isValid() and index.column() == STATUS_COLUMN_INDEX:
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.MouseButton.LeftButton:
                 self._cycle_review_status(index.row())
                 event.accept()
                 return
-            elif event.button() == Qt.RightButton:
+            elif event.button() == Qt.MouseButton.RightButton:
                 self._show_status_menu(index.row(), event.globalPos())
                 event.accept()
                 return
@@ -923,11 +923,11 @@ class EventTableWidget(QTableView):
         stretch_fallback = None
         for col in range(model.columnCount()):
             if col == STATUS_COLUMN_INDEX:
-                header.setSectionResizeMode(col, QHeaderView.Fixed)
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
                 self.setColumnWidth(col, STATUS_COLUMN_WIDTH)
                 continue
 
-            header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            header_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
             key = column_key_for_header(header_label)
             if key is None:
                 continue
@@ -937,10 +937,10 @@ class EventTableWidget(QTableView):
 
             if key == "event":
                 event_col = col
-                header.setSectionResizeMode(col, QHeaderView.Stretch)
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
                 continue
 
-            header.setSectionResizeMode(col, QHeaderView.Fixed)
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
             if key == "time":
                 self.setColumnWidth(col, TIME_COLUMN_WIDTH)
             elif key == "id":
@@ -951,7 +951,7 @@ class EventTableWidget(QTableView):
                 self.setColumnWidth(col, PRESSURE_COLUMN_WIDTH)
 
         if event_col is None and stretch_fallback is not None:
-            header.setSectionResizeMode(stretch_fallback, QHeaderView.Stretch)
+            header.setSectionResizeMode(stretch_fallback, QHeaderView.ResizeMode.Stretch)
 
     def _apply_numeric_delegates(self) -> None:
         model = self.model()
@@ -961,7 +961,7 @@ class EventTableWidget(QTableView):
         for col in range(model.columnCount()):
             if col in (STATUS_COLUMN_INDEX, EVENT_COLUMN_INDEX):
                 continue
-            header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            header_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
             if header_label == "Time (s)" or col == TIME_COLUMN_INDEX:
                 self.setItemDelegateForColumn(col, self._time_delegate)
             else:
@@ -972,7 +972,7 @@ class EventTableWidget(QTableView):
         if model is None:
             return None
         for col in range(model.columnCount()):
-            header_label = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+            header_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
             if header_label == label:
                 return col
         return None
@@ -994,7 +994,7 @@ class EventTableWidget(QTableView):
             values: list[str] = []
             for col in range(min_col, max_col + 1):
                 idx = selected_map.get((row, col))
-                data = idx.data(Qt.DisplayRole) if idx is not None else ""
+                data = idx.data(Qt.ItemDataRole.DisplayRole) if idx is not None else ""
                 if data is None:
                     data = ""
                 values.append(str(data))
@@ -1050,9 +1050,9 @@ class EventTableWidget(QTableView):
                 if not value_text:
                     continue
                 idx = model.index(row, col)
-                if not (model.flags(idx) & Qt.ItemIsEditable):
+                if not (model.flags(idx) & Qt.ItemFlag.ItemIsEditable):
                     continue
-                if model.setData(idx, value_text, Qt.EditRole):
+                if model.setData(idx, value_text, Qt.ItemDataRole.EditRole):
                     paste_count += 1
 
         if paste_count > 0:
@@ -1108,7 +1108,7 @@ class EventTableWidget(QTableView):
             while next_row >= 0:
                 while next_col >= 0:
                     idx = model.index(next_row, next_col)
-                    if model.flags(idx) & Qt.ItemIsEditable:
+                    if model.flags(idx) & Qt.ItemFlag.ItemIsEditable:
                         self.setCurrentIndex(idx)
                         return
                     next_col -= 1
@@ -1121,7 +1121,7 @@ class EventTableWidget(QTableView):
             while next_row < model.rowCount():
                 while next_col < model.columnCount():
                     idx = model.index(next_row, next_col)
-                    if model.flags(idx) & Qt.ItemIsEditable:
+                    if model.flags(idx) & Qt.ItemFlag.ItemIsEditable:
                         self.setCurrentIndex(idx)
                         return
                     next_col += 1
@@ -1150,7 +1150,7 @@ class EventTableWidget(QTableView):
             model._review_states[row] = status
 
         index = model.index(row, STATUS_COLUMN_INDEX)
-        model.dataChanged.emit(index, index, [Qt.DecorationRole, Qt.ToolTipRole])
+        model.dataChanged.emit(index, index, [Qt.ItemDataRole.DecorationRole, Qt.ItemDataRole.ToolTipRole])
         self.statusChanged.emit(row, status)
 
     def _show_status_menu(self, row: int, pos) -> None:

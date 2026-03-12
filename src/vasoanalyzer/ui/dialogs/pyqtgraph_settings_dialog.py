@@ -6,8 +6,8 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, TypedDict
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QDialog,
@@ -81,8 +81,8 @@ class PyQtGraphSettingsDialog(QDialog):
         # Main scroll area
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
@@ -100,11 +100,11 @@ class PyQtGraphSettingsDialog(QDialog):
 
         # Dialog buttons
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.Apply
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Apply
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        buttons.button(QDialogButtonBox.Apply).clicked.connect(self._save_settings)
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self._save_settings)
         layout.addWidget(buttons)
 
     def _create_tracks_group(self) -> QGroupBox:
@@ -131,8 +131,8 @@ class PyQtGraphSettingsDialog(QDialog):
 
             name_label = QLabel(label_text)
             grid.addWidget(name_label, row, 0)
-            grid.addWidget(widgets["visible"], row, 1, alignment=Qt.AlignCenter)
-            grid.addWidget(widgets["autoscale"], row, 2, alignment=Qt.AlignCenter)
+            grid.addWidget(widgets["visible"], row, 1, alignment=Qt.AlignmentFlag.AlignCenter)
+            grid.addWidget(widgets["autoscale"], row, 2, alignment=Qt.AlignmentFlag.AlignCenter)
             grid.addWidget(widgets["y_min"], row, 3)
             grid.addWidget(widgets["y_max"], row, 4)
             row += 1
@@ -208,14 +208,14 @@ class PyQtGraphSettingsDialog(QDialog):
         y_min_spin = QDoubleSpinBox()
         y_min_spin.setRange(-10000, 10000)
         y_min_spin.setDecimals(2)
-        y_min_spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        y_min_spin.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
+        y_min_spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        y_min_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
         y_max_spin = QDoubleSpinBox()
         y_max_spin.setRange(-10000, 10000)
         y_max_spin.setDecimals(2)
-        y_max_spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        y_max_spin.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
+        y_max_spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        y_max_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
 
         try:
             if track is not None:

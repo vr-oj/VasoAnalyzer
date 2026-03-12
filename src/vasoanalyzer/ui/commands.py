@@ -3,7 +3,7 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtWidgets import QUndoCommand
+from PyQt6.QtGui import QUndoCommand
 
 
 class ReplaceEventCommand(QUndoCommand):

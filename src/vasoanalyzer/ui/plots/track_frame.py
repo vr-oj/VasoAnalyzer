@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QFrame, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtCore import QEvent
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QFrame, QSizePolicy, QVBoxLayout, QWidget
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -36,8 +36,8 @@ class TrackFrame(QWidget):
 
         self._separator_bar = QFrame(self)
         self._separator_bar.setObjectName("TrackSeparatorBar")
-        self._separator_bar.setFrameShape(QFrame.NoFrame)
-        self._separator_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._separator_bar.setFrameShape(QFrame.Shape.NoFrame)
+        self._separator_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self._layout.addWidget(self._content_host, 1)
         self._layout.addWidget(self._separator_bar, 0)
@@ -75,10 +75,10 @@ class TrackFrame(QWidget):
     def event(self, event) -> bool:  # noqa: N802 - Qt API
         handled = super().event(event)
         if event is not None and event.type() in {
-            QEvent.PaletteChange,
-            QEvent.ApplicationPaletteChange,
-            QEvent.StyleChange,
-            QEvent.Show,
+            QEvent.Type.PaletteChange,
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.StyleChange,
+            QEvent.Type.Show,
         }:
             self._apply_divider_style()
         return handled

@@ -30,9 +30,9 @@ from typing import Any, cast
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
-from PyQt5.QtCore import QAbstractTableModel, QMimeData, QModelIndex, QSettings, Qt, pyqtProperty
-from PyQt5.QtGui import QBrush, QColor, QFont, QPalette
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, QSettings, Qt, pyqtProperty
+from PyQt6.QtGui import QBrush, QColor, QFont, QPalette
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFileDialog,
@@ -161,19 +161,19 @@ def get_fonts() -> dict[str, QFont]:
 
     # Configure sizes and weights
     fonts["h1"].setPointSize(16)
-    fonts["h1"].setWeight(QFont.Bold)
+    fonts["h1"].setWeight(QFont.Weight.Bold)
 
     fonts["h2"].setPointSize(14)
-    fonts["h2"].setWeight(QFont.DemiBold)
+    fonts["h2"].setWeight(QFont.Weight.DemiBold)
 
     fonts["h3"].setPointSize(12)
-    fonts["h3"].setWeight(QFont.DemiBold)
+    fonts["h3"].setWeight(QFont.Weight.DemiBold)
 
     fonts["body"].setPointSize(14)  # Increased from 11
-    fonts["body"].setWeight(QFont.Normal)
+    fonts["body"].setWeight(QFont.Weight.Normal)
 
     fonts["small"].setPointSize(12)  # Increased from 10
-    fonts["small"].setWeight(QFont.Normal)
+    fonts["small"].setWeight(QFont.Weight.Normal)
 
     fonts["mono"].setPointSize(12)  # Increased from 10
 
@@ -508,16 +508,16 @@ class PandasModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return len(self._df.columns)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
-        if not index.isValid() or role != Qt.DisplayRole:
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
             return None
         value = self._df.iat[index.row(), index.column()]
         return "" if pd.isna(value) else str(value)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
-        if role != Qt.DisplayRole:
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
-        if orientation == Qt.Horizontal:
+        if orientation == Qt.Orientation.Horizontal:
             return self._df.columns[section]
         return str(section + 1)
 
@@ -527,12 +527,12 @@ class SessionValuesTable(QTableWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setAlternatingRowColors(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self.verticalHeader().setVisible(False)
 
     def mimeTypes(self) -> list[str]:
@@ -548,7 +548,7 @@ class SessionValuesTable(QTableWidget):
         if item is None:
             return mime
 
-        event_index = item.data(Qt.UserRole)
+        event_index = item.data(Qt.ItemDataRole.UserRole)
         if event_index is None:
             return mime
 
@@ -565,9 +565,9 @@ class TemplatePreviewTable(QTableWidget):
         self._drop_context = None
         self._active_drop_column: int | None = None
         self.setAcceptDrops(True)
-        self.setDragDropMode(QAbstractItemView.DropOnly)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self._apply_theme()
 
     def set_drop_context(self, context) -> None:
@@ -630,12 +630,12 @@ class TemplatePreviewTable(QTableWidget):
 
         palette.setColor(self.backgroundRole(), QColor(table_bg))
         palette.setColor(self.foregroundRole(), QColor(text))
-        palette.setColor(QPalette.Base, QColor(table_bg))
-        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
-        palette.setColor(QPalette.Text, QColor(text))
-        palette.setColor(QPalette.WindowText, QColor(text))
-        palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(highlighted_text))
+        palette.setColor(QPalette.ColorRole.Base, QColor(table_bg))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.ColorRole.Text, QColor(text))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(highlighted_text))
 
         self.setPalette(palette)
         # Use the new modern table stylesheet
@@ -690,7 +690,7 @@ class TemplatePage(WizardPageBase):
         # Recent templates UI
         self.recent_templates_label = QLabel("Recent templates")
         self.recent_templates_list = QListWidget()
-        self.recent_templates_list.setSelectionMode(QListWidget.SingleSelection)
+        self.recent_templates_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.recent_templates_list.setAlternatingRowColors(True)
         self.recent_templates_list.setUniformItemSizes(True)
         self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
@@ -963,7 +963,7 @@ class TemplatePage(WizardPageBase):
             file_name = os.path.basename(path)
             item = QListWidgetItem(file_name)
             item.setToolTip(path)
-            item.setData(Qt.UserRole, path)
+            item.setData(Qt.ItemDataRole.UserRole, path)
             self.recent_templates_list.addItem(item)
 
         self.recent_templates_label.setVisible(True)
@@ -990,7 +990,7 @@ class TemplatePage(WizardPageBase):
         """Handle activation of a recent template entry."""
         if item is None:
             return
-        path = item.data(Qt.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
         self._load_template_from_path(path)
@@ -1007,7 +1007,7 @@ class TemplatePage(WizardPageBase):
         item = self.recent_templates_list.currentItem()
         if item is None:
             return
-        path = item.data(Qt.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
         paths = [p for p in self._load_recent_templates() if p != path]
@@ -1321,7 +1321,7 @@ class RowMappingPage(WizardPageBase):
         root.addLayout(control_row)
 
         splitter = QSplitter()
-        splitter.setOrientation(Qt.Horizontal)
+        splitter.setOrientation(Qt.Orientation.Horizontal)
         root.addWidget(splitter, 1)
 
         self.preview_table = TemplatePreviewTable()
@@ -1349,18 +1349,18 @@ class RowMappingPage(WizardPageBase):
         )
         self.mapping_table.verticalHeader().setVisible(False)
         self.mapping_table.verticalHeader().setDefaultSectionSize(36)
-        self.mapping_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.mapping_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._apply_table_theme(self.mapping_table)
         self.mapping_table.setAlternatingRowColors(True)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.mapping_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.mapping_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.mapping_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         splitter.addWidget(self.mapping_table)
 
         self.session_values_table = SessionValuesTable()
-        self.session_values_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.session_values_table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.session_values_table.verticalHeader().setDefaultSectionSize(36)
         session_container = QVBoxLayout()
         session_container.setSpacing(SPACING["sm"])
@@ -1404,12 +1404,12 @@ class RowMappingPage(WizardPageBase):
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
         highlighted_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
 
-        palette.setColor(QPalette.Base, QColor(table_bg))
-        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
-        palette.setColor(QPalette.Text, QColor(text))
-        palette.setColor(QPalette.WindowText, QColor(text))
-        palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(highlighted_text))
+        palette.setColor(QPalette.ColorRole.Base, QColor(table_bg))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.ColorRole.Text, QColor(text))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(highlighted_text))
 
         table.setPalette(palette)
         # Use the new modern table stylesheet
@@ -1500,7 +1500,7 @@ class RowMappingPage(WizardPageBase):
 
         for row_idx, event in enumerate(events):
             event_item = QTableWidgetItem(event.label)
-            event_item.setData(Qt.UserRole, event.index)
+            event_item.setData(Qt.ItemDataRole.UserRole, event.index)
             table.setItem(row_idx, 0, event_item)
 
             time_text = ""
@@ -1536,20 +1536,20 @@ class RowMappingPage(WizardPageBase):
 
         for row_idx, event_row in enumerate(event_rows):
             row_number_item = QTableWidgetItem(str(event_row.row_index))
-            row_number_item.setFlags(row_number_item.flags() & ~Qt.ItemIsEditable)
+            row_number_item.setFlags(row_number_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             row_number_item.setFont(font_mono)
             self.mapping_table.setItem(row_idx, 0, row_number_item)
 
             self._template_row_to_table_index[event_row.row_index] = row_idx
 
             label_item = QTableWidgetItem(event_row.label)
-            label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
+            label_item.setFlags(label_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.mapping_table.setItem(row_idx, 1, label_item)
 
             combo = QComboBox()
             combo.setEditable(True)
-            combo.setInsertPolicy(QComboBox.NoInsert)
-            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
             combo.setStyleSheet(get_modern_combobox_stylesheet())
             combo.addItem("<leave unmapped>", None)
             for event in wiz.session_events:
@@ -1568,12 +1568,12 @@ class RowMappingPage(WizardPageBase):
             self._event_row_widgets[event_row.row_index] = combo
 
             value_item = QTableWidgetItem("")
-            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
+            value_item.setFlags(value_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.mapping_table.setItem(row_idx, 3, value_item)
             self._value_items[event_row.row_index] = value_item
 
             status_item = QTableWidgetItem("○")
-            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
+            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.mapping_table.setItem(row_idx, 4, status_item)
             self._status_items[event_row.row_index] = status_item
 
@@ -1940,10 +1940,10 @@ class PreviewPage(WizardPageBase):
             self,
             "Update Template",
             f"This will overwrite {target_path.name} with the mapped values. Continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if confirm != QMessageBox.Yes:
+        if confirm != QMessageBox.StandardButton.Yes:
             return
 
         wiz = self._wizard()
@@ -1990,8 +1990,8 @@ class ExcelMapWizard(QWizard):
     def __init__(self, parent=None, events_df: pd.DataFrame | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Map Events to Excel")
-        self.setWizardStyle(QWizard.ModernStyle)
-        self.setOption(QWizard.HaveFinishButtonOnEarlyPages)
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.setOption(QWizard.WizardOption.HaveFinishButtonOnEarlyPages)
         self.setMinimumSize(1100, 720)
         self.resize(1200, 750)
 

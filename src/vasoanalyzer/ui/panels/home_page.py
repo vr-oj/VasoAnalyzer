@@ -4,9 +4,9 @@ import logging
 from collections.abc import Callable
 from typing import Protocol
 
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal
-from PyQt5.QtSvg import QSvgWidget
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
+from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWidgets import (
     QApplication,
     QBoxLayout,
     QFrame,
@@ -72,8 +72,8 @@ class HomePage(QWidget):
         self._scroll_area = QScrollArea(self)
         self._scroll_area.setObjectName("HomeScrollArea")
         self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setFrameShape(QFrame.NoFrame)
-        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self._scroll_area, 1)
 
         scroll_host = QWidget()
@@ -87,7 +87,7 @@ class HomePage(QWidget):
         self._content = QWidget(scroll_host)
         self._content.setObjectName("HomeContent")
         self._content.setMaximumWidth(1120)
-        self._content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(32, 32, 32, 24)
@@ -95,7 +95,7 @@ class HomePage(QWidget):
         content_layout.addWidget(self._build_hero_section(), stretch=0)
         content_layout.addWidget(self._build_cards_row(), stretch=0)
 
-        scroll_layout.addWidget(self._content, 0, Qt.AlignHCenter | Qt.AlignTop)
+        scroll_layout.addWidget(self._content, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
         self._banner_container = QFrame(self)
         self._banner_container.setObjectName("HomeBannerContainer")
@@ -125,7 +125,7 @@ class HomePage(QWidget):
             else QSvgWidget(window.icon_path("Home.svg"))
         )
         hero_icon.setFixedSize(72, 72)
-        layout.addWidget(hero_icon, alignment=Qt.AlignTop)
+        layout.addWidget(hero_icon, alignment=Qt.AlignmentFlag.AlignTop)
 
         text_column = QVBoxLayout()
         text_column.setSpacing(12)
@@ -140,11 +140,11 @@ class HomePage(QWidget):
 
         badge = QLabel(APP_VERSION, hero)
         badge.setObjectName("BetaBadgeLabel")
-        badge.setAlignment(Qt.AlignCenter)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setFixedHeight(24)
-        badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         badge.setToolTip("Current release")
-        title_row.addWidget(badge, 0, Qt.AlignVCenter)
+        title_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch(1)
 
         subtitle = QLabel(
@@ -177,9 +177,9 @@ class HomePage(QWidget):
         dismiss_btn.setObjectName("CloudStorageWarningDismiss")
         dismiss_btn.setText("Got it, don't show again")
         dismiss_btn.setAutoRaise(True)
-        dismiss_btn.setCursor(Qt.PointingHandCursor)
+        dismiss_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         dismiss_btn.clicked.connect(self._dismiss_cloud_storage_warning)
-        cloud_layout.addWidget(dismiss_btn, 0, Qt.AlignTop)
+        cloud_layout.addWidget(dismiss_btn, 0, Qt.AlignmentFlag.AlignTop)
 
         self.cloud_storage_warning = cloud_warning
 
@@ -196,7 +196,7 @@ class HomePage(QWidget):
         window = self._window
         container = QWidget(self)
         container.setObjectName("HomePrimaryActions")
-        row = QBoxLayout(QBoxLayout.LeftToRight)
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
         container.setLayout(row)
@@ -233,7 +233,7 @@ class HomePage(QWidget):
         self._primary_actions_widget = container
         self._primary_action_buttons = [window.home_resume_btn, open_btn, create_btn]
         for button in self._primary_action_buttons:
-            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         return container
 
@@ -241,7 +241,7 @@ class HomePage(QWidget):
         window = self._window
         container = QWidget(self)
         container.setObjectName("HomeSecondaryActions")
-        row = QBoxLayout(QBoxLayout.LeftToRight)
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
         container.setLayout(row)
@@ -259,7 +259,7 @@ class HomePage(QWidget):
         row.addWidget(import_btn)
 
         self._secondary_actions_spacer = QSpacerItem(
-            0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum
+            0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
         row.addItem(self._secondary_actions_spacer)
 
@@ -267,7 +267,7 @@ class HomePage(QWidget):
         welcome_btn.setObjectName("HomeHelpButton")
         welcome_btn.setText("Welcome Guide")
         welcome_btn.setAutoRaise(True)
-        welcome_btn.setCursor(Qt.PointingHandCursor)
+        welcome_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         welcome_btn.clicked.connect(lambda: window.show_welcome_guide(modal=False))
         row.addWidget(welcome_btn)
 
@@ -275,14 +275,14 @@ class HomePage(QWidget):
         self._secondary_actions_widget = container
         self._secondary_import_button = import_btn
         self._secondary_help_button = welcome_btn
-        import_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        import_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         return container
 
     def _build_cards_row(self) -> QWidget:
         container = QWidget(self)
         container.setObjectName("HomeCardsRow")
-        row = QBoxLayout(QBoxLayout.LeftToRight)
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(24)
         container.setLayout(row)
@@ -317,7 +317,7 @@ class HomePage(QWidget):
             "Clear all", window.clear_recent_files
         )
         window.home_clear_sessions_button.setVisible(False)
-        header.addWidget(window.home_clear_sessions_button, 0, Qt.AlignRight)
+        header.addWidget(window.home_clear_sessions_button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header)
 
         subtitle = QLabel(
@@ -354,7 +354,7 @@ class HomePage(QWidget):
             "Clear all", window.clear_recent_projects
         )
         window.home_clear_projects_button.setVisible(False)
-        header.addWidget(window.home_clear_projects_button, 0, Qt.AlignRight)
+        header.addWidget(window.home_clear_projects_button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header)
 
         subtitle = QLabel("Projects you've worked on recently", card)
@@ -387,8 +387,8 @@ class HomePage(QWidget):
         button.setObjectName("HomeClearButton")
         button.setText(text)
         button.setAutoRaise(True)
-        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        button.setCursor(Qt.PointingHandCursor)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(callback)
         return button
 
@@ -412,9 +412,9 @@ class HomePage(QWidget):
         return total > available_width
 
     def _set_action_button_policy(self, buttons: list[QWidget], *, expand: bool) -> None:
-        policy = QSizePolicy.Expanding if expand else QSizePolicy.Preferred
+        policy = QSizePolicy.Policy.Expanding if expand else QSizePolicy.Policy.Preferred
         for button in buttons:
-            button.setSizePolicy(policy, QSizePolicy.Fixed)
+            button.setSizePolicy(policy, QSizePolicy.Policy.Fixed)
 
     def _update_responsive_layout(self) -> None:
         if not hasattr(self, "_content"):
@@ -427,7 +427,7 @@ class HomePage(QWidget):
                 self._primary_actions_layout.spacing(),
                 available_width,
             )
-            direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
+            direction = QBoxLayout.Direction.TopToBottom if stack else QBoxLayout.Direction.LeftToRight
             self._primary_actions_layout.setDirection(direction)
             self._primary_actions_layout.setSpacing(10 if stack else 12)
             self._set_action_button_policy(self._primary_action_buttons, expand=stack)
@@ -439,32 +439,32 @@ class HomePage(QWidget):
                 self._secondary_actions_layout.spacing(),
                 available_width,
             )
-            direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
+            direction = QBoxLayout.Direction.TopToBottom if stack else QBoxLayout.Direction.LeftToRight
             self._secondary_actions_layout.setDirection(direction)
             self._secondary_actions_layout.setSpacing(8 if stack else 12)
             if hasattr(self, "_secondary_actions_spacer"):
                 if stack:
                     self._secondary_actions_spacer.changeSize(
-                        0, 0, QSizePolicy.Fixed, QSizePolicy.Fixed
+                        0, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
                     )
                 else:
                     self._secondary_actions_spacer.changeSize(
-                        0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum
+                        0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
                     )
             self._secondary_actions_layout.setAlignment(
                 self._secondary_help_button,
-                Qt.AlignLeft if stack else (Qt.AlignRight | Qt.AlignVCenter),
+                Qt.AlignmentFlag.AlignLeft if stack else (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
             )
             self._secondary_import_button.setSizePolicy(
-                QSizePolicy.Expanding if stack else QSizePolicy.Preferred,
-                QSizePolicy.Fixed,
+                QSizePolicy.Policy.Expanding if stack else QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
             )
             self._secondary_actions_layout.invalidate()
 
         if hasattr(self, "_cards_layout"):
             available_width = self._cards_widget.contentsRect().width()
             stack = self._needs_stack(self._cards, self._cards_layout.spacing(), available_width)
-            direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
+            direction = QBoxLayout.Direction.TopToBottom if stack else QBoxLayout.Direction.LeftToRight
             self._cards_layout.setDirection(direction)
             self._cards_layout.setSpacing(16 if stack else 24)
 

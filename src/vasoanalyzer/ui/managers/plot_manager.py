@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QObject, QSignalBlocker, QTimer, Qt
-from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QObject, QSignalBlocker, QTimer, Qt
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QInputDialog,
@@ -755,7 +755,7 @@ class PlotManager(QObject):
         for button in buttons:
             button.setMinimumWidth(0)
             button.setMaximumWidth(16777215)
-            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         if compact:
             return
@@ -772,7 +772,7 @@ class PlotManager(QObject):
         for button in buttons:
             button.setMinimumWidth(target_width)
             button.setMaximumWidth(target_width)
-            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
             button.updateGeometry()
 
     def _refresh_zoom_window(self) -> None:
@@ -1175,7 +1175,7 @@ class PlotManager(QObject):
             target = getattr(h, "canvas", None)
         if target is None:
             return
-        cursor = Qt.OpenHandCursor if mode == "pan" else Qt.CrossCursor
+        cursor = Qt.CursorShape.OpenHandCursor if mode == "pan" else Qt.CursorShape.CrossCursor
         with contextlib.suppress(Exception):
             target.setCursor(QCursor(cursor))
 
@@ -1708,7 +1708,7 @@ class PlotManager(QObject):
             defaults=labels_defaults,
         )
 
-        if dialog.exec_():
+        if dialog.exec():
             h.apply_legend_settings(dialog.get_settings(), mark_dirty=True)
 
     def _on_trace_nav_window_requested(self, x0: float, x1: float) -> None:

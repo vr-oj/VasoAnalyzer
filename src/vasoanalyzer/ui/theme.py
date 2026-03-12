@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import cast
 
 from matplotlib import rcParams
-from PyQt5.QtCore import QObject, QSettings, pyqtSignal
-from PyQt5.QtGui import QColor, QPalette
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QObject, QSettings, pyqtSignal
+from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtWidgets import QApplication
 
 log = logging.getLogger(__name__)
 
@@ -220,14 +220,14 @@ def _build_theme_from_palette(force_dark: bool | None = None) -> dict:
     palette = app.palette() if app else QPalette()
 
     # Extract base colors from OS palette
-    window_bg = palette.color(QPalette.Window)
-    window_text = palette.color(QPalette.WindowText)
-    base = palette.color(QPalette.Base)
-    alternate_base = palette.color(QPalette.AlternateBase)
-    button = palette.color(QPalette.Button)
-    highlight = palette.color(QPalette.Highlight)
-    highlighted_text = palette.color(QPalette.HighlightedText)
-    mid = palette.color(QPalette.Mid)
+    window_bg = palette.color(QPalette.ColorRole.Window)
+    window_text = palette.color(QPalette.ColorRole.WindowText)
+    base = palette.color(QPalette.ColorRole.Base)
+    alternate_base = palette.color(QPalette.ColorRole.AlternateBase)
+    button = palette.color(QPalette.ColorRole.Button)
+    highlight = palette.color(QPalette.ColorRole.Highlight)
+    highlighted_text = palette.color(QPalette.ColorRole.HighlightedText)
+    mid = palette.color(QPalette.ColorRole.Mid)
 
     # Detect or override dark mode
     if force_dark is None:
@@ -749,31 +749,31 @@ def apply_qt_palette(theme: dict):
     tooltip_text = window_text
 
     # Apply to all color groups (Active, Inactive, Disabled)
-    for group in [QPalette.Active, QPalette.Inactive, QPalette.Disabled]:
+    for group in [QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled]:
         # Window (toolbars, status bar - gray chrome)
-        palette.setColor(group, QPalette.Window, window_bg)
-        palette.setColor(group, QPalette.WindowText, window_text)
+        palette.setColor(group, QPalette.ColorRole.Window, window_bg)
+        palette.setColor(group, QPalette.ColorRole.WindowText, window_text)
 
         # Base (content areas - white/dark backgrounds)
-        palette.setColor(group, QPalette.Base, base_bg)
-        palette.setColor(group, QPalette.AlternateBase, alternate_bg)
-        palette.setColor(group, QPalette.Text, window_text)
+        palette.setColor(group, QPalette.ColorRole.Base, base_bg)
+        palette.setColor(group, QPalette.ColorRole.AlternateBase, alternate_bg)
+        palette.setColor(group, QPalette.ColorRole.Text, window_text)
 
         # Buttons
-        palette.setColor(group, QPalette.Button, button_bg)
-        palette.setColor(group, QPalette.ButtonText, window_text)
+        palette.setColor(group, QPalette.ColorRole.Button, button_bg)
+        palette.setColor(group, QPalette.ColorRole.ButtonText, window_text)
 
         # Highlight (selections)
-        palette.setColor(group, QPalette.Highlight, highlight_bg)
-        palette.setColor(group, QPalette.HighlightedText, highlight_text)
-        palette.setColor(group, QPalette.ToolTipBase, tooltip_bg)
-        palette.setColor(group, QPalette.ToolTipText, tooltip_text)
+        palette.setColor(group, QPalette.ColorRole.Highlight, highlight_bg)
+        palette.setColor(group, QPalette.ColorRole.HighlightedText, highlight_text)
+        palette.setColor(group, QPalette.ColorRole.ToolTipBase, tooltip_bg)
+        palette.setColor(group, QPalette.ColorRole.ToolTipText, tooltip_text)
 
         # Mid/borders
-        palette.setColor(group, QPalette.Mid, mid_color)
-        palette.setColor(group, QPalette.Dark, mid_color.darker(120))
-        palette.setColor(group, QPalette.Light, window_bg.lighter(150))
-        palette.setColor(group, QPalette.Midlight, window_bg.lighter(125))
+        palette.setColor(group, QPalette.ColorRole.Mid, mid_color)
+        palette.setColor(group, QPalette.ColorRole.Dark, mid_color.darker(120))
+        palette.setColor(group, QPalette.ColorRole.Light, window_bg.lighter(150))
+        palette.setColor(group, QPalette.ColorRole.Midlight, window_bg.lighter(125))
 
     # Apply the palette to the application
     app.setPalette(palette)
@@ -864,7 +864,7 @@ def get_theme_mode() -> str:
 
     app = QApplication.instance()
     palette = app.palette() if app else QPalette()
-    return "dark" if palette.color(QPalette.Window).lightness() < 128 else "light"
+    return "dark" if palette.color(QPalette.ColorRole.Window).lightness() < 128 else "light"
 
 
 def _apply_theme(theme: dict) -> None:

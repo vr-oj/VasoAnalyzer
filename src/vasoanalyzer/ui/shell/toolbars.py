@@ -4,9 +4,9 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
-from PyQt5.QtCore import QSize, Qt
-from PyQt5.QtGui import QIcon, QKeySequence
-from PyQt5.QtWidgets import QAction, QMenu, QToolButton
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon, QKeySequence, QAction, QActionGroup
+from PyQt6.QtWidgets import QMenu, QToolButton
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 from vasoanalyzer.ui.widgets import CustomToolbar
@@ -37,7 +37,7 @@ def build_plot_toolbar(window: VasoAnalyzerApp, canvas: Any, plot_host: Any):
     toolbar.setObjectName("PlotToolbar")
     toolbar.setIconSize(QSize(22, 22))
     toolbar.setContentsMargins(0, 0, 0, 0)
-    toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+    toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
     toolbar.setFloatable(False)
     toolbar.setMovable(False)
     _apply_toolbar_styles(toolbar)
@@ -179,7 +179,7 @@ def _build_pyqtgraph_plot_toolbar(
     window.actPgPan = QAction(QIcon(window.icon_path("Pan.svg")), "Pan", window)
     window.actPgPan.setCheckable(True)
     window.actPgPan.setShortcut(QKeySequence("P"))
-    window.actPgPan.setShortcutContext(Qt.WindowShortcut)
+    window.actPgPan.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actPgPan.setToolTip("Pan: drag to move the view")
 
     mouse_mode = "pan"
@@ -195,7 +195,7 @@ def _build_pyqtgraph_plot_toolbar(
     window.actBoxZoom = QAction(QIcon(window.icon_path("Zoom.svg")), "Select", window)
     window.actBoxZoom.setCheckable(True)
     window.actBoxZoom.setShortcut(QKeySequence("Z"))
-    window.actBoxZoom.setShortcutContext(Qt.WindowShortcut)
+    window.actBoxZoom.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actBoxZoom.setToolTip("Select: drag to zoom into a region")
     window.actBoxZoom.setChecked(not pan_checked)
     window.actBoxZoom.toggled.connect(window._on_box_zoom_toggled)
@@ -206,7 +206,7 @@ def _build_pyqtgraph_plot_toolbar(
 
     window.actZoomIn = QAction(QIcon(window.icon_path("Zoom.svg")), "Zoom In", window)
     window.actZoomIn.setShortcuts([QKeySequence("+"), QKeySequence("=")])
-    window.actZoomIn.setShortcutContext(Qt.WindowShortcut)
+    window.actZoomIn.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actZoomIn.setToolTip(
         "<b>Zoom In</b> <kbd>+</kbd><br><br>"
         "Zoom in to see more detail along time.<br>"
@@ -216,7 +216,7 @@ def _build_pyqtgraph_plot_toolbar(
 
     window.actZoomOut = QAction(QIcon(window.icon_path("ZoomOut.svg")), "Zoom Out", window)
     window.actZoomOut.setShortcut(QKeySequence("-"))
-    window.actZoomOut.setShortcutContext(Qt.WindowShortcut)
+    window.actZoomOut.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actZoomOut.setToolTip(
         "<b>Zoom Out</b> <kbd>-</kbd><br><br>"
         "Zoom out to see more time range.<br>"
@@ -226,7 +226,7 @@ def _build_pyqtgraph_plot_toolbar(
 
     window.actZoomBack = QAction(QIcon(window.icon_path("Back.svg")), "Zoom Back", window)
     window.actZoomBack.setShortcut(QKeySequence("Backspace"))
-    window.actZoomBack.setShortcutContext(Qt.WindowShortcut)
+    window.actZoomBack.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actZoomBack.setToolTip(
         "<b>Zoom Back</b> <kbd>Backspace</kbd><br><br>"
         "Step back through zoom history.<br>"
@@ -238,7 +238,7 @@ def _build_pyqtgraph_plot_toolbar(
         QIcon(window.icon_path("autoscale.svg")), "Autoscale Y (Once)", window
     )
     window.actAutoscale.setShortcut(QKeySequence("A"))
-    window.actAutoscale.setShortcutContext(Qt.WindowShortcut)
+    window.actAutoscale.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actAutoscale.setToolTip(
         "<b>Autoscale</b> <kbd>A</kbd><br><br>"
         "Autoscale Y in the current time window.<br>"
@@ -251,7 +251,7 @@ def _build_pyqtgraph_plot_toolbar(
     )
     window.actAutoscaleY.setCheckable(True)
     window.actAutoscaleY.setShortcut(QKeySequence("Shift+A"))
-    window.actAutoscaleY.setShortcutContext(Qt.WindowShortcut)
+    window.actAutoscaleY.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actAutoscaleY.setToolTip(
         "<b>Y-Axis Autoscale</b> <kbd>Shift+A</kbd><br><br>"
         "Toggle Y-axis autoscaling.<br>"
@@ -275,7 +275,7 @@ def _add_shared_plot_actions(
     window.actGrid.setCheckable(True)
     window.actGrid.setChecked(window.grid_visible)
     window.actGrid.setShortcut(QKeySequence("G"))
-    window.actGrid.setShortcutContext(Qt.WindowShortcut)
+    window.actGrid.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
     window.actGrid.setToolTip(
         "<b>Toggle Grid</b> <kbd>G</kbd><br><br>"
         "Shows/hides coordinate grid overlay.<br>"
@@ -311,7 +311,6 @@ def _add_shared_plot_actions(
         window.actChannelEventLabels.triggered.connect(window.toggle_channel_event_labels)
 
         # Font-size submenu for event labels.
-        from PyQt5.QtWidgets import QActionGroup  # noqa: PLC0415
         size_menu = QMenu("Event label size", None)
         size_group = QActionGroup(size_menu)
         size_group.setExclusive(True)
@@ -517,7 +516,7 @@ def _add_view_overflow_menu(
     view_button.setIcon(QIcon(window.icon_path("plot-settings.svg")))
     view_button.setIconSize(toolbar.iconSize())
     view_button.setToolTip("More view options")
-    view_button.setPopupMode(QToolButton.InstantPopup)
+    view_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
     view_button.setMenu(view_menu)
     view_button.setToolButtonStyle(toolbar.toolButtonStyle())
     view_action = toolbar.addWidget(view_button)

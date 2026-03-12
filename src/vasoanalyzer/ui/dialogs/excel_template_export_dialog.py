@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -165,8 +165,8 @@ class ExcelTemplateExportDialog(QDialog):
         self._mapping_table.setHorizontalHeaderLabels(["Template Row Label", "Session Event"])
         self._mapping_table.horizontalHeader().setStretchLastSection(True)
         self._mapping_table.horizontalHeader().setDefaultSectionSize(260)
-        self._mapping_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._mapping_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._mapping_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._mapping_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         flex_layout.addWidget(self._mapping_table, 1)
 
         self._flexible_group.setVisible(False)
@@ -188,11 +188,11 @@ class ExcelTemplateExportDialog(QDialog):
         self.preview_table = QTableWidget(0, 3)
         self.preview_table.setHorizontalHeaderLabels(["Row / Metric", "Value", "Target Cell"])
         self.preview_table.horizontalHeader().setStretchLastSection(True)
-        self.preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         preview_layout.addWidget(self.preview_table)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         preview_layout.addWidget(self.status_label)
         layout.addWidget(preview_group, 1)
 
@@ -411,16 +411,16 @@ class ExcelTemplateExportDialog(QDialog):
 
             if event_row.is_header:
                 item = QTableWidgetItem(f"— {event_row.label} —")
-                item.setFlags(Qt.ItemIsEnabled)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 item.setForeground(QColor("#9CA3AF"))
                 self._mapping_table.setItem(row_idx, 0, item)
                 blank = QTableWidgetItem("")
-                blank.setFlags(Qt.ItemIsEnabled)
+                blank.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 blank.setForeground(QColor("#9CA3AF"))
                 self._mapping_table.setItem(row_idx, 1, blank)
             else:
                 label_item = QTableWidgetItem(event_row.label)
-                label_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                label_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 self._mapping_table.setItem(row_idx, 0, label_item)
 
                 combo = QComboBox()

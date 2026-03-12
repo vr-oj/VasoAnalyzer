@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 
-from PyQt5 import QtCore, QtGui, QtSvg, QtWidgets
+from PyQt6 import QtCore, QtGui, QtSvg, QtWidgets
 
 from utils import resource_path
 from vasoanalyzer.ui.theme import get_theme_mode
@@ -41,19 +41,19 @@ def themed_svg_icon(svg_path: str, palette: QtGui.QPalette, size: QtCore.QSize) 
     if base is None:
         return QtGui.QIcon(svg_path)
 
-    normal = palette.color(QtGui.QPalette.Active, QtGui.QPalette.WindowText)
-    disabled = palette.color(QtGui.QPalette.Disabled, QtGui.QPalette.WindowText)
+    normal = palette.color(QtGui.QPalette.ColorGroup.Active, QtGui.QPalette.ColorRole.WindowText)
+    disabled = palette.color(QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.WindowText)
     if disabled == normal:
-        disabled = palette.color(QtGui.QPalette.Disabled, QtGui.QPalette.Mid)
-    active = palette.color(QtGui.QPalette.Active, QtGui.QPalette.HighlightedText)
+        disabled = palette.color(QtGui.QPalette.ColorGroup.Disabled, QtGui.QPalette.ColorRole.Mid)
+    active = palette.color(QtGui.QPalette.ColorGroup.Active, QtGui.QPalette.ColorRole.HighlightedText)
     if not active.isValid() or active == normal:
         active = normal
 
     icon = QtGui.QIcon()
-    _add_icon_state(icon, base, normal, QtGui.QIcon.Normal)
-    _add_icon_state(icon, base, active, QtGui.QIcon.Active)
-    _add_icon_state(icon, base, disabled, QtGui.QIcon.Disabled)
-    _add_icon_state(icon, base, normal, QtGui.QIcon.Selected)
+    _add_icon_state(icon, base, normal, QtGui.QIcon.Mode.Normal)
+    _add_icon_state(icon, base, active, QtGui.QIcon.Mode.Active)
+    _add_icon_state(icon, base, disabled, QtGui.QIcon.Mode.Disabled)
+    _add_icon_state(icon, base, normal, QtGui.QIcon.Mode.Selected)
     return icon
 
 
@@ -86,12 +86,12 @@ def _render_svg(renderer: QtSvg.QSvgRenderer, size: QtCore.QSize) -> QtGui.QImag
         max(1, int(size.width() * dpr)),
         max(1, int(size.height() * dpr)),
     )
-    image = QtGui.QImage(target, QtGui.QImage.Format_ARGB32)
-    image.fill(QtCore.Qt.transparent)
+    image = QtGui.QImage(target, QtGui.QImage.Format.Format_ARGB32)
+    image.fill(QtCore.Qt.GlobalColor.transparent)
 
     painter = QtGui.QPainter(image)
-    painter.setRenderHint(QtGui.QPainter.Antialiasing)
-    painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform)
     renderer.render(painter, QtCore.QRectF(0, 0, target.width(), target.height()))
     painter.end()
 
@@ -103,17 +103,17 @@ def _add_icon_state(
     icon: QtGui.QIcon, base: QtGui.QImage, color: QtGui.QColor, mode: QtGui.QIcon.Mode
 ) -> None:
     pixmap = _tint_pixmap(base, color)
-    icon.addPixmap(pixmap, mode, QtGui.QIcon.Off)
-    icon.addPixmap(pixmap, mode, QtGui.QIcon.On)
+    icon.addPixmap(pixmap, mode, QtGui.QIcon.State.Off)
+    icon.addPixmap(pixmap, mode, QtGui.QIcon.State.On)
 
 
 def _tint_pixmap(base: QtGui.QImage, color: QtGui.QColor) -> QtGui.QPixmap:
-    image = QtGui.QImage(base.size(), QtGui.QImage.Format_ARGB32)
-    image.fill(QtCore.Qt.transparent)
+    image = QtGui.QImage(base.size(), QtGui.QImage.Format.Format_ARGB32)
+    image.fill(QtCore.Qt.GlobalColor.transparent)
     painter = QtGui.QPainter(image)
-    painter.setCompositionMode(QtGui.QPainter.CompositionMode_Source)
+    painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_Source)
     painter.drawImage(0, 0, base)
-    painter.setCompositionMode(QtGui.QPainter.CompositionMode_SourceIn)
+    painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceIn)
     painter.fillRect(image.rect(), color)
     painter.end()
     image.setDevicePixelRatio(base.devicePixelRatio())

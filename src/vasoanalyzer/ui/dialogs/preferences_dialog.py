@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import QSettings
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSettings
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -61,7 +61,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(tabs)
 
         # Dialog buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
@@ -369,13 +369,13 @@ class PreferencesDialog(QDialog):
             max_age = self.temp_cleanup_spin.value() * 3600  # Convert hours to seconds
             cleaned = cleanup_stale_temp_dirs(max_age=max_age)
 
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
 
             QMessageBox.information(
                 self, "Cleanup Complete", f"Cleaned up {cleaned} temporary directory(ies)."
             )
         except Exception as e:
-            from PyQt5.QtWidgets import QMessageBox
+            from PyQt6.QtWidgets import QMessageBox
 
             QMessageBox.warning(self, "Cleanup Failed", f"Failed to clean up temp files:\n{e}")
 

@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QByteArray, QMimeData, QObject, QRunnable, QSettings, QTimer, Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QByteArray, QMimeData, QObject, QRunnable, QSettings, QTimer, Qt
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QInputDialog,
@@ -250,10 +250,10 @@ class SampleManager(QObject):
                 f"Failed {len(failures)} dataset(s)."
             )
             msg.setInformativeText("You can copy the details for support.")
-            copy_btn = msg.addButton("Copy details", QMessageBox.ActionRole)
-            msg.addButton(QMessageBox.Ok)
+            copy_btn = msg.addButton("Copy details", QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QMessageBox.StandardButton.Ok)
             msg.setDetailedText(detail)
-            msg.exec_()
+            msg.exec()
             if msg.clickedButton() is copy_btn:
                 QApplication.clipboard().setText(detail)
 
@@ -474,10 +474,10 @@ class SampleManager(QObject):
             msg.setWindowTitle("Paste Partial")
             msg.setText(f"Pasted {len(imported_ids)} dataset(s); {len(failures)} failed.")
             msg.setInformativeText("You can copy the details for support.")
-            copy_btn = msg.addButton("Copy details", QMessageBox.ActionRole)
-            msg.addButton(QMessageBox.Ok)
+            copy_btn = msg.addButton("Copy details", QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QMessageBox.StandardButton.Ok)
             msg.setDetailedText(detail)
-            msg.exec_()
+            msg.exec()
             if msg.clickedButton() is copy_btn:
                 QApplication.clipboard().setText(detail)
 
@@ -518,7 +518,7 @@ class SampleManager(QObject):
                         sample_item = exp_item.child(k)
                         if sample_item is None:
                             continue
-                        if sample_item.data(0, Qt.UserRole) is sample:
+                        if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
                             quality = h._get_sample_data_quality(sample)
                             sample_item.setIcon(0, h._data_quality_icon(quality))
                             sample_item.setToolTip(
@@ -582,7 +582,7 @@ class SampleManager(QObject):
                     sample_item = exp_item.child(k)
                     if sample_item is None:
                         continue
-                    item_sample = sample_item.data(0, Qt.UserRole)
+                    item_sample = sample_item.data(0, Qt.ItemDataRole.UserRole)
                     if item_sample is sample:
                         tree.blockSignals(True)
                         tree.setCurrentItem(sample_item)
@@ -596,7 +596,7 @@ class SampleManager(QObject):
             return []
         samples: list[SampleN] = []
         for item in h.project_tree.selectedItems() or []:
-            obj = item.data(0, Qt.UserRole)
+            obj = item.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(obj, SampleN) and obj not in samples:
                 samples.append(obj)
         return samples
@@ -1696,7 +1696,7 @@ class SampleManager(QObject):
                 _root = h.project_tree.topLevelItem(_i)
                 for _j in range(_root.childCount()):
                     _exp_item = _root.child(_j)
-                    _obj = _exp_item.data(0, Qt.UserRole)
+                    _obj = _exp_item.data(0, Qt.ItemDataRole.UserRole)
                     if isinstance(_obj, Experiment):
                         experiment_expanded[_obj.name] = _exp_item.isExpanded()
             if experiment_expanded:

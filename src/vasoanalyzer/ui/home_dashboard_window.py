@@ -6,9 +6,9 @@ import sys
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QSettings, QSize, Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSettings, QSize, Qt
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -154,9 +154,9 @@ class HomeDashboardWindow(QMainWindow):
             dlg = WelcomeGuideDialog(self)
             dlg.openRequested.connect(self.open_project_file)
             dlg.createRequested.connect(self.new_project)
-            dlg.setWindowModality(Qt.ApplicationModal)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
             dlg.finished.connect(lambda _: self._handle_welcome_guide_closed(dlg))
-            dlg.exec_()
+            dlg.exec()
             return
 
         existing = getattr(self, "_welcome_dialog", None)
@@ -256,13 +256,13 @@ class HomeDashboardWindow(QMainWindow):
         row = QWidget()
         row.setObjectName("HomeRecentRow")
         row.setToolTip(path)
-        row.setCursor(Qt.PointingHandCursor)
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(8)
 
         def _row_click(event):
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.MouseButton.LeftButton:
                 open_callback()
             event.accept()
 
@@ -279,12 +279,12 @@ class HomeDashboardWindow(QMainWindow):
         remove_btn = QToolButton()
         remove_btn.setObjectName("HomeRemoveButton")
         remove_btn.setAutoRaise(True)
-        remove_btn.setCursor(Qt.PointingHandCursor)
-        remove_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         remove_btn.setText("Remove")
         remove_btn.setToolTip(f"Remove {path}")
         remove_btn.clicked.connect(lambda _checked=False: remove_callback())
-        row_layout.addWidget(remove_btn, 0, Qt.AlignRight)
+        row_layout.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignRight)
 
         return row
 
@@ -374,7 +374,7 @@ class HomeDashboardWindow(QMainWindow):
         secondary: bool = False,
     ) -> QPushButton:
         button = QPushButton(text)
-        button.setCursor(Qt.PointingHandCursor)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setMinimumHeight(44)
         if icon_name:
             button.setIcon(QIcon(self.icon_path(icon_name)))

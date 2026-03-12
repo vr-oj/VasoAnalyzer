@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pyqtgraph as pg
-from PyQt5.QtGui import QColor, QFont, QFontMetricsF
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.theme import CURRENT_THEME
