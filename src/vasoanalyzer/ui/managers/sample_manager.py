@@ -526,25 +526,21 @@ class SampleManager(QObject):
         for sample in samples:
             found = False
             for i in range(h.project_tree.topLevelItemCount()):
-                project_item = h.project_tree.topLevelItem(i)
-                if project_item is None:
+                exp_item = h.project_tree.topLevelItem(i)
+                if exp_item is None:
                     continue
-                for j in range(project_item.childCount()):
-                    exp_item = project_item.child(j)
-                    if exp_item is None:
-                        continue
-                    for sample_item in self._iter_sample_items(exp_item):
-                        if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
-                            quality = h._get_sample_data_quality(sample)
-                            sample_item.setIcon(0, h._data_quality_icon(quality))
-                            sample_item.setToolTip(
-                                0,
-                                f"Data quality: {h._data_quality_label(quality)}",
-                            )
-                            found = True
-                            break
-                    if found:
+                for sample_item in self._iter_sample_items(exp_item):
+                    if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
+                        quality = h._get_sample_data_quality(sample)
+                        sample_item.setIcon(0, h._data_quality_icon(quality))
+                        sample_item.setToolTip(
+                            0,
+                            f"Data quality: {h._data_quality_label(quality)}",
+                        )
+                        found = True
                         break
+                if found:
+                    break
                 if found:
                     break
 
@@ -587,20 +583,16 @@ class SampleManager(QObject):
 
         tree = h.project_tree
         for i in range(tree.topLevelItemCount()):
-            project_item = tree.topLevelItem(i)
-            if project_item is None:
+            exp_item = tree.topLevelItem(i)
+            if exp_item is None:
                 continue
-            for j in range(project_item.childCount()):
-                exp_item = project_item.child(j)
-                if exp_item is None:
-                    continue
-                for sample_item in self._iter_sample_items(exp_item):
-                    if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
-                        tree.blockSignals(True)
-                        tree.setCurrentItem(sample_item)
-                        tree.blockSignals(False)
-                        tree.scrollToItem(sample_item)
-                        return
+            for sample_item in self._iter_sample_items(exp_item):
+                if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
+                    tree.blockSignals(True)
+                    tree.setCurrentItem(sample_item)
+                    tree.blockSignals(False)
+                    tree.scrollToItem(sample_item)
+                    return
 
     def _selected_samples_from_tree(self) -> list[SampleN]:
         h = self._host
@@ -1705,12 +1697,10 @@ class SampleManager(QObject):
         if getattr(h, "project_tree", None):
             experiment_expanded: dict[str, bool] = {}
             for _i in range(h.project_tree.topLevelItemCount()):
-                _root = h.project_tree.topLevelItem(_i)
-                for _j in range(_root.childCount()):
-                    _exp_item = _root.child(_j)
-                    _obj = _exp_item.data(0, Qt.ItemDataRole.UserRole)
-                    if isinstance(_obj, Experiment):
-                        experiment_expanded[_obj.name] = _exp_item.isExpanded()
+                _exp_item = h.project_tree.topLevelItem(_i)
+                _obj = _exp_item.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(_obj, Experiment):
+                    experiment_expanded[_obj.name] = _exp_item.isExpanded()
             if experiment_expanded:
                 state["experiment_expanded"] = experiment_expanded
         return state

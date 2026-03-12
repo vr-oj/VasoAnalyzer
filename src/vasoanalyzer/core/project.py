@@ -315,6 +315,7 @@ class Experiment:
     excel_path: str | None = None
     next_column: str = "B"
     samples: list[SampleN] = field(default_factory=list)
+    subfolder_names: list[str] = field(default_factory=list)
     style: dict | None = None
     notes: str | None = None
     tags: list[str] = field(default_factory=list)
@@ -784,6 +785,8 @@ def project_to_dict(project: Project, manifest: dict | None = None) -> dict:
             "next_column": exp.next_column,
             "samples": [sample_to_dict(s, base_dir) for s in exp.samples],
         }
+        if exp.subfolder_names:
+            exp_dict["subfolder_names"] = list(exp.subfolder_names)
         if exp.style is not None:
             exp_dict["style"] = exp.style
         if exp.notes is not None:
@@ -928,6 +931,7 @@ def project_from_dict(data: dict) -> Project:
                 excel_path=exp.get("excel_path"),
                 next_column=exp.get("next_column", "B"),
                 samples=samples,
+                subfolder_names=list(exp.get("subfolder_names", [])) if isinstance(exp.get("subfolder_names"), list) else [],
                 style=exp.get("style"),
                 notes=exp.get("notes"),
                 tags=list(exp.get("tags", [])) if isinstance(exp.get("tags"), list) else [],
@@ -1639,6 +1643,9 @@ def _load_project_bundle(path: str) -> Project:
                     excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
+                    subfolder_names=list(exp_meta.get("subfolder_names", []))
+                    if isinstance(exp_meta.get("subfolder_names"), list)
+                    else [],
                     style=exp_meta.get("style"),
                     notes=exp_meta.get("notes"),
                     tags=list(exp_meta.get("tags", []))
@@ -2020,6 +2027,7 @@ def _populate_store_from_project(project: Project, repo: ProjectRepository, base
             "style": _normalise_json_data(exp.style),
             "notes": exp.notes,
             "tags": list(exp.tags),
+            "subfolder_names": list(exp.subfolder_names),
         }
     meta_entries.append(("experiments_meta", _json_dumps(experiments_payload)))
     # Persist explicit experiment order so that load does not depend on dataset id sequence
@@ -2923,6 +2931,7 @@ def _build_sample_extra(
         else None,
         "exported": sample.exported,
         "column": sample.column,
+        "subfolder": sample.subfolder,
         "trace_path": _relativize_path(sample.trace_path, base_dir),
         "events_path": _relativize_path(sample.events_path, base_dir),
         "snapshot_path": _relativize_path(sample.snapshot_path, base_dir),
@@ -3504,6 +3513,9 @@ def _load_project_sqlite(path: str) -> Project:
                     excel_path=excel_path_value,
                     next_column=exp_meta.get("next_column", "B"),
                     samples=[],
+                    subfolder_names=list(exp_meta.get("subfolder_names", []))
+                    if isinstance(exp_meta.get("subfolder_names"), list)
+                    else [],
                     style=exp_meta.get("style"),
                     notes=exp_meta.get("notes"),
                     tags=list(exp_meta.get("tags", []))
@@ -3722,6 +3734,7 @@ def _dataset_to_sample(
         snapshots=None,
         snapshot_path=snapshot_path,
         notes=dataset.get("notes"),
+        subfolder=extra.get("subfolder"),
         analysis_results=None,
         attachments=attachments,
         dataset_id=dataset_id,
