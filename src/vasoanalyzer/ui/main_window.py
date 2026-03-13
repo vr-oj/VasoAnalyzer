@@ -6750,10 +6750,11 @@ QPushButton[isGhost="true"]:pressed {{
             return
 
         # 3) Remember in Recent Files
-        if primary_trace_path not in self.recent_files:
-            self.recent_files = [primary_trace_path] + self.recent_files[:4]
-            self.settings.setValue("recentFiles", self.recent_files)
-            self.update_recent_files_menu()
+        # Always move to front (most-recently-used ordering)
+        filtered = [p for p in self.recent_files if p != primary_trace_path]
+        self.recent_files = [primary_trace_path] + filtered[:9]
+        self.settings.setValue("recentFiles", self.recent_files)
+        self.update_recent_files_menu()
 
         # 4) Helper already populated events & UI
 

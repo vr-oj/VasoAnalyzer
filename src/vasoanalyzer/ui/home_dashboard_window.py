@@ -188,9 +188,10 @@ class HomeDashboardWindow(QMainWindow):
         self.settings.setValue("recentProjects", self.recent_projects)
 
     def update_recent_projects(self, path: str) -> None:
-        if path not in self.recent_projects:
-            self.recent_projects = [path] + self.recent_projects[:4]
-            self.settings.setValue("recentProjects", self.recent_projects)
+        # Always move to front (most-recently-used ordering)
+        filtered = [p for p in self.recent_projects if p != path]
+        self.recent_projects = [path] + filtered[:9]
+        self.settings.setValue("recentProjects", self.recent_projects)
         self._refresh_home_recent()
 
     def remove_recent_project(self, path: str) -> None:
@@ -253,28 +254,58 @@ class HomeDashboardWindow(QMainWindow):
     def _make_home_recent_row(
         self, label: str, path: str, open_callback, remove_callback
     ) -> QWidget:
+        exists = os.path.exists(path)
+
         row = QWidget()
         row.setObjectName("HomeRecentRow")
         row.setToolTip(path)
-        row.setCursor(Qt.CursorShape.PointingHandCursor)
+        if exists:
+            row.setCursor(Qt.CursorShape.PointingHandCursor)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(8)
+        row_layout.setSpacing(0)
 
         def _row_click(event):
-            if event.button() == Qt.MouseButton.LeftButton:
+            if exists and event.button() == Qt.MouseButton.LeftButton:
                 open_callback()
             event.accept()
 
         row.mousePressEvent = _row_click
 
-        open_btn = QPushButton(label)
-        open_btn.setProperty("isGhost", True)
-        open_btn.setMinimumHeight(32)
-        open_btn.setToolTip(path)
-        open_btn.clicked.connect(lambda _checked=False: open_callback())
-        self._apply_button_style(open_btn)
-        row_layout.addWidget(open_btn, 1)
+        # --- text column: name + parent folder ---
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(12, 6, 0, 6)
+        text_col.setSpacing(1)
+
+        name_btn = QPushButton(label)
+        name_btn.setProperty("isGhost", True)
+        name_btn.setMinimumHeight(20)
+        name_btn.setToolTip(path)
+        if exists:
+            name_btn.clicked.connect(lambda _checked=False: open_callback())
+        self._apply_button_style(name_btn)
+        text_col.addWidget(name_btn)
+
+        # Parent folder hint (e.g. "~/Documents/Lab/")
+        parent_dir = os.path.dirname(path)
+        home = os.path.expanduser("~")
+        if parent_dir.startswith(home):
+            short_dir = "~" + parent_dir[len(home):]
+        else:
+            short_dir = parent_dir
+        dir_label = QLabel(short_dir)
+        dir_label.setObjectName("HomeRecentPath")
+        dir_label.setWordWrap(False)
+        text_col.addWidget(dir_label)
+
+        row_layout.addLayout(text_col, 1)
+
+        # --- missing badge ---
+        if not exists:
+            row.setProperty("missing", True)
+            missing_lbl = QLabel("Missing")
+            missing_lbl.setObjectName("HomeMissingBadge")
+            row_layout.addWidget(missing_lbl, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         remove_btn = QToolButton()
         remove_btn.setObjectName("HomeRemoveButton")
@@ -282,7 +313,7 @@ class HomeDashboardWindow(QMainWindow):
         remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remove_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         remove_btn.setText("Remove")
-        remove_btn.setToolTip(f"Remove {path}")
+        remove_btn.setToolTip(f"Remove from list")
         remove_btn.clicked.connect(lambda _checked=False: remove_callback())
         row_layout.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignRight)
 
@@ -300,10 +331,10 @@ class HomeDashboardWindow(QMainWindow):
             if not has_sessions:
                 self._add_home_placeholder(
                     layout,
-                    "No recent imports yet. Open data to see them listed here.",
+                    "Files you import will appear here for quick access.",
                 )
             else:
-                for path in paths[:3]:
+                for path in paths[:8]:
                     name = os.path.basename(path) or path
                     row = self._make_home_recent_row(
                         name,
@@ -325,13 +356,13 @@ class HomeDashboardWindow(QMainWindow):
             if not has_projects:
                 self._add_home_placeholder(
                     layout,
-                    "No recent projects yet. Open or create a project to see it here.",
+                    "Projects you open or create will appear here.",
                     "Open project…",
                     self.open_project_file,
                     "folder-open.svg",
                 )
             else:
-                for path in projects[:3]:
+                for path in projects[:8]:
                     name = os.path.basename(path) or path
                     row = self._make_home_recent_row(
                         name,

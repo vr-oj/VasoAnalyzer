@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable
 from typing import Protocol
 
-from PyQt6.QtCore import QSettings, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtSvgWidgets import QSvgWidget
 from PyQt6.QtWidgets import (
     QApplication,
@@ -63,7 +63,6 @@ class HomePage(QWidget):
         super().__init__(parent=window)
         self._window = window
         self.setObjectName("HomePage")
-        self._settings = QSettings("TykockiLab", "VasoAnalyzer")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -97,15 +96,6 @@ class HomePage(QWidget):
 
         scroll_layout.addWidget(self._content, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
-        self._banner_container = QFrame(self)
-        self._banner_container.setObjectName("HomeBannerContainer")
-        banner_layout = QVBoxLayout(self._banner_container)
-        banner_layout.setContentsMargins(32, 8, 32, 24)
-        banner_layout.setSpacing(0)
-        banner_layout.addWidget(self.cloud_storage_warning)
-        root.addWidget(self._banner_container, 0)
-
-        self._apply_cloud_storage_visibility()
         self._apply_stylesheet()
         self._update_responsive_layout()
 
@@ -153,35 +143,6 @@ class HomePage(QWidget):
         )
         subtitle.setWordWrap(True)
         subtitle.setObjectName("HeroSubtitle")
-
-        cloud_warning = QFrame(self)
-        cloud_warning.setObjectName("CloudStorageWarning")
-        cloud_layout = QHBoxLayout(cloud_warning)
-        cloud_layout.setContentsMargins(12, 8, 12, 8)
-        cloud_layout.setSpacing(12)
-
-        cloud_text = QLabel(
-            (
-                "<b>Storage recommendation</b><br>"
-                "Store active projects on your local drive (Documents, Desktop) for best reliability. "
-                "Cloud storage sync can interrupt database writes, potentially causing corruption. "
-                "Copy .vaso files to cloud storage for backup and sharing."
-            ),
-            cloud_warning,
-        )
-        cloud_text.setWordWrap(True)
-        cloud_text.setObjectName("CloudStorageWarningText")
-        cloud_layout.addWidget(cloud_text, 1)
-
-        dismiss_btn = QToolButton(cloud_warning)
-        dismiss_btn.setObjectName("CloudStorageWarningDismiss")
-        dismiss_btn.setText("Got it, don't show again")
-        dismiss_btn.setAutoRaise(True)
-        dismiss_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        dismiss_btn.clicked.connect(self._dismiss_cloud_storage_warning)
-        cloud_layout.addWidget(dismiss_btn, 0, Qt.AlignmentFlag.AlignTop)
-
-        self.cloud_storage_warning = cloud_warning
 
         text_column.addLayout(title_row)
         text_column.addWidget(subtitle)
@@ -321,7 +282,7 @@ class HomePage(QWidget):
         layout.addLayout(header)
 
         subtitle = QLabel(
-            "Files and folders recently brought into projects",
+            "Traces and data files you've recently opened",
             card,
         )
         subtitle.setObjectName("CardSubtitle")
@@ -367,20 +328,6 @@ class HomePage(QWidget):
         layout.addLayout(window.home_recent_projects_layout)
         layout.addStretch()
         return card
-
-    def _apply_cloud_storage_visibility(self) -> None:
-        show = self._settings.value("home/show_storage_warning", True, type=bool)
-        if hasattr(self, "cloud_storage_warning"):
-            self.cloud_storage_warning.setVisible(bool(show))
-        if hasattr(self, "_banner_container"):
-            self._banner_container.setVisible(bool(show))
-
-    def _dismiss_cloud_storage_warning(self) -> None:
-        self._settings.setValue("home/show_storage_warning", False)
-        if hasattr(self, "cloud_storage_warning"):
-            self.cloud_storage_warning.hide()
-        if hasattr(self, "_banner_container"):
-            self._banner_container.hide()
 
     def _make_clear_button(self, text: str, callback: Callable[[], None]) -> QToolButton:
         button = QToolButton(self)
@@ -522,8 +469,6 @@ class HomePage(QWidget):
         accent = CURRENT_THEME.get("accent", text_color)
         accent_fill = CURRENT_THEME.get("accent_fill", accent)
         row_hover_color = rgba_from_hex(accent_fill, 0.12)
-        info_bg = rgba_from_hex(accent_fill, 0.08)
-        info_border = rgba_from_hex(accent_fill, 0.35)
         card_border_color = rgba_from_hex(border_color, 0.55)
         hero_border_color = rgba_from_hex(border_color, 0.85)
         button_bg = CURRENT_THEME.get("button_bg", window_bg)
@@ -553,8 +498,7 @@ QWidget#HomePage {{
 }}
 QScrollArea#HomeScrollArea,
 QWidget#HomeScrollHost,
-QWidget#HomeContent,
-QFrame#HomeBannerContainer {{
+QWidget#HomeContent {{
     background: {page_bg};
 }}
 QFrame#HeroFrame {{
@@ -652,52 +596,54 @@ QToolButton#HomeHelpButton:hover {{
     color: {card_title_color};
     text-decoration: underline;
 }}
-QFrame#CloudStorageWarning {{
-    background-color: {info_bg};
-    border: 1px solid {info_border};
-    border-radius: 10px;
-    padding: 1px;
-}}
-QLabel#CloudStorageWarningText {{
-    color: {text_color};
-    font-size: 12px;
-}}
-QToolButton#CloudStorageWarningDismiss {{
-    background: transparent;
-    color: {muted_action_color};
-    border: none;
-    padding: 2px 4px;
-    font-size: 11px;
-    font-weight: 500;
-}}
-QToolButton#CloudStorageWarningDismiss:hover {{
-    color: {card_title_color};
-    text-decoration: underline;
-}}
+/* --- Recent rows --- */
 QWidget#HomeRecentRow {{
     border: 1px solid {card_border_color};
     border-radius: 10px;
 }}
+QWidget#HomeRecentRow:hover {{
+    background: {row_hover_color};
+}}
 
-/* Make recent file/project rows clearly readable */
+/* Name button inside row */
 QWidget#HomeRecentRow QPushButton[isGhost="true"] {{
     color: {card_title_color};
     background-color: transparent;
     border: none;
-    padding: 7px 12px;
-    min-height: 32px;
+    padding: 0px;
+    min-height: 18px;
     font-size: 13px;
+    font-weight: 500;
     text-align: left;
 }}
-
-/* Keep ghost buttons transparent on hover inside recent rows */
 QWidget#HomeRecentRow QPushButton[isGhost="true"]:hover {{
     background-color: transparent;
 }}
 
-/* Subtle hover background for the whole row */
-QWidget#HomeRecentRow:hover {{
-    background: {row_hover_color};
+/* Path subtitle */
+QLabel#HomeRecentPath {{
+    color: {placeholder_color};
+    font-size: 11px;
+    padding: 0px;
+}}
+
+/* Missing file badge */
+QLabel#HomeMissingBadge {{
+    color: {placeholder_color};
+    background: {rgba_from_hex(text_color, 0.06)};
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: 4px;
+}}
+
+/* Dim missing rows */
+QWidget#HomeRecentRow[missing="true"] {{
+    opacity: 0.55;
+}}
+QWidget#HomeRecentRow[missing="true"] QPushButton[isGhost="true"] {{
+    color: {placeholder_color};
 }}
 """
         )
