@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import webbrowser
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
@@ -16,6 +18,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+
+_RELEASES_URL = "https://github.com/vr-oj/VasoAnalyzer/releases/latest"
 
 
 class UpdateDialog(QDialog):
@@ -29,7 +33,7 @@ class UpdateDialog(QDialog):
     def __init__(self, current_version: str, latest_version: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Update Available")
-        self.resize(450, 200)
+        self.resize(450, 220)
 
         # Store the user's choice
         self.user_choice = self.OK
@@ -47,9 +51,8 @@ class UpdateDialog(QDialog):
 
         # Message
         message = QLabel(
-            f"A new version ({latest_version}) of VasoAnalyzer is available!\n\n"
-            f"You are currently using version {current_version}.\n"
-            "Visit GitHub to download the latest release."
+            f"VasoAnalyzer <b>{latest_version}</b> is available.\n"
+            f"You are currently on <b>{current_version}</b>."
         )
         message.setWordWrap(True)
         message.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -75,11 +78,12 @@ class UpdateDialog(QDialog):
         remind_btn.clicked.connect(self._remind_later)
         button_layout.addWidget(remind_btn)
 
-        # OK button
-        ok_btn = QPushButton("OK")
-        ok_btn.setDefault(True)
-        ok_btn.clicked.connect(self.accept)
-        button_layout.addWidget(ok_btn)
+        # Download button — opens the releases page
+        download_btn = QPushButton("Download Update")
+        download_btn.setDefault(True)
+        download_btn.setToolTip("Open the GitHub releases page to download the latest version")
+        download_btn.clicked.connect(self._open_download)
+        button_layout.addWidget(download_btn)
 
         main.addLayout(button_layout)
 
@@ -93,7 +97,13 @@ class UpdateDialog(QDialog):
         self.user_choice = self.DONT_SHOW
         self.accept()
 
-    def exec_(self):
-        """Override exec_ to return the user's choice."""
+    def _open_download(self):
+        """Open the GitHub releases page and close the dialog."""
+        webbrowser.open(_RELEASES_URL)
+        self.user_choice = self.OK
+        self.accept()
+
+    def exec(self):
+        """Override exec to return the user's choice."""
         super().exec()
         return self.user_choice

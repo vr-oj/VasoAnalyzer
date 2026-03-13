@@ -60,6 +60,12 @@ def init_ui(window: VasoAnalyzerApp) -> None:
     window.data_page.setObjectName("DataPage")
     window.stack.addWidget(window.data_page)
 
+    # Comparison page — full-window side-by-side dataset comparison
+    from vasoanalyzer.ui.comparison_page import ComparisonPage
+    window.comparison_page = ComparisonPage(host=window)
+    window.stack.addWidget(window.comparison_page)
+    window.comparison_page.back_requested.connect(window.show_analysis_workspace)
+
     window.main_layout = QVBoxLayout(window.data_page)
     window.main_layout.setContentsMargins(0, 0, 0, 0)
     window.main_layout.setSpacing(0)

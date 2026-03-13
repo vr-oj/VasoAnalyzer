@@ -2168,7 +2168,9 @@ class VasoAnalyzerApp(QMainWindow):
         if isinstance(obj, Experiment):
             item.setExpanded(not item.isExpanded())
             self.current_experiment = obj
-            self.current_sample = None
+            if self.current_sample is not None:
+                self.current_sample = None
+                self._clear_canvas_and_table()
             if self.current_project is not None:
                 if not isinstance(self.current_project.ui_state, dict):
                     self.current_project.ui_state = {}
@@ -2465,13 +2467,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._snapshot_mgr._on_snapshot_load_finished(token, sample, stack, error)
 
     def open_comparison_window(self) -> None:
-        """Open (or raise) the floating dataset comparison window."""
-        if not hasattr(self, "_comparison_window") or self._comparison_window is None:
-            from vasoanalyzer.ui.comparison_window import ComparisonWindow
-            self._comparison_window = ComparisonWindow(self)
-        self._comparison_window.show()
-        self._comparison_window.raise_()
-        self._comparison_window.activateWindow()
+        """Switch to the comparison page (replaces old floating window)."""
+        self.show_comparison_page()
 
     def open_samples_in_new_windows(self, samples):
         """Open each sample in its own window for side-by-side comparison."""
@@ -2493,7 +2490,7 @@ class VasoAnalyzerApp(QMainWindow):
         class DualViewWindow(QMainWindow):
             def __init__(self, parent, pair):
                 super().__init__(parent)
-                self.setWindowTitle("Dual View")
+                self.setWindowTitle(f"VasoAnalyzer {APP_VERSION} — Dual View")
                 self.views = []
                 self._syncing = False
                 self._cursor_guides = []
@@ -2845,15 +2842,20 @@ class VasoAnalyzerApp(QMainWindow):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
+        need_clear = False
         for sample in experiment.samples:
             self.project_state.pop(id(sample), None)
             if self.current_sample is sample:
                 self.current_sample = None
+                need_clear = True
 
         self.current_project.experiments.remove(experiment)
 
         if self.current_experiment is experiment:
             self.current_experiment = None
+
+        if need_clear:
+            self._clear_canvas_and_table()
 
         self.refresh_project_tree()
         self.mark_session_dirty()
@@ -3265,23 +3267,29 @@ class VasoAnalyzerApp(QMainWindow):
         """Merge multiple folder-import candidates into a single dataset."""
         from vasoanalyzer.io.trace_events import load_trace_and_events
         from vasoanalyzer.services.folder_import_service import get_file_signature
+        from vasoanalyzer.ui.dialogs.merge_preview_dialog import MergePreviewDialog
 
-        # Sort by trace filename so segments join in chronological order
+        # Build initial file lists sorted by name
         sorted_cands = sorted(candidates, key=lambda c: Path(c.trace_file).name)
         trace_paths = [c.trace_file for c in sorted_cands]
-        events_paths = [c.events_file for c in sorted_cands if c.events_file]
+        events_paths: list[str | None] = [
+            c.events_file for c in sorted_cands
+        ]
 
-        # Ask user for dataset name
-        default_name = Path(sorted_cands[0].subfolder_path).parent.name or "Merged Dataset"
-        name, ok = QInputDialog.getText(
-            self, "Merged Dataset Name", "Name for merged dataset:", text=default_name
-        )
-        if not ok or not name.strip():
+        # Show merge preview dialog so the user can reorder and name
+        dlg = MergePreviewDialog(trace_paths, events_paths, parent=self)
+        if dlg.exec() != MergePreviewDialog.DialogCode.Accepted:
             return
-        name = name.strip()
+
+        trace_paths = dlg.ordered_trace_paths()
+        events_paths = dlg.ordered_events_paths()
+        name = dlg.merged_name
+
+        # Filter out None event paths for the loader
+        ev_non_none = [ep for ep in events_paths if ep is not None]
+        ev_arg = ev_non_none if len(ev_non_none) == len(trace_paths) else None
 
         try:
-            ev_arg = events_paths if len(events_paths) == len(trace_paths) else None
             df, labels, times, frames, diam, od_diam, import_meta = load_trace_and_events(
                 trace_paths, ev_arg
             )
@@ -3292,6 +3300,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         sample = SampleN(name=name)
         sample.trace_data = df
+        sample.import_metadata = import_meta or {}
         self._update_sample_link_metadata(sample, "trace", Path(trace_paths[0]).resolve())
         sample.trace_sig = get_file_signature(trace_paths[0])
 
@@ -3341,6 +3350,7 @@ class VasoAnalyzerApp(QMainWindow):
         ):
             return
 
+        need_clear = False
         for sample in samples:
             for exp in self.current_project.experiments:
                 if sample in exp.samples:
@@ -3348,7 +3358,11 @@ class VasoAnalyzerApp(QMainWindow):
                     self.project_state.pop(id(sample), None)
                     if self.current_sample is sample:
                         self.current_sample = None
+                        need_clear = True
                     break
+
+        if need_clear:
+            self._clear_canvas_and_table()
 
         self.refresh_project_tree()
         self.mark_session_dirty()
@@ -3361,8 +3375,10 @@ class VasoAnalyzerApp(QMainWindow):
         for exp in self.current_project.experiments:
             if sample in exp.samples:
                 exp.samples.remove(sample)
-                if self.current_sample is sample:
+                need_clear = self.current_sample is sample
+                if need_clear:
                     self.current_sample = None
+                    self._clear_canvas_and_table()
                 self.refresh_project_tree()
                 if self.current_project.path:
                     save_project_file(self.current_project, self.current_project.path)
@@ -3501,7 +3517,7 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_file_menu(self, menubar):
         file_menu = menubar.addMenu("&File")
 
-        # Project workspace submenu
+        # -- Project submenu -----------------------------------------------
         project_menu = file_menu.addMenu("Project")
 
         self.action_new_project = QAction("New Project…", self)
@@ -3519,12 +3535,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         project_menu.addSeparator()
 
-        self.action_save_project = QAction("Save Project", self)
+        self.action_save_project = QAction("Save", self)
         self.action_save_project.setShortcut("Ctrl+Shift+S")
         self.action_save_project.triggered.connect(self.save_project_file)
         project_menu.addAction(self.action_save_project)
 
-        self.action_save_project_as = QAction("Save Project As…", self)
+        self.action_save_project_as = QAction("Save As…", self)
         self.action_save_project_as.triggered.connect(self.save_project_file_as)
         project_menu.addAction(self.action_save_project_as)
 
@@ -3540,48 +3556,42 @@ class VasoAnalyzerApp(QMainWindow):
 
         file_menu.addSeparator()
 
-        self.action_new = QAction("Start New Analysis…", self)
-        self.action_new.setShortcut(QKeySequence.StandardKey.New)
-        self.action_new.triggered.connect(self.start_new_analysis)
-        file_menu.addAction(self.action_new)
+        # -- Import submenu ------------------------------------------------
+        import_menu = file_menu.addMenu("Import")
 
-        import_menu = file_menu.addMenu("Open Data")
-
-        self.action_open_trace = QAction("Import Trace CSV…", self)
+        self.action_open_trace = QAction("Trace CSV…", self)
         self.action_open_trace.setShortcut(QKeySequence.StandardKey.Open)
         self.action_open_trace.triggered.connect(self._handle_load_trace)
         import_menu.addAction(self.action_open_trace)
 
-        self.action_import_vasotracker_v1 = QAction("VasoTracker v1 (CSV + Table)…", self)
-        self.action_import_vasotracker_v1.triggered.connect(self._handle_load_vasotracker_v1)
-        import_menu.addAction(self.action_import_vasotracker_v1)
-
-        self.action_import_vasotracker_v2 = QAction("VasoTracker v2 (CSV + table.csv)…", self)
-        self.action_import_vasotracker_v2.triggered.connect(self._handle_load_vasotracker_v2)
-        import_menu.addAction(self.action_import_vasotracker_v2)
+        self.action_import_vasotracker = QAction("VasoTracker…", self)
+        self.action_import_vasotracker.triggered.connect(self._handle_load_vasotracker)
+        import_menu.addAction(self.action_import_vasotracker)
 
         import_menu.addSeparator()
 
-        self.action_import_events = QAction("Import Events CSV…", self)
+        self.action_import_events = QAction("Events CSV…", self)
         self.action_import_events.triggered.connect(self._handle_load_events)
         self.action_import_events.setEnabled(False)
         import_menu.addAction(self.action_import_events)
 
-        self.action_open_tiff = QAction("Import Result TIFF…", self)
+        self.action_open_tiff = QAction("TIFF Snapshot…", self)
         self.action_open_tiff.setShortcut("Ctrl+Shift+T")
         self.action_open_tiff.triggered.connect(self.load_snapshot)
         import_menu.addAction(self.action_open_tiff)
 
-        self.action_import_folder = QAction("Import Folder…", self)
+        self.action_import_folder = QAction("Folder…", self)
         self.action_import_folder.setShortcut("Ctrl+Shift+I")
         self.action_import_folder.triggered.connect(self._handle_import_folder)
         import_menu.addAction(self.action_import_folder)
 
-        self.action_import_dataset_pkg = QAction("Import Dataset Package…", self)
+        import_menu.addSeparator()
+
+        self.action_import_dataset_pkg = QAction("Dataset (.vasod)…", self)
         self.action_import_dataset_pkg.triggered.connect(self.import_dataset_package_action)
         import_menu.addAction(self.action_import_dataset_pkg)
 
-        self.action_import_dataset_from_project = QAction("Import from Project…", self)
+        self.action_import_dataset_from_project = QAction("From Another Project…", self)
         self.action_import_dataset_from_project.triggered.connect(
             self.import_dataset_from_project_action
         )
@@ -3592,33 +3602,29 @@ class VasoAnalyzerApp(QMainWindow):
 
         file_menu.addSeparator()
 
+        # -- Export submenu ------------------------------------------------
         export_menu = file_menu.addMenu("Export")
 
-        copy_menu = export_menu.addMenu("Copy for Excel")
-        self.action_copy_excel_row = QAction("Row-per-Event (Excel)", self)
-        self.action_copy_excel_row.triggered.connect(
-            lambda: self._copy_event_profile_to_clipboard(
-                EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True
-            )
-        )
-        copy_menu.addAction(self.action_copy_excel_row)
-        self.action_copy_excel_values = QAction("Values Only (Column Paste)", self)
-        self.action_copy_excel_values.triggered.connect(
-            lambda: self._copy_event_profile_to_clipboard(
-                EVENT_VALUES_SINGLE_COLUMN_ID, include_header=False
-            )
-        )
-        copy_menu.addAction(self.action_copy_excel_values)
-        copy_menu.addSeparator()
-        self.action_copy_excel_pressure = QAction("Pressure Curve (Standard)", self)
-        self.action_copy_excel_pressure.triggered.connect(
-            lambda: self._copy_event_profile_to_clipboard(
-                PRESSURE_CURVE_STANDARD_ID, include_header=True
-            )
-        )
-        copy_menu.addAction(self.action_copy_excel_pressure)
+        self.action_export_tiff = QAction("Figure…", self)
+        self.action_export_tiff.triggered.connect(self.export_high_res_plot)
+        export_menu.addAction(self.action_export_tiff)
 
-        export_csv_menu = export_menu.addMenu("Export CSV")
+        self.action_export_report = QAction("Report…", self)
+        self.action_export_report.setToolTip(
+            "Export a composite figure with trace, event table, and metadata"
+        )
+        self.action_export_report.triggered.connect(self._export_data_report)
+        export_menu.addAction(self.action_export_report)
+
+        self.action_gif_animator = QAction("GIF…", self)
+        self.action_gif_animator.setToolTip("Create animated GIFs from traces and snapshots")
+        self.action_gif_animator.triggered.connect(self.show_gif_animator)
+        self.action_gif_animator.setEnabled(False)
+        export_menu.addAction(self.action_gif_animator)
+
+        export_menu.addSeparator()
+
+        export_csv_menu = export_menu.addMenu("CSV")
         self.action_export_csv = export_csv_menu.menuAction()
         self.action_export_csv_row = QAction("Row-per-Event (Excel)…", self)
         self.action_export_csv_row.triggered.connect(
@@ -3643,44 +3649,11 @@ class VasoAnalyzerApp(QMainWindow):
         )
         export_csv_menu.addAction(self.action_export_csv_pressure)
 
-        self.action_export_excel_template = QAction("Export to VasoAnalyzer Excel Template…", self)
-        self.action_export_excel_template.triggered.connect(self.open_excel_template_export_dialog)
-        export_menu.addAction(self.action_export_excel_template)
-
-        self.action_export_excel = QAction("Export to Excel Template…", self)
-        self.action_export_excel.triggered.connect(self.open_excel_mapping_dialog)
-        export_menu.addAction(self.action_export_excel)
-
-        self.action_gif_animator = QAction("Export GIF…", self)
-        self.action_gif_animator.setToolTip("Create animated GIFs from traces and snapshots")
-        self.action_gif_animator.triggered.connect(self.show_gif_animator)
-        self.action_gif_animator.setEnabled(False)
-        export_menu.addAction(self.action_gif_animator)
-
-        self.action_export_dataset_pkg = QAction("Export Dataset Package…", self)
-        self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
-        export_menu.addAction(self.action_export_dataset_pkg)
-
         export_menu.addSeparator()
 
-        self.action_export_tiff = QAction("High-Res Plot…", self)
-        self.action_export_tiff.triggered.connect(self.export_high_res_plot)
-        export_menu.addAction(self.action_export_tiff)
-
-        self.action_export_report = QAction("Data Report…", self)
-        self.action_export_report.setToolTip(
-            "Export a composite figure with trace, event table, and metadata"
-        )
-        self.action_export_report.triggered.connect(self._export_data_report)
-        export_menu.addAction(self.action_export_report)
-
-        self.action_export_bundle = QAction("Project Bundle (.vaso)…", self)
-        self.action_export_bundle.triggered.connect(self.export_project_bundle_action)
-        export_menu.addAction(self.action_export_bundle)
-
-        self.action_export_shareable = QAction("Shareable Single File…", self)
-        self.action_export_shareable.triggered.connect(self.export_shareable_project)
-        export_menu.addAction(self.action_export_shareable)
+        self.action_export_dataset_pkg = QAction("Dataset (.vasod)…", self)
+        self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
+        export_menu.addAction(self.action_export_dataset_pkg)
 
         file_menu.addSeparator()
 
@@ -3725,6 +3698,31 @@ class VasoAnalyzerApp(QMainWindow):
         clear_events.triggered.connect(self.clear_current_session)
         edit_menu.addAction(clear_events)
 
+        edit_menu.addSeparator()
+
+        copy_menu = edit_menu.addMenu("Copy for Excel")
+        self.action_copy_excel_row = QAction("Row-per-Event", self)
+        self.action_copy_excel_row.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_row)
+        self.action_copy_excel_values = QAction("Values Only (Column Paste)", self)
+        self.action_copy_excel_values.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                EVENT_VALUES_SINGLE_COLUMN_ID, include_header=False
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_values)
+        self.action_copy_excel_pressure = QAction("Pressure Curve (Standard)", self)
+        self.action_copy_excel_pressure.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                PRESSURE_CURVE_STANDARD_ID, include_header=True
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_pressure)
+
     def _build_view_menu(self, menubar):
         view_menu = menubar.addMenu("&View")
 
@@ -3735,17 +3733,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         view_menu.addSeparator()
 
-        # Color scheme selection
-        theme_menu = view_menu.addMenu("Color Theme")
-        self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
-        self.action_theme_dark = QAction("Dark", self, checkable=True)
-        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
-        self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
-        theme_menu.addAction(self.action_theme_light)
-        theme_menu.addAction(self.action_theme_dark)
-
-        view_menu.addSeparator()
-
+        # -- Navigation ----------------------------------------------------
         reset_act = QAction("Reset View", self)
         reset_act.setShortcut("Ctrl+R")
         reset_act.triggered.connect(self.reset_view)
@@ -3769,6 +3757,33 @@ class VasoAnalyzerApp(QMainWindow):
 
         view_menu.addSeparator()
 
+        # -- Channels ------------------------------------------------------
+        channels_menu = view_menu.addMenu("Channels")
+        self.id_toggle_act = QAction("Inner", self, checkable=True, checked=True)
+        self.id_toggle_act.setToolTip("Show inner diameter trace")
+        self.od_toggle_act = QAction("Outer", self, checkable=True, checked=True)
+        self.od_toggle_act.setToolTip("Show outer diameter trace")
+        self.avg_pressure_toggle_act = QAction("Pressure", self, checkable=True, checked=True)
+        self.avg_pressure_toggle_act.setToolTip("Show pressure trace")
+        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=False)
+        self.set_pressure_toggle_act.setToolTip("Show set pressure trace")
+        self.id_toggle_act.setShortcut("I")
+        self.od_toggle_act.setShortcut("O")
+        self.set_pressure_toggle_act.setShortcut("S")
+        self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
+        self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
+        self.avg_pressure_toggle_act.setIcon(QIcon(self.icon_path("P.svg")))
+        self.set_pressure_toggle_act.setIcon(QIcon(self.icon_path("SP.svg")))
+        self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
+        self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
+        self.avg_pressure_toggle_act.toggled.connect(self.toggle_avg_pressure)
+        self.set_pressure_toggle_act.toggled.connect(self.toggle_set_pressure)
+        channels_menu.addAction(self.id_toggle_act)
+        channels_menu.addAction(self.od_toggle_act)
+        channels_menu.addAction(self.avg_pressure_toggle_act)
+        channels_menu.addAction(self.set_pressure_toggle_act)
+
+        # -- Annotations ---------------------------------------------------
         anno_menu = view_menu.addMenu("Annotations")
         ev_lines = QAction("Event Lines", self, checkable=True, checked=True)
         ev_lbls = QAction("Event Labels", self)
@@ -3789,8 +3804,7 @@ class VasoAnalyzerApp(QMainWindow):
         label_modes_menu.addAction(self.actEventLabelsHorizontal)
         label_modes_menu.addAction(self.actEventLabelsOutside)
 
-        view_menu.addSeparator()
-
+        # -- Panels --------------------------------------------------------
         self.showhide_menu = view_menu.addMenu("Panels")
         evt_tbl = QAction("Event Table", self, checkable=True, checked=True)
         snap_vw = QAction("Snapshot Viewer", self, checkable=True, checked=False)
@@ -3805,12 +3819,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.snapshot_viewer_action = snap_vw
         self.event_table_action = evt_tbl
 
-        self._register_trace_nav_shortcuts()
-
-        view_menu.addSeparator()
-
         shortcut = "Meta+M" if sys.platform == "darwin" else "Ctrl+M"
-        self.action_snapshot_metadata = QAction("Metadata…", self)
+        self.action_snapshot_metadata = QAction("Snapshot Metadata…", self)
         self.action_snapshot_metadata.setShortcut(shortcut)
         self.action_snapshot_metadata.setCheckable(True)
         self.action_snapshot_metadata.setEnabled(False)
@@ -3818,38 +3828,20 @@ class VasoAnalyzerApp(QMainWindow):
             self.action_snapshot_metadata.triggered.connect(
                 lambda checked: self.set_snapshot_metadata_visible(bool(checked))
             )
-        view_menu.addAction(self.action_snapshot_metadata)
+        self.showhide_menu.addAction(self.action_snapshot_metadata)
 
-        self.id_toggle_act = QAction("Inner", self, checkable=True, checked=True)
-        self.id_toggle_act.setStatusTip("Show inner diameter trace")
-        self.id_toggle_act.setToolTip("Show inner diameter trace")
-        self.od_toggle_act = QAction("Outer", self, checkable=True, checked=True)
-        self.od_toggle_act.setStatusTip("Show outer diameter trace")
-        self.od_toggle_act.setToolTip("Show outer diameter trace")
-        self.avg_pressure_toggle_act = QAction("Pressure", self, checkable=True, checked=True)
-        self.avg_pressure_toggle_act.setStatusTip("Show pressure trace")
-        self.avg_pressure_toggle_act.setToolTip("Show pressure trace")
-        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=False)
-        self.set_pressure_toggle_act.setStatusTip("Show set pressure trace")
-        self.set_pressure_toggle_act.setToolTip("Show set pressure trace")
-        self.id_toggle_act.setShortcut("I")
-        self.od_toggle_act.setShortcut("O")
-        # Note: No shortcut for pressure to avoid conflict with PyQtGraph Autoscale (A)
-        self.set_pressure_toggle_act.setShortcut("S")
-        self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
-        self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
-        self.avg_pressure_toggle_act.setIcon(QIcon(self.icon_path("P.svg")))
-        self.set_pressure_toggle_act.setIcon(QIcon(self.icon_path("SP.svg")))
-        self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
-        self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
-        self.avg_pressure_toggle_act.toggled.connect(self.toggle_avg_pressure)
-        self.set_pressure_toggle_act.toggled.connect(self.toggle_set_pressure)
-        self.showhide_menu.addAction(self.id_toggle_act)
-        self.showhide_menu.addAction(self.od_toggle_act)
-        self.showhide_menu.addAction(self.avg_pressure_toggle_act)
-        self.showhide_menu.addAction(self.set_pressure_toggle_act)
+        self._register_trace_nav_shortcuts()
 
         view_menu.addSeparator()
+
+        # -- Appearance ----------------------------------------------------
+        theme_menu = view_menu.addMenu("Color Theme")
+        self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
+        self.action_theme_dark = QAction("Dark", self, checkable=True)
+        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
+        self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
+        theme_menu.addAction(self.action_theme_light)
+        theme_menu.addAction(self.action_theme_dark)
 
         fs_act = QAction("Full Screen", self)
         fs_act.setShortcut("F11")
@@ -3859,52 +3851,34 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_tools_menu(self, menubar):
         tools_menu = menubar.addMenu("&Tools")
 
-        # Visualization tools
-        self.action_plot_settings = QAction("Plot Settings…", self)
-        self.action_plot_settings.triggered.connect(self.open_plot_settings_dialog)
-        tools_menu.addAction(self.action_plot_settings)
-
-        layout_act = QAction("Subplot Layout…", self)
-        layout_act.triggered.connect(self.open_subplot_layout_dialog)
-        tools_menu.addAction(layout_act)
-
-        tools_menu.addSeparator()
-
-        self.action_select_range = QAction("Select Range on Trace", self)
+        self.action_select_range = QAction("Select Range", self)
         self.action_select_range.setCheckable(True)
         self.action_select_range.toggled.connect(self._toggle_trace_range_selection)
         tools_menu.addAction(self.action_select_range)
 
-        self.action_copy_selected_range = QAction("Copy Selected Range Data", self)
+        self.action_copy_selected_range = QAction("Copy Range Data", self)
         self.action_copy_selected_range.triggered.connect(self._copy_selected_range_data)
         tools_menu.addAction(self.action_copy_selected_range)
 
-        self.action_export_selected_range = QAction("Export Selected Range Data…", self)
+        self.action_export_selected_range = QAction("Export Range Data…", self)
         self.action_export_selected_range.triggered.connect(self._export_selected_range_data)
         tools_menu.addAction(self.action_export_selected_range)
 
         tools_menu.addSeparator()
 
-        # Data management tools
-        self.action_relink_assets = QAction("Relink Missing Files…", self)
-        self.action_relink_assets.setEnabled(False)
-        self.action_relink_assets.triggered.connect(self.show_relink_dialog)
-        tools_menu.addAction(self.action_relink_assets)
-
-        tools_menu.addSeparator()
-
         self.action_compare_datasets = QAction("Compare Datasets…", self)
         self.action_compare_datasets.setToolTip(
-            "Open the comparison window and drag datasets from the project tree to compare them"
+            "Open the comparison window to compare datasets side by side"
         )
         self.action_compare_datasets.triggered.connect(self.open_comparison_window)
         tools_menu.addAction(self.action_compare_datasets)
 
         tools_menu.addSeparator()
 
-        self.action_change_log = QAction("Change Log…", self)
-        self.action_change_log.triggered.connect(self._show_change_log_dialog)
-        tools_menu.addAction(self.action_change_log)
+        self.action_relink_assets = QAction("Relink Missing Files…", self)
+        self.action_relink_assets.setEnabled(False)
+        self.action_relink_assets.triggered.connect(self.show_relink_dialog)
+        tools_menu.addAction(self.action_relink_assets)
 
     def _build_window_menu(self, menubar):
         window_menu = menubar.addMenu("&Window")
@@ -3933,24 +3907,30 @@ class VasoAnalyzerApp(QMainWindow):
         self._assign_menu_role(self.action_about, "AboutRole")
         help_menu.addAction(self.action_about)
 
-        act_about_project = QAction("About Project File…", self)
-        act_about_project.triggered.connect(self.show_project_file_info)
-        help_menu.addAction(act_about_project)
-
-        self.action_user_manual = QAction("User Manual…", self)
-        self.action_user_manual.triggered.connect(self.open_user_manual)
-        help_menu.addAction(self.action_user_manual)
+        help_menu.addSeparator()
 
         guide_act = QAction("Welcome Guide…", self)
         guide_act.setShortcut("Ctrl+/")
         guide_act.triggered.connect(lambda: self.show_welcome_guide(modal=False))
         help_menu.addAction(guide_act)
 
-        tut_act = QAction("Quick Start Tutorial…", self)
-        tut_act.triggered.connect(self.show_tutorial)
-        help_menu.addAction(tut_act)
+        self.action_user_manual = QAction("User Manual…", self)
+        self.action_user_manual.triggered.connect(self.open_user_manual)
+        help_menu.addAction(self.action_user_manual)
+
+        act_keys = QAction("Keyboard Shortcuts…", self)
+        act_keys.triggered.connect(self.show_shortcuts)
+        help_menu.addAction(act_keys)
 
         help_menu.addSeparator()
+
+        self.action_change_log = QAction("Change Log…", self)
+        self.action_change_log.triggered.connect(self._show_change_log_dialog)
+        help_menu.addAction(self.action_change_log)
+
+        act_rel = QAction("Release Notes…", self)
+        act_rel.triggered.connect(self.show_release_notes)
+        help_menu.addAction(act_rel)
 
         act_update = QAction("Check for Updates", self)
         act_update.triggered.connect(self.check_for_updates)
@@ -3959,19 +3939,17 @@ class VasoAnalyzerApp(QMainWindow):
             act_update.setToolTip("Disabled by VASO_DISABLE_UPDATE_CHECK")
         help_menu.addAction(act_update)
 
-        act_keys = QAction("Keyboard Shortcuts…", self)
-        act_keys.triggered.connect(self.show_shortcuts)
-        help_menu.addAction(act_keys)
+        help_menu.addSeparator()
+
+        act_cite = QAction("How to Cite…", self)
+        act_cite.triggered.connect(self._show_citation_dialog)
+        help_menu.addAction(act_cite)
 
         act_bug = QAction("Report a Bug…", self)
         act_bug.triggered.connect(
             lambda: webbrowser.open("https://github.com/vr-oj/VasoAnalyzer/issues/new")
         )
         help_menu.addAction(act_bug)
-
-        act_rel = QAction("Release Notes…", self)
-        act_rel.triggered.connect(self.show_release_notes)
-        help_menu.addAction(act_rel)
 
     def show_project_file_info(self, checked: bool = False) -> None:
         """Show information about project file format.
@@ -4201,9 +4179,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_projects = recent
 
     def update_recent_projects(self, path):
-        if path not in self.recent_projects:
-            self.recent_projects = [path] + self.recent_projects[:4]
-            self.settings.setValue("recentProjects", self.recent_projects)
+        # Always move to front (most-recently-used ordering)
+        filtered = [p for p in self.recent_projects if p != path]
+        self.recent_projects = [path] + filtered[:9]
+        self.settings.setValue("recentProjects", self.recent_projects)
         self.build_recent_projects_menu()
         self._refresh_home_recent()
 
@@ -4579,6 +4558,12 @@ class VasoAnalyzerApp(QMainWindow):
     def _delete_event_meta(self, index: int) -> None:
         self._event_mgr._delete_event_meta(index)
 
+    def _insert_event_at(self, index: int, row: tuple, meta: dict[str, Any] | None = None) -> None:
+        self._event_mgr._insert_event_at(index, row, meta)
+
+    def _remove_event_at(self, index: int) -> tuple | None:
+        return self._event_mgr._remove_event_at(index)
+
     def _fallback_restore_review_states(self, event_count: int) -> None:
         self._event_mgr._fallback_restore_review_states(event_count)
 
@@ -4750,58 +4735,47 @@ class VasoAnalyzerApp(QMainWindow):
         dialog.exec()
 
     def open_user_manual(self, checked: bool = False):
-        """Open user manual PDF.
+        """Open the user manual on GitHub."""
+        import webbrowser
 
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        manual_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "docs",
-                "VasoAnalyzer_User_Manual.pdf",
-            )
-        )
-
-        if not os.path.exists(manual_path):
-            QMessageBox.warning(
-                self,
-                "Manual Not Found",
-                "The user manual could not be located.",
-            )
-            return
-
-        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(manual_path))
-        if not opened:
-            QMessageBox.warning(
-                self,
-                "Open Failed",
-                "Unable to open the user manual on this system.",
-            )
+        webbrowser.open("https://github.com/vr-oj/VasoAnalyzer/blob/main/docs/USER_MANUAL.md")
 
     def show_release_notes(self, checked: bool = False):
-        """Show release notes.
+        """Open the GitHub releases page in the browser."""
+        import webbrowser
 
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        # You could load a local CHANGELOG.md and display it
-        QMessageBox.information(
-            self,
-            "Release Notes",
-            (
-                f"Release {APP_VERSION}:\n"
-                "- PyQtGraph renderer is now the primary backend for all trace views.\n"
-                "- Multi-track stacked layout: Inner Diameter, Outer Diameter, Pressure, and Set Pressure synchronized in a single scrollable view.\n"
-                "- Point Editor with undo/redo and audit history.\n"
-                "- Excel Mapper with flexible template writer for any workbook layout.\n"
-                "- VasoTracker v1 and v2 import with automatic sibling file discovery.\n"
-                "- Dataset package import/export between .vaso projects.\n"
-                "- Thread-safe background sample loading.\n"
-                "- General stability and logging improvements.\n"
-            ),
+        webbrowser.open("https://github.com/vr-oj/VasoAnalyzer/releases")
+
+    def _show_citation_dialog(self, checked: bool = False):
+        """Show citation information with a copy-to-clipboard option."""
+        citation = (
+            "Vega Rodríguez, O. J. (2025). VasoAnalyzer (v3.1.0) "
+            "[Computer software]. https://github.com/vr-oj/VasoAnalyzer"
         )
+        box = QMessageBox(self)
+        box.setWindowTitle("How to Cite VasoAnalyzer")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            "<b>Suggested citation:</b><br><br>"
+            f"{citation}<br><br>"
+            "<b>BibTeX:</b><br>"
+            "<pre style='font-size:11px'>"
+            "@software{VasoAnalyzer,\n"
+            "  author  = {Vega Rodríguez, Osvaldo J.},\n"
+            "  title   = {VasoAnalyzer},\n"
+            f"  version = {{{APP_VERSION}}},\n"
+            "  year    = {2025},\n"
+            "  url     = {https://github.com/vr-oj/VasoAnalyzer}\n"
+            "}</pre>"
+        )
+        copy_btn = box.addButton("Copy Citation", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() == copy_btn:
+            from PyQt6.QtWidgets import QApplication
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(citation)
 
     def show_about(self, checked: bool = False):
         """Show about dialog.
@@ -4988,6 +4962,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.sync_clip_action.setEnabled(False)
         self.sync_clip_action.triggered.connect(self.open_sync_clip_exporter)
 
+        self.compare_action = QAction(
+            QIcon(self.icon_path("compare.svg")), "Compare…", self
+        )
+        self.compare_action.setToolTip("Compare datasets side-by-side")
+        self.compare_action.triggered.connect(self.show_comparison_page)
+
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Import Events CSV…", self
         )
@@ -5041,11 +5021,13 @@ class VasoAnalyzerApp(QMainWindow):
             toolbar.addAction(edit_points_action)
         toolbar.addAction(self.excel_action)
         toolbar.addAction(self.sync_clip_action)
+        toolbar.addAction(self.compare_action)
         for action in (
             self.review_events_action,
             edit_points_action,
             self.excel_action,
             self.sync_clip_action,
+            self.compare_action,
         ):
             if action is None:
                 continue
@@ -5355,12 +5337,36 @@ class VasoAnalyzerApp(QMainWindow):
         self.show_home_dashboard()
 
     def show_analysis_workspace(self):
+        # Save comparison state before leaving
+        page = getattr(self, "comparison_page", None)
+        if page is not None and self.current_project is not None:
+            state = page.save_state()
+            if not isinstance(self.current_project.ui_state, dict):
+                self.current_project.ui_state = {}
+            if state:
+                self.current_project.ui_state["comparison_state"] = state
+            else:
+                self.current_project.ui_state.pop("comparison_state", None)
+
         self.stack.setCurrentWidget(self.data_page)
         if hasattr(self, "home_action") and self.home_action is not None:
             self.home_action.setVisible(True)
         self._update_home_resume_button()
         self._set_toolbars_visible(True)
         self._update_plot_empty_state()
+
+    def show_comparison_page(self) -> None:
+        """Switch to the full-window dataset comparison page."""
+        page = getattr(self, "comparison_page", None)
+        if page is None:
+            return
+        self._set_toolbars_visible(False)
+        self.stack.setCurrentWidget(page)
+        # Restore last comparison session if the page is empty
+        if not page._panels and self.current_project is not None:
+            ui = self.current_project.ui_state
+            if isinstance(ui, dict) and "comparison_state" in ui:
+                page.restore_state(ui["comparison_state"])
 
     def show_home_dashboard(self) -> None:
         manager = getattr(self, "window_manager", None)
@@ -5824,21 +5830,13 @@ QPushButton[isGhost="true"]:pressed {{
             return
 
         name = self.current_project.name or ""
-        path_hint = ""
-        if self.current_project.path:
+        if not name and self.current_project.path:
             try:
-                path_hint = Path(self.current_project.path).name
+                name = Path(self.current_project.path).stem
             except Exception:
-                path_hint = self.current_project.path
+                name = ""
 
-        if name and path_hint and name != path_hint:
-            suffix = f"{name} — {path_hint}"
-        elif name or path_hint:
-            suffix = name or path_hint
-        else:
-            suffix = ""
-
-        self.setWindowTitle(f"{base} — {suffix}" if suffix else base)
+        self.setWindowTitle(f"{base} — {name}" if name else base)
 
     def _compute_sampling_rate(self, trace_df: pd.DataFrame | None) -> float | None:
         if trace_df is None or "Time (s)" not in trace_df.columns:
@@ -6710,7 +6708,7 @@ QPushButton[isGhost="true"]:pressed {{
                 choice = self._prompt_merge_traces(selected)
                 if choice == "cancel":
                     return
-                file_path = selected if choice == "merge" else selected[0]
+                file_path = choice if isinstance(choice, list) else selected[0]
             else:
                 file_path = selected[0]
         primary_trace_path = file_path[0] if isinstance(file_path, list) else file_path
@@ -7761,7 +7759,7 @@ QPushButton[isGhost="true"]:pressed {{
             choice = self._prompt_merge_traces(file_paths)
             if choice == "cancel":
                 return
-            trace_source = file_paths if choice == "merge" else file_paths[0]
+            trace_source = choice if isinstance(choice, list) else file_paths[0]
         else:
             trace_source = file_paths[0]
         self._import_trace_events_from_paths(trace_source, source="file_dialog")
@@ -7835,66 +7833,53 @@ QPushButton[isGhost="true"]:pressed {{
             import_meta,
         )
 
-    def _handle_load_vasotracker_v1(self, checked: bool = False) -> None:
-        """Import a VasoTracker v1 trace/table pair through the normalized pipeline."""
+    def _handle_load_vasotracker(self, checked: bool = False) -> None:
+        """Import a VasoTracker trace/table pair, auto-detecting v1 vs v2."""
 
         trace_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select VasoTracker v1 trace CSV",
+            "Select VasoTracker trace CSV",
             "",
             "CSV Files (*.csv)",
         )
         if not trace_path:
             return
-        try:
-            payload = self._build_vasotracker_prefetched_payload(
-                trace_path,
-                source_format="vasotracker_v1",
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "VasoTracker v1 Import Error",
-                f"Could not import VasoTracker v1 files:\n{exc}",
-            )
-            return
-        self._import_trace_events_from_paths(
-            trace_path,
-            source="vasotracker_v1",
-            prefetched_payload=payload,
+
+        # Try v2 first (newer format), fall back to v1
+        for version in ("vasotracker_v2", "vasotracker_v1"):
+            try:
+                payload = self._build_vasotracker_prefetched_payload(
+                    trace_path,
+                    source_format=version,
+                )
+                self._import_trace_events_from_paths(
+                    trace_path,
+                    source=version,
+                    prefetched_payload=payload,
+                )
+                return
+            except Exception:
+                continue
+
+        QMessageBox.critical(
+            self,
+            "VasoTracker Import Error",
+            "Could not import the selected file as VasoTracker v1 or v2.",
         )
+
+    # Keep legacy names so any external callers still work
+    def _handle_load_vasotracker_v1(self, checked: bool = False) -> None:
+        self._handle_load_vasotracker(checked)
 
     def _handle_load_vasotracker_v2(self, checked: bool = False) -> None:
-        """Import a VasoTracker v2 trace/table pair through the normalized pipeline."""
+        self._handle_load_vasotracker(checked)
 
-        trace_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select VasoTracker v2 trace CSV",
-            "",
-            "CSV Files (*.csv)",
-        )
-        if not trace_path:
-            return
-        try:
-            payload = self._build_vasotracker_prefetched_payload(
-                trace_path,
-                source_format="vasotracker_v2",
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "VasoTracker v2 Import Error",
-                f"Could not import VasoTracker v2 files:\n{exc}",
-            )
-            return
-        self._import_trace_events_from_paths(
-            trace_path,
-            source="vasotracker_v2",
-            prefetched_payload=payload,
-        )
+    def _prompt_merge_traces(self, paths: list[str]) -> str | list[str]:
+        """Ask the user whether to merge multiple trace CSVs.
 
-    def _prompt_merge_traces(self, paths: list[str]) -> str:
-        """Ask the user whether to merge multiple trace CSVs."""
+        Returns ``"cancel"``, ``"single"``, or a list of trace paths in the
+        user-confirmed order when merging is selected.
+        """
         box = QMessageBox(self)
         box.setWindowTitle("Merge trace CSVs?")
         box.setText(
@@ -7907,7 +7892,12 @@ QPushButton[isGhost="true"]:pressed {{
         box.exec()
         clicked = box.clickedButton()
         if clicked == merge_btn:
-            return "merge"
+            from vasoanalyzer.ui.dialogs.merge_preview_dialog import MergePreviewDialog
+
+            dlg = MergePreviewDialog(paths, parent=self)
+            if dlg.exec() != MergePreviewDialog.DialogCode.Accepted:
+                return "cancel"
+            return dlg.ordered_trace_paths()
         if clicked == single_btn:
             return "single"
         return "cancel"

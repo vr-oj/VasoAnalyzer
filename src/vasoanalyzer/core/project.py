@@ -1498,11 +1498,12 @@ def _save_project_bundle(project: Project, path: str, *, skip_optimize: bool = F
 
         # Populate repository from project
         base_dir = Path(project.path).resolve().parent if project.path else dest.parent
-        _save_manifest = _build_save_manifest(project)
         _populate_store_from_project(project, repo, base_dir)
 
-        # Post-populate verification: confirm expected trace rows are present before snapshot
+        # Post-populate verification: build manifest AFTER populating so it uses the
+        # newly-assigned dataset_ids (populate clears + re-inserts, reassigning IDs).
         if not skip_optimize:
+            _save_manifest = _build_save_manifest(project)
             _verify_save_manifest(repo.store.conn, _save_manifest)  # type: ignore[attr-defined]
 
         # Save (creates snapshot for bundles/containers)

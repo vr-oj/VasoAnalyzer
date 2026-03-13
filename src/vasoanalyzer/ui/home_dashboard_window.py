@@ -61,7 +61,8 @@ class HomeDashboardWindow(QMainWindow):
         self._onboarding_checked = False
 
         self._apply_window_branding()
-        self.setWindowTitle("VasoAnalyzer Home")
+        from utils.config import APP_VERSION
+        self.setWindowTitle(f"VasoAnalyzer {APP_VERSION}")
         self.resize(1100, 700)
 
         self.home_page = HomePage(self)

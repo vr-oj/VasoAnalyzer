@@ -2,6 +2,8 @@
 
 **Desktop analysis toolkit for pressure myography — built for VasoTracker users**
 
+<!-- TODO: Add screenshot/banner image here -->
+
 VasoAnalyzer turns raw VasoTracker recordings into clean, export-ready results without leaving your desktop. Load a trace CSV, annotate events, clean artefacts, fill your lab's Excel template, and export publication-quality figures — all inside a single `.vaso` project file you can share with collaborators or archive for reproducibility.
 
 > **Privacy first** — all processing happens locally. No cloud, no account, no data leaves your machine.
@@ -15,7 +17,7 @@ VasoAnalyzer is designed for researchers and lab members who run **pressure myog
 - Visualize multi-channel diameter and pressure traces
 - Annotate protocol events (drug additions, pressure steps, washes)
 - Clean artefacts and spikes before analysis
-- Map results into lab-specific Excel templates
+- Compare datasets side by side
 - Export figures and tables for papers and presentations
 - Keep an organized, reproducible record of every experiment
 
@@ -26,10 +28,13 @@ If you currently copy-paste VasoTracker CSVs into Excel by hand, VasoAnalyzer re
 ## Key capabilities
 
 ### Single-file projects (`.vaso`)
-Every dataset, event annotation, edit, figure setting, and export configuration lives in one portable file. Back it up, email it, or drop it on a shared drive — your collaborator opens the exact same view.
+Every dataset, event annotation, edit, figure setting, and export configuration lives in one portable SQLite file. Back it up, email it, or drop it on a shared drive — your collaborator opens the exact same view.
 
 ### Multi-track trace viewer
 Inner diameter, outer diameter, pressure, and set-pressure channels stacked in a synchronized view with smooth pan and zoom. Event markers sit above the trace and inline on each channel so you always know where you are in the protocol.
+
+### Dataset comparison
+Open the comparison tool to view multiple datasets side by side. Drag samples from the project tree, compare traces across experiments, and see event markers overlaid on each panel.
 
 ### Point Editor with audit trail
 Interactively clean spikes and artefacts by deleting or connecting points. Every edit is recorded as a structured action and visible in the Edit History panel — nothing is silently discarded.
@@ -44,8 +49,8 @@ Map event-level and trace-level data into your lab's existing Excel templates. T
 - **Figures** — PNG, TIFF, or SVG at publication resolution
 - **GIF animations** — synchronized vessel image + trace playback
 - **Event tables** — CSV with diameters, pressures, and metadata per event
-- **Excel** — filled templates via the Excel Mapper
 - **Dataset packages** (`.vasods`) — share individual datasets between projects
+- **Reports** — composite figures with trace, event table, and metadata
 
 ### Full VasoTracker integration
 - Microsecond-precision timing via `Time_s_exact`
@@ -60,19 +65,23 @@ Map event-level and trace-level data into your lab's existing Excel templates. T
 
 ### Install
 
-| Platform | Instructions |
-|----------|-------------|
-| **Windows** | Download the latest `.zip` from [Releases](https://github.com/vr-oj/VasoAnalyzer/releases), extract, and run `VasoAnalyzer.exe`. |
-| **macOS** | Download the `.zip`, extract, drag to **Applications**, then right-click → **Open** on first launch to bypass Gatekeeper. |
+Download the latest release for your platform from the [Releases page](https://github.com/vr-oj/VasoAnalyzer/releases).
+
+| Platform | Download | Steps |
+|----------|----------|-------|
+| **Windows** | `VasoAnalyzer-Setup-x.x.x.exe` | Run the installer and follow the prompts. A desktop shortcut is created automatically. |
+| **macOS** | `VasoAnalyzer-x.x.x.zip` | Extract, drag `VasoAnalyzer.app` to **Applications**, then right-click → **Open** on first launch to bypass Gatekeeper. |
+
+VasoAnalyzer checks for updates automatically (configurable in *Help → Check for Updates*).
 
 ### Typical workflow
 
 1. **Create a project** — launch VasoAnalyzer and click *Create New Project* on the Home screen.
-2. **Import data** — click *Open Data* in the toolbar. Load a trace CSV (time + diameter), an event file (time + label), and optionally a TIFF stack.
+2. **Import data** — go to *File → Import* in the menu bar. Load a trace CSV (time + diameter), an event file (time + label), and optionally a TIFF stack.
 3. **Explore** — pan and zoom through the trace. Use `P` for pan mode, `Z` for select/zoom mode, scroll to navigate.
 4. **Clean** — open the Point Editor to remove spikes and artefacts. All edits are tracked.
 5. **Annotate** — adjust event labels and timing in the Events table. Changes are reflected on the plot immediately.
-6. **Export** — export figures (PNG/TIFF/SVG), fill an Excel template with the Excel Mapper, or export event tables as CSV.
+6. **Export** — export figures (PNG/TIFF/SVG), event tables as CSV, or dataset packages for sharing.
 7. **Save** — press `Cmd/Ctrl + Shift + S` to save. The `.vaso` file captures everything — reopen it tomorrow to the exact same view.
 
 ---
@@ -93,7 +102,7 @@ Map event-level and trace-level data into your lab's existing Excel templates. T
 - TIFF stacks for snapshot/preview (large stacks are auto-sampled for performance)
 
 ### Project files
-- `.vaso` — single-file project (ZIP container, inspectable with any unzip tool)
+- `.vaso` — single-file SQLite project containing all datasets, annotations, and settings
 - `.vasods` — single-dataset package for sharing between projects
 
 ---
@@ -185,8 +194,31 @@ resources/    — icons, SVGs, stylesheets
 
 ---
 
-## Citation and license
+## How to cite this software
 
-If VasoAnalyzer contributed to your research, please cite it using the metadata in [`CITATION.cff`](CITATION.cff).
+If VasoAnalyzer contributed to your research, please cite it as:
+
+> Vega Rodríguez, O. J. (2025). *VasoAnalyzer* (v3.1.0) [Computer software]. https://github.com/vr-oj/VasoAnalyzer
+
+BibTeX:
+
+```bibtex
+@software{VasoAnalyzer,
+  author    = {Vega Rodríguez, Osvaldo J.},
+  title     = {VasoAnalyzer},
+  version   = {3.1.0},
+  year      = {2025},
+  url       = {https://github.com/vr-oj/VasoAnalyzer},
+  license   = {CC-BY-NC-SA-4.0}
+}
+```
+
+Machine-readable citation metadata is also available in [`CITATION.cff`](CITATION.cff).
+
+You can also find this citation from within the app via *Help → How to Cite*.
+
+---
+
+## License
 
 This project is released under the **CC BY-NC-SA 4.0** license. See [`LICENSE`](LICENSE) for details.

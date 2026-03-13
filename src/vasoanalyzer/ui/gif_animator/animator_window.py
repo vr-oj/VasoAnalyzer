@@ -249,7 +249,8 @@ class GifAnimatorWindow(QMainWindow):
         self.frame_time_metadata = frame_time_result  # Store metadata for auditability
 
         # Setup UI
-        self.setWindowTitle(f"GIF Animator - {sample.name}")
+        from utils.config import APP_VERSION
+        self.setWindowTitle(f"VasoAnalyzer {APP_VERSION} — GIF Animator")
         self.setGeometry(100, 100, 1200, 700)
 
         self._init_ui()
