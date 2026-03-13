@@ -23,9 +23,9 @@ class TiffScrubBar(QtWidgets.QSlider):
         self.setTracking(True)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.setRange(0, 0)
-        self.setFixedHeight(30)
-        self._track_height = 10
-        self._handle_radius = 8
+        self.setFixedHeight(24)
+        self._track_height = 8
+        self._handle_radius = 7
         self._hovering = False
         self._dragging = False
 
@@ -187,14 +187,14 @@ class TiffTransportBar(QtWidgets.QFrame):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("TiffTransportBar")
-        self._icon_size = QtCore.QSize(16, 16)
-        self._button_size = 30
+        self._icon_size = QtCore.QSize(14, 14)
+        self._button_size = 26
         self._page_count = 0
         self._page_index = 0
         self._speed_multiplier = 1.0
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 4)
         layout.setSpacing(2)
 
         self.scrub_bar = TiffScrubBar(self)
@@ -232,10 +232,9 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.end_button.setToolTip("Jump to last frame")
         self.end_button.clicked.connect(self._on_jump_end)
         row.addWidget(self.end_button)
+
         row.addStretch(1)
 
-        self.speed_label = QtWidgets.QLabel("Speed:")
-        self.speed_label.setObjectName("SnapshotSpeedLabel")
         self.speed_combo = QtWidgets.QComboBox(self)
         self.speed_combo.setObjectName("SnapshotSpeedCombo")
         self.speed_combo.setToolTip("Playback speed multiplier")
@@ -243,14 +242,10 @@ class TiffTransportBar(QtWidgets.QFrame):
         for value in (0.25, 0.5, 1.0, 2.0, 5.0, 10.0):
             self.speed_combo.addItem(_format_multiplier(value), value)
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
-        self.speed_pill = QtWidgets.QFrame(self)
-        self.speed_pill.setObjectName("SnapshotSpeedPill")
-        self.speed_pill.setSizePolicy(QtWidgets.QSizePolicy.Policy.Fixed, QtWidgets.QSizePolicy.Policy.Fixed)
-        speed_layout = QtWidgets.QHBoxLayout(self.speed_pill)
-        speed_layout.setContentsMargins(8, 4, 8, 4)
-        speed_layout.setSpacing(6)
-        speed_layout.addWidget(self.speed_label)
-        speed_layout.addWidget(self.speed_combo)
+        row.addWidget(self.speed_combo)
+        # Backward-compat aliases used by snapshot_manager
+        self.speed_label = self.speed_combo
+        self.speed_pill = self.speed_combo
 
         self.time_label = QtWidgets.QLabel("Frame 0 / 0")
         self.time_label.setObjectName("SnapshotTimeLabel")
@@ -258,7 +253,6 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
         row.addWidget(self.time_label)
         layout.addLayout(row)
-
         self._apply_control_styles()
         self._apply_icons()
         self.set_speed_multiplier(1.0)
@@ -336,29 +330,22 @@ QToolButton:disabled {{
     border-color: {_rgba(border)};
 }}
 """
-        pill_bg = QtGui.QColor(button_bg)
-        pill_bg.setAlpha(235)
-        pill_border = QtGui.QColor(border)
-        pill_border.setAlpha(210)
-        pill_radius = max(10, radius + 6)
-        pill_style = f"""
-QFrame#SnapshotSpeedPill {{
-    background: {_rgba(pill_bg)};
-    border: 1px solid {_rgba(pill_border)};
-    border-radius: {pill_radius}px;
-}}
-"""
         combo_style = f"""
 QComboBox#SnapshotSpeedCombo {{
-    background: transparent;
-    border: none;
-    padding: 2px 4px;
+    background: {_rgba(button_bg)};
+    border: 1px solid {_rgba(border)};
+    border-radius: {radius}px;
+    padding: 2px 6px 2px 6px;
     min-height: 22px;
     color: {_rgba(text)};
+    font-size: 10px;
+}}
+QComboBox#SnapshotSpeedCombo:hover {{
+    background: {_rgba(hover)};
 }}
 QComboBox#SnapshotSpeedCombo::drop-down {{
     border: none;
-    width: 18px;
+    width: 14px;
 }}
 QComboBox#SnapshotSpeedCombo QAbstractItemView {{
     background: {_rgba(field)};
@@ -372,9 +359,7 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
         )
         for button in (self.start_button, self.play_button, self.end_button):
             button.setStyleSheet(button_style)
-        self.speed_pill.setStyleSheet(pill_style)
         self.speed_combo.setStyleSheet(combo_style)
-        self.speed_label.setStyleSheet(f"color: {_rgba(text)}; font-size: 10px;")
         self.time_label.setStyleSheet(label_style)
 
     def changeEvent(self, event: QtCore.QEvent) -> None:
@@ -389,7 +374,7 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
             self.play_button,
             self.end_button,
             self.scrub_bar,
-            self.speed_pill,
+            self.speed_combo,
         ):
             widget.setEnabled(enabled)
         self.time_label.setEnabled(True)
@@ -398,6 +383,7 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
         self._page_count = max(0, int(page_count))
         self.scrub_bar.setRange(0, max(0, self._page_count - 1))
         self.set_controls_enabled(self._page_count > 0)
+        self._lock_time_label_width()
         self._update_frame_label()
 
     def set_page_index(self, page_index: int) -> None:
@@ -433,6 +419,21 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
 
     def set_time_readout(self, text: str) -> None:
         self.time_label.setText(text)
+        fm = self.time_label.fontMetrics()
+        needed = fm.horizontalAdvance(text) + 8
+        if needed > self.time_label.minimumWidth():
+            self.time_label.setMinimumWidth(needed)
+
+    def _lock_time_label_width(self) -> None:
+        """Set a stable minimum width so the label doesn't resize during scrub."""
+        if self._page_count <= 0:
+            self.time_label.setMinimumWidth(0)
+            return
+        n = str(self._page_count)
+        # Use the widest plausible text for this page count
+        sample = f"Frame {n} / {n}   00000.00 s / 00000.00 s"
+        fm = self.time_label.fontMetrics()
+        self.time_label.setMinimumWidth(fm.horizontalAdvance(sample) + 8)
 
     def _update_frame_label(self) -> None:
         if self._page_count <= 0:

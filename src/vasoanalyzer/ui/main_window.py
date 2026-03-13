@@ -4518,6 +4518,15 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _on_event_rows_changed(self) -> None:
         self._event_mgr._on_event_rows_changed()
+        self._update_event_count_label()
+
+    def _update_event_count_label(self) -> None:
+        label = getattr(self, "event_count_label", None)
+        if label is None:
+            return
+        ctrl = getattr(self, "event_table_controller", None)
+        count = len(ctrl.rows) if ctrl is not None else 0
+        label.setText(f"{count} event{'s' if count != 1 else ''}" if count else "")
 
     def _ensure_event_meta_length(self, length: int | None = None) -> None:
         self._event_mgr._ensure_event_meta_length(length)
@@ -9455,9 +9464,6 @@ QPushButton[isGhost="true"]:pressed {{
             snapshot_box = QVBoxLayout(self.snapshot_card)
             snapshot_box.setContentsMargins(0, 0, 0, 0)
             snapshot_box.setSpacing(0)
-            snapshot_title = QLabel("Snapshot Viewer", self.snapshot_card)
-            snapshot_title.setObjectName("PanelSectionTitle")
-            snapshot_box.addWidget(snapshot_title, 0, Qt.AlignmentFlag.AlignLeft)
             self.snapshot_stack = QStackedWidget(self.snapshot_card)
             self.snapshot_stack.setObjectName("SnapshotStack")
             self.snapshot_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -9473,9 +9479,6 @@ QPushButton[isGhost="true"]:pressed {{
         table_layout = QVBoxLayout(self.event_table_card)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
-        table_title = QLabel("Event Table", self.event_table_card)
-        table_title.setObjectName("PanelSectionTitle")
-        table_layout.addWidget(table_title)
         self.review_notice_banner = QFrame(self.event_table_card)
         self.review_notice_banner.setObjectName("ReviewNoticeBanner")
         notice_layout = QHBoxLayout(self.review_notice_banner)
@@ -9495,6 +9498,10 @@ QPushButton[isGhost="true"]:pressed {{
         self._configure_review_notice_banner()
         table_layout.addWidget(self.review_notice_banner)
         table_layout.addWidget(self.event_table, 1)
+        self.event_count_label = QLabel("", self.event_table_card)
+        self.event_count_label.setObjectName("EventCountLabel")
+        self.event_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        table_layout.addWidget(self.event_count_label)
         right_panel_layout.addWidget(self.event_table_card, 1)
         # Snapshot card uses Preferred policy (aspect-ratio-aware); event table expands.
         if self.snapshot_card is not None:

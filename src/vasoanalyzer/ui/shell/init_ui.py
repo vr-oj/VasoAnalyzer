@@ -381,8 +381,8 @@ QWidget#TiffTransportBar QToolButton {{
     background: {button_bg};
     border: 1px solid {panel_border};
     border-radius: {panel_radius}px;
-    min-width: 30px;
-    min-height: 30px;
+    min-width: 26px;
+    min-height: 26px;
     padding: 0px;
 }}
 QWidget#TiffTransportBar QToolButton:hover {{
@@ -405,17 +405,12 @@ QWidget#TiffTransportBar QComboBox#SnapshotSpeedCombo {{
     font-size: 11px;
     color: {text_color};
 }}
-QLabel#SnapshotSpeedLabel,
 QLabel#SnapshotTimeLabel {{
     color: {status_color};
     font-size: 10px;
 }}
 QLabel#SnapshotTimeLabel {{
     font-family: Menlo, Consolas, "Courier New", monospace;
-}}
-QLabel#SnapshotStatusLabel {{
-    color: {status_color};
-    font-size: 10px;
 }}
 QLabel#SnapshotSubsampleLabel {{
     background: {hover_bg};
@@ -436,10 +431,14 @@ QLabel#PanelSectionTitle {{
     font-weight: 600;
     padding: 0px 0px 2px 0px;
 }}
+QLabel#EventCountLabel {{
+    color: {status_color};
+    font-size: 9pt;
+    padding: 2px 8px;
+}}
 QWidget#SnapshotPreview {{
-    background: {snapshot_bg};
-    border: 1px solid {preview_border};
-    border-radius: {preview_radius}px;
+    background: {panel_bg};
+    border: none;
     color: {preview_color};
 }}
 QWidget#SnapshotPreview QLabel {{

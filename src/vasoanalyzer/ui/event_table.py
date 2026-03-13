@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QAbstractTableModel,
     QEvent,
     QModelIndex,
+    QSettings,
     QSignalBlocker,
     Qt,
     pyqtSignal,
@@ -676,18 +677,20 @@ class EventTableWidget(QTableView):
         self._preferred_event_width = DEFAULT_EVENT_COLUMN_WIDTH
 
         h_header = self.horizontalHeader()
-        h_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        h_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         h_header.setMinimumSectionSize(24)
         h_header.setStretchLastSection(False)
         h_header.setDefaultSectionSize(84)
         h_header.setMinimumHeight(28)
         if h_header.count() > EVENT_COLUMN_INDEX:
             h_header.resizeSection(EVENT_COLUMN_INDEX, self._preferred_event_width)
-            h_header.setSectionResizeMode(EVENT_COLUMN_INDEX, QHeaderView.ResizeMode.Interactive)
+        h_header.sectionResized.connect(self._on_section_resized)
+        h_header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        h_header.customContextMenuRequested.connect(self._show_column_visibility_menu)
 
         v_header = self.verticalHeader()
         v_header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        v_header.setDefaultSectionSize(26)
+        v_header.setDefaultSectionSize(24)
         v_header.setMinimumWidth(STATUS_COLUMN_WIDTH + 4)
         v_header.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -697,7 +700,8 @@ class EventTableWidget(QTableView):
         log.debug("[THEME-DEBUG] EventTableWidget.apply_theme called, id(self)=%s", id(self))
         palette = self.palette()
         header_bg = CURRENT_THEME.get(
-            "panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.ColorRole.Base).name())
+            "table_header_bg",
+            CURRENT_THEME.get("panel_bg", CURRENT_THEME.get("table_bg", palette.color(QPalette.ColorRole.Base).name())),
         )
         header_text = CURRENT_THEME.get("text", palette.color(QPalette.ColorRole.Text).name())
         hover = CURRENT_THEME.get("table_hover", CURRENT_THEME.get("button_hover_bg", header_bg))
@@ -713,6 +717,7 @@ class EventTableWidget(QTableView):
         header_border = CURRENT_THEME.get(
             "panel_border", CURRENT_THEME.get("table_header_border", grid_base.name())
         )
+        accent = CURRENT_THEME.get("accent", "#3B82F6")
         row_hover = CURRENT_THEME.get("table_hover", base)
 
         header = self.horizontalHeader()
@@ -720,12 +725,12 @@ class EventTableWidget(QTableView):
             QHeaderView::section {{
                 background-color: {header_bg};
                 color: {header_text};
-                font-weight: 600;
+                font-weight: 700;
                 font-size: 9.5pt;
-                padding: 5px 8px;
+                padding: 4px 8px;
                 border: none;
                 border-right: 1px solid {header_border};
-                border-bottom: 1px solid {header_border};
+                border-bottom: 2px solid {accent};
             }}
             QHeaderView::section:hover {{
                 background-color: {hover};
@@ -734,17 +739,24 @@ class EventTableWidget(QTableView):
                 background-color: {header_bg};
                 border: none;
                 border-right: 1px solid {header_border};
-                border-bottom: 1px solid {header_border};
+                border-bottom: 2px solid {accent};
             }}
         """
         header.setStyleSheet(header_style)
 
         v_header = self.verticalHeader()
-        v_header_bg = header_bg
-        v_header_style = (
-            f"QHeaderView::section {{background-color: {v_header_bg}; color: {header_text}; "
-            f"font-weight: 500; padding: 0px 5px; border: none; border-right: 1px solid {header_border};}}"
-        )
+        v_header_style = f"""
+            QHeaderView::section {{
+                background-color: {header_bg};
+                color: {header_text};
+                font-weight: 500;
+                font-size: 9pt;
+                padding: 0px 5px;
+                border: none;
+                border-right: 1px solid {header_border};
+                border-bottom: 1px solid {header_border};
+            }}
+        """
         v_header.setStyleSheet(v_header_style)
         body_style = (
             f"QTableView {{alternate-background-color: {alt}; background-color: {base}; "
@@ -773,6 +785,7 @@ class EventTableWidget(QTableView):
             return
 
         visible_keys = set(column_keys)
+        user_hidden = self._load_hidden_columns()
         h_scroll = self.horizontalScrollBar()
         previous_scroll = h_scroll.value()
         blocker = QSignalBlocker(h_scroll)
@@ -785,7 +798,8 @@ class EventTableWidget(QTableView):
                 key = column_key_for_header(header_label)
                 if key is None:
                     continue
-                self.setColumnHidden(col, key not in visible_keys)
+                hidden = key not in visible_keys or (key != "event" and key in user_hidden)
+                self.setColumnHidden(col, hidden)
             self.apply_viewport_fit_policy()
             h_scroll.setValue(min(previous_scroll, h_scroll.maximum()))
         finally:
@@ -895,17 +909,10 @@ class EventTableWidget(QTableView):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._fit_columns_to_viewport()
+        self._fill_event_column()
 
     def refresh_column_widths(self) -> None:
-        model = self.model()
-        if not model or model.columnCount() == 0:
-            return
-        self._fit_columns_to_viewport()
-
-    def _fit_columns_to_viewport(self) -> None:
-        """Fit columns to viewport - event column handles stretch."""
-        return
+        pass
 
     def _apply_column_resize_modes(self) -> None:
         self.apply_viewport_fit_policy()
@@ -918,9 +925,17 @@ class EventTableWidget(QTableView):
 
         header = self.horizontalHeader()
         header.setStretchLastSection(False)
+        saved = self._load_column_widths()
 
-        event_col = None
-        stretch_fallback = None
+        default_widths: dict[str, int] = {
+            "time": TIME_COLUMN_WIDTH,
+            "id": ID_COLUMN_WIDTH,
+            "od": OD_COLUMN_WIDTH,
+            "avg_p": PRESSURE_COLUMN_WIDTH,
+            "set_p": PRESSURE_COLUMN_WIDTH,
+        }
+
+        header.blockSignals(True)
         for col in range(model.columnCount()):
             if col == STATUS_COLUMN_INDEX:
                 header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
@@ -932,26 +947,121 @@ class EventTableWidget(QTableView):
             if key is None:
                 continue
 
-            if not self.isColumnHidden(col) and stretch_fallback is None:
-                stretch_fallback = col
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
 
             if key == "event":
-                event_col = col
-                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+                continue  # width set by _fill_event_column
+
+            width = saved.get(key) or default_widths.get(key, 84)
+            self.setColumnWidth(col, width)
+
+        header.blockSignals(False)
+        self._fill_event_column()
+
+    def _fill_event_column(self) -> None:
+        """Give the Event column all remaining horizontal space."""
+        model = self.model()
+        if model is None or model.columnCount() == 0:
+            return
+        header = self.horizontalHeader()
+        event_col = None
+        used = 0
+        for col in range(model.columnCount()):
+            if self.isColumnHidden(col):
                 continue
+            h_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+            key = column_key_for_header(h_label)
+            if key == "event":
+                event_col = col
+                continue
+            used += self.columnWidth(col)
+        if event_col is None:
+            return
+        viewport_w = self.viewport().width()
+        remaining = viewport_w - used
+        min_event = max(DEFAULT_EVENT_COLUMN_WIDTH, header.minimumSectionSize())
+        width = max(remaining, min_event)
+        header.blockSignals(True)
+        self.setColumnWidth(event_col, width)
+        header.blockSignals(False)
 
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
-            if key == "time":
-                self.setColumnWidth(col, TIME_COLUMN_WIDTH)
-            elif key == "id":
-                self.setColumnWidth(col, ID_COLUMN_WIDTH)
-            elif key == "od":
-                self.setColumnWidth(col, OD_COLUMN_WIDTH)
-            elif key in ("avg_p", "set_p"):
-                self.setColumnWidth(col, PRESSURE_COLUMN_WIDTH)
+    _SETTINGS_KEY = "EventTable/ColumnWidths"
 
-        if event_col is None and stretch_fallback is not None:
-            header.setSectionResizeMode(stretch_fallback, QHeaderView.ResizeMode.Stretch)
+    def _on_section_resized(self, logical_index: int, _old_size: int, new_size: int) -> None:
+        """Persist column width when the user drags a column edge."""
+        model = self.model()
+        if model is None or logical_index == STATUS_COLUMN_INDEX:
+            return
+        header_label = model.headerData(logical_index, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+        key = column_key_for_header(header_label)
+        if key is None or key == "event":
+            return
+        saved = self._load_column_widths()
+        saved[key] = new_size
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        settings.setValue(self._SETTINGS_KEY, saved)
+
+    def _load_column_widths(self) -> dict[str, int]:
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        raw = settings.value(self._SETTINGS_KEY)
+        if isinstance(raw, dict):
+            return {k: int(v) for k, v in raw.items() if isinstance(v, (int, float, str))}
+        return {}
+
+    _HIDDEN_COLS_KEY = "EventTable/HiddenColumns"
+
+    def _show_column_visibility_menu(self, pos) -> None:
+        """Show a context menu on the header to toggle column visibility."""
+        model = self.model()
+        if model is None or model.columnCount() == 0:
+            return
+        menu = QMenu(self)
+        for col in range(model.columnCount()):
+            if col == STATUS_COLUMN_INDEX:
+                continue
+            header_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+            key = column_key_for_header(header_label)
+            if key is None or key == "event":
+                continue
+            action = menu.addAction(header_label)
+            action.setCheckable(True)
+            action.setChecked(not self.isColumnHidden(col))
+            action.toggled.connect(lambda checked, c=col, k=key: self._toggle_column(c, k, checked))
+        menu.exec(self.horizontalHeader().mapToGlobal(pos))
+
+    def _toggle_column(self, col: int, key: str, visible: bool) -> None:
+        self.setColumnHidden(col, not visible)
+        hidden = self._load_hidden_columns()
+        if visible:
+            hidden.discard(key)
+        else:
+            hidden.add(key)
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        settings.setValue(self._HIDDEN_COLS_KEY, list(hidden))
+        self.apply_viewport_fit_policy()
+
+    def _load_hidden_columns(self) -> set[str]:
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        raw = settings.value(self._HIDDEN_COLS_KEY)
+        if isinstance(raw, list):
+            return {str(v) for v in raw if isinstance(v, str)}
+        return set()
+
+    def restore_column_visibility(self) -> None:
+        """Restore persisted column visibility. Call after setting the model."""
+        model = self.model()
+        if model is None or model.columnCount() == 0:
+            return
+        hidden = self._load_hidden_columns()
+        if not hidden:
+            return
+        for col in range(model.columnCount()):
+            if col == STATUS_COLUMN_INDEX:
+                continue
+            header_label = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
+            key = column_key_for_header(header_label)
+            if key is not None and key != "event" and key in hidden:
+                self.setColumnHidden(col, True)
 
     def _apply_numeric_delegates(self) -> None:
         model = self.model()

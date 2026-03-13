@@ -36,14 +36,6 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
 
         self.controller = StackPlayerController(self)
 
-        self.status_label = QtWidgets.QLabel("Sync unavailable: no data", self)
-        self.status_label.setObjectName("SnapshotStatusLabel")
-        self.status_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter)
-        self.status_label.setContentsMargins(0, 0, 0, 0)
-        self.status_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed
-        )
-
         self.frame_view = FrameView(self)
         self.frame_view.setObjectName("SnapshotPreview")
         self.frame_view.setSizePolicy(
@@ -52,20 +44,9 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
 
         self.controls = TiffTransportBar(self)
 
-        header = QtWidgets.QFrame(self)
-        header.setObjectName("TiffViewerHeader")
-        header_layout = QtWidgets.QHBoxLayout(header)
-        header_layout.setContentsMargins(6, 2, 6, 2)
-        header_layout.setSpacing(4)
-        header_layout.addWidget(self.status_label, 1)
-        header_layout.addStretch(1)
-        self.controls.speed_pill.setParent(header)
-        header_layout.addWidget(self.controls.speed_pill, 0)
-
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        layout.addWidget(header)
         layout.addWidget(self.frame_view, 1)
         layout.addWidget(self.controls)
 
@@ -105,7 +86,6 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
             self._cache.clear()
         self.controller.set_source(self._source, self._page_time_map)
         self.controls.set_page_count(self.controller.page_count)
-        self._update_status_label()
         self._update_sync_availability()
         self._update_time_readout(self.controller.current_index or 0)
 
@@ -204,23 +184,6 @@ class TiffStackViewerWidget(QtWidgets.QWidget):
             if qimage is not None and self._cache is not None:
                 self._cache.set(key, qimage)
         self.frame_view.set_frame(qimage)
-
-    def _update_status_label(self) -> None:
-        if self.controller.page_count <= 0:
-            self.status_label.setText("No TIFF loaded")
-            return
-        if self._page_time_map is None:
-            self.status_label.setText("Sync unavailable: no mapping")
-            return
-        status = (self._page_time_map.status or "").strip()
-        if not status:
-            if self._page_time_map.valid:
-                status = f"TIFF mapped: {self._page_time_map.page_count} frames"
-            else:
-                status = "Sync unavailable"
-        elif self._page_time_map.valid:
-            status = f"TIFF mapped: {self._page_time_map.page_count} frames"
-        self.status_label.setText(status)
 
     def _update_sync_availability(self) -> None:
         if self._page_time_map is None or not self._page_time_map.valid:

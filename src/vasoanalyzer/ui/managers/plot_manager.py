@@ -726,17 +726,23 @@ class PlotManager(QObject):
         buttons: list[QToolButton] = []
         seen: set[int] = set()
 
-        for action in (
-            getattr(h, "actGrid", None),
-            getattr(h, "actChannelEventLabels", None),
-            getattr(h, "actStyle", None),
-        ):
-            if action is None:
-                continue
-            widget = toolbar.widgetForAction(action)
+        def add(widget: QToolButton | None) -> None:
             if isinstance(widget, QToolButton) and id(widget) not in seen:
                 buttons.append(widget)
                 seen.add(id(widget))
+
+        for action in (getattr(h, "actGrid", None), getattr(h, "actStyle", None)):
+            if action is not None:
+                add(toolbar.widgetForAction(action))
+
+        # Event Labels may be a split QToolButton added via addWidget — find by object name
+        event_labels_btn = toolbar.findChild(QToolButton, "PlotToolbarEventLabels")
+        if event_labels_btn is not None:
+            add(event_labels_btn)
+        else:
+            action = getattr(h, "actChannelEventLabels", None)
+            if action is not None:
+                add(toolbar.widgetForAction(action))
 
         return buttons
 
@@ -808,9 +814,14 @@ class PlotManager(QObject):
         ]
 
         # View group: Grid, Event Labels (optional), Style
+        # Event Labels may be a widget action (split button) — prefer that over raw QAction
+        event_labels_action = (
+            getattr(toolbar, "_event_labels_widget_action", None)
+            or getattr(h, "actChannelEventLabels", None)
+        )
         view_actions = [a for a in [
             getattr(h, "actGrid", None),
-            getattr(h, "actChannelEventLabels", None),
+            event_labels_action,
             getattr(h, "actStyle", None),
         ] if a is not None]
 

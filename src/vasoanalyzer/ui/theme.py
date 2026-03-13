@@ -35,7 +35,7 @@ LIGHT_THEME = {
     "plot_bg": "#FFFFFF",  # White content area
     "toolbar_bg": "#F3F4F6",
     "table_bg": "#FFFFFF",
-    "alternate_bg": "#F9FAFB",
+    "alternate_bg": "#F5F6F8",
     "panel_bg": "#FFFFFF",
     # Text
     "text": "#111827",
@@ -74,6 +74,7 @@ LIGHT_THEME = {
     "warning_text": "#78350F",
     # Snapshot
     "snapshot_bg": "#F3F4F6",
+    "table_header_bg": "#EEF0F4",
     "table_hover": "#F3F4F6",
     "table_editable_hover": "#DBEAFE",
     "table_focused_border": "#3366FF",
@@ -86,7 +87,7 @@ DARK_THEME = {
     "plot_bg": "#0D1117",  # Dark content area
     "toolbar_bg": "#1E242D",
     "table_bg": "#0D1117",
-    "alternate_bg": "#161B22",
+    "alternate_bg": "#171D25",
     "panel_bg": "#0D1117",
     # Text
     "text": "#E6EDF3",
@@ -125,6 +126,7 @@ DARK_THEME = {
     "warning_text": "#FDE68A",
     # Snapshot
     "snapshot_bg": "#0D1117",
+    "table_header_bg": "#161B22",
     "table_hover": "#21262D",
     "table_editable_hover": "#1C3D5A",
     "table_focused_border": "#3B82F6",
@@ -560,7 +562,7 @@ LIGHT_THEME = {
     # Tables
     "table_bg": "#FFFFFF",
     "table_text": "#101828",
-    "alternate_bg": "#F6F8FB",
+    "alternate_bg": "#F0F3F7",
     "selection_bg": "#DDE9F8",
     "highlighted_text": "#0F172A",
     "panel_bg": "#FFFFFF",
@@ -596,6 +598,7 @@ LIGHT_THEME = {
     # Snapshot
     "snapshot_bg": "#F0F3F7",
     # Table-specific
+    "table_header_bg": "#E5EAF1",
     "table_hover": "#EEF3FA",
     "table_editable_hover": "#E1ECF9",
     "table_focused_border": "#2F67A8",
@@ -616,7 +619,7 @@ DARK_THEME = {
     # Tables
     "table_bg": "#101822",
     "table_text": "#E7EDF4",
-    "alternate_bg": "#18212D",
+    "alternate_bg": "#192430",
     "selection_bg": "#2A3D55",
     "highlighted_text": "#FFFFFF",
     "panel_bg": "#131C27",
@@ -652,6 +655,7 @@ DARK_THEME = {
     # Snapshot
     "snapshot_bg": "#0F151E",
     # Table-specific
+    "table_header_bg": "#18212D",
     "table_hover": "#213041",
     "table_editable_hover": "#314C69",
     "table_focused_border": "#5DA8F8",

@@ -477,7 +477,18 @@ def _add_view_toolbar_buttons(
     if is_pyqtgraph:
         act_labels = getattr(window, "actChannelEventLabels", None)
         if act_labels is not None:
-            toolbar.addAction(act_labels)
+            size_menu = getattr(window, "_event_label_size_menu", None)
+            if size_menu is not None:
+                btn = QToolButton(toolbar)
+                btn.setObjectName("PlotToolbarEventLabels")
+                btn.setDefaultAction(act_labels)
+                btn.setIconSize(toolbar.iconSize())
+                btn.setToolButtonStyle(toolbar.toolButtonStyle())
+                btn.setMenu(size_menu)
+                btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+                toolbar._event_labels_widget_action = toolbar.addWidget(btn)
+            else:
+                toolbar.addAction(act_labels)
 
     act_style = getattr(window, "actStyle", None)
     if act_style is not None:

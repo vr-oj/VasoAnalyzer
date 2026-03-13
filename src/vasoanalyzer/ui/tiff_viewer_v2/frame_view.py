@@ -89,7 +89,8 @@ def _snapshot_background_color() -> QtGui.QColor:
     try:
         current_theme = getattr(theme_module, "CURRENT_THEME", None)
         if isinstance(current_theme, dict):
-            value = current_theme.get("snapshot_bg")
+            # Use panel_bg so letterbox bars blend with the card background
+            value = current_theme.get("panel_bg", current_theme.get("snapshot_bg"))
             if value:
                 return QtGui.QColor(value)
     except Exception:

@@ -284,17 +284,12 @@ class ThemeManager(QObject):
                 border: 1px solid {panel_border};
                 border-radius: {radius}px;
             }}
-            QLabel#SnapshotSpeedLabel,
             QLabel#SnapshotTimeLabel {{
                 color: {text};
                 font-size: 10px;
             }}
             QLabel#SnapshotTimeLabel {{
                 font-family: Menlo, Consolas, "Courier New", monospace;
-            }}
-            QLabel#SnapshotStatusLabel {{
-                color: {status};
-                font-size: 10px;
             }}
             QLabel#SnapshotSubsampleLabel {{
                 background: {button_hover};
@@ -308,8 +303,8 @@ class ThemeManager(QObject):
                 border: 1px solid {border};
                 border-radius: {radius}px;
                 padding: 0px;
-                min-height: 30px;
-                min-width: 30px;
+                min-height: 26px;
+                min-width: 26px;
                 font-size: 12px;
             }}
             QFrame#SnapshotCard QToolButton:hover {{
