@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from PyQt5.QtCore import QItemSelectionModel
+from PyQt6.QtCore import QItemSelectionModel
 
 from vasoanalyzer.core.project import SampleN
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp
@@ -91,8 +91,8 @@ def test_multi_select_event_focus_is_deterministic(qt_app) -> None:
         selection.clearSelection()
         first = model.index(0, 1)
         second = model.index(1, 1)
-        selection.select(first, QItemSelectionModel.Select | QItemSelectionModel.Rows)
-        selection.select(second, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        selection.select(first, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+        selection.select(second, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
         qt_app.processEvents()
 
         assert window._time_cursor_time == pytest.approx(1.0, abs=1e-6)

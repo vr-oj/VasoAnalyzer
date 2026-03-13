@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QToolButton
+from PyQt6.QtWidgets import QToolButton
 
 from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 

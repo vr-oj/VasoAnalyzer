@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QLabel
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QLabel
 
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
@@ -34,7 +34,7 @@ def test_gutter_width_and_controls_parenting(qt_app) -> None:
         assert margins.right() == 0
         assert margins.bottom() == 0
         assert gutter_layout.spacing() == 0
-        assert track.gutter_widget.testAttribute(Qt.WA_PaintUnclipped) is False
+        assert track.gutter_widget.testAttribute(Qt.WidgetAttribute.WA_PaintUnclipped) is False
         menu_geo = controls.menu_button_widget.geometry()
         scale_geo = controls.scale_buttons_widget.geometry()
         assert menu_geo.left() >= 0

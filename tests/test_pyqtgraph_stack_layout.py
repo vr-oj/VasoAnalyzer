@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.axis_width_sync import AxisWidthSync

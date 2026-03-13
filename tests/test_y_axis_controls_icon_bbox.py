@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from PyQt5.QtCore import QSize
-from PyQt5.QtGui import QColor, QImage, QPalette
-from PyQt5.QtWidgets import QWidget
+from PyQt6.QtCore import QSize
+from PyQt6.QtGui import QColor, QImage, QPalette
+from PyQt6.QtWidgets import QWidget
 
 from vasoanalyzer.ui.plots.y_axis_controls import ICON_PX, YAxisControls
 

@@ -1,5 +1,5 @@
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QHeaderView
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QHeaderView
 
 from vasoanalyzer.ui.event_table import (
     EVENT_COLUMN_INDEX,
@@ -18,7 +18,7 @@ def _column_index_for_label(table: EventTableWidget, label: str) -> int | None:
     if model is None:
         return None
     for col in range(model.columnCount()):
-        header = model.headerData(col, Qt.Horizontal, Qt.DisplayRole)
+        header = model.headerData(col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole)
         if header == label:
             return col
     return None
@@ -47,13 +47,13 @@ def test_event_table_viewport_fit_policy(qt_app):
     set_p_col = _column_index_for_label(table, "Set P (mmHg)")
 
     assert None not in (time_col, id_col, od_col, avg_p_col, set_p_col)
-    assert header.sectionResizeMode(EVENT_COLUMN_INDEX) == QHeaderView.Stretch
-    assert header.sectionResizeMode(0) == QHeaderView.Fixed
-    assert header.sectionResizeMode(time_col) == QHeaderView.Fixed
-    assert header.sectionResizeMode(id_col) == QHeaderView.Fixed
-    assert header.sectionResizeMode(od_col) == QHeaderView.Fixed
-    assert header.sectionResizeMode(avg_p_col) == QHeaderView.Fixed
-    assert header.sectionResizeMode(set_p_col) == QHeaderView.Fixed
+    assert header.sectionResizeMode(EVENT_COLUMN_INDEX) == QHeaderView.ResizeMode.Stretch
+    assert header.sectionResizeMode(0) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionResizeMode(time_col) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionResizeMode(id_col) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionResizeMode(od_col) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionResizeMode(avg_p_col) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionResizeMode(set_p_col) == QHeaderView.ResizeMode.Fixed
 
     assert table.columnWidth(0) == STATUS_COLUMN_WIDTH
     assert table.columnWidth(time_col) == TIME_COLUMN_WIDTH

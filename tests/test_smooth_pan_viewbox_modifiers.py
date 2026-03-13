@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QPoint, QPointF, Qt
+from PyQt6.QtCore import QPoint, QPointF, Qt
 
 from vasoanalyzer.ui.plots.smooth_pan_viewbox import SmoothPanViewBox
 
 
 class _FakeWheelEvent:
-    def __init__(self, *, delta_y: int, modifiers: Qt.KeyboardModifiers, scene_pos: QPointF) -> None:
+    def __init__(self, *, delta_y: int, modifiers: Qt.KeyboardModifier, scene_pos: QPointF) -> None:
         self._delta_y = int(delta_y)
         self._modifiers = modifiers
         self._scene_pos = QPointF(scene_pos)
@@ -18,7 +18,7 @@ class _FakeWheelEvent:
     def pixelDelta(self) -> QPoint:
         return QPoint(0, 0)
 
-    def modifiers(self) -> Qt.KeyboardModifiers:
+    def modifiers(self) -> Qt.KeyboardModifier:
         return self._modifiers
 
     def scenePos(self) -> QPointF:
@@ -33,7 +33,7 @@ def test_shift_wheel_pans_y_by_five_percent_of_span(qt_app) -> None:
     vb.setRange(xRange=(0.0, 10.0), yRange=(0.0, 100.0), padding=0.0, update=True)
     _, y_before = vb.viewRange()
 
-    ev = _FakeWheelEvent(delta_y=120, modifiers=Qt.ShiftModifier, scene_pos=QPointF(5.0, 50.0))
+    ev = _FakeWheelEvent(delta_y=120, modifiers=Qt.KeyboardModifier.ShiftModifier, scene_pos=QPointF(5.0, 50.0))
     vb.wheelEvent(ev)
     _, y_after = vb.viewRange()
 
@@ -47,7 +47,7 @@ def test_alt_wheel_zooms_y_about_cursor(qt_app) -> None:
     _, y_before = vb.viewRange()
     span_before = float(y_before[1] - y_before[0])
 
-    ev = _FakeWheelEvent(delta_y=120, modifiers=Qt.AltModifier, scene_pos=QPointF(5.0, 50.0))
+    ev = _FakeWheelEvent(delta_y=120, modifiers=Qt.KeyboardModifier.AltModifier, scene_pos=QPointF(5.0, 50.0))
     vb.wheelEvent(ev)
     _, y_after = vb.viewRange()
     span_after = float(y_after[1] - y_after[0])

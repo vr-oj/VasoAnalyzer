@@ -1,7 +1,7 @@
 import pytest
 
-from PyQt5.QtCore import QCoreApplication, QSettings, Qt
-from PyQt5.QtWidgets import QApplication
+from PyQt6.QtCore import QCoreApplication, QSettings, Qt
+from PyQt6.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -27,6 +27,6 @@ def _force_snapshot_keep_count() -> None:
 def qt_app() -> QApplication:
     app = QApplication.instance()
     if app is None:
-        QCoreApplication.setAttribute(Qt.AA_Use96Dpi, True)
+        QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_Use96Dpi, True)
         app = QApplication([])
     return app

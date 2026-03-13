@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt5.QtWidgets import QFrame, QWidget
+from PyQt6.QtWidgets import QFrame, QWidget
 
 from vasoanalyzer.ui.plots.track_frame import TRACK_DIVIDER_THICKNESS_PX, TrackFrame
 

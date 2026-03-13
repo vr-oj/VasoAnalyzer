@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QSettings
+from PyQt6.QtCore import QSettings
 
 from vasoanalyzer.ui.dialogs.new_project_dialog import NewProjectDialog
 

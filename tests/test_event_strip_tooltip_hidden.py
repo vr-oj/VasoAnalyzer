@@ -4,7 +4,7 @@ import time
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF
+from PyQt6.QtCore import QPointF
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.event_display_mode import EventDisplayMode

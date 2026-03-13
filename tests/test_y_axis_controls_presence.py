@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QPoint, Qt
-from PyQt5.QtWidgets import QFrame
+from PyQt6.QtCore import QEvent, QPoint, Qt
+from PyQt6.QtWidgets import QFrame
 
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
 from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
@@ -214,13 +214,13 @@ def test_right_click_axis_uses_same_controls_menu_instance(qt_app) -> None:
 
 class _FakeMousePressEvent:
     def type(self):
-        return QEvent.MouseButtonPress
+        return QEvent.Type.MouseButtonPress
 
     def pos(self):
         return QPoint(0, 0)
 
     def button(self):
-        return Qt.LeftButton
+        return Qt.MouseButton.LeftButton
 
 
 class _FakeMouseMoveEvent:
@@ -228,7 +228,7 @@ class _FakeMouseMoveEvent:
         self._pos = QPoint(pos)
 
     def type(self):
-        return QEvent.MouseMove
+        return QEvent.Type.MouseMove
 
     def pos(self):
         return QPoint(self._pos)
@@ -269,14 +269,14 @@ def test_axis_hover_sets_vertical_resize_cursor(qt_app) -> None:
             _FakeMouseMoveEvent(axis_pos),
         )
         assert moved_axis is False
-        assert track.view.get_widget().cursor().shape() == Qt.SizeVerCursor
+        assert track.view.get_widget().cursor().shape() == Qt.CursorShape.SizeVerCursor
 
         moved_non_axis = track.view._process_axis_mouse_event(
             track.view.get_widget(),
             _FakeMouseMoveEvent(non_axis_pos),
         )
         assert moved_non_axis is False
-        assert track.view.get_widget().cursor().shape() != Qt.SizeVerCursor
+        assert track.view.get_widget().cursor().shape() != Qt.CursorShape.SizeVerCursor
     finally:
         track.widget.close()
         qt_app.processEvents()
