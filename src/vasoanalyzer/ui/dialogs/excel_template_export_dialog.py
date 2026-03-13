@@ -33,37 +33,12 @@ from vasoanalyzer.excel.flexible_writer import (
     apply_flexible_write_plan,
     build_flexible_write_plan,
 )
+from vasoanalyzer.excel.label_matching import best_match as _find_best_match
 from vasoanalyzer.excel.template_metadata import read_template_metadata
 from vasoanalyzer.excel.template_v1 import inspect_template, validate_template_or_raise
 from vasoanalyzer.excel.writer_v1 import apply_write_plan, build_write_plan
 from vasoanalyzer.export.generator import build_export_table, events_from_rows
 from vasoanalyzer.export.profiles import EVENT_TABLE_ROW_PER_EVENT, PRESSURE_CURVE_STANDARD
-
-
-def _normalize_label(label: str) -> str:
-    """Normalize a measurement label for fuzzy matching."""
-    return (
-        label.lower()
-        .replace("–", "-")
-        .replace("—", "-")
-        .replace(":", "-")
-        .replace("  ", " ")
-        .strip()
-    )
-
-
-def _find_best_match(template_label: str, session_labels: list[str]) -> str | None:
-    """Return the best-matching session event label for a template row label."""
-    norm_template = _normalize_label(template_label)
-    for sl in session_labels:
-        if _normalize_label(sl) == norm_template:
-            return sl
-    # Partial substring match
-    for sl in session_labels:
-        norm_sl = _normalize_label(sl)
-        if norm_template in norm_sl or norm_sl in norm_template:
-            return sl
-    return None
 
 
 class ExcelTemplateExportDialog(QDialog):

@@ -10,6 +10,7 @@ from .flexible_writer import (
     apply_flexible_write_plan,
     build_flexible_write_plan,
 )
+from .label_matching import best_match, normalize_label
 from .template_metadata import (
     DateColumnMetadata,
     EventRowMetadata,
@@ -27,4 +28,6 @@ __all__ = [
     "FlexibleWritePlan",
     "build_flexible_write_plan",
     "apply_flexible_write_plan",
+    "normalize_label",
+    "best_match",
 ]

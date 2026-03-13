@@ -18,6 +18,8 @@ project repository.
 
 import contextlib
 import csv
+import hashlib
+import json
 import os
 import re
 import tempfile
@@ -57,6 +59,7 @@ import logging
 
 import vasoanalyzer.ui.theme as theme
 from vasoanalyzer.excel import TemplateMetadata
+from vasoanalyzer.excel.label_matching import normalize_label, best_match
 
 __all__ = ["ExcelMapWizard"]
 
@@ -66,30 +69,6 @@ DEFAULT_QMODEL_INDEX = QModelIndex()
 
 SESSION_EVENT_MIME = "application/vnd.vaso.session-event"
 
-_NORM_SUBS = re.compile(r"[:\-–—•+/\\()\[\]{}=,;]")
-
-
-def _norm_label(label: str) -> str:
-    """Normalize a measurement label for fuzzy matching.
-
-    Handles common formatting differences between session event labels and
-    template row labels:
-    - Converts micro sign µ → u (e.g. "1 µM PE" → "1 um pe")
-    - Removes separator characters (colon, dash, em-dash, plus, etc.)
-    - Collapses whitespace
-    - Case-insensitive (lowercased)
-
-    Examples::
-
-        _norm_label("20 mmHg: Max")  →  "20 mmhg max"
-        _norm_label("+ 1 µM CCh")   →  "1 um cch"
-        _norm_label("1 µM PE")      →  "1 um pe"
-    """
-    s = label.strip().lower()
-    s = s.replace("µ", "u").replace("μ", "u")  # micro sign variants
-    s = _NORM_SUBS.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
 
 
 # UI Design Tokens
@@ -1860,6 +1839,21 @@ class PreviewPage(WizardPageBase):
             )
             return
 
+        # Pre-export validation
+        wiz = self._wizard()
+        warnings = self._validate_before_export(wiz)
+        if warnings:
+            warning_text = "\n".join(f"• {w}" for w in warnings)
+            proceed = QMessageBox.warning(
+                self,
+                "Mapping Warnings",
+                f"{warning_text}\n\nContinue anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if proceed != QMessageBox.StandardButton.Yes:
+                return
+
         confirm = QMessageBox.question(
             self,
             "Update Template",
@@ -1870,7 +1864,6 @@ class PreviewPage(WizardPageBase):
         if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        wiz = self._wizard()
         wiz.apply_mapping()
 
         try:
@@ -1889,8 +1882,36 @@ class PreviewPage(WizardPageBase):
             QMessageBox.critical(self, "Save Failed", str(exc))
             return
 
+        # Persist mapping corrections for future sessions
+        wiz.save_mapping_history()
+
         QMessageBox.information(self, "Template Updated", f"Mappings written to {target_path}")
         self.completeChanged.emit()
+
+    # ------------------------------------------------------
+    @staticmethod
+    def _validate_before_export(wiz: "ExcelMapWizard") -> list[str]:
+        """Return a list of human-readable warnings (empty = all good)."""
+        warnings: list[str] = []
+
+        # Unmapped rows
+        unmapped = sum(1 for v in wiz.row_assignments.values() if v is None)
+        if unmapped:
+            warnings.append(
+                f"{unmapped} template row(s) have no mapped event and will be skipped."
+            )
+
+        # Duplicate event assignments
+        assignments = Counter(a for a in wiz.row_assignments.values() if a is not None)
+        dupes = {idx for idx, count in assignments.items() if count > 1}
+        if dupes:
+            event_by_index = {e.index: e for e in wiz.session_events}
+            dupe_labels = [event_by_index[i].label for i in dupes if i in event_by_index]
+            warnings.append(
+                f"Event(s) mapped to multiple rows: {', '.join(dupe_labels)}"
+            )
+
+        return warnings
 
     # ------------------------------------------------------
     def isComplete(self) -> bool:
@@ -2413,6 +2434,9 @@ class ExcelMapWizard(QWizard):
         if self.active_date_column:
             self._load_existing_assignments_from_sheet()
 
+        # Pass 0: apply saved mapping history (user corrections from previous sessions)
+        self._apply_mapping_history()
+
         # Pass 1: exact case-insensitive match
         label_map: dict[str, deque[int]] = {}
         for event in self.session_events:
@@ -2433,7 +2457,7 @@ class ExcelMapWizard(QWizard):
         # differences between session event labels and template row labels.
         norm_map: dict[str, deque[int]] = {}
         for event in self.session_events:
-            key = _norm_label(event.label)
+            key = normalize_label(event.label)
             norm_map.setdefault(key, deque()).append(event.index)
 
         for row in self.event_rows:
@@ -2441,10 +2465,99 @@ class ExcelMapWizard(QWizard):
                 continue
             if self.row_assignments.get(row.row_index) is not None:
                 continue  # already matched in pass 1
-            key = _norm_label(row.label)
+            key = normalize_label(row.label)
             queue = norm_map.get(key)
             if queue:
                 self.row_assignments[row.row_index] = queue.popleft()
+
+        # Pass 3: fuzzy match — substring containment + token-overlap scoring
+        # for rows that still have no assignment after exact/normalised passes.
+        assigned_indices: set[int] = {
+            idx for idx in self.row_assignments.values() if idx is not None
+        }
+        remaining_labels = [
+            e.label
+            for e in self.session_events
+            if e.index not in assigned_indices
+        ]
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            if self.row_assignments.get(row.row_index) is not None:
+                continue
+            match_label = best_match(row.label, remaining_labels)
+            if match_label is not None:
+                # Find the event index for this label
+                for event in self.session_events:
+                    if event.label == match_label and event.index not in assigned_indices:
+                        self.row_assignments[row.row_index] = event.index
+                        assigned_indices.add(event.index)
+                        remaining_labels.remove(match_label)
+                        break
+
+    # --------------------------------------------------
+    # Mapping persistence — remember user corrections
+    # --------------------------------------------------
+
+    def _template_fingerprint(self) -> str:
+        """Return a stable hash identifying this template by its row labels."""
+        labels = sorted(
+            normalize_label(r.label) for r in self.event_rows if not r.is_header
+        )
+        raw = "|".join(labels)
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+    def _load_mapping_history(self) -> dict[str, str]:
+        """Load previously saved template_label → session_label map."""
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        key = f"excel_mapping_history/{self._template_fingerprint()}"
+        data = settings.value(key, "", type=str)
+        if data:
+            try:
+                return json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {}
+
+    def save_mapping_history(self) -> None:
+        """Persist current row_assignments as template_label → session_label."""
+        history: dict[str, str] = {}
+        event_by_index = {e.index: e for e in self.session_events}
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            ev_idx = self.row_assignments.get(row.row_index)
+            if ev_idx is not None and ev_idx in event_by_index:
+                history[row.label] = event_by_index[ev_idx].label
+        if history:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            key = f"excel_mapping_history/{self._template_fingerprint()}"
+            settings.setValue(key, json.dumps(history))
+
+    def _apply_mapping_history(self) -> None:
+        """Apply saved mappings as Pass 0 (before fuzzy matching)."""
+        history = self._load_mapping_history()
+        if not history:
+            return
+        # Build label→event index lookup
+        label_to_events: dict[str, list[int]] = {}
+        for event in self.session_events:
+            label_to_events.setdefault(event.label, []).append(event.index)
+
+        assigned: set[int] = set()
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            if self.row_assignments.get(row.row_index) is not None:
+                continue
+            saved_label = history.get(row.label)
+            if saved_label and saved_label in label_to_events:
+                candidates = label_to_events[saved_label]
+                for idx in candidates:
+                    if idx not in assigned:
+                        self.row_assignments[row.row_index] = idx
+                        assigned.add(idx)
+                        break
 
     # --------------------------------------------------
     def value_for_event(self, event_index: int, measurement: str | None) -> Any:

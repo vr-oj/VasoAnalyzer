@@ -1,6 +1,6 @@
 name: Build
 
-# Triggered when you push a version tag, e.g.: git tag v3.0.2 && git push --tags
+# Triggered when you push a version tag, e.g.: git tag v3.1.0 && git push --tags
 on:
   push:
     tags:
