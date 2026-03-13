@@ -5313,7 +5313,7 @@ class VasoAnalyzerApp(QMainWindow):
             if action is not None:
                 menu.addAction(action)
 
-        menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
     def _make_home_button(
         self,
@@ -5763,7 +5763,7 @@ QPushButton[isGhost="true"]:pressed {{
         for channel_key, label in channels:
             action = menu.addAction(label)
             action.triggered.connect(lambda _, key=channel_key: self._launch_point_editor(key))
-        menu.exec_(QCursor.pos())
+        menu.exec(QCursor.pos())
 
     def _launch_point_editor(self, channel: str) -> None:
         if self.trace_model is None:
@@ -6382,7 +6382,7 @@ QPushButton[isGhost="true"]:pressed {{
         widget = getattr(self, "snapshot_widget", None)
         if widget is None:
             return
-        chosen = menu.exec_(widget.mapToGlobal(pos))
+        chosen = menu.exec(widget.mapToGlobal(pos))
         if chosen is copy_action and has_metadata:
             self.copy_current_frame_metadata_to_clipboard()
 
@@ -8301,7 +8301,7 @@ QPushButton[isGhost="true"]:pressed {{
                     undo_action = menu.addAction("Undo Last Replacement")
                     add_new_action = menu.addAction("➕ Add as New Event")
 
-                    action = menu.exec_(self.canvas.mapToGlobal(event.guiEvent.pos()))
+                    action = menu.exec(self.canvas.mapToGlobal(event.guiEvent.pos()))
                     if action == delete_action:
                         self._safe_remove_artist(marker)
                         self._safe_remove_artist(label)
@@ -8445,7 +8445,7 @@ QPushButton[isGhost="true"]:pressed {{
                 delete_action = menu.addAction("Delete Pin")
                 undo_action = menu.addAction("Undo Last Replacement")
                 add_new_action = menu.addAction("➕ Add as New Event")
-                action = menu.exec_(QCursor.pos())
+                action = menu.exec(QCursor.pos())
                 if action == delete_action:
                     self._safe_remove_artist(marker)
                     self._safe_remove_artist(label)
@@ -8473,7 +8473,7 @@ QPushButton[isGhost="true"]:pressed {{
                 menu = QMenu(self)
                 add_pin_action = menu.addAction("📍 Add Pin Here")
                 add_event_action = menu.addAction("➕ Add Event Marker Here…")
-                action = menu.exec_(QCursor.pos())
+                action = menu.exec(QCursor.pos())
 
                 if action == add_pin_action:
                     self._add_pyqtgraph_pin(track_id, x, y, tr_type)

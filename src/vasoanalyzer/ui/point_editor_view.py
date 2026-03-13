@@ -9,7 +9,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
-    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -136,10 +135,11 @@ class PointEditorDialog(QDialog):
 
     def _build_side_panel(self) -> QWidget:
         container = QWidget(self)
-        grid = QGridLayout(container)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setSpacing(8)
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(8)
 
+        # ---- data table ----
         self.table = QTableWidget(container)
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["Idx", "Time (s)", "Raw", "Preview"])
@@ -148,55 +148,63 @@ class PointEditorDialog(QDialog):
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         header = self.table.horizontalHeader()
-        for col in range(self.table.columnCount()):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
-        header.setStretchLastSection(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         grid_color = theme.CURRENT_THEME.get("grid_color", "#666666")
         self.table.setStyleSheet(f"QTableWidget {{ gridline-color: {grid_color}; }}")
-        grid.addWidget(self.table, 0, 0, 1, 3)
+        vbox.addWidget(self.table, stretch=1)
 
+        # ---- connect method ----
+        method_row = QHBoxLayout()
+        method_row.setSpacing(8)
         method_label = QLabel("Connect Method", container)
         self.method_combo = QComboBox(container)
         self.method_combo.addItems(["Linear", "Slope-preserving cubic"])
         self.method_combo.setCurrentIndex(0 if self.session.connect_method == "linear" else 1)
         self.method_combo.currentIndexChanged.connect(self._on_method_changed)
-        grid.addWidget(method_label, 1, 0, 1, 1)
-        grid.addWidget(self.method_combo, 1, 1, 1, 2)
+        method_row.addWidget(method_label)
+        method_row.addWidget(self.method_combo, stretch=1)
+        vbox.addLayout(method_row)
 
+        # ---- edit actions ----
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
         self.delete_btn = QPushButton("Delete (NaN)", container)
         self.delete_btn.clicked.connect(self._on_delete)
         self.connect_btn = QPushButton("Connect Across", container)
         self.connect_btn.clicked.connect(self._on_connect)
         self.restore_btn = QPushButton("Restore", container)
         self.restore_btn.clicked.connect(self._on_restore)
-
-        action_row = QHBoxLayout()
         action_row.addWidget(self.delete_btn)
         action_row.addWidget(self.connect_btn)
         action_row.addWidget(self.restore_btn)
-        grid.addLayout(action_row, 2, 0, 1, 3)
+        vbox.addLayout(action_row)
 
+        # ---- undo / redo ----
+        stack_row = QHBoxLayout()
+        stack_row.setSpacing(6)
         self.undo_btn = QPushButton("Undo", container)
         self.undo_btn.clicked.connect(self._on_undo)
         self.redo_btn = QPushButton("Redo", container)
         self.redo_btn.clicked.connect(self._on_redo)
-
-        stack_row = QHBoxLayout()
         stack_row.addWidget(self.undo_btn)
         stack_row.addWidget(self.redo_btn)
-        grid.addLayout(stack_row, 3, 0, 1, 3)
+        vbox.addLayout(stack_row)
 
+        # ---- spacer before dialog buttons ----
+        vbox.addStretch(0)
+
+        # ---- dialog buttons ----
+        buttons = QHBoxLayout()
+        buttons.setSpacing(6)
         self.apply_btn = QPushButton("Apply && Close", container)
         self.apply_btn.setDefault(True)
         self.apply_btn.clicked.connect(self._on_apply)
         self.cancel_btn = QPushButton("Cancel", container)
         self.cancel_btn.clicked.connect(self.reject)
-
-        buttons = QHBoxLayout()
         buttons.addStretch(1)
         buttons.addWidget(self.apply_btn)
         buttons.addWidget(self.cancel_btn)
-        grid.addLayout(buttons, 4, 0, 1, 3)
+        vbox.addLayout(buttons)
 
         return container
 
@@ -216,28 +224,8 @@ class PointEditorDialog(QDialog):
         self._resize_table_columns()
 
     def _resize_table_columns(self) -> None:
-        """Ensure table columns are wide enough for current contents."""
-        if self.table is None:
-            return
-
-        self.table.resizeColumnsToContents()
-        header = self.table.horizontalHeader()
-        col_count = self.table.columnCount()
-        if col_count <= 0:
-            return
-
-        content_width = sum(header.sectionSize(col) for col in range(col_count))
-        available = self.table.viewport().width()
-        extra = available - content_width
-        if extra <= 0:
-            return
-
-        base_extra = extra // col_count
-        remainder = extra % col_count
-        for col in range(col_count):
-            add = base_extra + (1 if col < remainder else 0)
-            if add > 0:
-                header.resizeSection(col, header.sectionSize(col) + add)
+        """No-op; columns use Stretch mode and resize automatically."""
+        return
 
     def _populate_table(self) -> None:
         times = self._visible_times
