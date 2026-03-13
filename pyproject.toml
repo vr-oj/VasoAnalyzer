@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vasoanalyzer"
-version = "3.0.2"
+version = "3.1.0"
 description = "VasoAnalyzer — Pressure Myography Analysis Toolkit"
 requires-python = ">=3.10"
 authors = [{ name = "Osvaldo J. Vega Rodríguez" }]
@@ -20,7 +20,7 @@ dependencies = [
     "imagecodecs>=2021.3",
     "h5py>=3.14.0",
     "Pillow>=9.0",
-    "PyQt5>=5.15",
+    "PyQt6>=6.4",
     "pyqtgraph>=0.13.0",
     "openpyxl>=3.0",
     "requests>=2.25",
@@ -55,7 +55,7 @@ minversion = "7.0"
 addopts = "-ra"
 testpaths = ["tests"]
 filterwarnings = [
-    "ignore::DeprecationWarning:PyQt5",
+    "ignore::DeprecationWarning:PyQt6",
 ]
 
 [tool.ruff]

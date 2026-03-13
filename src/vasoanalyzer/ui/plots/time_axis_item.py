@@ -23,11 +23,23 @@ class TimeAxisItem(pg.AxisItem):
 
     def set_time_mode(self, mode: TimeMode | str) -> None:
         self._formatter.set_mode(coerce_time_mode(mode))
+        # Reset accumulated textHeight so stale values don't poison
+        # the textFillLimits density check in generateDrawSpecs.
+        self.textHeight = self.style.get("tickTextHeight", 18)
         self.picture = None
         self.update()
 
     def time_mode(self) -> TimeMode:
         return self._formatter.mode
+
+    def set_tick_spacing(self, spacing_s: float | None) -> None:
+        """Set fixed major tick spacing in seconds. None or 0 resets to automatic."""
+        if spacing_s and spacing_s > 0:
+            self.setTickSpacing(levels=[(float(spacing_s), 0)])
+        else:
+            self.setTickSpacing()
+        self.picture = None
+        self.update()
 
     def tickStrings(self, values: Iterable[float], scale: float, spacing: float):
         return [self._formatter.format(float(value)) for value in values]

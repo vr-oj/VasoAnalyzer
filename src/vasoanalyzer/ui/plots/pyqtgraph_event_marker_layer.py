@@ -7,8 +7,9 @@ import logging
 from dataclasses import dataclass, field
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QFont
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPicture, QTransform
+from PyQt6.QtWidgets import QGraphicsItem, QGraphicsObject
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3
 from vasoanalyzer.ui.plots.event_display_mode import (
@@ -23,11 +24,89 @@ log = logging.getLogger(__name__)
 __all__ = ["PyQtGraphEventMarkerLayer"]
 
 
+class _CrispVerticalLabel(QGraphicsObject):
+    """A vertical text label that renders at native screen resolution.
+
+    Uses the same ``QPicture`` record-and-replay technique as pyqtgraph's
+    ``AxisItem`` — draw commands are recorded once into a resolution-
+    independent ``QPicture``, then replayed via ``picture.play(painter)``
+    each frame.  Qt re-rasterises the text at the device's native DPI
+    during replay, producing axis-label-quality sharpness.
+    """
+
+    def __init__(self, parent: QGraphicsItem | None = None) -> None:
+        super().__init__(parent)
+        self._text: str = ""
+        self._font = QFont("Arial", 9)
+        self._color = QColor("#000000")
+        self._tooltip: str = ""
+        self._picture: QPicture | None = None
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        self.setZValue(6)
+
+    # -- public API --
+    def set_text(self, text: str) -> None:
+        if text != self._text:
+            self.prepareGeometryChange()
+            self._text = text
+            self._picture = None
+            self.update()
+
+    def set_font(self, font: QFont) -> None:
+        self.prepareGeometryChange()
+        self._font = font
+        self._picture = None
+        self.update()
+
+    def set_color(self, color: str | QColor) -> None:
+        self._color = QColor(color) if isinstance(color, str) else color
+        self._picture = None
+        self.update()
+
+    def set_tooltip(self, tip: str) -> None:
+        self._tooltip = tip
+        self.setToolTip(tip)
+
+    # -- QGraphicsItem overrides --
+    def boundingRect(self) -> QRectF:
+        if not self._text:
+            return QRectF()
+        if self._picture is not None:
+            return QRectF(self._picture.boundingRect())
+        fm = QFontMetricsF(self._font)
+        w = fm.horizontalAdvance(self._text)
+        h = fm.height()
+        # Rotated -90°: width becomes height and vice-versa.
+        return QRectF(-h, -w, h, w)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        if not self._text:
+            return
+        if self._picture is None:
+            self._rebuild_picture()
+        self._picture.play(painter)
+
+    # -- internals --
+    def _rebuild_picture(self) -> None:
+        pic = QPicture()
+        p = QPainter(pic)
+        try:
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            p.setFont(self._font)
+            p.setPen(self._color)
+            p.rotate(-90)
+            p.drawText(QPointF(2, 0), self._text)
+        finally:
+            p.end()
+        self._picture = pic
+
+
 @dataclass
 class _MarkerItem:
     entry: EventEntryV3
     line: pg.InfiniteLine
-    label: pg.TextItem | None = field(default=None)
+    label: _CrispVerticalLabel | None = field(default=None)
 
 
 class PyQtGraphEventMarkerLayer:
@@ -99,22 +178,12 @@ class PyQtGraphEventMarkerLayer:
             with contextlib.suppress(Exception):
                 line.setToolTip(tooltip)
 
-            # Vertical text label — hidden by default, enabled by
-            # set_channel_labels_visible(True).  anchor=(0, 1) with
-            # rotation=-90° places the right edge of the rotated text at the
-            # set position (x=entry.t), so text sits entirely to the left of
-            # the dashed line and reads upward from y_bottom near the x-axis.
-            label = pg.TextItem(
-                text="",
-                color=self._label_color,
-                anchor=(0, 1),
-            )
-            label.setFont(self._font)
-            label.setRotation(-90)
-            label.setZValue(6)
+            # Sharp vertical label — uses native QPainter.drawText().
+            label = _CrispVerticalLabel()
+            label.set_font(self._font)
+            label.set_color(self._label_color)
+            label.set_tooltip(tooltip)
             label.setVisible(False)
-            with contextlib.suppress(Exception):
-                label.setToolTip(tooltip)
 
             self._plot_item.addItem(line)
             self._plot_item.addItem(label)
@@ -228,7 +297,7 @@ class PyQtGraphEventMarkerLayer:
             text = self._channel_label_text(item)
             if not text:
                 continue
-            item.label.setText(text)
+            item.label.set_text(text)
             item.label.setPos(float(item.entry.t), y_bottom)
             item.label.setVisible(True)
 
@@ -246,8 +315,8 @@ class PyQtGraphEventMarkerLayer:
     def _apply_label_styles(self) -> None:
         for item in self._items:
             if item.label is not None:
-                item.label.setColor(self._label_color)
-                item.label.setFont(self._font)
+                item.label.set_color(self._label_color)
+                item.label.set_font(self._font)
 
     def _channel_label_text(self, item: _MarkerItem) -> str:
         """Event text displayed as a vertical label inside the channel."""
@@ -318,11 +387,11 @@ class PyQtGraphEventMarkerLayer:
         if selected:
             qcolor = QColor(self._SELECTED_COLOR)
             qcolor.setAlphaF(1.0)
-            return pg.mkPen(color=qcolor, width=2.5, style=Qt.SolidLine)
+            return pg.mkPen(color=qcolor, width=2.5, style=Qt.PenStyle.SolidLine)
         if hovered:
             qcolor = QColor(self._HOVERED_COLOR)
             qcolor.setAlphaF(0.85)
-            return pg.mkPen(color=qcolor, width=2.0, style=Qt.SolidLine)
+            return pg.mkPen(color=qcolor, width=2.0, style=Qt.PenStyle.SolidLine)
         color = self._line_color_override or self._entry_color(entry) or style.color
         qcolor = QColor(color)
         if not qcolor.isValid():
@@ -333,6 +402,6 @@ class PyQtGraphEventMarkerLayer:
         pen_style = (
             self._line_style_override
             if self._line_style_override is not None
-            else Qt.DashLine
+            else Qt.PenStyle.DashLine
         )
         return pg.mkPen(color=qcolor, width=float(width), style=pen_style)

@@ -11,8 +11,8 @@ import time
 
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
-from PyQt5.QtGui import QColor, QPalette
-from PyQt5.QtWidgets import (
+from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
@@ -112,8 +112,8 @@ class ExcelMappingDialog(QDialog):
         self.layout.addWidget(self.cell_label)
 
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
         self.layout.addWidget(line)
 
         self.event_table = QTableWidget()
@@ -121,33 +121,33 @@ class ExcelMappingDialog(QDialog):
         self.event_table.setHorizontalHeaderLabels(
             ["EventLabel", "Time (s)", "ID (\u00b5m)", "Frame"]
         )
-        self.event_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.event_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.event_table.cellClicked.connect(self.map_event_to_excel)
         self.event_table.setMinimumWidth(420)
         header = self.event_table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setMinimumSectionSize(80)
         header.setStretchLastSection(True)
         header.setDefaultSectionSize(100)
 
         vheader = self.event_table.verticalHeader()
-        vheader.setSectionResizeMode(QHeaderView.Fixed)
+        vheader.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         vheader.setDefaultSectionSize(24)
         self.layout.addWidget(self.event_table)
         self.populate_event_table()
 
         # Preview table for selected Excel column
         self.preview_table = QTableWidget()
-        self.preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.preview_table.setMinimumWidth(420)
         pheader = self.preview_table.horizontalHeader()
-        pheader.setSectionResizeMode(QHeaderView.Interactive)
+        pheader.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         pheader.setMinimumSectionSize(80)
         pheader.setStretchLastSection(True)
         pheader.setDefaultSectionSize(100)
 
         pvheader = self.preview_table.verticalHeader()
-        pvheader.setSectionResizeMode(QHeaderView.Fixed)
+        pvheader.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         pvheader.setDefaultSectionSize(24)
         self.layout.addWidget(self.preview_table)
 
@@ -178,12 +178,12 @@ class ExcelMappingDialog(QDialog):
         highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
         grid = CURRENT_THEME.get("grid_color", "#374151")
 
-        palette.setColor(QPalette.Base, QColor(table_bg))
-        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
-        palette.setColor(QPalette.Text, QColor(text))
-        palette.setColor(QPalette.WindowText, QColor(text))
-        palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Base, QColor(table_bg))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.ColorRole.Text, QColor(text))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(text))
 
         table.setPalette(palette)
         table.setAlternatingRowColors(True)
@@ -218,12 +218,12 @@ class ExcelMappingDialog(QDialog):
         highlight = CURRENT_THEME.get("selection_bg", "#1D4ED8")
         grid = CURRENT_THEME.get("grid_color", "#374151")
 
-        palette.setColor(QPalette.Base, QColor(table_bg))
-        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
-        palette.setColor(QPalette.Text, QColor(text))
-        palette.setColor(QPalette.WindowText, QColor(text))
-        palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Base, QColor(table_bg))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.ColorRole.Text, QColor(text))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(text))
 
         table.setPalette(palette)
         table.setAlternatingRowColors(True)

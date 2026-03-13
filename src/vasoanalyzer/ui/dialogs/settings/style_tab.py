@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -37,7 +37,7 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
     # Axis titles ---------------------------------------------------
     axis_box = QGroupBox("Axis Titles")
     axis_form = QFormLayout(axis_box)
-    axis_form.setLabelAlignment(Qt.AlignRight)
+    axis_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     dialog.title_edit = QLineEdit(dialog.ax.get_title())
     dialog.title_edit.setPlaceholderText("Plot title")
@@ -114,7 +114,7 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
     # Tick labels ---------------------------------------------------
     tick_box = QGroupBox("Tick Labels")
     tick_form = QFormLayout(tick_box)
-    tick_form.setLabelAlignment(Qt.AlignRight)
+    tick_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     dialog.tick_font_size = QSpinBox()
     dialog.tick_font_size.setRange(6, 32)
@@ -144,7 +144,7 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
     # Pinned annotations -------------------------------------------
     pin_box = QGroupBox("Pinned Labels")
     pin_form = QFormLayout(pin_box)
-    pin_form.setLabelAlignment(Qt.AlignRight)
+    pin_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     dialog.pin_font_family = QComboBox()
     dialog.pin_font_family.addItems(fonts)
@@ -186,7 +186,7 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
     # Trace lines ---------------------------------------------------
     line_box = QGroupBox("Trace Lines")
     line_form = QFormLayout(line_box)
-    line_form.setLabelAlignment(Qt.AlignRight)
+    line_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     dialog.line_width = QDoubleSpinBox()
     dialog.line_width.setRange(0.5, 10)
@@ -253,7 +253,7 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
     # Event highlights ----------------------------------------------
     highlight_box = QGroupBox("Event Highlights")
     highlight_form = QFormLayout(highlight_box)
-    highlight_form.setLabelAlignment(Qt.AlignRight)
+    highlight_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     dialog.event_highlight_color_btn = dialog._make_color_button(
         dialog.style.get(
@@ -296,7 +296,7 @@ def build_style_tab(dialog: UnifiedSettingsDialog) -> QWidget:
     grid.setRowStretch(4, 1)
 
     scroll = QScrollArea()
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     scroll.setWidgetResizable(True)
     scroll.setWidget(content)
 

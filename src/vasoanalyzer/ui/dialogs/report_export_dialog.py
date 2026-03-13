@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -67,7 +67,7 @@ class ReportExportDialog(QDialog):
         # ---- Page dimensions ----
         dims_group = QGroupBox("Page Dimensions")
         dims_form = QFormLayout(dims_group)
-        dims_form.setLabelAlignment(Qt.AlignRight)
+        dims_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.width_spin = QDoubleSpinBox()
         self.width_spin.setRange(6.0, 24.0)
@@ -108,7 +108,7 @@ class ReportExportDialog(QDialog):
         # ---- Output settings ----
         output_group = QGroupBox("Output")
         output_form = QFormLayout(output_group)
-        output_form.setLabelAlignment(Qt.AlignRight)
+        output_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.format_combo = QComboBox()
         self.format_combo.addItem("PNG Image", "png")
@@ -126,7 +126,7 @@ class ReportExportDialog(QDialog):
 
         # ---- Buttons ----
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel, Qt.Horizontal, self
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, Qt.Orientation.Horizontal, self
         )
         buttons.accepted.connect(self._commit)
         buttons.rejected.connect(self.reject)

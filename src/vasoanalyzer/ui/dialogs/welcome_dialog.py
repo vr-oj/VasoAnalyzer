@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 import os
 
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal
-from PyQt5.QtSvg import QSvgWidget
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QSettings, Qt, pyqtSignal
+from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
@@ -45,7 +45,7 @@ class WelcomeGuideDialog(QDialog):
         self.setWindowTitle("Welcome to VasoAnalyzer")
         self.setMinimumSize(900, 1000)
         self.setMinimumWidth(900)
-        self.setAttribute(Qt.WA_DeleteOnClose, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self._centered = False
 
         self.settings = QSettings("VasoAnalyzer", "VasoAnalyzer")
@@ -56,9 +56,9 @@ class WelcomeGuideDialog(QDialog):
         root.setSpacing(20)
 
         self._page_definitions = [
-            ("Welcome", self._page_welcome),
-            ("Getting Started", self._page_getting_started),
-            ("Your Data", self._page_your_data),
+            ("Overview", self._page_welcome),
+            ("Workflow", self._page_getting_started),
+            ("Data", self._page_your_data),
             ("Navigation", self._page_navigation),
             ("Shortcuts", self._page_shortcuts),
         ]
@@ -75,8 +75,8 @@ class WelcomeGuideDialog(QDialog):
             scroll = QScrollArea()
             scroll.setObjectName("va-welcome-scroll")
             scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.NoFrame)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             scroll.setWidget(page)
             scroll.setProperty("va-step-title", title)
 
@@ -133,15 +133,15 @@ class WelcomeGuideDialog(QDialog):
 
         if icon_path and icon_ext.lower() in {".png", ".jpg", ".jpeg"}:
             try:
-                from PyQt5.QtGui import QPixmap
+                from PyQt6.QtGui import QPixmap
 
                 label = QLabel()
                 pixmap = QPixmap(icon_path)
                 if not pixmap.isNull():
-                    scaled = pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    scaled = pixmap.scaled(60, 60, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
                     label.setPixmap(scaled)
                 label.setFixedSize(60, 60)
-                label.setAlignment(Qt.AlignCenter)
+                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 return label
             except Exception:
                 log.debug("Failed to load welcome dialog icon", exc_info=True)
@@ -156,13 +156,13 @@ class WelcomeGuideDialog(QDialog):
 
         fallback = QLabel("VA")
         fallback.setObjectName("va-badge")
-        fallback.setAlignment(Qt.AlignCenter)
+        fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
         fallback.setFixedSize(60, 60)
         return fallback
 
     def _workspace_illustration(self) -> QSvgWidget:
         svg = QSvgWidget(":/art/workspace_map.svg")
-        svg.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        svg.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         svg.setFixedHeight(160)
         return svg
 
@@ -174,7 +174,7 @@ class WelcomeGuideDialog(QDialog):
         layout.setSpacing(16)
 
         icon = self._brand_icon_widget()
-        layout.addWidget(icon, 0, Qt.AlignTop)
+        layout.addWidget(icon, 0, Qt.AlignmentFlag.AlignTop)
 
         text_column = QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
@@ -190,14 +190,15 @@ class WelcomeGuideDialog(QDialog):
         version_chip = QLabel(f"Version {APP_VERSION}")
         version_chip.setProperty("va-chip", True)
         version_chip.setFixedHeight(20)
-        version_chip.setAlignment(Qt.AlignCenter)
+        version_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version_chip.setMinimumWidth(96)
 
         title_row.addWidget(title, 1)
-        title_row.addWidget(version_chip, 0, Qt.AlignRight)
+        title_row.addWidget(version_chip, 0, Qt.AlignmentFlag.AlignRight)
 
         subtitle = QLabel(
-            "Take a quick tour to load traces, explore events, and share results confidently."
+            "A quick tour of everything you can do — from loading traces to exporting results. "
+            "For the full guide, see Help \u2192 User Manual."
         )
         subtitle.setWordWrap(True)
         subtitle.setProperty("va-body", True)
@@ -210,9 +211,9 @@ class WelcomeGuideDialog(QDialog):
         hint = QLabel("Tip: Reopen this guide anytime with ⌘/Ctrl+/.")
         hint.setProperty("va-caption", True)
         hint.setWordWrap(True)
-        hint.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         hint.setMaximumWidth(240)
-        layout.addWidget(hint, 0, Qt.AlignTop)
+        layout.addWidget(hint, 0, Qt.AlignmentFlag.AlignTop)
 
         return hero
 
@@ -233,17 +234,17 @@ class WelcomeGuideDialog(QDialog):
             node_layout.setSpacing(6)
 
             dot = QLabel(str(idx))
-            dot.setAlignment(Qt.AlignCenter)
+            dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
             dot.setFixedSize(28, 28)
             dot.setProperty("va-step-dot", True)
 
             caption = QLabel(title)
-            caption.setAlignment(Qt.AlignCenter)
+            caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
             caption.setWordWrap(True)
             caption.setProperty("va-step-label", True)
 
-            node_layout.addWidget(dot, 0, Qt.AlignCenter)
-            node_layout.addWidget(caption, 0, Qt.AlignCenter)
+            node_layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignCenter)
+            node_layout.addWidget(caption, 0, Qt.AlignmentFlag.AlignCenter)
 
             layout.addWidget(node)
             self._step_widgets.append((dot, caption))
@@ -272,7 +273,7 @@ class WelcomeGuideDialog(QDialog):
         self.done_btn.setAutoDefault(last_page)
 
         if last_page:
-            self.done_btn.setFocus(Qt.TabFocusReason)
+            self.done_btn.setFocus(Qt.FocusReason.TabFocusReason)
 
         self._set_step_active(index)
 
@@ -325,7 +326,7 @@ class WelcomeGuideDialog(QDialog):
             action_label = QLabel(action)
             action_label.setProperty("va-body", True)
             action_label.setWordWrap(True)
-            action_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            action_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             row.addWidget(action_label, 1)
 
             layout.addLayout(row)
@@ -352,14 +353,14 @@ class WelcomeGuideDialog(QDialog):
         for index, token in enumerate(tokens):
             capsule = QLabel(token)
             capsule.setProperty("va-key", True)
-            capsule.setAlignment(Qt.AlignCenter)
-            capsule.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+            capsule.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            capsule.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
             strip.addWidget(capsule)
 
             if index != len(tokens) - 1:
                 plus = QLabel("+")
                 plus.setProperty("va-key-sep", True)
-                plus.setAlignment(Qt.AlignCenter)
+                plus.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 strip.addWidget(plus)
 
         if not tokens:
@@ -381,8 +382,10 @@ class WelcomeGuideDialog(QDialog):
         title = QLabel("What is VasoAnalyzer?")
         title.setProperty("va-h1", True)
         blurb = QLabel(
-            "<p>VasoAnalyzer is a desktop app for analyzing pressure myography experiments. "
-            "Everything lives in a single <code>.vaso</code> project file you can share with collaborators.</p>"
+            "<p>VasoAnalyzer is a desktop toolkit for analyzing pressure myography experiments. "
+            "Load your VasoTracker recordings, clean the data, annotate events, fill your lab’s "
+            "Excel template, and export publication-ready figures — all inside a single "
+            "<code>.vaso</code> project file you can share with collaborators.</p>"
         )
         blurb.setWordWrap(True)
         blurb.setProperty("va-body", True)
@@ -392,22 +395,32 @@ class WelcomeGuideDialog(QDialog):
 
         for heading, body in (
             (
-                "Trace viewer",
-                "Inner diameter, outer diameter, pressure, and set-pressure in a synchronized, "
-                "multi-track view with event markers. Smooth panning and zooming, even for long recordings.",
+                "Multi-track trace viewer",
+                "Inner diameter, outer diameter, pressure, and set-pressure channels in a "
+                "synchronized view with event markers, smooth pan and zoom, and level-of-detail "
+                "rendering for long recordings.",
             ),
             (
-                "Point Editor",
-                "Clean artefacts and spikes interactively. All edits are recorded in an audit trail.",
+                "Point Editor with audit trail",
+                "Interactively clean artefacts and spikes. Every edit is recorded and visible "
+                "in the Edit History panel — nothing is silently discarded.",
             ),
             (
-                "Events and Excel Mapper",
+                "Events + Excel Mapper",
                 "Import event files, view them as plot markers and table rows, then map results "
-                "into your lab’s Excel templates for export.",
+                "into your lab’s Excel templates. The mapper remembers your column wiring and "
+                "preserves formulas and formatting.",
             ),
             (
-                "Figure export",
-                "Export publication-ready plots (PNG/TIFF/SVG) and vessel + trace GIF animations.",
+                "Figures, GIFs + dataset sharing",
+                "Export publication-quality plots (PNG/TIFF/SVG), synchronized vessel + trace "
+                "GIF animations, and shareable dataset packages (.vasods).",
+            ),
+            (
+                "Full VasoTracker integration",
+                "Microsecond-precision timing, automatic sibling file discovery, frame-based "
+                "TIFF synchronization, and complete data preservation — every VasoTracker "
+                "column is kept.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -421,11 +434,11 @@ class WelcomeGuideDialog(QDialog):
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(16)
 
-        title = QLabel("Getting started")
+        title = QLabel("Your workflow in 5 steps")
         title.setProperty("va-h1", True)
 
         intro = QLabel(
-            "A typical workflow from a fresh VasoTracker recording to export-ready results."
+            "From a fresh VasoTracker recording to export-ready results — here's the typical path."
         )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
@@ -436,23 +449,30 @@ class WelcomeGuideDialog(QDialog):
         for heading, body in (
             (
                 "1. Create or open a project",
-                "Start a new project from the Home screen, or open an existing .vaso file. "
-                "You can also open a single trace CSV for a quick look without creating a project.",
+                "Click Create New Project on the Home screen, or open an existing .vaso file. "
+                "You can also open a single trace CSV for a quick look without creating a project first.",
             ),
             (
                 "2. Import your data",
-                "Load trace CSVs (time + diameter/pressure), event files (time + label), "
-                "and optionally a TIFF stack for image context.",
+                "Click Open Data in the toolbar to load trace CSVs (time + diameter), event files "
+                "(time + label), and optionally a TIFF stack. Drop any VasoTracker file and "
+                "VasoAnalyzer finds the sibling files automatically.",
             ),
             (
-                "3. Clean and annotate",
-                "Use the Point Editor to remove spikes, and the Events table to adjust labels "
-                "and timing. All changes are tracked.",
+                "3. Explore and clean",
+                "Pan and zoom through the trace (P for pan, Z for select zoom). Open the Point "
+                "Editor to remove spikes and artefacts — all edits are tracked in the audit trail.",
             ),
             (
-                "4. Export and save",
-                "Export figures, fill Excel templates with the Excel Mapper, then save "
-                "your project. Everything is bundled in the .vaso file.",
+                "4. Annotate and map",
+                "Adjust event labels and timing in the Events table. Use the Excel Mapper to "
+                "wire your data into your lab's Excel template — it remembers your mappings for next time.",
+            ),
+            (
+                "5. Export and save",
+                "Export figures (PNG/TIFF/SVG), GIF animations, event tables (CSV), or filled "
+                "Excel templates. Save your project with Cmd/Ctrl+Shift+S — the .vaso file "
+                "captures everything so you can reopen to the exact same view.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -466,12 +486,12 @@ class WelcomeGuideDialog(QDialog):
         layout.setContentsMargins(4, 0, 4, 0)
         layout.setSpacing(16)
 
-        title = QLabel("Your data")
+        title = QLabel("Data you can load")
         title.setProperty("va-h1", True)
 
         intro = QLabel(
-            "VasoAnalyzer reads your raw VasoTracker files as-is and keeps analysis "
-            "state inside the project."
+            "VasoAnalyzer reads your raw VasoTracker files as-is — no conversion needed. "
+            "All analysis state is kept inside the project, your source files are never modified."
         )
         intro.setWordWrap(True)
         intro.setProperty("va-body", True)
@@ -482,24 +502,30 @@ class WelcomeGuideDialog(QDialog):
         for heading, body in (
             (
                 "Trace CSVs",
-                "A time column and at least an inner diameter column. Outer diameter, "
-                "pressure, and set-pressure channels are optional.",
+                "A time column and at least an inner diameter column. Outer diameter, pressure, "
+                "and set-pressure are optional. Common header variants (VasoTracker, custom) are "
+                "recognized automatically.",
             ),
             (
-                "Event files",
-                "CSV/TXT with Time and Label columns, plus optional metadata "
-                "(e.g., Temp, P1, P2). Events appear as markers on the trace and rows "
-                "in the Event Table.",
+                "Event files (CSV / TXT)",
+                "Time and Label columns, plus optional metadata (Temp, P1, P2, Caliper, etc.). "
+                "Events appear as markers on the trace, rows in the Event Table, and inline "
+                "labels on each channel.",
             ),
             (
                 "TIFF stacks",
-                "Image frames for visual context. Large stacks are down-sampled "
-                "automatically for smooth preview.",
+                "Vessel image frames for visual context. Large stacks are auto-sampled for smooth "
+                "preview. Frame-based synchronization keeps the image aligned with the trace.",
             ),
             (
                 "Project files (.vaso)",
-                "A single file that bundles your traces, events, edits, figures, and "
-                "settings. Safe to copy, back up, or share.",
+                "A single ZIP-based file that bundles traces, events, edits, figure settings, "
+                "and export configurations. Safe to copy, back up, email, or share.",
+            ),
+            (
+                "Dataset packages (.vasods)",
+                "Lightweight archives containing a single dataset. Use them to share specific "
+                "experiments between projects or with collaborators.",
             ),
         ):
             layout.addWidget(self._make_callout(heading, body))
@@ -692,15 +718,15 @@ class WelcomeGuideDialog(QDialog):
         nav.setSpacing(10)
 
         self.chk_hide = QCheckBox("Don't show at startup")
-        nav.addWidget(self.chk_hide, 0, Qt.AlignVCenter)
+        nav.addWidget(self.chk_hide, 0, Qt.AlignmentFlag.AlignVCenter)
 
         support = QLabel(
             '<a href="https://github.com/vr-oj/VasoAnalyzer">Documentation & updates</a>'
         )
         support.setOpenExternalLinks(True)
         support.setProperty("va-caption", True)
-        support.setTextInteractionFlags(Qt.TextBrowserInteraction)
-        nav.addWidget(support, 0, Qt.AlignVCenter)
+        support.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        nav.addWidget(support, 0, Qt.AlignmentFlag.AlignVCenter)
 
         nav.addStretch(1)
 

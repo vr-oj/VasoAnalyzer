@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 import numpy as np
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 from vasoanalyzer.core.audit import EditAction
 from vasoanalyzer.core.trace_model import TraceModel, bridge_segment, find_neighbor

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from PyQt5.QtWidgets import (
+from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -91,7 +91,7 @@ class EventReviewWizard(QDialog):
         nav_row.addWidget(self.confirm_button)
         layout.addLayout(nav_row)
 
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         button_box.accepted.connect(self._accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)

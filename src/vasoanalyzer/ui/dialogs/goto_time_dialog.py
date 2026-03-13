@@ -5,8 +5,8 @@ from __future__ import annotations
 import math
 import re
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -46,8 +46,8 @@ class GotoTimeDialog(QDialog):
         layout.setSpacing(10)
 
         form = QFormLayout()
-        form.setLabelAlignment(Qt.AlignLeft)
-        form.setFormAlignment(Qt.AlignLeft)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
 
         self._time_input = QLineEdit(self)
         self._time_input.setPlaceholderText("e.g. 45.5, 1:30, 01:02:30.5")
@@ -72,7 +72,7 @@ class GotoTimeDialog(QDialog):
         self._error.setVisible(False)
         layout.addWidget(self._error)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)

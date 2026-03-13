@@ -7,9 +7,9 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt5.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer
-from PyQt5.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
-from PyQt5.QtWidgets import QApplication, QMessageBox, QSplashScreen
+from PyQt6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPainterPath, QPixmap
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from utils.config import APP_VERSION
 from vasoanalyzer.app.window_manager import WindowManager
@@ -35,6 +35,19 @@ log = logging.getLogger(__name__)
 os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 
+# Fix Qt platform plugin discovery on macOS (particularly Apple Silicon / M-series).
+# PyQt6's bundled Qt may not set the plugin path automatically, leaving it empty
+# and causing a fatal "Could not find the Qt platform plugin 'cocoa'" crash.
+if sys.platform == "darwin" and "QT_QPA_PLATFORM_PLUGIN_PATH" not in os.environ:
+    try:
+        import PyQt6 as _pyqt5
+
+        _qt_plugins = Path(_pyqt5.__file__).parent / "Qt6" / "plugins" / "platforms"
+        if _qt_plugins.exists():
+            os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(_qt_plugins)
+    except Exception:
+        pass
+
 
 class _FileOpenEventFilter(QObject):
     """Handle macOS Finder file-open events."""
@@ -43,7 +56,7 @@ class _FileOpenEventFilter(QObject):
         super().__init__(parent)
 
     def eventFilter(self, obj, event):  # type: ignore[override]
-        if event.type() == QEvent.FileOpen:
+        if event.type() == QEvent.Type.FileOpen:
             path = event.file()
             if path:
                 open_project_from_path(path)
@@ -57,8 +70,6 @@ class VasoAnalyzerLauncher:
     def __init__(self, project_path: str | None = None) -> None:
         self.project_path = project_path
 
-        QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QCoreApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
         QCoreApplication.setApplicationName("VasoAnalyzer")
 
         self.app = QApplication(sys.argv)
@@ -95,7 +106,7 @@ class VasoAnalyzerLauncher:
         """
         try:
             # Load user's theme preference from settings
-            from PyQt5.QtCore import QSettings
+            from PyQt6.QtCore import QSettings
 
             settings = QSettings("TykockiLab", "VasoAnalyzer")
             mode = settings.value("appearance/themeMode", "light", type=str)
@@ -109,7 +120,7 @@ class VasoAnalyzerLauncher:
         # Use native OS style for better platform integration
         # Force a hard exit on macOS to avoid SIP teardown segfaults on exit.
         if sys.platform == "darwin":
-            self.app.setStyle("macintosh")
+            self.app.setStyle("macos")
         elif sys.platform.startswith("win"):
             # Fusion gives a modern, flat look consistent with macOS on Windows.
             # The default "windows" style looks dated and visually mismatches macOS.
@@ -132,12 +143,12 @@ class VasoAnalyzerLauncher:
         scaled = pixmap.scaled(
             target_size,
             target_size,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
         scaled.setDevicePixelRatio(device_ratio)
 
-        self.splash = QSplashScreen(scaled, Qt.WindowStaysOnTopHint)
+        self.splash = QSplashScreen(scaled, Qt.WindowType.WindowStaysOnTopHint)
         self.splash.setMask(scaled.mask())
         self.splash.show()
 
@@ -149,7 +160,7 @@ class VasoAnalyzerLauncher:
 
         painter = QPainter(pixmap)
         try:
-            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
             font = QFont()
             font.setPointSize(14)
@@ -169,7 +180,7 @@ class VasoAnalyzerLauncher:
             badge_path.addRoundedRect(x, y, badge_width, badge_height, 10, 10)
             painter.fillPath(badge_path, QColor(48, 104, 255, 210))
 
-            painter.setPen(Qt.white)
+            painter.setPen(Qt.GlobalColor.white)
             painter.drawText(x + pad_x, y + pad_y + metrics.ascent(), text)
         finally:
             painter.end()
@@ -211,7 +222,7 @@ class VasoAnalyzerLauncher:
 
     # ------------------------------------------------------------------
     def run(self) -> None:
-        exit_code = self.app.exec_()
+        exit_code = self.app.exec()
         if sys.platform == "darwin":
             try:
                 logging.shutdown()

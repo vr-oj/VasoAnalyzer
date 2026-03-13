@@ -11,9 +11,9 @@ from typing import Any
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt
-from PyQt5.QtGui import QColor, QCursor
-from PyQt5.QtWidgets import QApplication, QWidget
+from PyQt6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, Qt
+from PyQt6.QtGui import QColor, QCursor
+from PyQt6.QtWidgets import QApplication, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel, TraceWindow
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -125,6 +125,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if self._enable_opengl and not sys.platform.startswith("win"):
             with contextlib.suppress(Exception):
                 self._plot_widget.useOpenGL(True)
+
+        # On Windows without OpenGL, Qt's raster engine uses MinimalViewportUpdate
+        # which can leave grid lines at viewport edges unpainted. FullViewportUpdate
+        # ensures the entire plot area is redrawn on each frame, preventing clipping.
+        if sys.platform.startswith("win"):
+            with contextlib.suppress(Exception):
+                from PyQt6.QtWidgets import QGraphicsView
+                self._plot_widget.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
 
         # Configure plot appearance
         self._plot_item.showGrid(x=True, y=True, alpha=0.10)
@@ -295,6 +303,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         with contextlib.suppress(Exception):
             layout.setVerticalSpacing(0)
 
+    def reapply_plot_item_layout(self) -> None:
+        """Force-reapply the PlotItem layout regardless of cached gutter value.
+
+        Call this when PyQtGraph may have reset internal layout margins/spacing
+        (e.g., after axis reconfiguration) without our code being aware.
+        """
+        self._apply_plot_item_layout()
+
     def set_left_outer_gutter_px(self, width_px: int) -> None:
         """Set reserved left-side gutter in pixels for Y-axis controls."""
         value = max(int(width_px), 0)
@@ -315,37 +331,35 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             with contextlib.suppress(AttributeError):
                 axis.enableAutoSIPrefix(False)
             axis.setVisible(True)
-            # Restore showValues AND tickLength together: the hide path sets
-            # tickLength=0 via setStyle, and setTickLength() doesn't exist in
-            # PyQtGraph so there's no other way to restore it.
-            axis.setStyle(showValues=True, tickLength=5)
+            axis.setStyle(
+                showValues=True,
+                autoReduceTextSpace=False,
+            )
             axis.setLabel(self._time_axis_label())
-            # On Windows, setHeight(None) auto-calculation runs before textHeight
-            # is populated (no ticks drawn yet), returning ~0 and clipping labels.
-            # Use an explicit height that guarantees space for tick text.
-            if sys.platform.startswith("win"):
-                with contextlib.suppress(Exception):
-                    axis.setHeight(40)
-            else:
-                with contextlib.suppress(Exception):
-                    axis.setHeight(None)
+            with contextlib.suppress(Exception):
+                axis.setHeight(None)
+            with contextlib.suppress(Exception):
+                axis.update()
             with contextlib.suppress(AttributeError):
                 axis.label.show()
                 axis.showLabel(True)
-            return
-
-        with contextlib.suppress(Exception):
-            self._plot_item.hideAxis("bottom")
-        axis.setVisible(False)
-        with contextlib.suppress(Exception):
-            axis.setStyle(showValues=False, tickLength=0)
-        with contextlib.suppress(Exception):
-            axis.setLabel("")
-        with contextlib.suppress(Exception):
-            axis.setHeight(0)
-        with contextlib.suppress(AttributeError):
-            axis.label.hide()
-            axis.showLabel(False)
+        else:
+            with contextlib.suppress(Exception):
+                self._plot_item.hideAxis("bottom")
+            axis.setVisible(False)
+            with contextlib.suppress(Exception):
+                axis.setStyle(showValues=False, tickLength=0)
+            with contextlib.suppress(Exception):
+                axis.setLabel("")
+            with contextlib.suppress(Exception):
+                axis.setHeight(0)
+            with contextlib.suppress(AttributeError):
+                axis.label.hide()
+                axis.showLabel(False)
+        # Re-apply layout margins: PyQtGraph's showAxis/hideAxis calls
+        # layout.invalidate() which can reset the PlotItem's QGraphicsGridLayout
+        # margins to non-zero defaults, shifting the ViewBox horizontally.
+        self._apply_plot_item_layout()
 
     def bottom_axis_visible(self) -> bool:
         """Return whether the bottom axis is currently visible."""
@@ -427,7 +441,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             color = self._to_qcolor(raw_color, "#888888")
         except Exception:
             color = self._to_qcolor("#888888", "#888888")
-        pen = pg.mkPen(color=color, width=1, style=Qt.SolidLine)
+        pen = pg.mkPen(color=color, width=1, style=Qt.PenStyle.SolidLine)
 
         # Remove existing lines before re-creating (theme refresh path)
         for attr in ("_crosshair_vline", "_crosshair_hline"):
@@ -807,14 +821,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         if enabled_flag:
             if not self._y_axis_cursor_forced:
                 self._y_axis_saved_cursor_explicit = bool(
-                    self._plot_widget.testAttribute(Qt.WA_SetCursor)
+                    self._plot_widget.testAttribute(Qt.WidgetAttribute.WA_SetCursor)
                 )
                 self._y_axis_saved_cursor = QCursor(self._plot_widget.cursor())
             # Pan → open-hand grab cursor; zoom → vertical resize cursor.
             if mode == "pan":
-                cursor = QCursor(Qt.OpenHandCursor)
+                cursor = QCursor(Qt.CursorShape.OpenHandCursor)
             else:
-                cursor = QCursor(Qt.SizeVerCursor)
+                cursor = QCursor(Qt.CursorShape.SizeVerCursor)
             self._plot_widget.setCursor(cursor)
             with contextlib.suppress(Exception):
                 self._plot_widget.viewport().setCursor(cursor)
@@ -1010,18 +1024,18 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             return False
 
         event_type = event.type()
-        if event_type in (QEvent.Resize, QEvent.Show, QEvent.LayoutRequest):
+        if event_type in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.LayoutRequest):
             self._reposition_y_axis_controls()
             return False
 
-        if event_type == QEvent.Leave:
+        if event_type == QEvent.Type.Leave:
             if self._y_axis_drag_active:
                 self._end_y_axis_drag()
             else:
                 self._set_y_axis_cursor_feedback(False)
             return False
 
-        if event_type == QEvent.MouseMove and self._y_axis_drag_active:
+        if event_type == QEvent.Type.MouseMove and self._y_axis_drag_active:
             pos = self._event_pos_in_plot_widget(obj, event)
             if pos is None:
                 return False
@@ -1046,14 +1060,14 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     return True
             return False
 
-        if event_type == QEvent.MouseMove:
+        if event_type == QEvent.Type.MouseMove:
             pos = self._event_pos_in_plot_widget(obj, event)
             self._update_cursor_for_widget_pos(pos)
             return False
 
-        if event_type == QEvent.MouseButtonRelease and self._y_axis_drag_active:
+        if event_type == QEvent.Type.MouseButtonRelease and self._y_axis_drag_active:
             with contextlib.suppress(Exception):
-                if event.button() == Qt.LeftButton:
+                if event.button() == Qt.MouseButton.LeftButton:
                     self._end_y_axis_drag()
                     pos = self._event_pos_in_plot_widget(obj, event)
                     self._set_y_axis_cursor_feedback(
@@ -1063,9 +1077,9 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                     return True
 
         if event_type not in (
-            QEvent.MouseButtonDblClick,
-            QEvent.MouseButtonPress,
-            QEvent.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
         ):
             return False
 
@@ -1075,7 +1089,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         with contextlib.suppress(Exception):
             button = event.button()
-            if event_type == QEvent.MouseButtonDblClick and button == Qt.LeftButton:
+            if event_type == QEvent.Type.MouseButtonDblClick and button == Qt.MouseButton.LeftButton:
                 self._end_y_axis_drag()
                 if self._trigger_y_axis_autoscale_once():
                     event.accept()
@@ -1083,8 +1097,8 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                 return False
             if (
                 self._chart_parity_v1
-                and event_type == QEvent.MouseButtonPress
-                and button == Qt.LeftButton
+                and event_type == QEvent.Type.MouseButtonPress
+                and button == Qt.MouseButton.LeftButton
                 and self.mouse_mode() != "rect"
             ):
                 self._y_axis_drag_active = True
@@ -1100,7 +1114,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
                         handler()
                 event.accept()
                 return True
-            if event_type == QEvent.MouseButtonPress and button == Qt.RightButton:
+            if event_type == QEvent.Type.MouseButtonPress and button == Qt.MouseButton.RightButton:
                 global_pos = self._event_global_pos(obj, event)
                 if self._show_y_axis_menu(global_pos):
                     event.accept()
@@ -1649,12 +1663,12 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             pen_kwargs["width"] = float(width)
         if style is not None:
             style_map = {
-                "solid": Qt.SolidLine,
-                "dashed": Qt.DashLine,
-                "dashdot": Qt.DashDotLine,
-                "dotted": Qt.DotLine,
+                "solid": Qt.PenStyle.SolidLine,
+                "dashed": Qt.PenStyle.DashLine,
+                "dashdot": Qt.PenStyle.DashDotLine,
+                "dotted": Qt.PenStyle.DotLine,
             }
-            pen_kwargs["style"] = style_map.get(style, Qt.SolidLine)
+            pen_kwargs["style"] = style_map.get(style, Qt.PenStyle.SolidLine)
         if not pen_kwargs:
             return
         self.inner_curve.setPen(pg.mkPen(**pen_kwargs))
@@ -1702,7 +1716,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
 
         Args:
             width: Line width in pixels
-            style: Qt pen style (Qt.SolidLine, Qt.DashLine, Qt.DotLine, Qt.DashDotLine)
+            style: Qt pen style (Qt.PenStyle.SolidLine, Qt.PenStyle.DashLine, Qt.PenStyle.DotLine, Qt.PenStyle.DashDotLine)
             color: Line color as hex string
             alpha: Line alpha/opacity (0.0 to 1.0)
         """
@@ -1911,7 +1925,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             button = mouse_event.button()
         except Exception:
             return
-        if button not in (Qt.LeftButton, Qt.RightButton):
+        if button not in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             return
         try:
             scene_pos = mouse_event.scenePos()
@@ -1924,11 +1938,11 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
             is_double = False
             with contextlib.suppress(Exception):
                 is_double = bool(mouse_event.double())
-            if button == Qt.LeftButton and is_double and self._trigger_y_axis_autoscale_once():
+            if button == Qt.MouseButton.LeftButton and is_double and self._trigger_y_axis_autoscale_once():
                 with contextlib.suppress(Exception):
                     mouse_event.accept()
                 return
-            if button == Qt.RightButton and self._show_y_axis_menu(QCursor.pos()):
+            if button == Qt.MouseButton.RightButton and self._show_y_axis_menu(QCursor.pos()):
                 with contextlib.suppress(Exception):
                     mouse_event.accept()
                 return
@@ -1945,7 +1959,7 @@ class PyQtGraphTraceView(AbstractTraceRenderer):
         except Exception:
             return
         self._click_handler(
-            x_val, y_val, 1 if button == Qt.LeftButton else 3, self._mode, mouse_event
+            x_val, y_val, 1 if button == Qt.MouseButton.LeftButton else 3, self._mode, mouse_event
         )
 
     def hover_tooltip_enabled(self) -> bool:
@@ -2236,7 +2250,7 @@ class _HoverHideFilter(QObject):
         self._owner = owner
 
     def eventFilter(self, obj, event):  # noqa: N802 - Qt API
-        if event.type() == QEvent.Leave:
+        if event.type() == QEvent.Type.Leave:
             with contextlib.suppress(Exception):
                 self._owner._hide_hover_tooltip()
         return False

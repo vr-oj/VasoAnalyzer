@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
@@ -209,12 +209,12 @@ class SourceProjectBrowserDialog(QDialog):
         header.addWidget(self.choose_btn, 0)
         layout.addLayout(header)
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         left = QWidget()
         left_layout = QVBoxLayout(left)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["Experiment / Dataset"])
-        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.itemSelectionChanged.connect(self._on_tree_selection)
         left_layout.addWidget(self.tree)
         splitter.addWidget(left)
@@ -264,7 +264,7 @@ class SourceProjectBrowserDialog(QDialog):
         dest_layout.addWidget(self.preserve_checkbox)
         layout.addWidget(dest_box)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -302,7 +302,7 @@ class SourceProjectBrowserDialog(QDialog):
             exp_item = QTreeWidgetItem([exp.name])
             exp_item.setData(
                 0,
-                Qt.UserRole,
+                Qt.ItemDataRole.UserRole,
                 {"type": "experiment", "experiment": exp.name},
             )
             for ds in exp.datasets:
@@ -310,7 +310,7 @@ class SourceProjectBrowserDialog(QDialog):
                 ds_item = QTreeWidgetItem([ds.dataset_name])
                 ds_item.setData(
                     0,
-                    Qt.UserRole,
+                    Qt.ItemDataRole.UserRole,
                     {
                         "type": "dataset",
                         "dataset_id": ds.dataset_id,
@@ -334,7 +334,7 @@ class SourceProjectBrowserDialog(QDialog):
             return
         ds_items = []
         for it in items:
-            payload = it.data(0, Qt.UserRole)
+            payload = it.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(payload, dict) and payload.get("type") == "dataset":
                 ds_items.append(it)
         if not ds_items:
@@ -343,13 +343,13 @@ class SourceProjectBrowserDialog(QDialog):
         seen: set[int] = set()
         self._selected_dataset_ids = []
         for it in ds_items:
-            payload = it.data(0, Qt.UserRole)
+            payload = it.data(0, Qt.ItemDataRole.UserRole)
             ds_id = int(payload.get("dataset_id"))
             if ds_id not in seen:
                 seen.add(ds_id)
                 self._selected_dataset_ids.append(ds_id)
         first = ds_items[0]
-        payload = first.data(0, Qt.UserRole)
+        payload = first.data(0, Qt.ItemDataRole.UserRole)
         ds_id = int(payload.get("dataset_id"))
         exp_name = payload.get("experiment") or "-"
         self._update_details(ds_id, exp_name)
@@ -421,7 +421,7 @@ class SourceProjectBrowserDialog(QDialog):
     ) -> tuple[str | None, list[DatasetInfo], str | None, bool, str | None]:
         if initial_path:
             self._load_source(initial_path)
-        if self.exec_() == QDialog.Accepted and self._source_info:
+        if self.exec() == QDialog.DialogCode.Accepted and self._source_info:
             selections: list[DatasetInfo] = []
             for ds_id in self._selected_dataset_ids:
                 info = self._dataset_map.get(ds_id)

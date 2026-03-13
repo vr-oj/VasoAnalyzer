@@ -6,10 +6,10 @@ import sys
 from dataclasses import dataclass
 
 import pyqtgraph as pg
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor, QPen
-from PyQt5.QtCore import Qt as QtCore
-from PyQt5.QtGui import QBrush, QColor, QPen
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QPen
+from PyQt6.QtCore import Qt as QtCore
+from PyQt6.QtGui import QBrush, QColor, QPen
 
 from vasoanalyzer.ui.theme import CURRENT_THEME, FONTS
 
@@ -31,10 +31,12 @@ class SelectionBoxStyle:
     brush_alpha: float
 
 
-# macOS: small sizes look great on Retina with Avenir Next.
-# Windows: Segoe UI needs slightly larger sizes to render clearly.
-PLOT_AXIS_FONT_SIZE = 8.5 if sys.platform == "darwin" else 10.0
-PLOT_TICK_FONT_SIZE = 7.0 if sys.platform == "darwin" else 9.0
+# Both platforms use the same logical point sizes so axis labels appear at
+# the same physical screen size.  On macOS Retina the higher DPI gives
+# sharper rendering for free; on Windows, PreferNoHinting (set on the font
+# objects in the plot host) smooths out the raster engine output.
+PLOT_AXIS_FONT_SIZE = 8.5
+PLOT_TICK_FONT_SIZE = 7.0
 PLOT_AXIS_LABELS = {
     "inner": "ID (µm)",
     "outer": "OD (µm)",

@@ -7,9 +7,9 @@
 
 import contextlib
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
@@ -51,8 +51,8 @@ class AxisSettingsDialog(QDialog):
         # ------------------------------------------------------------------
         scale_tab = QWidget()
         scale_form = QFormLayout(scale_tab)
-        scale_form.setLabelAlignment(Qt.AlignRight)
-        scale_form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        scale_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        scale_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         scale_form.setHorizontalSpacing(12)
         scale_form.setVerticalSpacing(6)
 
@@ -111,8 +111,8 @@ class AxisSettingsDialog(QDialog):
         # ------------------------------------------------------------------
         app_tab = QWidget()
         app_form = QFormLayout(app_tab)
-        app_form.setLabelAlignment(Qt.AlignRight)
-        app_form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        app_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        app_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         app_form.setHorizontalSpacing(12)
         app_form.setVerticalSpacing(6)
 
@@ -136,9 +136,9 @@ class AxisSettingsDialog(QDialog):
         # Buttons
         # ------------------------------------------------------------------
         buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Apply | QDialogButtonBox.Cancel
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Apply | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.Apply).clicked.connect(self._apply)
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self._apply)
         buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
         main.addWidget(buttons)

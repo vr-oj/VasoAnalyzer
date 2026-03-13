@@ -4,7 +4,7 @@ import contextlib
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox
 
 from vasoanalyzer.core.project import (
     ProjectUpgradeRequired,
@@ -120,10 +120,10 @@ def open_project_file(window: VasoAnalyzerApp, path: str | None = None) -> None:
                         "Convert it to the new single-file .vaso format now?\n"
                         "A backup (.bak1) will be kept for safety."
                     ),
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
                 )
-                if choice != QMessageBox.Yes:
+                if choice != QMessageBox.StandardButton.Yes:
                     window.statusBar().showMessage("Conversion cancelled.", 5000)
                     log.debug("   User cancelled conversion")
                     return

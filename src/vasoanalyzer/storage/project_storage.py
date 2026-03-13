@@ -47,7 +47,7 @@ def get_use_bundle_format_by_default() -> bool:
     Bundle format is the default because it's cloud-safe and crash-proof.
     """
     try:
-        from PyQt5.QtCore import QSettings
+        from PyQt6.QtCore import QSettings
 
         settings = QSettings("TykockiLab", "VasoAnalyzer")
         # Default to True (bundle format) if not set

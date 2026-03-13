@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt5.QtWidgets import QDockWidget, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QDockWidget, QSizePolicy, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -39,7 +39,7 @@ class ZoomWindowDock(QDockWidget):
             facecolor=CURRENT_THEME.get("window_bg", "#FFFFFF"),
         )
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.ax = self.figure.add_subplot(111)
         self.ax.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
         self.ax.grid(True, color=CURRENT_THEME.get("grid_color", "#CCCCCC"))

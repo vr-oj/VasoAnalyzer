@@ -5,8 +5,8 @@
 
 """Dialog for editing legend placement, appearance, and labels."""
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -64,7 +64,7 @@ class LegendSettingsDialog(QDialog):
         # Appearance block -------------------------------------------------
         appearance_box = QGroupBox("Appearance")
         appearance_form = QFormLayout(appearance_box)
-        appearance_form.setLabelAlignment(Qt.AlignRight)
+        appearance_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.title_edit = QLineEdit(settings.get("title", ""))
         appearance_form.addRow("Title:", self.title_edit)
@@ -93,7 +93,7 @@ class LegendSettingsDialog(QDialog):
         # Font block -------------------------------------------------------
         font_box = QGroupBox("Font")
         font_form = QFormLayout(font_box)
-        font_form.setLabelAlignment(Qt.AlignRight)
+        font_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.font_combo = QComboBox()
         self.font_combo.addItems(self._DEFAULT_FONTS)
@@ -127,7 +127,7 @@ class LegendSettingsDialog(QDialog):
         # Labels block -----------------------------------------------------
         labels_box = QGroupBox("Legend Labels")
         labels_form = QFormLayout(labels_box)
-        labels_form.setLabelAlignment(Qt.AlignRight)
+        labels_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
         self.inner_edit = None
         self.outer_edit = None
@@ -144,7 +144,7 @@ class LegendSettingsDialog(QDialog):
             main.addWidget(labels_box)
 
         # Buttons ----------------------------------------------------------
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         main.addWidget(buttons)

@@ -19,11 +19,9 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QObject, Qt, QTimer
-from PyQt5.QtGui import QColor, QIcon, QKeySequence
-from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
+from PyQt6.QtCore import QObject, Qt, QTimer
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QKeySequence
+from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QInputDialog,
@@ -41,7 +39,7 @@ from vasoanalyzer.services.project_service import (
     events_dataframe_from_rows,
     normalize_event_table_rows,
 )
-from vasoanalyzer.ui.commands import ReplaceEventCommand
+from vasoanalyzer.ui.commands import AddEventCommand, DeleteEventsCommand, ReplaceEventCommand
 from vasoanalyzer.ui.controllers.selection_sync import event_time_for_row, pick_event_row
 from vasoanalyzer.ui.dialogs.event_review_wizard import EventReviewWizard
 from vasoanalyzer.ui.event_table import build_event_table_column_contract
@@ -127,11 +125,9 @@ class EventManager(QObject):
                 return None
             return round(numeric, 2)
 
+        # Always use the actual trace values at the snapped time point
+        # rather than the raw click y-coordinate, for data consistency.
         id_val, od_val, avg_p_val, set_p_val = h._sample_values_at_time(event_time)
-        if str(trace_type).lower() == "outer" and od_val is not None:
-            od_val = float(y)
-        else:
-            id_val = float(y)
 
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
         new_entry = (
@@ -154,35 +150,10 @@ class EventManager(QObject):
                     insert_idx = idx
                     break
 
-        if not isinstance(h.event_labels, list):
-            h.event_labels = []
-        if not isinstance(h.event_times, list):
-            h.event_times = []
-        if not isinstance(h.event_frames, list):
-            h.event_frames = []
-        if not isinstance(h.event_label_meta, list):
-            h.event_label_meta = []
-
-        if insert_idx >= len(h.event_table_data):
-            h.event_table_data.append(new_entry)
-            h.event_labels.append(label_value)
-            h.event_times.append(event_time)
-            h.event_frames.append(int(nearest_idx))
-            h.event_label_meta.append(h._with_default_review_state(None))
-        else:
-            h.event_table_data.insert(insert_idx, new_entry)
-            h.event_labels.insert(insert_idx, label_value)
-            h.event_times.insert(insert_idx, event_time)
-            h.event_frames.insert(insert_idx, int(nearest_idx))
-            h._insert_event_meta(insert_idx)
-
-        h._ensure_event_meta_length(len(h.event_table_data))
-        h.populate_table()
-        h.update_plot()
-        h.auto_export_table()
+        cmd = AddEventCommand(h, insert_idx, new_entry)
+        h.undo_stack.push(cmd)
         h._focus_event_row(insert_idx, source="manual")
         log.info("Quick-added event marker: %s", new_entry)
-        h.mark_session_dirty()
 
     def prompt_add_event(self, x, y, trace_type="inner"):
         h = self._host
@@ -224,48 +195,36 @@ class EventManager(QObject):
 
         arr_t = h.trace_data["Time (s)"].values
         idx = int(np.argmin(np.abs(arr_t - x)))
-        id_val = h.trace_data["Inner Diameter"].values[idx]
-        od_val = h.trace_data["Outer Diameter"].values[idx] if has_od else None
-        avg_p_val = h.trace_data[avg_label].values[idx] if has_avg_p else None
-        set_p_val = h.trace_data[set_label].values[idx] if has_set_p else None
+        event_time = float(arr_t[idx])
 
-        if trace_type == "outer" and has_od:
-            od_val = y
-        else:
-            id_val = y
+        # Always use actual trace values at the snapped time point
+        id_val, od_val, avg_p_val, set_p_val = h._sample_values_at_time(event_time)
 
         frame_number = idx  # store nearest trace index as frame hint
+
+        def _ro(v: float | None) -> float | None:
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return round(f, 2) if np.isfinite(f) else None
 
         # EventRow: (label, time, id, od|None, avg_p|None, set_p|None, frame|None)
         new_entry = (
             new_label.strip(),
-            round(x, 2),
-            round(id_val, 2),
-            round(od_val, 2) if od_val is not None else None,
-            round(avg_p_val, 2) if avg_p_val is not None else None,
-            round(set_p_val, 2) if set_p_val is not None else None,
+            round(event_time, 2),
+            _ro(id_val),
+            _ro(od_val),
+            _ro(avg_p_val),
+            _ro(set_p_val),
             frame_number,
         )
 
-        # Insert into data
-        if insert_idx == len(h.event_table_data):  # Add to end
-            h.event_labels.append(new_label.strip())
-            h.event_times.append(x)
-            h.event_table_data.append(new_entry)
-            h.event_frames.append(frame_number)
-            h.event_label_meta.append(h._with_default_review_state(None))
-        else:
-            h.event_labels.insert(insert_idx, new_label.strip())
-            h.event_times.insert(insert_idx, x)
-            h.event_table_data.insert(insert_idx, new_entry)
-            h.event_frames.insert(insert_idx, frame_number)
-            h._insert_event_meta(insert_idx)
-
-        h.populate_table()
-        h.auto_export_table()
-        h.update_plot()
+        cmd = AddEventCommand(h, insert_idx, new_entry)
+        h.undo_stack.push(cmd)
         log.info("Inserted new event: %s", new_entry)
-        h.mark_session_dirty()
 
     def manual_add_event(self):
         h = self._host
@@ -322,24 +281,9 @@ class EventManager(QObject):
             frame_number,
         )
 
-        if insert_idx == len(h.event_table_data):
-            h.event_labels.append(label.strip())
-            h.event_times.append(t_val)
-            h.event_table_data.append(new_entry)
-            h.event_frames.append(frame_number)
-            h.event_label_meta.append(h._with_default_review_state(None))
-        else:
-            h.event_labels.insert(insert_idx, label.strip())
-            h.event_times.insert(insert_idx, t_val)
-            h.event_table_data.insert(insert_idx, new_entry)
-            h.event_frames.insert(insert_idx, frame_number)
-            h._insert_event_meta(insert_idx)
-
-        h.populate_table()
-        h.update_plot()
-        h.auto_export_table()
+        cmd = AddEventCommand(h, insert_idx, new_entry)
+        h.undo_stack.push(cmd)
         log.info("Manually inserted event: %s", new_entry)
-        h.mark_session_dirty()
 
     def handle_event_replacement(self, x, y):
         h = self._host
@@ -369,10 +313,10 @@ class EventManager(QObject):
                 h,
                 "Confirm Replacement",
                 f"Replace ID for '{event_label}' at {event_time:.2f}s with {y:.1f} µm?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
 
-            if confirm == QMessageBox.Yes:
+            if confirm == QMessageBox.StandardButton.Yes:
                 has_od = h.trace_data is not None and "Outer Diameter" in h.trace_data.columns
                 old_value = h.event_table_data[index][2]
                 h.last_replaced_event = (index, old_value)
@@ -423,37 +367,94 @@ class EventManager(QObject):
             h,
             "Delete Event" if len(indices) == 1 else "Delete Events",
             prompt,
-            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        if confirm != QMessageBox.Yes:
+        if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        h._delete_events_by_indices(indices)
+        self._delete_events_by_indices(indices)
 
     def _delete_events_by_indices(self, indices: list[int]) -> None:
         h = self._host
         if not indices:
             return
-        indices = sorted(
+        valid = sorted(
             set(idx for idx in indices if 0 <= idx < len(h.event_table_data)),
-            reverse=True,
         )
-        if not indices:
+        if not valid:
             return
 
-        for idx in indices:
-            del h.event_labels[idx]
-            if idx < len(h.event_times):
-                del h.event_times[idx]
-            if idx < len(h.event_frames):
-                del h.event_frames[idx]
-            h._delete_event_meta(idx)
-            h.event_table_data.pop(idx)
-            h.event_table_controller.remove_row(idx)
+        # Capture rows + meta before removal for undo
+        removed: list[tuple[int, tuple, dict[str, Any]]] = []
+        meta_list = getattr(h, "event_label_meta", []) or []
+        for idx in valid:
+            row = h.event_table_data[idx]
+            meta = dict(meta_list[idx]) if idx < len(meta_list) else {}
+            removed.append((idx, row, meta))
+
+        cmd = DeleteEventsCommand(h, removed)
+        h.undo_stack.push(cmd)
+        h._update_excel_controls()
+
+    # ------------------------------------------------------------------
+    # Atomic insert / remove used by undo commands
+    # ------------------------------------------------------------------
+
+    def _insert_event_at(
+        self, index: int, row: tuple, meta: dict[str, Any] | None = None
+    ) -> None:
+        """Insert *row* at *index* into all event arrays and refresh the UI."""
+        h = self._host
+        label = row[0] if row else ""
+        time_val = float(row[1]) if len(row) > 1 else 0.0
+        frame_val = int(row[-1]) if (row and row[-1] is not None) else 0
+
+        for attr in ("event_labels", "event_times", "event_frames", "event_label_meta"):
+            if not isinstance(getattr(h, attr, None), list):
+                setattr(h, attr, [])
+
+        if index >= len(h.event_table_data):
+            h.event_table_data.append(row)
+            h.event_labels.append(label)
+            h.event_times.append(time_val)
+            h.event_frames.append(frame_val)
+            h.event_label_meta.append(h._with_default_review_state(meta))
+        else:
+            h.event_table_data.insert(index, row)
+            h.event_labels.insert(index, label)
+            h.event_times.insert(index, time_val)
+            h.event_frames.insert(index, frame_val)
+            h._insert_event_meta(index, meta)
+
+        h._ensure_event_meta_length(len(h.event_table_data))
+        h.populate_table()
+        h.update_plot()
+        h.auto_export_table()
+        h.mark_session_dirty()
+
+    def _remove_event_at(self, index: int) -> tuple | None:
+        """Remove the event at *index* from all event arrays and refresh the UI.
+
+        Returns the removed ``EventRow`` or ``None`` if *index* is out of range.
+        """
+        h = self._host
+        if index < 0 or index >= len(h.event_table_data):
+            return None
+
+        removed = h.event_table_data.pop(index)
+        if index < len(h.event_labels):
+            del h.event_labels[index]
+        if index < len(h.event_times):
+            del h.event_times[index]
+        if index < len(h.event_frames):
+            del h.event_frames[index]
+        h._delete_event_meta(index)
+        h.event_table_controller.remove_row(index)
 
         h.update_plot()
-        h._update_excel_controls()
+        h.auto_export_table()
         h.mark_session_dirty()
+        return removed
 
     def _sync_event_data_from_table(self) -> None:
         h = self._host
@@ -1445,32 +1446,84 @@ class EventManager(QObject):
         menu = QMenu()
         has_events = bool(getattr(h, "event_table_data", None))
 
-        if index.isValid():
-            edit_action = menu.addAction("✏️ Edit ID (µm)…")
-            delete_action = menu.addAction("🗑️ Delete Event")
-            menu.addSeparator()
-            jump_action = menu.addAction("🔍 Jump to Event on Plot")
-            pin_action = menu.addAction("📌 Pin to Plot")
-            menu.addSeparator()
-            replace_with_pin_action = menu.addAction("🔄 Replace ID with Pinned Value")
-        else:
-            edit_action = delete_action = jump_action = pin_action = replace_with_pin_action = None
+        # --- Determine multi-selection ---
+        selected_rows: list[int] = []
+        sel_model = h.event_table.selectionModel()
+        if sel_model is not None:
+            selected_rows = sorted({idx.row() for idx in sel_model.selectedRows()})
+        multi = len(selected_rows) > 1
 
+        # === Row-specific actions ===
+        if index.isValid():
+            if multi:
+                delete_action = menu.addAction(f"🗑️ Delete {len(selected_rows)} Events")
+                edit_action = edit_label_action = edit_time_action = None
+                edit_od_action = jump_action = pin_action = None
+                replace_with_pin_action = duplicate_action = None
+                insert_before_action = insert_after_action = None
+            else:
+                # --- Edit submenu ---
+                edit_menu = menu.addMenu("✏️ Edit")
+                edit_label_action = edit_menu.addAction("Label…")
+                edit_time_action = edit_menu.addAction("Time (s)…")
+                edit_action = edit_menu.addAction("ID (µm)…")
+                has_od_col = h.trace_data is not None and "Outer Diameter" in h.trace_data.columns
+                edit_od_action = edit_menu.addAction("OD (µm)…") if has_od_col else None
+
+                delete_action = menu.addAction("🗑️ Delete Event")
+                duplicate_action = menu.addAction("📋 Duplicate Event…")
+                menu.addSeparator()
+
+                # --- Insert ---
+                insert_before_action = menu.addAction("⬆️ Insert Event Before…")
+                insert_after_action = menu.addAction("⬇️ Insert Event After…")
+                menu.addSeparator()
+
+                jump_action = menu.addAction("🔍 Jump to Event on Plot")
+                pin_action = menu.addAction("📌 Pin to Plot")
+                menu.addSeparator()
+                replace_with_pin_action = menu.addAction("🔄 Replace ID with Pinned Value")
+        else:
+            edit_action = delete_action = jump_action = pin_action = None
+            replace_with_pin_action = duplicate_action = None
+            edit_label_action = edit_time_action = edit_od_action = None
+            insert_before_action = insert_after_action = None
+
+        # === Copy submenu ===
         copy_menu = menu.addMenu("Copy")
         copy_row_action = copy_menu.addAction("Row-per-Event (Excel)")
         copy_values_action = copy_menu.addAction("Values Only (Column Paste)")
         copy_profile_menu = copy_menu.addMenu("Profile")
         copy_pressure_action = copy_profile_menu.addAction("Pressure Curve (Standard)")
-        for action in (copy_row_action, copy_values_action, copy_pressure_action):
-            action.setEnabled(has_events)
+        for act in (copy_row_action, copy_values_action, copy_pressure_action):
+            act.setEnabled(has_events)
+
+        menu.addSeparator()
+
+        # === Undo / Redo ===
+        undo_action = menu.addAction("↩️ Undo")
+        undo_action.setEnabled(h.undo_stack.canUndo())
+        if h.undo_stack.canUndo():
+            undo_action.setText(f"↩️ Undo: {h.undo_stack.undoText()}")
+        redo_action = menu.addAction("↪️ Redo")
+        redo_action.setEnabled(h.undo_stack.canRedo())
+        if h.undo_stack.canRedo():
+            redo_action.setText(f"↪️ Redo: {h.undo_stack.redoText()}")
 
         menu.addSeparator()
         clear_pins_action = menu.addAction("❌ Clear All Pins")
         menu.addSeparator()
         add_event_action = menu.addAction("➕ Add Event…")
 
-        action = menu.exec_(h.event_table.viewport().mapToGlobal(position))
+        # === Renumber ===
+        renumber_action = menu.addAction("🔢 Renumber Events")
+        renumber_action.setEnabled(has_events)
 
+        action = menu.exec(h.event_table.viewport().mapToGlobal(position))
+        if action is None:
+            return
+
+        # --- Handle copy actions ---
         if action == copy_row_action:
             h._copy_event_profile_to_clipboard(EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True)
             return
@@ -1483,7 +1536,33 @@ class EventManager(QObject):
             h._copy_event_profile_to_clipboard(PRESSURE_CURVE_STANDARD_ID, include_header=True)
             return
 
-        if index.isValid() and action == edit_action:
+        # --- Handle undo/redo ---
+        if action == undo_action:
+            h.undo_stack.undo()
+            return
+        if action == redo_action:
+            h.undo_stack.redo()
+            return
+
+        # --- Handle renumber ---
+        if action == renumber_action:
+            self._renumber_events()
+            return
+
+        # --- Multi-delete ---
+        if multi and action == delete_action:
+            h.delete_selected_events(indices=selected_rows)
+            return
+
+        if not index.isValid():
+            if action == add_event_action:
+                h.manual_add_event()
+            elif action == clear_pins_action:
+                self._clear_all_pins()
+            return
+
+        # --- Single-row actions ---
+        if action == edit_action:
             if row >= len(h.event_table_data):
                 return
             old_val = h.event_table_data[row][2]
@@ -1497,25 +1576,34 @@ class EventManager(QObject):
                 2,
             )
             if ok:
-                has_od = h.trace_data is not None and "Outer Diameter" in h.trace_data.columns
-                rounded = round(new_val, 2)
-                if has_od:
-                    lbl, t, _, od_val, frame_val = h.event_table_data[row]
-                    h.event_table_data[row] = (lbl, t, rounded, od_val, frame_val)
-                else:
-                    lbl, t, _, frame_val = h.event_table_data[row]
-                    h.event_table_data[row] = (lbl, t, rounded, frame_val)
-                h.event_table_controller.update_row(row, h.event_table_data[row])
-                h._mark_row_edited(row)
-                h.auto_export_table()
+                cmd = ReplaceEventCommand(h, row, old_val, new_val)
+                h.undo_stack.push(cmd)
 
-        elif index.isValid() and action == delete_action:
+        elif action == edit_label_action:
+            self._edit_event_label(row)
+
+        elif action == edit_time_action:
+            self._edit_event_time(row)
+
+        elif edit_od_action is not None and action == edit_od_action:
+            self._edit_event_od(row)
+
+        elif action == delete_action:
             h.delete_selected_events(indices=[row])
 
-        elif index.isValid() and action == jump_action:
+        elif action == duplicate_action:
+            self._duplicate_event(row)
+
+        elif action == insert_before_action:
+            self._insert_event_relative(row, before=True)
+
+        elif action == insert_after_action:
+            self._insert_event_relative(row, before=False)
+
+        elif action == jump_action:
             h._focus_event_row(row, source="context")
 
-        elif index.isValid() and action == pin_action:
+        elif action == pin_action:
             plot_host = getattr(h, "plot_host", None)
             is_pyqtgraph = plot_host is not None and plot_host.get_render_backend() == "pyqtgraph"
             if is_pyqtgraph:
@@ -1558,9 +1646,9 @@ class EventManager(QObject):
                 h,
                 "Confirm Replacement",
                 f"Replace ID at {t_event:.2f}s with pinned value: {pin_id:.2f} µm?",
-                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
-            if confirm == QMessageBox.Yes:
+            if confirm == QMessageBox.StandardButton.Yes:
                 h.last_replaced_event = (row, h.event_table_data[row][2])
                 has_od = h.trace_data is not None and "Outer Diameter" in h.trace_data.columns
                 if has_od:
@@ -1589,19 +1677,186 @@ class EventManager(QObject):
                 h.mark_session_dirty()
 
         elif action == clear_pins_action:
-            if not h.pinned_points:
-                QMessageBox.information(h, "No Pins", "There are no pins to clear.")
-                return
-            for marker, label in h.pinned_points:
-                h._safe_remove_artist(marker)
-                h._safe_remove_artist(label)
-            h.pinned_points.clear()
-            h.canvas.draw_idle()
-            log.info("Cleared all pins.")
-            h.mark_session_dirty()
+            self._clear_all_pins()
 
         elif action == add_event_action:
             h.manual_add_event()
+
+    # ------------------------------------------------------------------
+    # Context-menu helper actions
+    # ------------------------------------------------------------------
+
+    def _clear_all_pins(self) -> None:
+        h = self._host
+        if not h.pinned_points:
+            QMessageBox.information(h, "No Pins", "There are no pins to clear.")
+            return
+        for marker, label in h.pinned_points:
+            h._safe_remove_artist(marker)
+            h._safe_remove_artist(label)
+        h.pinned_points.clear()
+        h.canvas.draw_idle()
+        log.info("Cleared all pins.")
+        h.mark_session_dirty()
+
+    def _edit_event_label(self, row: int) -> None:
+        h = self._host
+        if row < 0 or row >= len(h.event_table_data):
+            return
+        old_label = h.event_table_data[row][0]
+        new_label, ok = QInputDialog.getText(
+            h, "Edit Label", "Event label:", text=str(old_label)
+        )
+        if not ok or not new_label.strip():
+            return
+        entry = list(h.event_table_data[row])
+        entry[0] = new_label.strip()
+        h.event_table_data[row] = tuple(entry)
+        if row < len(h.event_labels):
+            h.event_labels[row] = new_label.strip()
+        h.event_table_controller.update_row(row, h.event_table_data[row])
+        h._mark_row_edited(row)
+        h.update_plot()
+        h.auto_export_table()
+        h.mark_session_dirty()
+
+    def _edit_event_time(self, row: int) -> None:
+        h = self._host
+        if row < 0 or row >= len(h.event_table_data):
+            return
+        old_time = float(h.event_table_data[row][1])
+        new_time, ok = QInputDialog.getDouble(
+            h, "Edit Time", "Time (s):", old_time, 0, 1e6, 2
+        )
+        if not ok:
+            return
+        entry = list(h.event_table_data[row])
+        entry[1] = round(new_time, 2)
+        h.event_table_data[row] = tuple(entry)
+        if row < len(h.event_times):
+            h.event_times[row] = round(new_time, 2)
+        h.event_table_controller.update_row(row, h.event_table_data[row])
+        h._mark_row_edited(row)
+        h.update_plot()
+        h.auto_export_table()
+        h.mark_session_dirty()
+
+    def _edit_event_od(self, row: int) -> None:
+        h = self._host
+        if row < 0 or row >= len(h.event_table_data):
+            return
+        entry = list(h.event_table_data[row])
+        # OD is at index 3 in the EventRow tuple
+        old_od = float(entry[3]) if entry[3] is not None else 0.0
+        new_od, ok = QInputDialog.getDouble(
+            h, "Edit OD", "OD (µm):", old_od, 0, 1e6, 2
+        )
+        if not ok:
+            return
+        entry[3] = round(new_od, 2)
+        h.event_table_data[row] = tuple(entry)
+        h.event_table_controller.update_row(row, h.event_table_data[row])
+        h._mark_row_edited(row)
+        h.auto_export_table()
+        h.mark_session_dirty()
+
+    def _duplicate_event(self, row: int) -> None:
+        h = self._host
+        if row < 0 or row >= len(h.event_table_data):
+            return
+        src = h.event_table_data[row]
+        label = f"{src[0]} (copy)"
+        new_label, ok = QInputDialog.getText(
+            h, "Duplicate Event", "Label for duplicate:", text=label
+        )
+        if not ok or not new_label.strip():
+            return
+        new_entry = (new_label.strip(),) + src[1:]
+        insert_idx = row + 1
+        cmd = AddEventCommand(h, insert_idx, new_entry)
+        h.undo_stack.push(cmd)
+        h._focus_event_row(insert_idx, source="manual")
+
+    def _insert_event_relative(self, row: int, *, before: bool = True) -> None:
+        """Insert a new event before or after *row* using a dialog."""
+        h = self._host
+        if h.trace_data is None or "Time (s)" not in h.trace_data.columns:
+            QMessageBox.warning(h, "No Trace", "Load a trace before adding events.")
+            return
+
+        insert_idx = row if before else row + 1
+        default_label = f"Event {len(h.event_table_data) + 1}"
+        label, ok = QInputDialog.getText(
+            h, "New Event", "Event label:", text=default_label
+        )
+        if not ok or not label.strip():
+            return
+
+        # Default time: midpoint between neighbors, or neighbor time
+        if insert_idx > 0 and insert_idx < len(h.event_table_data):
+            t_before = float(h.event_table_data[insert_idx - 1][1])
+            t_after = float(h.event_table_data[insert_idx][1])
+            default_time = round((t_before + t_after) / 2, 2)
+        elif insert_idx > 0:
+            default_time = float(h.event_table_data[insert_idx - 1][1])
+        elif h.event_table_data:
+            default_time = float(h.event_table_data[0][1])
+        else:
+            default_time = 0.0
+
+        t_val, ok = QInputDialog.getDouble(
+            h, "Event Time", "Time (s):", default_time, 0, 1e6, 2
+        )
+        if not ok:
+            return
+
+        id_val, od_val, avg_p, set_p = h._sample_values_at_time(t_val)
+        times = h.trace_data["Time (s)"].to_numpy(dtype=float)
+        frame = int(np.argmin(np.abs(times - t_val))) if times.size > 0 else 0
+
+        def _ro(v: float | None) -> float | None:
+            if v is None:
+                return None
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return round(f, 2) if np.isfinite(f) else None
+
+        new_entry = (
+            label.strip(),
+            round(t_val, 2),
+            _ro(id_val),
+            _ro(od_val),
+            _ro(avg_p),
+            _ro(set_p),
+            frame,
+        )
+        cmd = AddEventCommand(h, insert_idx, new_entry)
+        h.undo_stack.push(cmd)
+        h._focus_event_row(insert_idx, source="manual")
+
+    def _renumber_events(self) -> None:
+        """Renumber all event labels sequentially (Event 1, Event 2, …)."""
+        h = self._host
+        if not h.event_table_data:
+            return
+        prefix, ok = QInputDialog.getText(
+            h, "Renumber Events", "Label prefix:", text="Event"
+        )
+        if not ok or not prefix.strip():
+            return
+        prefix = prefix.strip()
+        for i in range(len(h.event_table_data)):
+            entry = list(h.event_table_data[i])
+            entry[0] = f"{prefix} {i + 1}"
+            h.event_table_data[i] = tuple(entry)
+            if i < len(h.event_labels):
+                h.event_labels[i] = entry[0]
+        h.populate_table()
+        h.update_plot()
+        h.auto_export_table()
+        h.mark_session_dirty()
 
     def load_events(self, labels, diam_before, od_before=None):
         h = self._host
@@ -1767,8 +2022,8 @@ class EventManager(QObject):
         )
         h._event_review_wizard = dialog
         flags = dialog.windowFlags()
-        dialog.setWindowFlags(flags | Qt.WindowStaysOnTopHint)
-        dialog.setWindowModality(Qt.NonModal)
+        dialog.setWindowFlags(flags | Qt.WindowType.WindowStaysOnTopHint)
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.accepted.connect(h._apply_event_review_changes)
         dialog.rejected.connect(h._cleanup_event_review_wizard)
         dialog.finished.connect(h._cleanup_event_review_wizard)
@@ -1821,17 +2076,17 @@ class EventManager(QObject):
 
         if path:
             msg = QMessageBox(h)
-            msg.setIcon(QMessageBox.Question)
+            msg.setIcon(QMessageBox.Icon.Question)
             msg.setWindowTitle("Export updated event table?")
             msg.setText(
                 "You reviewed and updated the event table.\n\n"
                 f"Do you want to save these changes to:\n{path}"
             )
-            overwrite_btn = msg.addButton("Export", QMessageBox.AcceptRole)
-            choose_btn = msg.addButton("Choose different path…", QMessageBox.ActionRole)
-            later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+            overwrite_btn = msg.addButton("Export", QMessageBox.ButtonRole.AcceptRole)
+            choose_btn = msg.addButton("Choose different path…", QMessageBox.ButtonRole.ActionRole)
+            later_btn = msg.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
             msg.setDefaultButton(overwrite_btn)
-            msg.exec_()
+            msg.exec()
             clicked = msg.clickedButton()
 
             if clicked is overwrite_btn:
@@ -1841,16 +2096,16 @@ class EventManager(QObject):
                 h._export_event_table_via_dialog()
         else:
             msg = QMessageBox(h)
-            msg.setIcon(QMessageBox.Question)
+            msg.setIcon(QMessageBox.Icon.Question)
             msg.setWindowTitle("Export updated event table?")
             msg.setText(
                 "You reviewed and updated the event table.\n\n"
                 "Do you want to export these values to a file?"
             )
-            export_btn = msg.addButton("Export…", QMessageBox.AcceptRole)
-            later_btn = msg.addButton("Not now", QMessageBox.RejectRole)
+            export_btn = msg.addButton("Export…", QMessageBox.ButtonRole.AcceptRole)
+            later_btn = msg.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
             msg.setDefaultButton(export_btn)
-            msg.exec_()
+            msg.exec()
 
             if msg.clickedButton() is export_btn:
                 h._export_event_table_via_dialog()

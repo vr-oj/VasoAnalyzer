@@ -7,8 +7,8 @@ import csv
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDockWidget,
@@ -143,7 +143,7 @@ class ScopeDock(QDockWidget):
             facecolor=CURRENT_THEME.get("window_bg", "#FFFFFF"),
         )
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.ax = self.figure.add_subplot(111)
         self.ax.set_facecolor(CURRENT_THEME.get("window_bg", "#FFFFFF"))
         self.ax.grid(True, color=CURRENT_THEME.get("grid_color", "#CCCCCC"))
@@ -152,7 +152,7 @@ class ScopeDock(QDockWidget):
         layout.addWidget(self.canvas, 1)
 
         self.summary_label = QLabel("No sweeps captured")
-        self.summary_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.summary_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self.summary_label)
 
         self.setWidget(container)
@@ -182,7 +182,7 @@ class ScopeDock(QDockWidget):
 
     # ------------------------------------------------------------------ helpers
     def _populate_sources(self) -> None:
-        current = self.source_combo.currentData(Qt.UserRole)
+        current = self.source_combo.currentData(Qt.ItemDataRole.UserRole)
         self.source_combo.blockSignals(True)
         self.source_combo.clear()
         self.source_combo.addItem("Inner Diameter", "inner")
@@ -190,14 +190,14 @@ class ScopeDock(QDockWidget):
             self.source_combo.addItem("Outer Diameter", "outer")
         self.source_combo.blockSignals(False)
         if current is not None:
-            index = self.source_combo.findData(current, role=Qt.UserRole)
+            index = self.source_combo.findData(current, role=Qt.ItemDataRole.UserRole)
             if index >= 0:
                 self.source_combo.setCurrentIndex(index)
 
     def _update_threshold_hint(self) -> None:
         if self._model is None:
             return
-        source = self.source_combo.currentData(Qt.UserRole)
+        source = self.source_combo.currentData(Qt.ItemDataRole.UserRole)
         if source == "outer":
             data = self._model.outer_full
             if data is None:
@@ -217,7 +217,7 @@ class ScopeDock(QDockWidget):
             return
         try:
             config = TriggerConfig(
-                component=str(self.source_combo.currentData(Qt.UserRole) or "inner"),
+                component=str(self.source_combo.currentData(Qt.ItemDataRole.UserRole) or "inner"),
                 threshold=float(self.threshold_spin.value()),
                 direction="rising" if self.direction_combo.currentIndex() == 0 else "falling",
                 pre_window=float(self.pre_spin.value()),

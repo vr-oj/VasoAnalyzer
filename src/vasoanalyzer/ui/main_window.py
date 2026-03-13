@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import tifffile
-from PyQt5.QtCore import (
+from PyQt6.QtCore import (
     QEvent,
     QMimeData,
     QObject,
@@ -51,23 +51,25 @@ from PyQt5.QtCore import (
     QUrl,
     pyqtSignal,
 )
-from PyQt5.QtGui import (
+from PyQt6.QtGui import (
+    QAction,
+    QActionGroup,
+    QBrush,
     QColor,
     QCursor,
     QDesktopServices,
     QFont,
     QFontMetrics,
+    QGuiApplication,
     QIcon,
     QKeySequence,
     QPainter,
     QPalette,
     QPixmap,
+    QUndoStack,
 )
-from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
+from PyQt6.QtWidgets import (
     QApplication,
-    QDesktopWidget,
     QDialog,
     QDockWidget,
     QFileDialog,
@@ -89,7 +91,6 @@ from PyQt5.QtWidgets import (
     QToolBar,
     QToolButton,
     QTreeWidgetItem,
-    QUndoStack,
     QVBoxLayout,
     QWidget,
 )
@@ -188,6 +189,7 @@ from .constants import DEFAULT_STYLE, PREVIOUS_PLOT_PATH
 from .dialogs.new_project_dialog import NewProjectDialog
 from .dialogs.welcome_dialog import WelcomeGuideDialog
 from .metadata_panel import MetadataDock
+from .project_explorer import SubfolderRef
 from .plotting import auto_export_editable_plot, export_high_res_plot, toggle_grid
 from .project_management import (
     open_excel_mapping_dialog,
@@ -546,6 +548,66 @@ class _MissingAssetScanJob(QRunnable):
         self.signals.finished.emit(self._token, payload)
 
 
+class _ProgressAnimator(QObject):
+    """Animates a QProgressBar with an asymptotic crawl toward a cap, then snaps to 100% on finish.
+
+    While a job is running the bar smoothly moves from 0 toward _CAP (never quite reaching it),
+    giving users honest "something is happening" feedback without fake percentages.
+    Calling finish() stops the crawl, jumps to 100%, and auto-hides after a short delay.
+    """
+
+    _CAP = 85          # asymptote: bar naturally approaches but never reaches this %
+    _EASING = 0.07     # fraction of remaining gap closed each tick (higher = faster start)
+    _INTERVAL_MS = 50  # tick rate in ms (50ms ≈ 20 fps, smooth without thrashing)
+
+    def __init__(self, bar: "QProgressBar", parent: "QObject | None" = None) -> None:
+        super().__init__(parent)
+        self._bar = bar
+        self._current = 0.0
+        self._tick_timer = QTimer(self)
+        self._tick_timer.setInterval(self._INTERVAL_MS)
+        self._tick_timer.timeout.connect(self._tick)
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._bar.hide)
+
+    def start(self, message: str = "") -> None:
+        """Show the bar and begin crawling toward the cap."""
+        self._hide_timer.stop()
+        self._tick_timer.stop()
+        self._current = 0.0
+        self._bar.setRange(0, 100)
+        self._bar.setValue(0)
+        self._set_format(message)
+        self._bar.show()
+        self._tick_timer.start()
+
+    def update_label(self, label: str) -> None:
+        """Update the text label without touching the animated value."""
+        if self._bar.isVisible():
+            self._set_format(label)
+
+    def finish(self) -> None:
+        """Stop crawling, snap to 100%, then auto-hide after a short pause."""
+        self._tick_timer.stop()
+        self._bar.setValue(100)
+        self._hide_timer.start(400)
+
+    def stop(self) -> None:
+        """Immediately hide without completing the animation (e.g. on error)."""
+        self._tick_timer.stop()
+        self._hide_timer.stop()
+        self._bar.hide()
+
+    def _tick(self) -> None:
+        remaining = self._CAP - self._current
+        self._current += remaining * self._EASING
+        self._bar.setValue(int(self._current))
+
+    def _set_format(self, message: str) -> None:
+        self._bar.setFormat(f"{message} %p%" if message else "%p%")
+
+
 class _SaveJobSignals(QObject):
     progressChanged = pyqtSignal(int, str)
     finished = pyqtSignal(bool, float, str)
@@ -744,7 +806,7 @@ class VasoAnalyzerApp(QMainWindow):
         # ===== Setup App Window =====
         self.setWindowTitle(f"VasoAnalyzer {APP_VERSION}")
         self.setGeometry(100, 100, 1280, 720)
-        screen_size = QDesktopWidget().availableGeometry()
+        screen_size = QGuiApplication.primaryScreen().availableGeometry()
         self.resize(screen_size.width(), screen_size.height())
 
         # ===== Initialize State =====
@@ -901,6 +963,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._progress_bar.setTextVisible(True)
         self._progress_bar.hide()  # Hidden by default
         self.statusBar().addPermanentWidget(self._progress_bar)
+        self._progress_animator = _ProgressAnimator(self._progress_bar, self)
         self._storage_mode_label = QLabel("")
         self._storage_mode_label.setVisible(False)
         self._storage_mode_label.setContentsMargins(8, 0, 8, 0)
@@ -1090,22 +1153,23 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.itemExpanded.connect(self._on_tree_experiment_expand_changed)
         self.project_tree.itemCollapsed.connect(self._on_tree_experiment_expand_changed)
         self.project_dock.tree.experiment_reordered.connect(self._on_experiment_reordered)
+        self.project_dock.tree.sample_moved.connect(self._on_sample_moved_in_tree)
         log.info("Connected project_tree.itemDoubleClicked to on_tree_item_double_clicked")
         # Single-click opens a sample; double-click is reserved for editing or opening figures
-        self.project_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.project_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.project_tree.customContextMenuRequested.connect(self.show_project_context_menu)
         self.project_tree.setAlternatingRowColors(True)
-        self.addDockWidget(Qt.LeftDockWidgetArea, self.project_dock)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.project_dock)
         if hasattr(self, "showhide_menu"):
             self.showhide_menu.addAction(self.project_dock.toggleViewAction())
 
         # Toggle button in toolbar
         self.project_toggle_btn = QToolButton()
-        self.project_toggle_btn.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+        self.project_toggle_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
         self.project_toggle_btn.setCheckable(True)
         self.project_toggle_btn.setChecked(False)
         self.project_toggle_btn.setToolTip("Toggle project panel")
-        self.project_toggle_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.project_toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.project_toggle_btn.setProperty("isPanelToggle", True)
         if hasattr(self, "toolbar") and self.toolbar is not None:
             self.project_toggle_btn.setIconSize(self.toolbar.iconSize())
@@ -1138,7 +1202,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def setup_metadata_panel(self):
         self.metadata_dock = MetadataDock(self)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.metadata_dock)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.metadata_dock)
 
         if hasattr(self, "showhide_menu"):
             self.showhide_menu.addAction(self.metadata_dock.toggleViewAction())
@@ -1165,12 +1229,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         self.metadata_toggle_btn = QToolButton()
         self.metadata_toggle_btn.setIcon(
-            self.style().standardIcon(QStyle.SP_FileDialogDetailedView)
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         )
         self.metadata_toggle_btn.setCheckable(True)
         self.metadata_toggle_btn.setChecked(False)
         self.metadata_toggle_btn.setToolTip("Toggle event and snapshot panel")
-        self.metadata_toggle_btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        self.metadata_toggle_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.metadata_toggle_btn.setProperty("isPanelToggle", True)
         if hasattr(self, "toolbar") and self.toolbar is not None:
             self.metadata_toggle_btn.setIconSize(self.toolbar.iconSize())
@@ -1183,8 +1247,8 @@ class VasoAnalyzerApp(QMainWindow):
 
     def setup_zoom_dock(self):
         self.zoom_dock = ZoomWindowDock(self)
-        self.zoom_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.zoom_dock)
+        self.zoom_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.zoom_dock)
         self.zoom_dock.hide()
 
         if hasattr(self, "showhide_menu"):
@@ -1194,8 +1258,8 @@ class VasoAnalyzerApp(QMainWindow):
 
     def setup_scope_dock(self):
         self.scope_dock = ScopeDock(self)
-        self.scope_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.BottomDockWidgetArea)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.scope_dock)
+        self.scope_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.BottomDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.scope_dock)
         self.scope_dock.hide()
 
         if hasattr(self, "showhide_menu"):
@@ -1212,8 +1276,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.review_dock = QDockWidget("Event Review", self)
         self.review_dock.setObjectName("ReviewDock")
         self.review_dock.setWidget(self.review_panel)
-        self.review_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
-        self.addDockWidget(Qt.RightDockWidgetArea, self.review_dock)
+        self.review_dock.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea | Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.review_dock)
         self.review_dock.hide()
 
         # Add to show/hide menu
@@ -1553,9 +1617,9 @@ class VasoAnalyzerApp(QMainWindow):
         """Return palette-aware colors for status/progress widgets."""
 
         pal = self.palette()
-        window = pal.color(QPalette.Window)
-        text = pal.color(QPalette.WindowText)
-        highlight = pal.color(QPalette.Highlight)
+        window = pal.color(QPalette.ColorRole.Window)
+        text = pal.color(QPalette.ColorRole.WindowText)
+        highlight = pal.color(QPalette.ColorRole.Highlight)
 
         is_dark = window.lightness() < 128
         status_bg = window.name()
@@ -1807,7 +1871,7 @@ class VasoAnalyzerApp(QMainWindow):
             if filename:
                 self._data_quality_icons[quality] = QIcon(self.icon_path(filename))
             else:
-                self._data_quality_icons[quality] = self.style().standardIcon(QStyle.SP_FileIcon)
+                self._data_quality_icons[quality] = self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
         return self._data_quality_icons[quality]
 
     def _update_tree_icons_for_samples(self, samples: Sequence[SampleN]) -> None:
@@ -1820,14 +1884,11 @@ class VasoAnalyzerApp(QMainWindow):
         # Capture current expand/collapse state for each experiment before clearing
         expanded_state: dict[str, bool] = {}
         for i in range(self.project_tree.topLevelItemCount()):
-            project_item = self.project_tree.topLevelItem(i)
-            if project_item is None:
+            exp_item = self.project_tree.topLevelItem(i)
+            if exp_item is None:
                 continue
-            for j in range(project_item.childCount()):
-                exp_item = project_item.child(j)
-                if exp_item is None:
-                    continue
-                obj = exp_item.data(0, Qt.UserRole)
+            obj = exp_item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(obj, Experiment):
                 exp_name = getattr(obj, "name", None) or exp_item.text(0)
                 expanded_state[exp_name] = exp_item.isExpanded()
 
@@ -1842,49 +1903,82 @@ class VasoAnalyzerApp(QMainWindow):
         self.project_tree.clear()
         if not self.current_project:
             return
-        root = QTreeWidgetItem([self.current_project.name])
-        root.setData(0, Qt.UserRole, self.current_project)
-        root.setFlags(root.flags() | Qt.ItemIsEditable)
-        root.setIcon(0, self.style().standardIcon(QStyle.SP_DirIcon))
-        root.setData(0, Qt.FontRole, self._bold_font(size_delta=2))
-        self.project_tree.addTopLevelItem(root)
+        # Update the dock header label with the project name
+        if hasattr(self.project_dock, "header_label"):
+            self.project_dock.header_label.setText(self.current_project.name)
+        _sf_color = QColor(CURRENT_THEME.get("text_disabled", "#6B7280"))
+
         for exp in self.current_project.experiments:
             exp_item = QTreeWidgetItem([exp.name])
-            exp_item.setData(0, Qt.UserRole, exp)
-            exp_item.setFlags(exp_item.flags() | Qt.ItemIsEditable | Qt.ItemIsDragEnabled)
-            exp_item.setIcon(0, self.style().standardIcon(QStyle.SP_FileDialogListView))
-            exp_item.setData(0, Qt.FontRole, self._bold_font(size_delta=1))
-            root.addChild(exp_item)
-            samples = sorted(
+            exp_item.setData(0, Qt.ItemDataRole.UserRole, exp)
+            exp_item.setFlags(exp_item.flags() | Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsDragEnabled)
+            exp_item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirClosedIcon))
+            exp_item.setData(0, Qt.ItemDataRole.FontRole, self._bold_font(size_delta=1))
+            self.project_tree.addTopLevelItem(exp_item)
+            all_samples = sorted(
                 exp.samples,
                 key=lambda sample: (sample.name or "").lower(),
             )
-            for s in samples:
-                has_data = bool(
-                    s.trace_path or s.trace_data is not None or s.dataset_id is not None
+            ungrouped = [s for s in all_samples if not getattr(s, "subfolder", None)]
+            # Canonical subfolder order: declared names first, then any extra from sample data
+            declared = list(exp.subfolder_names) if exp.subfolder_names else []
+            extra = [
+                sf for sf in dict.fromkeys(
+                    getattr(s, "subfolder", None) for s in all_samples
+                    if getattr(s, "subfolder", None)
                 )
-                status = "✓" if has_data else "✗"
-                quality = self._get_sample_data_quality(s)
-                item = QTreeWidgetItem([f"{s.name} {status}"])
-                item.setData(0, Qt.UserRole, s)
-                item.setFlags(item.flags() | Qt.ItemIsEditable)
-                item.setIcon(0, self._data_quality_icon(quality))
-                item.setToolTip(
-                    0,
-                    f"Data quality: {self._data_quality_label(quality)}",
+                if sf not in declared
+            ]
+            ordered_subfolders = declared + extra
+            subfolder_map: dict[str, list[SampleN]] = {}
+            for s in all_samples:
+                sf = getattr(s, "subfolder", None)
+                if sf:
+                    subfolder_map.setdefault(sf, []).append(s)
+
+            for s in ungrouped:
+                exp_item.addChild(self._make_tree_sample_item(s))
+
+            sf_font = self._bold_font(size_delta=0)
+            sf_font.setItalic(True)
+            sf_font.setBold(False)
+            for sf_name in ordered_subfolders:
+                sf_item = QTreeWidgetItem([sf_name])
+                sf_item.setData(0, Qt.ItemDataRole.UserRole, SubfolderRef(name=sf_name, experiment=exp))
+                sf_item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
+                sf_item.setData(0, Qt.ItemDataRole.FontRole, sf_font)
+                sf_item.setForeground(0, QBrush(_sf_color))
+                sf_item.setFlags(
+                    (sf_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    & ~Qt.ItemFlag.ItemIsDragEnabled
                 )
-                exp_item.addChild(item)
+                exp_item.addChild(sf_item)
+                for s in subfolder_map.get(sf_name, []):
+                    sf_item.addChild(self._make_tree_sample_item(s))
+                sf_item.setExpanded(True)
+
             # Restore expand state; default to expanded for experiments seen for the first time
             exp_item.setExpanded(expanded_state.get(exp.name, True))
-        root.setExpanded(True)
         self._update_metadata_panel(self.current_project)
         self._schedule_missing_asset_scan()
         if self.current_sample:
             self._select_tree_item_for_sample(self.current_sample)
 
+    def _make_tree_sample_item(self, s: SampleN) -> QTreeWidgetItem:
+        """Create a QTreeWidgetItem for a sample node."""
+        has_data = bool(s.trace_path or s.trace_data is not None or s.dataset_id is not None)
+        status = "✓" if has_data else "✗"
+        quality = self._get_sample_data_quality(s)
+        item = QTreeWidgetItem([f"{s.name} {status}"])
+        item.setData(0, Qt.ItemDataRole.UserRole, s)
+        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        item.setIcon(0, self._data_quality_icon(quality))
+        item.setToolTip(0, f"Data quality: {self._data_quality_label(quality)}")
+        return item
+
     def _on_tree_experiment_expand_changed(self, item) -> None:
         """Persist experiment expand/collapse state to project.ui_state."""
-        obj = item.data(0, Qt.UserRole)
+        obj = item.data(0, Qt.ItemDataRole.UserRole)
         if not isinstance(obj, Experiment) or not self.current_project:
             return
         if not isinstance(self.current_project.ui_state, dict):
@@ -1898,15 +1992,34 @@ class VasoAnalyzerApp(QMainWindow):
             return
         new_order: list[Experiment] = []
         for i in range(self.project_tree.topLevelItemCount()):
-            root = self.project_tree.topLevelItem(i)
-            for j in range(root.childCount()):
-                exp_item = root.child(j)
-                obj = exp_item.data(0, Qt.UserRole)
-                if isinstance(obj, Experiment):
-                    new_order.append(obj)
+            exp_item = self.project_tree.topLevelItem(i)
+            obj = exp_item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(obj, Experiment):
+                new_order.append(obj)
         if new_order:
             self.current_project.experiments = new_order
             self.mark_session_dirty("experiment_reordered")
+
+    def _on_sample_moved_in_tree(self, samples, target_exp: Experiment, target_sf) -> None:
+        """Handle one or more samples drag-dropped within the project tree."""
+        if not self.current_project:
+            return
+        for sample in samples:
+            source_exp = None
+            for exp in self.current_project.experiments:
+                if sample in exp.samples:
+                    source_exp = exp
+                    break
+            if source_exp is None:
+                continue
+            if source_exp is not target_exp:
+                source_exp.samples.remove(sample)
+                target_exp.samples.append(sample)
+            sample.subfolder = target_sf
+        if target_sf and target_sf not in target_exp.subfolder_names:
+            target_exp.subfolder_names.append(target_sf)
+        self.refresh_project_tree()
+        self.mark_session_dirty()
 
     def _set_samples_data_quality(self, samples: Sequence[SampleN], quality: str | None) -> None:
         self._sample_mgr._set_samples_data_quality(samples, quality)
@@ -1919,17 +2032,12 @@ class VasoAnalyzerApp(QMainWindow):
             return
         tree = self.project_tree
         for i in range(tree.topLevelItemCount()):
-            project_item = tree.topLevelItem(i)
-            if project_item is None:
+            exp_item = tree.topLevelItem(i)
+            if exp_item is None:
                 continue
-            for j in range(project_item.childCount()):
-                exp_item = project_item.child(j)
-                if exp_item is None:
-                    continue
-                if exp_item.text(0) == exp_name:
-                    tree.expandItem(project_item)
-                    tree.expandItem(exp_item)
-                    return
+            if exp_item.text(0) == exp_name:
+                tree.expandItem(exp_item)
+                return
 
     def _select_tree_item_for_sample(self, sample: SampleN | None) -> None:
         self._sample_mgr._select_tree_item_for_sample(sample)
@@ -2027,7 +2135,7 @@ class VasoAnalyzerApp(QMainWindow):
             )
 
     def on_tree_item_clicked(self, item, _):
-        obj = item.data(0, Qt.UserRole)
+        obj = item.data(0, Qt.ItemDataRole.UserRole)
 
         # Debug: Log all clicks
         if isinstance(obj, tuple) and len(obj) >= 1:
@@ -2038,21 +2146,31 @@ class VasoAnalyzerApp(QMainWindow):
             # Skip activation so the tree can accumulate selections without
             # refresh_project_tree clearing them.
             modifiers = QApplication.keyboardModifiers()
-            if modifiers & (Qt.ControlModifier | Qt.ShiftModifier):
+            if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
                 return
 
+            # Resolve parent experiment: parent may be an Experiment or a SubfolderRef
             experiment = None
             parent = item.parent()
             if parent:
-                parent_obj = parent.data(0, Qt.UserRole)
+                parent_obj = parent.data(0, Qt.ItemDataRole.UserRole)
                 if isinstance(parent_obj, Experiment):
                     experiment = parent_obj
+                elif isinstance(parent_obj, SubfolderRef):
+                    experiment = parent_obj.experiment
             self._activate_sample(obj, experiment)
             # Metadata panel is updated in _render_sample, no need to update here
             return
+        if isinstance(obj, SubfolderRef):
+            # Toggle expand/collapse on single click
+            item.setExpanded(not item.isExpanded())
+            return
         if isinstance(obj, Experiment):
+            item.setExpanded(not item.isExpanded())
             self.current_experiment = obj
-            self.current_sample = None
+            if self.current_sample is not None:
+                self.current_sample = None
+                self._clear_canvas_and_table()
             if self.current_project is not None:
                 if not isinstance(self.current_project.ui_state, dict):
                     self.current_project.ui_state = {}
@@ -2065,7 +2183,7 @@ class VasoAnalyzerApp(QMainWindow):
 
     def on_tree_item_double_clicked(self, item, column):
         """Handle double-click on tree items - open figures."""
-        obj = item.data(0, Qt.UserRole)
+        obj = item.data(0, Qt.ItemDataRole.UserRole)
         log.info(f"Double-clicked tree item, obj type: {type(obj)}, obj: {obj}")
 
     def _activate_sample(
@@ -2078,7 +2196,7 @@ class VasoAnalyzerApp(QMainWindow):
         self._sample_mgr._activate_sample(sample, experiment, ensure_loaded=ensure_loaded)
 
     def on_tree_item_changed(self, item, _):
-        obj = item.data(0, Qt.UserRole)
+        obj = item.data(0, Qt.ItemDataRole.UserRole)
         if obj is None:
             return
 
@@ -2101,12 +2219,27 @@ class VasoAnalyzerApp(QMainWindow):
             self.project_tree.blockSignals(True)
             item.setText(0, f"{name} {status}")
             self.project_tree.blockSignals(False)
-        elif isinstance(obj, Experiment | Project):
+        elif isinstance(obj, SubfolderRef):
+            old_name = obj.name
+            if name and name != old_name:
+                for s in obj.experiment.samples:
+                    if getattr(s, "subfolder", None) == old_name:
+                        s.subfolder = name
+                sf_names = obj.experiment.subfolder_names
+                if old_name in sf_names:
+                    sf_names[sf_names.index(old_name)] = name
+                obj.name = name
+                self.mark_session_dirty()
+        elif isinstance(obj, Experiment):
             obj.name = name
+        elif isinstance(obj, Project):
+            obj.name = name
+            if hasattr(self.project_dock, "header_label"):
+                self.project_dock.header_label.setText(name)
 
     def on_tree_item_double_clicked(self, item, _):
         """Handle tree double-click (sample)."""
-        obj = item.data(0, Qt.UserRole)
+        obj = item.data(0, Qt.ItemDataRole.UserRole)
         if isinstance(obj, SampleN):
             self.load_sample_into_view(obj)
             return
@@ -2118,7 +2251,7 @@ class VasoAnalyzerApp(QMainWindow):
         if not selection:
             self._update_metadata_panel()
             return
-        obj = selection[0].data(0, Qt.UserRole)
+        obj = selection[0].data(0, Qt.ItemDataRole.UserRole)
         self._update_metadata_panel(obj)
 
     def _on_metadata_visibility_changed(self, visible: bool) -> None:
@@ -2334,13 +2467,8 @@ class VasoAnalyzerApp(QMainWindow):
         self._snapshot_mgr._on_snapshot_load_finished(token, sample, stack, error)
 
     def open_comparison_window(self) -> None:
-        """Open (or raise) the floating dataset comparison window."""
-        if not hasattr(self, "_comparison_window") or self._comparison_window is None:
-            from vasoanalyzer.ui.comparison_window import ComparisonWindow
-            self._comparison_window = ComparisonWindow(self)
-        self._comparison_window.show()
-        self._comparison_window.raise_()
-        self._comparison_window.activateWindow()
+        """Switch to the comparison page (replaces old floating window)."""
+        self.show_comparison_page()
 
     def open_samples_in_new_windows(self, samples):
         """Open each sample in its own window for side-by-side comparison."""
@@ -2362,13 +2490,13 @@ class VasoAnalyzerApp(QMainWindow):
         class DualViewWindow(QMainWindow):
             def __init__(self, parent, pair):
                 super().__init__(parent)
-                self.setWindowTitle("Dual View")
+                self.setWindowTitle(f"VasoAnalyzer {APP_VERSION} — Dual View")
                 self.views = []
                 self._syncing = False
                 self._cursor_guides = []
                 self._pin_signatures: list[tuple[float, ...]] = []
 
-                splitter = QSplitter(Qt.Vertical, self)
+                splitter = QSplitter(Qt.Orientation.Vertical, self)
 
                 parent_style = (
                     parent.get_current_plot_style() if parent is not None else DEFAULT_STYLE.copy()
@@ -2558,11 +2686,12 @@ class VasoAnalyzerApp(QMainWindow):
     def show_project_context_menu(self, pos):
         item = self.project_tree.itemAt(pos)
         menu = QMenu()
+        global_pos = self.project_tree.viewport().mapToGlobal(pos)
 
         selected_samples = [
-            it.data(0, Qt.UserRole)
+            it.data(0, Qt.ItemDataRole.UserRole)
             for it in self.project_tree.selectedItems()
-            if isinstance(it.data(0, Qt.UserRole), SampleN)
+            if isinstance(it.data(0, Qt.ItemDataRole.UserRole), SampleN)
         ]
         open_act = None
         dual_act = None
@@ -2573,7 +2702,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         if item is None:
             add_exp = menu.addAction("Add Experiment")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == add_exp:
                 self.add_experiment()
             elif action == open_act:
@@ -2582,34 +2711,47 @@ class VasoAnalyzerApp(QMainWindow):
                 self.open_samples_in_dual_view(selected_samples)
             return
 
-        obj = item.data(0, Qt.UserRole)
-        if isinstance(obj, Project):
-            add_exp = menu.addAction("Add Experiment")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
-            if action == add_exp:
-                self.add_experiment()
-            elif action == open_act:
-                self.open_samples_in_new_windows(selected_samples)
-            elif action == dual_act:
-                self.open_samples_in_dual_view(selected_samples)
-        elif isinstance(obj, Experiment):
+        obj = item.data(0, Qt.ItemDataRole.UserRole)
+        if isinstance(obj, Experiment):
             add_n = menu.addAction("Add Sample")
             import_folder = menu.addAction("Import Folder…")
+            menu.addSeparator()
+            add_sf = menu.addAction("Add Subfolder…")
+            menu.addSeparator()
             del_exp = menu.addAction("Delete Experiment")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == add_n:
                 self.add_sample(obj)
             elif action == import_folder:
                 self._handle_import_folder(target_experiment=obj)
+            elif action == add_sf:
+                self._add_subfolder_to_experiment(obj)
             elif action == del_exp:
                 self.delete_experiment(obj)
             elif action == open_act:
                 self.open_samples_in_new_windows(selected_samples)
             elif action == dual_act:
                 self.open_samples_in_dual_view(selected_samples)
+        elif isinstance(obj, SubfolderRef):
+            del_sf = menu.addAction("Delete Subfolder")
+            del_sf.setToolTip("Remove subfolder — datasets are moved back to the experiment")
+            action = menu.exec(global_pos)
+            if action == del_sf:
+                self._delete_subfolder(obj)
         elif isinstance(obj, SampleN):
             load_data = menu.addAction("Load Data Into N…")
             save_n = menu.addAction("Save Data As…")
+            menu.addSeparator()
+            # Subfolder assignment
+            _current_sf = getattr(obj, "subfolder", None)
+            move_to_sf = menu.addAction(
+                "Move to Subfolder…" if not _current_sf else f'Move from "{_current_sf}"…'
+            )
+            if _current_sf:
+                remove_from_sf = menu.addAction("Remove from Subfolder")
+            else:
+                remove_from_sf = None
+            menu.addSeparator()
             _del_targets = selected_samples if len(selected_samples) > 1 else [obj]
             _del_label = (
                 f"Delete {len(_del_targets)} Datasets"
@@ -2628,11 +2770,20 @@ class VasoAnalyzerApp(QMainWindow):
                 self._data_quality_icon("questionable"), "Questionable data (yellow)"
             )
             quality_bad = quality_menu.addAction(self._data_quality_icon("bad"), "Bad data (red)")
-            action = menu.exec_(self.project_tree.viewport().mapToGlobal(pos))
+            action = menu.exec(global_pos)
             if action == load_data:
                 self.load_data_into_sample(obj)
             elif action == save_n:
                 self.save_sample_as(obj)
+            elif action == move_to_sf:
+                _targets = selected_samples if len(selected_samples) > 1 else [obj]
+                self._move_samples_to_subfolder(_targets)
+            elif action == remove_from_sf and remove_from_sf is not None:
+                _targets = selected_samples if len(selected_samples) > 1 else [obj]
+                for s in _targets:
+                    s.subfolder = None
+                self.refresh_project_tree()
+                self.mark_session_dirty()
             elif action == del_n:
                 self.delete_samples(_del_targets)
             elif action in {
@@ -2685,27 +2836,100 @@ class VasoAnalyzerApp(QMainWindow):
             self,
             "Delete Experiment",
             message,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if confirm != QMessageBox.Yes:
+        if confirm != QMessageBox.StandardButton.Yes:
             return
 
+        need_clear = False
         for sample in experiment.samples:
             self.project_state.pop(id(sample), None)
             if self.current_sample is sample:
                 self.current_sample = None
+                need_clear = True
 
         self.current_project.experiments.remove(experiment)
 
         if self.current_experiment is experiment:
             self.current_experiment = None
 
+        if need_clear:
+            self._clear_canvas_and_table()
+
         self.refresh_project_tree()
         self.mark_session_dirty()
         self.auto_save_project(reason="delete_experiment")
         self._update_home_resume_button()
         self._update_metadata_panel(self.current_project)
+
+    def _add_subfolder_to_experiment(self, experiment: Experiment) -> None:
+        """Create a new subfolder in the experiment and start inline rename."""
+        base = "New Subfolder"
+        name = base
+        existing = set(experiment.subfolder_names)
+        counter = 1
+        while name in existing:
+            name = f"{base} {counter}"
+            counter += 1
+        experiment.subfolder_names.append(name)
+        self.refresh_project_tree()
+        # Find the new subfolder item and start inline editing
+        tree = self.project_tree
+        for i in range(tree.topLevelItemCount()):
+            exp_item = tree.topLevelItem(i)
+            if exp_item.data(0, Qt.ItemDataRole.UserRole) is experiment:
+                for k in range(exp_item.childCount()):
+                    child = exp_item.child(k)
+                    obj = child.data(0, Qt.ItemDataRole.UserRole)
+                    if isinstance(obj, SubfolderRef) and obj.name == name:
+                        exp_item.setExpanded(True)
+                        tree.scrollToItem(child)
+                        tree.setCurrentItem(child)
+                        tree.editItem(child, 0)
+                        return
+        self.mark_session_dirty()
+
+    def _delete_subfolder(self, sf_ref: SubfolderRef) -> None:
+        """Remove a subfolder and move its samples back to the experiment level."""
+        for s in sf_ref.experiment.samples:
+            if getattr(s, "subfolder", None) == sf_ref.name:
+                s.subfolder = None
+        if sf_ref.name in sf_ref.experiment.subfolder_names:
+            sf_ref.experiment.subfolder_names.remove(sf_ref.name)
+        self.refresh_project_tree()
+        self.mark_session_dirty()
+
+    def _move_samples_to_subfolder(self, samples: list[SampleN]) -> None:
+        """Prompt for a subfolder name and assign it to the given samples."""
+        if not samples:
+            return
+        # Find the experiment for the first sample to suggest existing subfolders
+        experiment = None
+        if self.current_project:
+            for exp in self.current_project.experiments:
+                if samples[0] in exp.samples:
+                    experiment = exp
+                    break
+        existing_sfs = sorted({
+            getattr(s, "subfolder", None)
+            for s in (experiment.samples if experiment else [])
+            if getattr(s, "subfolder", None)
+        })
+        prompt = "Subfolder name:"
+        if existing_sfs:
+            prompt += f"\n(Existing: {', '.join(existing_sfs)})"
+        name, ok = QInputDialog.getText(self, "Move to Subfolder", prompt)
+        name = name.strip()
+        if not ok or not name:
+            return
+        for s in samples:
+            s.subfolder = name
+        # Ensure the name is registered in the experiment's subfolder_names
+        if experiment and name not in experiment.subfolder_names:
+            experiment.subfolder_names.append(name)
+        self.refresh_project_tree()
+        self.mark_session_dirty()
 
     def add_sample(self, experiment):
         self._sample_mgr.add_sample(experiment)
@@ -2774,7 +2998,7 @@ class VasoAnalyzerApp(QMainWindow):
             self,
             "Select Folder to Import",
             "",
-            QFileDialog.ShowDirsOnly | QFileDialog.DontResolveSymlinks,
+            QFileDialog.Option.ShowDirsOnly | QFileDialog.Option.DontResolveSymlinks,
         )
 
         if not folder_path:
@@ -2827,7 +3051,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         # Show preview dialog
         dialog = FolderImportDialog(candidates, self)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             log.info("IMPORT: folder import dialog canceled path=%s", folder_path)
             return
 
@@ -3043,23 +3267,29 @@ class VasoAnalyzerApp(QMainWindow):
         """Merge multiple folder-import candidates into a single dataset."""
         from vasoanalyzer.io.trace_events import load_trace_and_events
         from vasoanalyzer.services.folder_import_service import get_file_signature
+        from vasoanalyzer.ui.dialogs.merge_preview_dialog import MergePreviewDialog
 
-        # Sort by trace filename so segments join in chronological order
+        # Build initial file lists sorted by name
         sorted_cands = sorted(candidates, key=lambda c: Path(c.trace_file).name)
         trace_paths = [c.trace_file for c in sorted_cands]
-        events_paths = [c.events_file for c in sorted_cands if c.events_file]
+        events_paths: list[str | None] = [
+            c.events_file for c in sorted_cands
+        ]
 
-        # Ask user for dataset name
-        default_name = Path(sorted_cands[0].subfolder_path).parent.name or "Merged Dataset"
-        name, ok = QInputDialog.getText(
-            self, "Merged Dataset Name", "Name for merged dataset:", text=default_name
-        )
-        if not ok or not name.strip():
+        # Show merge preview dialog so the user can reorder and name
+        dlg = MergePreviewDialog(trace_paths, events_paths, parent=self)
+        if dlg.exec() != MergePreviewDialog.DialogCode.Accepted:
             return
-        name = name.strip()
+
+        trace_paths = dlg.ordered_trace_paths()
+        events_paths = dlg.ordered_events_paths()
+        name = dlg.merged_name
+
+        # Filter out None event paths for the loader
+        ev_non_none = [ep for ep in events_paths if ep is not None]
+        ev_arg = ev_non_none if len(ev_non_none) == len(trace_paths) else None
 
         try:
-            ev_arg = events_paths if len(events_paths) == len(trace_paths) else None
             df, labels, times, frames, diam, od_diam, import_meta = load_trace_and_events(
                 trace_paths, ev_arg
             )
@@ -3070,6 +3300,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         sample = SampleN(name=name)
         sample.trace_data = df
+        sample.import_metadata = import_meta or {}
         self._update_sample_link_metadata(sample, "trace", Path(trace_paths[0]).resolve())
         sample.trace_sig = get_file_signature(trace_paths[0])
 
@@ -3113,12 +3344,13 @@ class VasoAnalyzerApp(QMainWindow):
 
         if (
             QMessageBox.question(
-                self, title, msg, QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                self, title, msg, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No
             )
-            != QMessageBox.Yes
+            != QMessageBox.StandardButton.Yes
         ):
             return
 
+        need_clear = False
         for sample in samples:
             for exp in self.current_project.experiments:
                 if sample in exp.samples:
@@ -3126,7 +3358,11 @@ class VasoAnalyzerApp(QMainWindow):
                     self.project_state.pop(id(sample), None)
                     if self.current_sample is sample:
                         self.current_sample = None
+                        need_clear = True
                     break
+
+        if need_clear:
+            self._clear_canvas_and_table()
 
         self.refresh_project_tree()
         self.mark_session_dirty()
@@ -3139,8 +3375,10 @@ class VasoAnalyzerApp(QMainWindow):
         for exp in self.current_project.experiments:
             if sample in exp.samples:
                 exp.samples.remove(sample)
-                if self.current_sample is sample:
+                need_clear = self.current_sample is sample
+                if need_clear:
                     self.current_sample = None
+                    self._clear_canvas_and_table()
                 self.refresh_project_tree()
                 if self.current_project.path:
                     save_project_file(self.current_project, self.current_project.path)
@@ -3231,14 +3469,14 @@ class VasoAnalyzerApp(QMainWindow):
     def text_icon(self, text: str) -> QIcon:
         """Return a simple text-based QIcon used for toolbar buttons."""
         pix = QPixmap(24, 24)
-        pix.fill(Qt.transparent)
+        pix.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pix)
         painter.setPen(QColor(0, 0, 0))
         font = painter.font()
         font.setBold(True)
         font.setPointSize(10)
         painter.setFont(font)
-        painter.drawText(pix.rect(), Qt.AlignCenter, text)
+        painter.drawText(pix.rect(), Qt.AlignmentFlag.AlignCenter, text)
         painter.end()
         return QIcon(pix)
 
@@ -3279,7 +3517,7 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_file_menu(self, menubar):
         file_menu = menubar.addMenu("&File")
 
-        # Project workspace submenu
+        # -- Project submenu -----------------------------------------------
         project_menu = file_menu.addMenu("Project")
 
         self.action_new_project = QAction("New Project…", self)
@@ -3297,12 +3535,12 @@ class VasoAnalyzerApp(QMainWindow):
 
         project_menu.addSeparator()
 
-        self.action_save_project = QAction("Save Project", self)
+        self.action_save_project = QAction("Save", self)
         self.action_save_project.setShortcut("Ctrl+Shift+S")
         self.action_save_project.triggered.connect(self.save_project_file)
         project_menu.addAction(self.action_save_project)
 
-        self.action_save_project_as = QAction("Save Project As…", self)
+        self.action_save_project_as = QAction("Save As…", self)
         self.action_save_project_as.triggered.connect(self.save_project_file_as)
         project_menu.addAction(self.action_save_project_as)
 
@@ -3318,48 +3556,42 @@ class VasoAnalyzerApp(QMainWindow):
 
         file_menu.addSeparator()
 
-        self.action_new = QAction("Start New Analysis…", self)
-        self.action_new.setShortcut(QKeySequence.New)
-        self.action_new.triggered.connect(self.start_new_analysis)
-        file_menu.addAction(self.action_new)
+        # -- Import submenu ------------------------------------------------
+        import_menu = file_menu.addMenu("Import")
 
-        import_menu = file_menu.addMenu("Open Data")
-
-        self.action_open_trace = QAction("Import Trace CSV…", self)
-        self.action_open_trace.setShortcut(QKeySequence.Open)
+        self.action_open_trace = QAction("Trace CSV…", self)
+        self.action_open_trace.setShortcut(QKeySequence.StandardKey.Open)
         self.action_open_trace.triggered.connect(self._handle_load_trace)
         import_menu.addAction(self.action_open_trace)
 
-        self.action_import_vasotracker_v1 = QAction("VasoTracker v1 (CSV + Table)…", self)
-        self.action_import_vasotracker_v1.triggered.connect(self._handle_load_vasotracker_v1)
-        import_menu.addAction(self.action_import_vasotracker_v1)
-
-        self.action_import_vasotracker_v2 = QAction("VasoTracker v2 (CSV + table.csv)…", self)
-        self.action_import_vasotracker_v2.triggered.connect(self._handle_load_vasotracker_v2)
-        import_menu.addAction(self.action_import_vasotracker_v2)
+        self.action_import_vasotracker = QAction("VasoTracker…", self)
+        self.action_import_vasotracker.triggered.connect(self._handle_load_vasotracker)
+        import_menu.addAction(self.action_import_vasotracker)
 
         import_menu.addSeparator()
 
-        self.action_import_events = QAction("Import Events CSV…", self)
+        self.action_import_events = QAction("Events CSV…", self)
         self.action_import_events.triggered.connect(self._handle_load_events)
         self.action_import_events.setEnabled(False)
         import_menu.addAction(self.action_import_events)
 
-        self.action_open_tiff = QAction("Import Result TIFF…", self)
+        self.action_open_tiff = QAction("TIFF Snapshot…", self)
         self.action_open_tiff.setShortcut("Ctrl+Shift+T")
         self.action_open_tiff.triggered.connect(self.load_snapshot)
         import_menu.addAction(self.action_open_tiff)
 
-        self.action_import_folder = QAction("Import Folder…", self)
+        self.action_import_folder = QAction("Folder…", self)
         self.action_import_folder.setShortcut("Ctrl+Shift+I")
         self.action_import_folder.triggered.connect(self._handle_import_folder)
         import_menu.addAction(self.action_import_folder)
 
-        self.action_import_dataset_pkg = QAction("Import Dataset Package…", self)
+        import_menu.addSeparator()
+
+        self.action_import_dataset_pkg = QAction("Dataset (.vasod)…", self)
         self.action_import_dataset_pkg.triggered.connect(self.import_dataset_package_action)
         import_menu.addAction(self.action_import_dataset_pkg)
 
-        self.action_import_dataset_from_project = QAction("Import from Project…", self)
+        self.action_import_dataset_from_project = QAction("From Another Project…", self)
         self.action_import_dataset_from_project.triggered.connect(
             self.import_dataset_from_project_action
         )
@@ -3370,33 +3602,29 @@ class VasoAnalyzerApp(QMainWindow):
 
         file_menu.addSeparator()
 
+        # -- Export submenu ------------------------------------------------
         export_menu = file_menu.addMenu("Export")
 
-        copy_menu = export_menu.addMenu("Copy for Excel")
-        self.action_copy_excel_row = QAction("Row-per-Event (Excel)", self)
-        self.action_copy_excel_row.triggered.connect(
-            lambda: self._copy_event_profile_to_clipboard(
-                EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True
-            )
-        )
-        copy_menu.addAction(self.action_copy_excel_row)
-        self.action_copy_excel_values = QAction("Values Only (Column Paste)", self)
-        self.action_copy_excel_values.triggered.connect(
-            lambda: self._copy_event_profile_to_clipboard(
-                EVENT_VALUES_SINGLE_COLUMN_ID, include_header=False
-            )
-        )
-        copy_menu.addAction(self.action_copy_excel_values)
-        copy_menu.addSeparator()
-        self.action_copy_excel_pressure = QAction("Pressure Curve (Standard)", self)
-        self.action_copy_excel_pressure.triggered.connect(
-            lambda: self._copy_event_profile_to_clipboard(
-                PRESSURE_CURVE_STANDARD_ID, include_header=True
-            )
-        )
-        copy_menu.addAction(self.action_copy_excel_pressure)
+        self.action_export_tiff = QAction("Figure…", self)
+        self.action_export_tiff.triggered.connect(self.export_high_res_plot)
+        export_menu.addAction(self.action_export_tiff)
 
-        export_csv_menu = export_menu.addMenu("Export CSV")
+        self.action_export_report = QAction("Report…", self)
+        self.action_export_report.setToolTip(
+            "Export a composite figure with trace, event table, and metadata"
+        )
+        self.action_export_report.triggered.connect(self._export_data_report)
+        export_menu.addAction(self.action_export_report)
+
+        self.action_gif_animator = QAction("GIF…", self)
+        self.action_gif_animator.setToolTip("Create animated GIFs from traces and snapshots")
+        self.action_gif_animator.triggered.connect(self.show_gif_animator)
+        self.action_gif_animator.setEnabled(False)
+        export_menu.addAction(self.action_gif_animator)
+
+        export_menu.addSeparator()
+
+        export_csv_menu = export_menu.addMenu("CSV")
         self.action_export_csv = export_csv_menu.menuAction()
         self.action_export_csv_row = QAction("Row-per-Event (Excel)…", self)
         self.action_export_csv_row.triggered.connect(
@@ -3421,44 +3649,11 @@ class VasoAnalyzerApp(QMainWindow):
         )
         export_csv_menu.addAction(self.action_export_csv_pressure)
 
-        self.action_export_excel_template = QAction("Export to VasoAnalyzer Excel Template…", self)
-        self.action_export_excel_template.triggered.connect(self.open_excel_template_export_dialog)
-        export_menu.addAction(self.action_export_excel_template)
-
-        self.action_export_excel = QAction("Export to Excel Template…", self)
-        self.action_export_excel.triggered.connect(self.open_excel_mapping_dialog)
-        export_menu.addAction(self.action_export_excel)
-
-        self.action_gif_animator = QAction("Export GIF…", self)
-        self.action_gif_animator.setToolTip("Create animated GIFs from traces and snapshots")
-        self.action_gif_animator.triggered.connect(self.show_gif_animator)
-        self.action_gif_animator.setEnabled(False)
-        export_menu.addAction(self.action_gif_animator)
-
-        self.action_export_dataset_pkg = QAction("Export Dataset Package…", self)
-        self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
-        export_menu.addAction(self.action_export_dataset_pkg)
-
         export_menu.addSeparator()
 
-        self.action_export_tiff = QAction("High-Res Plot…", self)
-        self.action_export_tiff.triggered.connect(self.export_high_res_plot)
-        export_menu.addAction(self.action_export_tiff)
-
-        self.action_export_report = QAction("Data Report…", self)
-        self.action_export_report.setToolTip(
-            "Export a composite figure with trace, event table, and metadata"
-        )
-        self.action_export_report.triggered.connect(self._export_data_report)
-        export_menu.addAction(self.action_export_report)
-
-        self.action_export_bundle = QAction("Project Bundle (.vaso)…", self)
-        self.action_export_bundle.triggered.connect(self.export_project_bundle_action)
-        export_menu.addAction(self.action_export_bundle)
-
-        self.action_export_shareable = QAction("Shareable Single File…", self)
-        self.action_export_shareable.triggered.connect(self.export_shareable_project)
-        export_menu.addAction(self.action_export_shareable)
+        self.action_export_dataset_pkg = QAction("Dataset (.vasod)…", self)
+        self.action_export_dataset_pkg.triggered.connect(self.export_dataset_package_action)
+        export_menu.addAction(self.action_export_dataset_pkg)
 
         file_menu.addSeparator()
 
@@ -3470,7 +3665,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         quit_text = "Quit VasoAnalyzer" if sys.platform == "darwin" else "Exit"
         self.action_exit = QAction(quit_text, self)
-        self.action_exit.setShortcut(QKeySequence.Quit)
+        self.action_exit.setShortcut(QKeySequence.StandardKey.Quit)
         self.action_exit.triggered.connect(self.close)
         self._assign_menu_role(self.action_exit, "QuitRole")
         file_menu.addAction(self.action_exit)
@@ -3479,17 +3674,17 @@ class VasoAnalyzerApp(QMainWindow):
         edit_menu = menubar.addMenu("&Edit")
 
         undo = self.undo_stack.createUndoAction(self, "Undo")
-        undo.setShortcut(QKeySequence.Undo)
+        undo.setShortcut(QKeySequence.StandardKey.Undo)
         edit_menu.addAction(undo)
 
         redo = self.undo_stack.createRedoAction(self, "Redo")
-        redo.setShortcut(QKeySequence.Redo)
+        redo.setShortcut(QKeySequence.StandardKey.Redo)
         edit_menu.addAction(redo)
 
         edit_menu.addSeparator()
 
         self.action_delete_event = QAction("Delete Event", self)
-        self.action_delete_event.setShortcut(QKeySequence.Delete)
+        self.action_delete_event.setShortcut(QKeySequence.StandardKey.Delete)
         self.action_delete_event.triggered.connect(self.delete_selected_events)
         edit_menu.addAction(self.action_delete_event)
 
@@ -3503,6 +3698,31 @@ class VasoAnalyzerApp(QMainWindow):
         clear_events.triggered.connect(self.clear_current_session)
         edit_menu.addAction(clear_events)
 
+        edit_menu.addSeparator()
+
+        copy_menu = edit_menu.addMenu("Copy for Excel")
+        self.action_copy_excel_row = QAction("Row-per-Event", self)
+        self.action_copy_excel_row.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                EVENT_TABLE_ROW_PER_EVENT_ID, include_header=True
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_row)
+        self.action_copy_excel_values = QAction("Values Only (Column Paste)", self)
+        self.action_copy_excel_values.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                EVENT_VALUES_SINGLE_COLUMN_ID, include_header=False
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_values)
+        self.action_copy_excel_pressure = QAction("Pressure Curve (Standard)", self)
+        self.action_copy_excel_pressure.triggered.connect(
+            lambda: self._copy_event_profile_to_clipboard(
+                PRESSURE_CURVE_STANDARD_ID, include_header=True
+            )
+        )
+        copy_menu.addAction(self.action_copy_excel_pressure)
+
     def _build_view_menu(self, menubar):
         view_menu = menubar.addMenu("&View")
 
@@ -3513,17 +3733,7 @@ class VasoAnalyzerApp(QMainWindow):
 
         view_menu.addSeparator()
 
-        # Color scheme selection
-        theme_menu = view_menu.addMenu("Color Theme")
-        self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
-        self.action_theme_dark = QAction("Dark", self, checkable=True)
-        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
-        self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
-        theme_menu.addAction(self.action_theme_light)
-        theme_menu.addAction(self.action_theme_dark)
-
-        view_menu.addSeparator()
-
+        # -- Navigation ----------------------------------------------------
         reset_act = QAction("Reset View", self)
         reset_act.setShortcut("Ctrl+R")
         reset_act.triggered.connect(self.reset_view)
@@ -3547,6 +3757,33 @@ class VasoAnalyzerApp(QMainWindow):
 
         view_menu.addSeparator()
 
+        # -- Channels ------------------------------------------------------
+        channels_menu = view_menu.addMenu("Channels")
+        self.id_toggle_act = QAction("Inner", self, checkable=True, checked=True)
+        self.id_toggle_act.setToolTip("Show inner diameter trace")
+        self.od_toggle_act = QAction("Outer", self, checkable=True, checked=True)
+        self.od_toggle_act.setToolTip("Show outer diameter trace")
+        self.avg_pressure_toggle_act = QAction("Pressure", self, checkable=True, checked=True)
+        self.avg_pressure_toggle_act.setToolTip("Show pressure trace")
+        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=False)
+        self.set_pressure_toggle_act.setToolTip("Show set pressure trace")
+        self.id_toggle_act.setShortcut("I")
+        self.od_toggle_act.setShortcut("O")
+        self.set_pressure_toggle_act.setShortcut("S")
+        self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
+        self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
+        self.avg_pressure_toggle_act.setIcon(QIcon(self.icon_path("P.svg")))
+        self.set_pressure_toggle_act.setIcon(QIcon(self.icon_path("SP.svg")))
+        self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
+        self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
+        self.avg_pressure_toggle_act.toggled.connect(self.toggle_avg_pressure)
+        self.set_pressure_toggle_act.toggled.connect(self.toggle_set_pressure)
+        channels_menu.addAction(self.id_toggle_act)
+        channels_menu.addAction(self.od_toggle_act)
+        channels_menu.addAction(self.avg_pressure_toggle_act)
+        channels_menu.addAction(self.set_pressure_toggle_act)
+
+        # -- Annotations ---------------------------------------------------
         anno_menu = view_menu.addMenu("Annotations")
         ev_lines = QAction("Event Lines", self, checkable=True, checked=True)
         ev_lbls = QAction("Event Labels", self)
@@ -3567,8 +3804,7 @@ class VasoAnalyzerApp(QMainWindow):
         label_modes_menu.addAction(self.actEventLabelsHorizontal)
         label_modes_menu.addAction(self.actEventLabelsOutside)
 
-        view_menu.addSeparator()
-
+        # -- Panels --------------------------------------------------------
         self.showhide_menu = view_menu.addMenu("Panels")
         evt_tbl = QAction("Event Table", self, checkable=True, checked=True)
         snap_vw = QAction("Snapshot Viewer", self, checkable=True, checked=False)
@@ -3583,12 +3819,8 @@ class VasoAnalyzerApp(QMainWindow):
         self.snapshot_viewer_action = snap_vw
         self.event_table_action = evt_tbl
 
-        self._register_trace_nav_shortcuts()
-
-        view_menu.addSeparator()
-
         shortcut = "Meta+M" if sys.platform == "darwin" else "Ctrl+M"
-        self.action_snapshot_metadata = QAction("Metadata…", self)
+        self.action_snapshot_metadata = QAction("Snapshot Metadata…", self)
         self.action_snapshot_metadata.setShortcut(shortcut)
         self.action_snapshot_metadata.setCheckable(True)
         self.action_snapshot_metadata.setEnabled(False)
@@ -3596,38 +3828,20 @@ class VasoAnalyzerApp(QMainWindow):
             self.action_snapshot_metadata.triggered.connect(
                 lambda checked: self.set_snapshot_metadata_visible(bool(checked))
             )
-        view_menu.addAction(self.action_snapshot_metadata)
+        self.showhide_menu.addAction(self.action_snapshot_metadata)
 
-        self.id_toggle_act = QAction("Inner", self, checkable=True, checked=True)
-        self.id_toggle_act.setStatusTip("Show inner diameter trace")
-        self.id_toggle_act.setToolTip("Show inner diameter trace")
-        self.od_toggle_act = QAction("Outer", self, checkable=True, checked=True)
-        self.od_toggle_act.setStatusTip("Show outer diameter trace")
-        self.od_toggle_act.setToolTip("Show outer diameter trace")
-        self.avg_pressure_toggle_act = QAction("Pressure", self, checkable=True, checked=True)
-        self.avg_pressure_toggle_act.setStatusTip("Show pressure trace")
-        self.avg_pressure_toggle_act.setToolTip("Show pressure trace")
-        self.set_pressure_toggle_act = QAction("Set Pressure", self, checkable=True, checked=False)
-        self.set_pressure_toggle_act.setStatusTip("Show set pressure trace")
-        self.set_pressure_toggle_act.setToolTip("Show set pressure trace")
-        self.id_toggle_act.setShortcut("I")
-        self.od_toggle_act.setShortcut("O")
-        # Note: No shortcut for pressure to avoid conflict with PyQtGraph Autoscale (A)
-        self.set_pressure_toggle_act.setShortcut("S")
-        self.id_toggle_act.setIcon(QIcon(self.icon_path("ID.svg")))
-        self.od_toggle_act.setIcon(QIcon(self.icon_path("OD.svg")))
-        self.avg_pressure_toggle_act.setIcon(QIcon(self.icon_path("P.svg")))
-        self.set_pressure_toggle_act.setIcon(QIcon(self.icon_path("SP.svg")))
-        self.id_toggle_act.toggled.connect(self.toggle_inner_diameter)
-        self.od_toggle_act.toggled.connect(self.toggle_outer_diameter)
-        self.avg_pressure_toggle_act.toggled.connect(self.toggle_avg_pressure)
-        self.set_pressure_toggle_act.toggled.connect(self.toggle_set_pressure)
-        self.showhide_menu.addAction(self.id_toggle_act)
-        self.showhide_menu.addAction(self.od_toggle_act)
-        self.showhide_menu.addAction(self.avg_pressure_toggle_act)
-        self.showhide_menu.addAction(self.set_pressure_toggle_act)
+        self._register_trace_nav_shortcuts()
 
         view_menu.addSeparator()
+
+        # -- Appearance ----------------------------------------------------
+        theme_menu = view_menu.addMenu("Color Theme")
+        self.action_theme_light = QAction("Light", self, checkable=True, checked=True)
+        self.action_theme_dark = QAction("Dark", self, checkable=True)
+        self.action_theme_light.triggered.connect(lambda: self.set_color_scheme("light"))
+        self.action_theme_dark.triggered.connect(lambda: self.set_color_scheme("dark"))
+        theme_menu.addAction(self.action_theme_light)
+        theme_menu.addAction(self.action_theme_dark)
 
         fs_act = QAction("Full Screen", self)
         fs_act.setShortcut("F11")
@@ -3637,52 +3851,34 @@ class VasoAnalyzerApp(QMainWindow):
     def _build_tools_menu(self, menubar):
         tools_menu = menubar.addMenu("&Tools")
 
-        # Visualization tools
-        self.action_plot_settings = QAction("Plot Settings…", self)
-        self.action_plot_settings.triggered.connect(self.open_plot_settings_dialog)
-        tools_menu.addAction(self.action_plot_settings)
-
-        layout_act = QAction("Subplot Layout…", self)
-        layout_act.triggered.connect(self.open_subplot_layout_dialog)
-        tools_menu.addAction(layout_act)
-
-        tools_menu.addSeparator()
-
-        self.action_select_range = QAction("Select Range on Trace", self)
+        self.action_select_range = QAction("Select Range", self)
         self.action_select_range.setCheckable(True)
         self.action_select_range.toggled.connect(self._toggle_trace_range_selection)
         tools_menu.addAction(self.action_select_range)
 
-        self.action_copy_selected_range = QAction("Copy Selected Range Data", self)
+        self.action_copy_selected_range = QAction("Copy Range Data", self)
         self.action_copy_selected_range.triggered.connect(self._copy_selected_range_data)
         tools_menu.addAction(self.action_copy_selected_range)
 
-        self.action_export_selected_range = QAction("Export Selected Range Data…", self)
+        self.action_export_selected_range = QAction("Export Range Data…", self)
         self.action_export_selected_range.triggered.connect(self._export_selected_range_data)
         tools_menu.addAction(self.action_export_selected_range)
 
         tools_menu.addSeparator()
 
-        # Data management tools
-        self.action_relink_assets = QAction("Relink Missing Files…", self)
-        self.action_relink_assets.setEnabled(False)
-        self.action_relink_assets.triggered.connect(self.show_relink_dialog)
-        tools_menu.addAction(self.action_relink_assets)
-
-        tools_menu.addSeparator()
-
         self.action_compare_datasets = QAction("Compare Datasets…", self)
         self.action_compare_datasets.setToolTip(
-            "Open the comparison window and drag datasets from the project tree to compare them"
+            "Open the comparison window to compare datasets side by side"
         )
         self.action_compare_datasets.triggered.connect(self.open_comparison_window)
         tools_menu.addAction(self.action_compare_datasets)
 
         tools_menu.addSeparator()
 
-        self.action_change_log = QAction("Change Log…", self)
-        self.action_change_log.triggered.connect(self._show_change_log_dialog)
-        tools_menu.addAction(self.action_change_log)
+        self.action_relink_assets = QAction("Relink Missing Files…", self)
+        self.action_relink_assets.setEnabled(False)
+        self.action_relink_assets.triggered.connect(self.show_relink_dialog)
+        tools_menu.addAction(self.action_relink_assets)
 
     def _build_window_menu(self, menubar):
         window_menu = menubar.addMenu("&Window")
@@ -3711,24 +3907,30 @@ class VasoAnalyzerApp(QMainWindow):
         self._assign_menu_role(self.action_about, "AboutRole")
         help_menu.addAction(self.action_about)
 
-        act_about_project = QAction("About Project File…", self)
-        act_about_project.triggered.connect(self.show_project_file_info)
-        help_menu.addAction(act_about_project)
-
-        self.action_user_manual = QAction("User Manual…", self)
-        self.action_user_manual.triggered.connect(self.open_user_manual)
-        help_menu.addAction(self.action_user_manual)
+        help_menu.addSeparator()
 
         guide_act = QAction("Welcome Guide…", self)
         guide_act.setShortcut("Ctrl+/")
         guide_act.triggered.connect(lambda: self.show_welcome_guide(modal=False))
         help_menu.addAction(guide_act)
 
-        tut_act = QAction("Quick Start Tutorial…", self)
-        tut_act.triggered.connect(self.show_tutorial)
-        help_menu.addAction(tut_act)
+        self.action_user_manual = QAction("User Manual…", self)
+        self.action_user_manual.triggered.connect(self.open_user_manual)
+        help_menu.addAction(self.action_user_manual)
+
+        act_keys = QAction("Keyboard Shortcuts…", self)
+        act_keys.triggered.connect(self.show_shortcuts)
+        help_menu.addAction(act_keys)
 
         help_menu.addSeparator()
+
+        self.action_change_log = QAction("Change Log…", self)
+        self.action_change_log.triggered.connect(self._show_change_log_dialog)
+        help_menu.addAction(self.action_change_log)
+
+        act_rel = QAction("Release Notes…", self)
+        act_rel.triggered.connect(self.show_release_notes)
+        help_menu.addAction(act_rel)
 
         act_update = QAction("Check for Updates", self)
         act_update.triggered.connect(self.check_for_updates)
@@ -3737,19 +3939,17 @@ class VasoAnalyzerApp(QMainWindow):
             act_update.setToolTip("Disabled by VASO_DISABLE_UPDATE_CHECK")
         help_menu.addAction(act_update)
 
-        act_keys = QAction("Keyboard Shortcuts…", self)
-        act_keys.triggered.connect(self.show_shortcuts)
-        help_menu.addAction(act_keys)
+        help_menu.addSeparator()
+
+        act_cite = QAction("How to Cite…", self)
+        act_cite.triggered.connect(self._show_citation_dialog)
+        help_menu.addAction(act_cite)
 
         act_bug = QAction("Report a Bug…", self)
         act_bug.triggered.connect(
             lambda: webbrowser.open("https://github.com/vr-oj/VasoAnalyzer/issues/new")
         )
         help_menu.addAction(act_bug)
-
-        act_rel = QAction("Release Notes…", self)
-        act_rel.triggered.connect(self.show_release_notes)
-        help_menu.addAction(act_rel)
 
     def show_project_file_info(self, checked: bool = False) -> None:
         """Show information about project file format.
@@ -3818,7 +4018,7 @@ class VasoAnalyzerApp(QMainWindow):
         from vasoanalyzer.ui.dialogs.preferences_dialog import PreferencesDialog
 
         dialog = PreferencesDialog(self)
-        dialog.exec_()
+        dialog.exec()
 
     def _safe_remove_artist(self, artist):
         """Remove the Matplotlib artist if it is still attached to a canvas."""
@@ -3979,9 +4179,10 @@ class VasoAnalyzerApp(QMainWindow):
         self.recent_projects = recent
 
     def update_recent_projects(self, path):
-        if path not in self.recent_projects:
-            self.recent_projects = [path] + self.recent_projects[:4]
-            self.settings.setValue("recentProjects", self.recent_projects)
+        # Always move to front (most-recently-used ordering)
+        filtered = [p for p in self.recent_projects if p != path]
+        self.recent_projects = [path] + filtered[:9]
+        self.settings.setValue("recentProjects", self.recent_projects)
         self.build_recent_projects_menu()
         self._refresh_home_recent()
 
@@ -4150,7 +4351,7 @@ class VasoAnalyzerApp(QMainWindow):
             dlg = UpdateDialog(APP_VERSION, latest_str, self)
             self._update_checker.set_dialog(dlg)
             try:
-                user_choice = dlg.exec_()
+                user_choice = dlg.exec()
             finally:
                 self._update_checker.set_dialog(None)
 
@@ -4296,6 +4497,15 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _on_event_rows_changed(self) -> None:
         self._event_mgr._on_event_rows_changed()
+        self._update_event_count_label()
+
+    def _update_event_count_label(self) -> None:
+        label = getattr(self, "event_count_label", None)
+        if label is None:
+            return
+        ctrl = getattr(self, "event_table_controller", None)
+        count = len(ctrl.rows) if ctrl is not None else 0
+        label.setText(f"{count} event{'s' if count != 1 else ''}" if count else "")
 
     def _ensure_event_meta_length(self, length: int | None = None) -> None:
         self._event_mgr._ensure_event_meta_length(length)
@@ -4347,6 +4557,12 @@ class VasoAnalyzerApp(QMainWindow):
 
     def _delete_event_meta(self, index: int) -> None:
         self._event_mgr._delete_event_meta(index)
+
+    def _insert_event_at(self, index: int, row: tuple, meta: dict[str, Any] | None = None) -> None:
+        self._event_mgr._insert_event_at(index, row, meta)
+
+    def _remove_event_at(self, index: int) -> tuple | None:
+        return self._event_mgr._remove_event_at(index)
 
     def _fallback_restore_review_states(self, event_count: int) -> None:
         self._event_mgr._fallback_restore_review_states(event_count)
@@ -4431,9 +4647,15 @@ class VasoAnalyzerApp(QMainWindow):
         outer_on: bool,
         *,
         outer_supported: bool | None = None,
+        avg_pressure_supported: bool | None = None,
+        set_pressure_supported: bool | None = None,
     ) -> None:
         if outer_supported is None:
             outer_supported = self._outer_channel_available()
+        if avg_pressure_supported is None:
+            avg_pressure_supported = self._avg_pressure_channel_available()
+        if set_pressure_supported is None:
+            set_pressure_supported = self._set_pressure_channel_available()
         if self.id_toggle_act is not None and self.id_toggle_act.isChecked() != inner_on:
             self.id_toggle_act.blockSignals(True)
             self.id_toggle_act.setChecked(inner_on)
@@ -4445,6 +4667,18 @@ class VasoAnalyzerApp(QMainWindow):
                 self.od_toggle_act.blockSignals(True)
                 self.od_toggle_act.setChecked(desired_checked)
                 self.od_toggle_act.blockSignals(False)
+        if self.avg_pressure_toggle_act is not None:
+            self.avg_pressure_toggle_act.setEnabled(avg_pressure_supported)
+            if not avg_pressure_supported and self.avg_pressure_toggle_act.isChecked():
+                self.avg_pressure_toggle_act.blockSignals(True)
+                self.avg_pressure_toggle_act.setChecked(False)
+                self.avg_pressure_toggle_act.blockSignals(False)
+        if self.set_pressure_toggle_act is not None:
+            self.set_pressure_toggle_act.setEnabled(set_pressure_supported)
+            if not set_pressure_supported and self.set_pressure_toggle_act.isChecked():
+                self.set_pressure_toggle_act.blockSignals(True)
+                self.set_pressure_toggle_act.setChecked(False)
+                self.set_pressure_toggle_act.blockSignals(False)
 
     def _reset_channel_view_defaults(self) -> None:
         self._plot_mgr._reset_channel_view_defaults()
@@ -4498,61 +4732,50 @@ class VasoAnalyzerApp(QMainWindow):
         )
 
         dialog = KeyboardShortcutsDialog(self)
-        dialog.exec_()
+        dialog.exec()
 
     def open_user_manual(self, checked: bool = False):
-        """Open user manual PDF.
+        """Open the user manual on GitHub."""
+        import webbrowser
 
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        manual_path = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "..",
-                "docs",
-                "VasoAnalyzer_User_Manual.pdf",
-            )
-        )
-
-        if not os.path.exists(manual_path):
-            QMessageBox.warning(
-                self,
-                "Manual Not Found",
-                "The user manual could not be located.",
-            )
-            return
-
-        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(manual_path))
-        if not opened:
-            QMessageBox.warning(
-                self,
-                "Open Failed",
-                "Unable to open the user manual on this system.",
-            )
+        webbrowser.open("https://github.com/vr-oj/VasoAnalyzer/blob/main/docs/USER_MANUAL.md")
 
     def show_release_notes(self, checked: bool = False):
-        """Show release notes.
+        """Open the GitHub releases page in the browser."""
+        import webbrowser
 
-        Args:
-            checked: Unused boolean from Qt signal (ignored)
-        """
-        # You could load a local CHANGELOG.md and display it
-        QMessageBox.information(
-            self,
-            "Release Notes",
-            (
-                f"Release {APP_VERSION}:\n"
-                "- PyQtGraph renderer is now the primary backend for all trace views.\n"
-                "- Multi-track stacked layout: Inner Diameter, Outer Diameter, Pressure, and Set Pressure synchronized in a single scrollable view.\n"
-                "- Point Editor with undo/redo and audit history.\n"
-                "- Excel Mapper with flexible template writer for any workbook layout.\n"
-                "- VasoTracker v1 and v2 import with automatic sibling file discovery.\n"
-                "- Dataset package import/export between .vaso projects.\n"
-                "- Thread-safe background sample loading.\n"
-                "- General stability and logging improvements.\n"
-            ),
+        webbrowser.open("https://github.com/vr-oj/VasoAnalyzer/releases")
+
+    def _show_citation_dialog(self, checked: bool = False):
+        """Show citation information with a copy-to-clipboard option."""
+        citation = (
+            "Vega Rodríguez, O. J. (2025). VasoAnalyzer (v3.1.0) "
+            "[Computer software]. https://github.com/vr-oj/VasoAnalyzer"
         )
+        box = QMessageBox(self)
+        box.setWindowTitle("How to Cite VasoAnalyzer")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(
+            "<b>Suggested citation:</b><br><br>"
+            f"{citation}<br><br>"
+            "<b>BibTeX:</b><br>"
+            "<pre style='font-size:11px'>"
+            "@software{VasoAnalyzer,\n"
+            "  author  = {Vega Rodríguez, Osvaldo J.},\n"
+            "  title   = {VasoAnalyzer},\n"
+            f"  version = {{{APP_VERSION}}},\n"
+            "  year    = {2025},\n"
+            "  url     = {https://github.com/vr-oj/VasoAnalyzer}\n"
+            "}</pre>"
+        )
+        copy_btn = box.addButton("Copy Citation", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() == copy_btn:
+            from PyQt6.QtWidgets import QApplication
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(citation)
 
     def show_about(self, checked: bool = False):
         """Show about dialog.
@@ -4575,7 +4798,7 @@ class VasoAnalyzerApp(QMainWindow):
         from .dialogs.tutorial_dialog import TutorialDialog
 
         dlg = TutorialDialog(self)
-        dont_show = dlg.exec_()
+        dont_show = dlg.exec()
         if dont_show:
             settings = QSettings("TykockiLab", "VasoAnalyzer")
             settings.setValue("tutorialShown", True)
@@ -4590,7 +4813,7 @@ class VasoAnalyzerApp(QMainWindow):
             from .dialogs.tutorial_dialog import TutorialDialog
 
             dlg = TutorialDialog(self)
-            dont_show = dlg.exec_()
+            dont_show = dlg.exec()
             if dont_show:
                 settings.setValue("tutorialShown", True)
 
@@ -4613,9 +4836,9 @@ class VasoAnalyzerApp(QMainWindow):
             dlg = WelcomeGuideDialog(self)
             dlg.openRequested.connect(self.open_project_file)
             dlg.createRequested.connect(self.new_project)
-            dlg.setWindowModality(Qt.ApplicationModal)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
             dlg.finished.connect(lambda _: self._handle_welcome_guide_closed(dlg))
-            dlg.exec_()
+            dlg.exec()
             return
 
         existing = getattr(self, "_welcome_dialog", None)
@@ -4689,21 +4912,24 @@ class VasoAnalyzerApp(QMainWindow):
         toolbar.setObjectName("PrimaryToolbar")
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
-        toolbar.setContextMenuPolicy(Qt.PreventContextMenu)
+        toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         toolbar.setIconSize(QSize(24, 24))
-        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
 
         self.home_action = QAction(QIcon(self.icon_path("Home.svg")), "Home", self)
         self.home_action.setToolTip("Home Dashboard")
         self.home_action.triggered.connect(self.show_home_dashboard)
         self.home_action.setVisible(False)
         toolbar.addAction(self.home_action)
+        home_btn = toolbar.widgetForAction(self.home_action)
+        if isinstance(home_btn, QToolButton):
+            home_btn.setObjectName("HomeButton")
 
         self.load_trace_action = QAction(
             QIcon(self.icon_path("folder-open.svg")), "Import Trace CSV…", self
         )
         self.load_trace_action.setToolTip("Import a CSV trace file and auto-detect matching events")
-        self.load_trace_action.setShortcut(QKeySequence.Open)
+        self.load_trace_action.setShortcut(QKeySequence.StandardKey.Open)
         self.load_trace_action.triggered.connect(self._handle_load_trace)
 
         self.load_snapshot_action = QAction(
@@ -4736,6 +4962,12 @@ class VasoAnalyzerApp(QMainWindow):
         self.sync_clip_action.setEnabled(False)
         self.sync_clip_action.triggered.connect(self.open_sync_clip_exporter)
 
+        self.compare_action = QAction(
+            QIcon(self.icon_path("compare.svg")), "Compare…", self
+        )
+        self.compare_action.setToolTip("Compare datasets side-by-side")
+        self.compare_action.triggered.connect(self.show_comparison_page)
+
         self.load_events_action = QAction(
             QIcon(self.icon_path("folder-plus.svg")), "Import Events CSV…", self
         )
@@ -4745,8 +4977,8 @@ class VasoAnalyzerApp(QMainWindow):
 
         import_button = QToolButton(self)
         import_button.setObjectName("ImportDataButton")
-        import_button.setText("Open Data…")
-        import_button.setToolTip("Open Data…")
+        import_button.setText("Open Data")
+        import_button.setToolTip("Open Data")
         import_button.setToolButtonStyle(toolbar.toolButtonStyle())
         import_button.setIconSize(toolbar.iconSize())
         if not self.load_trace_action.icon().isNull():
@@ -4766,10 +4998,10 @@ class VasoAnalyzerApp(QMainWindow):
         if hasattr(self, "action_import_dataset_from_project"):
             import_menu.addAction(self.action_import_dataset_from_project)
         import_button.setMenu(import_menu)
-        import_button.setPopupMode(QToolButton.InstantPopup)
+        import_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.save_session_action = QAction(QIcon(self.icon_path("Save.svg")), "Save Project", self)
         self.save_session_action.setToolTip("Save Project")
-        self.save_session_action.setShortcut(QKeySequence.Save)
+        self.save_session_action.setShortcut(QKeySequence.StandardKey.Save)
         self.save_session_action.triggered.connect(self.save_project_file)
 
         self.welcome_action = QAction(
@@ -4780,17 +5012,22 @@ class VasoAnalyzerApp(QMainWindow):
 
         toolbar.addWidget(import_button)
         toolbar.addAction(self.save_session_action)
+        save_btn = toolbar.widgetForAction(self.save_session_action)
+        if isinstance(save_btn, QToolButton):
+            save_btn.setObjectName("SaveProjectButton")
         toolbar.addSeparator()
         toolbar.addAction(self.review_events_action)
         if edit_points_action is not None:
             toolbar.addAction(edit_points_action)
         toolbar.addAction(self.excel_action)
         toolbar.addAction(self.sync_clip_action)
+        toolbar.addAction(self.compare_action)
         for action in (
             self.review_events_action,
             edit_points_action,
             self.excel_action,
             self.sync_clip_action,
+            self.compare_action,
         ):
             if action is None:
                 continue
@@ -4800,13 +5037,14 @@ class VasoAnalyzerApp(QMainWindow):
 
         toolbar.addWidget(self.trace_file_label)
 
+        toolbar.setStyleSheet(self._primary_toolbar_css())
         return toolbar
 
     def _update_toolbar_compact_mode(self, width: int | None = None) -> None:
         if width is None:
             width = self.width()
         compact = width < 1152
-        style = Qt.ToolButtonIconOnly if compact else Qt.ToolButtonTextUnderIcon
+        style = Qt.ToolButtonStyle.ToolButtonIconOnly if compact else Qt.ToolButtonStyle.ToolButtonTextUnderIcon
         for toolbar in (
             getattr(self, "primary_toolbar", None),
             getattr(self, "toolbar", None),
@@ -4814,14 +5052,8 @@ class VasoAnalyzerApp(QMainWindow):
             if toolbar is None:
                 continue
             toolbar.setToolButtonStyle(style)
-        plot_toolbar = getattr(self, "toolbar", None)
-        if plot_toolbar is not None:
-            view_button = getattr(plot_toolbar, "_view_menu_button", None)
-            if isinstance(view_button, QToolButton):
-                view_button.setToolButtonStyle(style)
-                view_button.setIconSize(plot_toolbar.iconSize())
         self._update_primary_toolbar_button_widths(compact)
-        self._update_plot_toolbar_signal_button_widths(compact)
+        self._normalize_plot_toolbar_group_widths(compact)
         self._normalize_plot_toolbar_button_geometry()
 
     def _primary_toolbar_buttons(self) -> list[QToolButton]:
@@ -4857,6 +5089,9 @@ class VasoAnalyzerApp(QMainWindow):
     def _update_plot_toolbar_signal_button_widths(self, compact: bool) -> None:
         self._plot_mgr._update_plot_toolbar_signal_button_widths(compact)
 
+    def _normalize_plot_toolbar_group_widths(self, compact: bool) -> None:
+        self._plot_mgr._normalize_plot_toolbar_group_widths(compact)
+
     def _update_primary_toolbar_button_widths(self, compact: bool) -> None:
         buttons = self._primary_toolbar_buttons()
         if not buttons:
@@ -4865,9 +5100,9 @@ class VasoAnalyzerApp(QMainWindow):
         for button in buttons:
             button.setMinimumWidth(0)
             button.setMaximumWidth(16777215)
-            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
             button.setToolButtonStyle(
-                Qt.ToolButtonIconOnly if compact else Qt.ToolButtonTextUnderIcon
+                Qt.ToolButtonStyle.ToolButtonIconOnly if compact else Qt.ToolButtonStyle.ToolButtonTextUnderIcon
             )
 
         if compact:
@@ -4891,7 +5126,7 @@ class VasoAnalyzerApp(QMainWindow):
         for button in buttons:
             button.setMinimumWidth(target_width)
             button.setMaximumWidth(target_width)
-            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
             button.updateGeometry()
 
     def resizeEvent(self, event):
@@ -4930,8 +5165,8 @@ class VasoAnalyzerApp(QMainWindow):
     def _create_next_step_hint_widget(self, parent: QWidget) -> QWidget:
         container = QFrame(parent)
         container.setObjectName("NextStepHint")
-        container.setFrameShape(QFrame.StyledPanel)
-        container.setFrameShadow(QFrame.Raised)
+        container.setFrameShape(QFrame.Shape.StyledPanel)
+        container.setFrameShadow(QFrame.Shadow.Raised)
 
         layout = QHBoxLayout(container)
         layout.setContentsMargins(12, 8, 12, 8)
@@ -4941,18 +5176,18 @@ class VasoAnalyzerApp(QMainWindow):
         label.setObjectName("NextStepHintLabel")
 
         btn_import_folder = QPushButton("Import folder…", container)
-        btn_import_folder.setCursor(Qt.PointingHandCursor)
+        btn_import_folder.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_import_folder.clicked.connect(self._handle_import_folder)
 
         btn_import_trace = QPushButton("Import trace/events file…", container)
-        btn_import_trace.setCursor(Qt.PointingHandCursor)
+        btn_import_trace.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_import_trace.clicked.connect(self._handle_load_trace)
 
         dismiss_btn = QToolButton(container)
         dismiss_btn.setText("Dismiss")
-        dismiss_btn.setCursor(Qt.PointingHandCursor)
+        dismiss_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         dismiss_btn.setAutoRaise(True)
-        dismiss_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        dismiss_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         dismiss_btn.clicked.connect(self._dismiss_next_step_hint)
 
         layout.addWidget(label)
@@ -5023,7 +5258,7 @@ class VasoAnalyzerApp(QMainWindow):
         return HomePage(self)
 
     def home_open_data(self) -> None:
-        from PyQt5.QtCore import QTimer
+        from PyQt6.QtCore import QTimer
 
         action = getattr(self, "load_trace_action", None)
         if action is not None:
@@ -5032,7 +5267,7 @@ class VasoAnalyzerApp(QMainWindow):
             QTimer.singleShot(0, self._handle_load_trace)
 
     def home_open_project(self) -> None:
-        from PyQt5.QtCore import QTimer
+        from PyQt6.QtCore import QTimer
 
         action = getattr(self, "action_open_project", None)
         if action is not None:
@@ -5060,7 +5295,7 @@ class VasoAnalyzerApp(QMainWindow):
             if action is not None:
                 menu.addAction(action)
 
-        menu.exec_(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
     def _make_home_button(
         self,
@@ -5072,7 +5307,7 @@ class VasoAnalyzerApp(QMainWindow):
         secondary: bool = False,
     ) -> QPushButton:
         button = QPushButton(text)
-        button.setCursor(Qt.PointingHandCursor)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setMinimumHeight(44)
         if icon_name:
             button.setIcon(QIcon(self.icon_path(icon_name)))
@@ -5102,12 +5337,36 @@ class VasoAnalyzerApp(QMainWindow):
         self.show_home_dashboard()
 
     def show_analysis_workspace(self):
+        # Save comparison state before leaving
+        page = getattr(self, "comparison_page", None)
+        if page is not None and self.current_project is not None:
+            state = page.save_state()
+            if not isinstance(self.current_project.ui_state, dict):
+                self.current_project.ui_state = {}
+            if state:
+                self.current_project.ui_state["comparison_state"] = state
+            else:
+                self.current_project.ui_state.pop("comparison_state", None)
+
         self.stack.setCurrentWidget(self.data_page)
         if hasattr(self, "home_action") and self.home_action is not None:
             self.home_action.setVisible(True)
         self._update_home_resume_button()
         self._set_toolbars_visible(True)
         self._update_plot_empty_state()
+
+    def show_comparison_page(self) -> None:
+        """Switch to the full-window dataset comparison page."""
+        page = getattr(self, "comparison_page", None)
+        if page is None:
+            return
+        self._set_toolbars_visible(False)
+        self.stack.setCurrentWidget(page)
+        # Restore last comparison session if the page is empty
+        if not page._panels and self.current_project is not None:
+            ui = self.current_project.ui_state
+            if isinstance(ui, dict) and "comparison_state" in ui:
+                page.restore_state(ui["comparison_state"])
 
     def show_home_dashboard(self) -> None:
         manager = getattr(self, "window_manager", None)
@@ -5140,6 +5399,69 @@ class VasoAnalyzerApp(QMainWindow):
     def _apply_button_style(button: QPushButton) -> None:
         button.style().unpolish(button)
         button.style().polish(button)
+
+    def _primary_toolbar_css(self) -> str:
+        bg = CURRENT_THEME.get("toolbar_bg", CURRENT_THEME.get("window_bg", "#FFFFFF"))
+        border_color = CURRENT_THEME.get("panel_border", CURRENT_THEME["grid_color"])
+        separator_color = CURRENT_THEME.get("grid_color", border_color)
+        button_bg = CURRENT_THEME.get("button_bg", bg)
+        hover_bg = CURRENT_THEME.get("button_hover_bg", CURRENT_THEME.get("selection_bg", bg))
+        pressed_bg = CURRENT_THEME.get("button_active_bg", hover_bg)
+        text_color = CURRENT_THEME["text"]
+        disabled_text = CURRENT_THEME.get("text_disabled", text_color)
+        radius = int(CURRENT_THEME.get("panel_radius", 6))
+        chevron_path = self.icon_path("chevron-down.svg").replace("\\", "/")
+        return f"""
+QToolBar#PrimaryToolbar {{
+    background: {bg};
+    border: none;
+    spacing: 2px;
+    padding: 2px 4px;
+}}
+QToolBar#PrimaryToolbar::separator {{
+    background: {border_color};
+    width: 2px;
+    border-radius: 1px;
+    margin: 3px 8px;
+}}
+QToolBar#PrimaryToolbar QToolButton {{
+    background: {button_bg};
+    border: 1px solid {border_color};
+    border-radius: {radius}px;
+    padding: 2px 10px 6px 10px;
+    color: {text_color};
+    min-width: 52px;
+}}
+QToolBar#PrimaryToolbar QToolButton:hover {{
+    background: {hover_bg};
+}}
+QToolBar#PrimaryToolbar QToolButton:pressed {{
+    background: {pressed_bg};
+}}
+QToolBar#PrimaryToolbar QToolButton:disabled {{
+    background: {bg};
+    border-color: {separator_color};
+    color: {disabled_text};
+}}
+QToolBar#PrimaryToolbar QToolButton#HomeButton,
+QToolBar#PrimaryToolbar QToolButton#ImportDataButton,
+QToolBar#PrimaryToolbar QToolButton#SaveProjectButton {{
+    font-weight: 600;
+}}
+QToolBar#PrimaryToolbar QToolButton::menu-indicator {{
+    width: 0;
+    height: 0;
+    image: none;
+}}
+QToolBar#PrimaryToolbar QToolButton#ImportDataButton::menu-indicator {{
+    image: url("{chevron_path}");
+    subcontrol-position: bottom center;
+    subcontrol-origin: padding;
+    bottom: 1px;
+    width: 10px;
+    height: 6px;
+}}
+"""
 
     def _shared_button_css(self) -> str:
         border = CURRENT_THEME["grid_color"]
@@ -5247,13 +5569,13 @@ QPushButton[isGhost="true"]:pressed {{
         row = QWidget()
         row.setObjectName("HomeRecentRow")
         row.setToolTip(path)
-        row.setCursor(Qt.PointingHandCursor)
+        row.setCursor(Qt.CursorShape.PointingHandCursor)
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(8)
 
         def _row_click(event):
-            if event.button() == Qt.LeftButton:
+            if event.button() == Qt.MouseButton.LeftButton:
                 open_callback()
             event.accept()
 
@@ -5270,12 +5592,12 @@ QPushButton[isGhost="true"]:pressed {{
         remove_btn = QToolButton()
         remove_btn.setObjectName("HomeRemoveButton")
         remove_btn.setAutoRaise(True)
-        remove_btn.setCursor(Qt.PointingHandCursor)
-        remove_btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        remove_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         remove_btn.setText("Remove")
         remove_btn.setToolTip(f"Remove {path}")
         remove_btn.clicked.connect(lambda _checked=False: remove_callback())
-        row_layout.addWidget(remove_btn, 0, Qt.AlignRight)
+        row_layout.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignRight)
 
         return row
 
@@ -5296,7 +5618,7 @@ QPushButton[isGhost="true"]:pressed {{
 
         if self.trace_file_label.width() > 0:
             metrics = QFontMetrics(self.trace_file_label.font())
-            display = metrics.elidedText(full_text, Qt.ElideMiddle, self.trace_file_label.width())
+            display = metrics.elidedText(full_text, Qt.TextElideMode.ElideMiddle, self.trace_file_label.width())
         else:
             display = full_text
         self.trace_file_label.setText(display)
@@ -5326,28 +5648,17 @@ QPushButton[isGhost="true"]:pressed {{
 
     # ------------------------------------------------------------------ progress bar helpers
     def show_progress(self, message: str = "", maximum: int = 100) -> None:
-        """Show progress bar in status bar with optional message."""
-        self._progress_bar.setMaximum(maximum)
-        self._progress_bar.setValue(0)
-        (
-            self._progress_bar.setFormat(f"{message} %p%")
-            if message
-            else self._progress_bar.setFormat("%p%")
-        )
-        self._progress_bar.show()
+        """Show an animated progress bar. The bar crawls smoothly toward ~85% while work runs."""
+        self._progress_animator.start(message)
         if message:
             self.statusBar().showMessage(message)
 
     def update_progress(self, value: int) -> None:
-        """Update progress bar value."""
-        if self._progress_bar.isVisible():
-            self._progress_bar.setValue(value)
-            # Progress bar updates automatically - no need to force event processing
+        """No-op: the animator owns the visual value. Use show_progress/hide_progress."""
 
     def hide_progress(self) -> None:
-        """Hide progress bar."""
-        self._progress_bar.hide()
-        self._progress_bar.setValue(0)
+        """Snap bar to 100% and auto-hide after a short pause."""
+        self._progress_animator.finish()
 
     def _start_sample_load_progress(self, sample_name: str) -> None:
         self._sample_mgr._start_sample_load_progress(sample_name)
@@ -5458,7 +5769,7 @@ QPushButton[isGhost="true"]:pressed {{
         for channel_key, label in channels:
             action = menu.addAction(label)
             action.triggered.connect(lambda _, key=channel_key: self._launch_point_editor(key))
-        menu.exec_(QCursor.pos())
+        menu.exec(QCursor.pos())
 
     def _launch_point_editor(self, channel: str) -> None:
         if self.trace_model is None:
@@ -5484,7 +5795,7 @@ QPushButton[isGhost="true"]:pressed {{
             return
 
         dialog = PointEditorDialog(session, self)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         actions = tuple(dialog.committed_actions() or ())
@@ -5519,21 +5830,13 @@ QPushButton[isGhost="true"]:pressed {{
             return
 
         name = self.current_project.name or ""
-        path_hint = ""
-        if self.current_project.path:
+        if not name and self.current_project.path:
             try:
-                path_hint = Path(self.current_project.path).name
+                name = Path(self.current_project.path).stem
             except Exception:
-                path_hint = self.current_project.path
+                name = ""
 
-        if name and path_hint and name != path_hint:
-            suffix = f"{name} — {path_hint}"
-        elif name or path_hint:
-            suffix = name or path_hint
-        else:
-            suffix = ""
-
-        self.setWindowTitle(f"{base} — {suffix}" if suffix else base)
+        self.setWindowTitle(f"{base} — {name}" if name else base)
 
     def _compute_sampling_rate(self, trace_df: pd.DataFrame | None) -> float | None:
         if trace_df is None or "Time (s)" not in trace_df.columns:
@@ -6077,7 +6380,7 @@ QPushButton[isGhost="true"]:pressed {{
         widget = getattr(self, "snapshot_widget", None)
         if widget is None:
             return
-        chosen = menu.exec_(widget.mapToGlobal(pos))
+        chosen = menu.exec(widget.mapToGlobal(pos))
         if chosen is copy_action and has_metadata:
             self.copy_current_frame_metadata_to_clipboard()
 
@@ -6405,7 +6708,7 @@ QPushButton[isGhost="true"]:pressed {{
                 choice = self._prompt_merge_traces(selected)
                 if choice == "cancel":
                     return
-                file_path = selected if choice == "merge" else selected[0]
+                file_path = choice if isinstance(choice, list) else selected[0]
             else:
                 file_path = selected[0]
         primary_trace_path = file_path[0] if isinstance(file_path, list) else file_path
@@ -6445,10 +6748,11 @@ QPushButton[isGhost="true"]:pressed {{
             return
 
         # 3) Remember in Recent Files
-        if primary_trace_path not in self.recent_files:
-            self.recent_files = [primary_trace_path] + self.recent_files[:4]
-            self.settings.setValue("recentFiles", self.recent_files)
-            self.update_recent_files_menu()
+        # Always move to front (most-recently-used ordering)
+        filtered = [p for p in self.recent_files if p != primary_trace_path]
+        self.recent_files = [primary_trace_path] + filtered[:9]
+        self.settings.setValue("recentFiles", self.recent_files)
+        self.update_recent_files_menu()
 
         # 4) Helper already populated events & UI
 
@@ -6458,10 +6762,10 @@ QPushButton[isGhost="true"]:pressed {{
                 self,
                 "Load TIFF?",
                 "Would you like to load a Result TIFF file?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            if resp == QMessageBox.Yes:
+            if resp == QMessageBox.StandardButton.Yes:
                 tiff_path, _ = QFileDialog.getOpenFileName(
                     self, "Open Result TIFF", "", "TIFF Files (*.tif *.tiff)"
                 )
@@ -7030,7 +7334,7 @@ QPushButton[isGhost="true"]:pressed {{
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
         if (
-            event.key() == Qt.Key_Space
+            event.key() == Qt.Key.Key_Space
             and not event.isAutoRepeat()
             and self._plot_host_is_pyqtgraph()
             and self._focus_is_plot_widget()
@@ -7055,7 +7359,7 @@ QPushButton[isGhost="true"]:pressed {{
         super().keyPressEvent(event)
 
     def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.key() == Qt.Key_Space and not event.isAutoRepeat() and self._space_pan_active:
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat() and self._space_pan_active:
             previous_mode = self._space_pan_prev_mode or "pan"
             self._space_pan_active = False
             self._space_pan_prev_mode = None
@@ -7071,9 +7375,9 @@ QPushButton[isGhost="true"]:pressed {{
 
     def eventFilter(self, source, event):
         event_table = getattr(self, "event_table", None)
-        if event_table is not None and source is event_table and event.type() == QEvent.Resize:
+        if event_table is not None and source is event_table and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self.update_snapshot_size)
-        elif source is self.trace_file_label and event.type() == QEvent.Resize:
+        elif source is self.trace_file_label and event.type() == QEvent.Type.Resize:
             QTimer.singleShot(0, self._update_status_chip)
         return super().eventFilter(source, event)
 
@@ -7455,7 +7759,7 @@ QPushButton[isGhost="true"]:pressed {{
             choice = self._prompt_merge_traces(file_paths)
             if choice == "cancel":
                 return
-            trace_source = file_paths if choice == "merge" else file_paths[0]
+            trace_source = choice if isinstance(choice, list) else file_paths[0]
         else:
             trace_source = file_paths[0]
         self._import_trace_events_from_paths(trace_source, source="file_dialog")
@@ -7529,79 +7833,71 @@ QPushButton[isGhost="true"]:pressed {{
             import_meta,
         )
 
-    def _handle_load_vasotracker_v1(self, checked: bool = False) -> None:
-        """Import a VasoTracker v1 trace/table pair through the normalized pipeline."""
+    def _handle_load_vasotracker(self, checked: bool = False) -> None:
+        """Import a VasoTracker trace/table pair, auto-detecting v1 vs v2."""
 
         trace_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select VasoTracker v1 trace CSV",
+            "Select VasoTracker trace CSV",
             "",
             "CSV Files (*.csv)",
         )
         if not trace_path:
             return
-        try:
-            payload = self._build_vasotracker_prefetched_payload(
-                trace_path,
-                source_format="vasotracker_v1",
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "VasoTracker v1 Import Error",
-                f"Could not import VasoTracker v1 files:\n{exc}",
-            )
-            return
-        self._import_trace_events_from_paths(
-            trace_path,
-            source="vasotracker_v1",
-            prefetched_payload=payload,
+
+        # Try v2 first (newer format), fall back to v1
+        for version in ("vasotracker_v2", "vasotracker_v1"):
+            try:
+                payload = self._build_vasotracker_prefetched_payload(
+                    trace_path,
+                    source_format=version,
+                )
+                self._import_trace_events_from_paths(
+                    trace_path,
+                    source=version,
+                    prefetched_payload=payload,
+                )
+                return
+            except Exception:
+                continue
+
+        QMessageBox.critical(
+            self,
+            "VasoTracker Import Error",
+            "Could not import the selected file as VasoTracker v1 or v2.",
         )
+
+    # Keep legacy names so any external callers still work
+    def _handle_load_vasotracker_v1(self, checked: bool = False) -> None:
+        self._handle_load_vasotracker(checked)
 
     def _handle_load_vasotracker_v2(self, checked: bool = False) -> None:
-        """Import a VasoTracker v2 trace/table pair through the normalized pipeline."""
+        self._handle_load_vasotracker(checked)
 
-        trace_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select VasoTracker v2 trace CSV",
-            "",
-            "CSV Files (*.csv)",
-        )
-        if not trace_path:
-            return
-        try:
-            payload = self._build_vasotracker_prefetched_payload(
-                trace_path,
-                source_format="vasotracker_v2",
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "VasoTracker v2 Import Error",
-                f"Could not import VasoTracker v2 files:\n{exc}",
-            )
-            return
-        self._import_trace_events_from_paths(
-            trace_path,
-            source="vasotracker_v2",
-            prefetched_payload=payload,
-        )
+    def _prompt_merge_traces(self, paths: list[str]) -> str | list[str]:
+        """Ask the user whether to merge multiple trace CSVs.
 
-    def _prompt_merge_traces(self, paths: list[str]) -> str:
-        """Ask the user whether to merge multiple trace CSVs."""
+        Returns ``"cancel"``, ``"single"``, or a list of trace paths in the
+        user-confirmed order when merging is selected.
+        """
         box = QMessageBox(self)
         box.setWindowTitle("Merge trace CSVs?")
         box.setText(
             f"{len(paths)} trace CSV files selected.\nMerge them into one continuous dataset?"
         )
-        merge_btn = box.addButton("Merge into one trace", QMessageBox.AcceptRole)
-        single_btn = box.addButton("Load first only", QMessageBox.ActionRole)
-        box.addButton(QMessageBox.Cancel)
+        merge_btn = box.addButton("Merge into one trace", QMessageBox.ButtonRole.AcceptRole)
+        single_btn = box.addButton("Load first only", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
         box.setDefaultButton(merge_btn)
-        box.exec_()
+        box.exec()
         clicked = box.clickedButton()
         if clicked == merge_btn:
-            return "merge"
+            from vasoanalyzer.ui.dialogs.merge_preview_dialog import MergePreviewDialog
+
+            dlg = MergePreviewDialog(paths, parent=self)
+            if dlg.exec() != MergePreviewDialog.DialogCode.Accepted:
+                return "cancel"
+            return dlg.ordered_trace_paths()
         if clicked == single_btn:
             return "single"
         return "cancel"
@@ -7655,7 +7951,7 @@ QPushButton[isGhost="true"]:pressed {{
                     events_df=events_df,
                     source_format=source,
                 )
-                if dlg.exec_() != QDialog.Accepted:
+                if dlg.exec() != QDialog.DialogCode.Accepted:
                     return
             except Exception:
                 log.debug("Could not show data preview, proceeding with import", exc_info=True)
@@ -7996,7 +8292,7 @@ QPushButton[isGhost="true"]:pressed {{
                     undo_action = menu.addAction("Undo Last Replacement")
                     add_new_action = menu.addAction("➕ Add as New Event")
 
-                    action = menu.exec_(self.canvas.mapToGlobal(event.guiEvent.pos()))
+                    action = menu.exec(self.canvas.mapToGlobal(event.guiEvent.pos()))
                     if action == delete_action:
                         self._safe_remove_artist(marker)
                         self._safe_remove_artist(label)
@@ -8087,7 +8383,7 @@ QPushButton[isGhost="true"]:pressed {{
         is_right = button == 3
 
         wizard = getattr(self, "_event_review_wizard", None)
-        if wizard is not None and wizard.isVisible() and (button == 1 or button == Qt.LeftButton):
+        if wizard is not None and wizard.isVisible() and (button == 1 or button == Qt.MouseButton.LeftButton):
             try:
                 wizard.handle_trace_click(x)
             except Exception:
@@ -8140,7 +8436,7 @@ QPushButton[isGhost="true"]:pressed {{
                 delete_action = menu.addAction("Delete Pin")
                 undo_action = menu.addAction("Undo Last Replacement")
                 add_new_action = menu.addAction("➕ Add as New Event")
-                action = menu.exec_(QCursor.pos())
+                action = menu.exec(QCursor.pos())
                 if action == delete_action:
                     self._safe_remove_artist(marker)
                     self._safe_remove_artist(label)
@@ -8168,7 +8464,7 @@ QPushButton[isGhost="true"]:pressed {{
                 menu = QMenu(self)
                 add_pin_action = menu.addAction("📍 Add Pin Here")
                 add_event_action = menu.addAction("➕ Add Event Marker Here…")
-                action = menu.exec_(QCursor.pos())
+                action = menu.exec(QCursor.pos())
 
                 if action == add_pin_action:
                     self._add_pyqtgraph_pin(track_id, x, y, tr_type)
@@ -8203,7 +8499,7 @@ QPushButton[isGhost="true"]:pressed {{
             self.toolbar.zoom()  # toggles off
             self.toolbar.mode = ""
             self.toolbar._active = None
-            self.canvas.setCursor(Qt.ArrowCursor)
+            self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
 
         self._sync_time_window_from_axes()
         self.update_scroll_slider()
@@ -8285,7 +8581,7 @@ QPushButton[isGhost="true"]:pressed {{
             sample_name=sample_name,
             parent=self,
         )
-        dialog.exec_()
+        dialog.exec()
 
     def _export_data_report(self) -> None:
         import matplotlib.pyplot as plt
@@ -8307,7 +8603,7 @@ QPushButton[isGhost="true"]:pressed {{
             has_snapshot=has_snapshot,
             has_events=has_events,
         )
-        if dlg.exec_() != QDialog.Accepted:
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         settings = dlg.get_settings()
         if settings is None:
@@ -8489,7 +8785,7 @@ QPushButton[isGhost="true"]:pressed {{
             idx = mapping.get(str(tab_name).lower(), 0)
             with contextlib.suppress(Exception):
                 dialog.tabs.setCurrentIndex(idx)
-        dialog.exec_()
+        dialog.exec()
 
     def open_pyqtgraph_settings_dialog(self):
         """Open PyQtGraph plot settings dialog.
@@ -8511,7 +8807,7 @@ QPushButton[isGhost="true"]:pressed {{
 
         dialog = PyQtGraphSettingsDialog(self, plot_host)
         dialog.resize(200, 1000)
-        dialog.exec_()
+        dialog.exec()
 
     def _update_gif_animator_state(self) -> None:
         self._export_mgr._update_gif_animator_state()
@@ -8885,9 +9181,9 @@ QPushButton[isGhost="true"]:pressed {{
             self,
             "Start New Analysis",
             "Clear current session and start fresh?",
-            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
-        if confirm == QMessageBox.Yes:
+        if confirm == QMessageBox.StandardButton.Yes:
             self.clear_current_session()
 
     def clear_current_session(self, checked: bool = False):
@@ -9112,7 +9408,7 @@ QPushButton[isGhost="true"]:pressed {{
         empty_state_layout.setSpacing(0)
         empty_state_layout.addStretch()
         self.plot_empty_state = PlotEmptyState(self.plot_empty_state_page)
-        empty_state_layout.addWidget(self.plot_empty_state, 0, Qt.AlignHCenter)
+        empty_state_layout.addWidget(self.plot_empty_state, 0, Qt.AlignmentFlag.AlignHCenter)
         empty_state_layout.addStretch()
         self.plot_stack_layout.addWidget(self.plot_empty_state_page)
 
@@ -9155,16 +9451,13 @@ QPushButton[isGhost="true"]:pressed {{
         if not self._snapshot_panel_disabled_by_env:
             self.snapshot_card = QFrame()
             self.snapshot_card.setObjectName("SnapshotCard")
-            self.snapshot_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            self.snapshot_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             snapshot_box = QVBoxLayout(self.snapshot_card)
             snapshot_box.setContentsMargins(0, 0, 0, 0)
             snapshot_box.setSpacing(0)
-            snapshot_title = QLabel("Snapshot Viewer", self.snapshot_card)
-            snapshot_title.setObjectName("PanelSectionTitle")
-            snapshot_box.addWidget(snapshot_title, 0, Qt.AlignLeft)
             self.snapshot_stack = QStackedWidget(self.snapshot_card)
             self.snapshot_stack.setObjectName("SnapshotStack")
-            self.snapshot_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            self.snapshot_stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             self.snapshot_stack.setMinimumHeight(160)
             if self.snapshot_widget is not None:
                 self.snapshot_stack.addWidget(self.snapshot_widget)
@@ -9173,13 +9466,10 @@ QPushButton[isGhost="true"]:pressed {{
             right_panel_layout.addWidget(self.snapshot_card)
         self.event_table_card = QFrame()
         self.event_table_card.setObjectName("TableCard")
-        self.event_table_card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.event_table_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         table_layout = QVBoxLayout(self.event_table_card)
         table_layout.setContentsMargins(0, 0, 0, 0)
         table_layout.setSpacing(0)
-        table_title = QLabel("Event Table", self.event_table_card)
-        table_title.setObjectName("PanelSectionTitle")
-        table_layout.addWidget(table_title)
         self.review_notice_banner = QFrame(self.event_table_card)
         self.review_notice_banner.setObjectName("ReviewNoticeBanner")
         notice_layout = QHBoxLayout(self.review_notice_banner)
@@ -9199,6 +9489,10 @@ QPushButton[isGhost="true"]:pressed {{
         self._configure_review_notice_banner()
         table_layout.addWidget(self.review_notice_banner)
         table_layout.addWidget(self.event_table, 1)
+        self.event_count_label = QLabel("", self.event_table_card)
+        self.event_count_label.setObjectName("EventCountLabel")
+        self.event_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        table_layout.addWidget(self.event_count_label)
         right_panel_layout.addWidget(self.event_table_card, 1)
         # Snapshot card uses Preferred policy (aspect-ratio-aware); event table expands.
         if self.snapshot_card is not None:
@@ -9207,7 +9501,7 @@ QPushButton[isGhost="true"]:pressed {{
         self._update_snapshot_panel_layout()
         self._update_review_notice_visibility()
 
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setObjectName("DataSplitter")
         splitter.setChildrenCollapsible(False)
         splitter.addWidget(plot_panel)
@@ -9220,7 +9514,7 @@ QPushButton[isGhost="true"]:pressed {{
             except Exception:
                 stretch_factors = "error"
         else:
-            stretch_factors = "unavailable (PyQt5 QSplitter has no stretchFactor())"
+            stretch_factors = "unavailable"
         log.info(
             "Snapshot splitter sizes: %s stretchFactors: %s",
             splitter.sizes(),
@@ -9391,13 +9685,11 @@ QPushButton[isGhost="true"]:pressed {{
             except (TypeError, ValueError):
                 target_id = None
             if target_id is not None:
-                root = self.project_tree.topLevelItem(0)
-                if root is not None:
-                    for i in range(root.childCount()):
-                        child = root.child(i)
-                        for j in range(child.childCount()):
-                            sample_child = child.child(j)
-                            sample_obj = sample_child.data(0, Qt.UserRole)
+                for i in range(self.project_tree.topLevelItemCount()):
+                    exp_child = self.project_tree.topLevelItem(i)
+                    if exp_child is not None:
+                        for sample_child in self._sample_mgr._iter_sample_items(exp_child):
+                            sample_obj = sample_child.data(0, Qt.ItemDataRole.UserRole)
                             if (
                                 isinstance(sample_obj, SampleN)
                                 and sample_obj.dataset_id == target_id
@@ -9413,24 +9705,19 @@ QPushButton[isGhost="true"]:pressed {{
             log.warning("RESTORE_SELECTION: No last_experiment saved, falling back to first sample")
             return False
 
-        root = self.project_tree.topLevelItem(0)
-        if root is None:
-            return False
-
         exp_item = None
         sample_item = None
 
-        for i in range(root.childCount()):
-            child = root.child(i)
-            obj = child.data(0, Qt.UserRole)
+        for i in range(self.project_tree.topLevelItemCount()):
+            child = self.project_tree.topLevelItem(i)
+            obj = child.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(obj, Experiment) and obj.name == last_exp:
                 exp_item = child
                 if last_sample:
-                    for j in range(child.childCount()):
-                        sample_child = child.child(j)
-                        sample_obj = sample_child.data(0, Qt.UserRole)
+                    for sc in self._sample_mgr._iter_sample_items(child):
+                        sample_obj = sc.data(0, Qt.ItemDataRole.UserRole)
                         if isinstance(sample_obj, SampleN) and sample_obj.name == last_sample:
-                            sample_item = sample_child
+                            sample_item = sc
                             break
                 break
 
@@ -9465,7 +9752,7 @@ QPushButton[isGhost="true"]:pressed {{
                 max_wait_iterations = 50  # 5 seconds max (50 * 100ms)
                 wait_iteration = 0
                 while self._save_in_progress and wait_iteration < max_wait_iterations:
-                    from PyQt5.QtCore import QCoreApplication
+                    from PyQt6.QtCore import QCoreApplication
 
                     QCoreApplication.processEvents()
                     import time

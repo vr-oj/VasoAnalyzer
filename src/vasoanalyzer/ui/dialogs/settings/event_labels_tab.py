@@ -4,8 +4,8 @@ import contextlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -90,7 +90,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # Create scroll area to prevent widget collapse
     scroll_area = QScrollArea()
     scroll_area.setWidgetResizable(True)
-    scroll_area.setFrameShape(QScrollArea.NoFrame)
+    scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
 
     # Create content widget that will be scrolled
     content_widget = QWidget()
@@ -115,7 +115,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # Global Label Style
     defaults_box = QGroupBox("Global Label Style")
     defaults_form = QFormLayout(defaults_box)
-    defaults_form.setLabelAlignment(Qt.AlignRight)
+    defaults_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     event_font_family = QComboBox()
     event_font_family.addItems(fonts)
@@ -155,7 +155,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # Behaviour controls
     behaviour_box = QGroupBox("Label Clustering & Behaviour")
     behaviour_form = QFormLayout(behaviour_box)
-    behaviour_form.setLabelAlignment(Qt.AlignRight)
+    behaviour_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     # Hidden: Auto mode and density controls (not needed for vertical labels)
     event_auto_mode = QCheckBox("Automatic density switching")
@@ -222,7 +222,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     # Text Outline (left column, row 1)
     outline_box = QGroupBox("Text Outline")
     outline_form = QFormLayout(outline_box)
-    outline_form.setLabelAlignment(Qt.AlignRight)
+    outline_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     event_outline_enabled = QCheckBox("Enable outline")
     event_outline_enabled.setChecked(False)
@@ -243,7 +243,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
 
     interaction_box = QGroupBox("Interaction & Legend")
     interaction_form = QFormLayout(interaction_box)
-    interaction_form.setLabelAlignment(Qt.AlignRight)
+    interaction_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
     event_tooltips_enabled = QCheckBox("Show hover tooltips")
     event_tooltips_enabled.setChecked(True)
@@ -289,7 +289,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
 
     event_list = QListWidget()
     event_list.setAlternatingRowColors(True)
-    event_list.setSelectionMode(QListWidget.SingleSelection)
+    event_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
     event_list.setMinimumWidth(220)
     event_list.setMaximumWidth(300)
     # NOTE: signal connects move to wire_event_labels_tab
@@ -304,7 +304,7 @@ def create_event_labels_tab_widgets(dialog: DialogT, window) -> EventLabelsTabRe
     main_layout.addWidget(overrides_box, 1)
 
     event_empty_label = QLabel("No events found for this sample.")
-    event_empty_label.setAlignment(Qt.AlignCenter)
+    event_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     event_empty_label.setStyleSheet("color: #666666;")
     main_layout.addWidget(event_empty_label)
 

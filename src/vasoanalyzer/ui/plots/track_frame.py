@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QFrame, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtCore import QEvent
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QSizePolicy, QVBoxLayout, QWidget
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 
@@ -34,13 +34,27 @@ class TrackFrame(QWidget):
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(0)
 
-        self._separator_bar = QFrame(self)
+        # Separator row: [left spacer (offset) | colored bar (plot area only)]
+        # The left spacer width is updated via set_divider_left_offset() so the
+        # bar starts at the left edge of the plot ViewBox, keeping the y-axis
+        # area visually continuous across stacked channels.
+        self._separator_row = QWidget(self)
+        self._separator_row.setContentsMargins(0, 0, 0, 0)
+        _sep_layout = QHBoxLayout(self._separator_row)
+        _sep_layout.setContentsMargins(0, 0, 0, 0)
+        _sep_layout.setSpacing(0)
+        self._separator_left = QWidget(self._separator_row)
+        self._separator_left.setFixedWidth(0)
+        self._separator_left.setStyleSheet("background: transparent;")
+        self._separator_bar = QFrame(self._separator_row)
         self._separator_bar.setObjectName("TrackSeparatorBar")
-        self._separator_bar.setFrameShape(QFrame.NoFrame)
-        self._separator_bar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self._separator_bar.setFrameShape(QFrame.Shape.NoFrame)
+        self._separator_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        _sep_layout.addWidget(self._separator_left, 0)
+        _sep_layout.addWidget(self._separator_bar, 1)
 
         self._layout.addWidget(self._content_host, 1)
-        self._layout.addWidget(self._separator_bar, 0)
+        self._layout.addWidget(self._separator_row, 0)
         self._apply_divider_style()
         self._refresh_divider_geometry()
         if child is not None:
@@ -72,13 +86,21 @@ class TrackFrame(QWidget):
     def divider_thickness(self) -> int:
         return int(self._divider_thickness)
 
+    def set_divider_left_offset(self, px: int) -> None:
+        """Set how many pixels from the left the divider bar is inset.
+
+        Set this to gutter_width + axis_width so the bar only appears over
+        the plot area, leaving the y-axis area unbroken between channels.
+        """
+        self._separator_left.setFixedWidth(max(int(px), 0))
+
     def event(self, event) -> bool:  # noqa: N802 - Qt API
         handled = super().event(event)
         if event is not None and event.type() in {
-            QEvent.PaletteChange,
-            QEvent.ApplicationPaletteChange,
-            QEvent.StyleChange,
-            QEvent.Show,
+            QEvent.Type.PaletteChange,
+            QEvent.Type.ApplicationPaletteChange,
+            QEvent.Type.StyleChange,
+            QEvent.Type.Show,
         }:
             self._apply_divider_style()
         return handled
@@ -104,6 +126,7 @@ class TrackFrame(QWidget):
 
     def _refresh_divider_geometry(self) -> None:
         height = int(self._divider_thickness) if self._divider_visible else 0
+        self._separator_row.setFixedHeight(max(height, 0))
         self._separator_bar.setFixedHeight(max(height, 0))
 
     def _apply_divider_style(self) -> None:

@@ -18,9 +18,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QObject, QSignalBlocker, QTimer, Qt
-from PyQt5.QtGui import QCursor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QObject, QSignalBlocker, QTimer, Qt
+from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QInputDialog,
@@ -217,10 +217,18 @@ class PlotManager(QObject):
         h = self._host
 
         has_outer = h._outer_channel_available()
-        h._apply_toggle_state(True, True, outer_supported=has_outer)
+        has_avg = h._avg_pressure_channel_available()
+        has_set = h._set_pressure_channel_available()
+        h._apply_toggle_state(
+            True,
+            True,
+            outer_supported=has_outer,
+            avg_pressure_supported=has_avg,
+            set_pressure_supported=has_set,
+        )
         if h.avg_pressure_toggle_act is not None:
             h.avg_pressure_toggle_act.blockSignals(True)
-            h.avg_pressure_toggle_act.setChecked(True)
+            h.avg_pressure_toggle_act.setChecked(has_avg)
             h.avg_pressure_toggle_act.blockSignals(False)
         if h.set_pressure_toggle_act is not None:
             h.set_pressure_toggle_act.blockSignals(True)
@@ -662,7 +670,8 @@ class PlotManager(QObject):
             widget = toolbar.widgetForAction(action)
             add_button(widget)
 
-        add_button(getattr(toolbar, "_view_menu_button", None))
+        for button in self._plot_toolbar_view_buttons():
+            add_button(button)
 
         for button in h._plot_toolbar_signal_buttons():
             add_button(button)
@@ -671,6 +680,97 @@ class PlotManager(QObject):
         add_button(getattr(h, "metadata_toggle_btn", None))
 
         return buttons
+
+    def _plot_toolbar_nav_buttons(self) -> list[QToolButton]:
+        """Return Navigation group buttons (Pan, Select, Fit View, Autoscale Y, Zoom In/Out, Undo Zoom)."""
+        h = self._host
+        toolbar = getattr(h, "toolbar", None)
+        if toolbar is None:
+            return []
+        buttons: list[QToolButton] = []
+        seen: set[int] = set()
+
+        def add(widget: QToolButton | None) -> None:
+            if isinstance(widget, QToolButton) and id(widget) not in seen:
+                buttons.append(widget)
+                seen.add(id(widget))
+
+        for action in (
+            getattr(h, "actPgPan", None),
+            getattr(h, "actBoxZoom", None),
+            getattr(h, "actPan", None),
+            getattr(h, "actZoom", None),
+        ):
+            if action is not None:
+                add(toolbar.widgetForAction(action))
+
+        for attr in (
+            "_quick_zoom_all_action",
+            "_quick_autoscale_action",
+            "_quick_zoom_in_action",
+            "_quick_zoom_out_action",
+            "_quick_zoom_back_action",
+        ):
+            action = getattr(toolbar, attr, None)
+            if action is not None:
+                add(toolbar.widgetForAction(action))
+
+        return buttons
+
+    def _plot_toolbar_view_buttons(self) -> list[QToolButton]:
+        """Return View group buttons (Grid, Event Labels, Style)."""
+        h = self._host
+        toolbar = getattr(h, "toolbar", None)
+        if toolbar is None:
+            return []
+        buttons: list[QToolButton] = []
+        seen: set[int] = set()
+
+        def add(widget: QToolButton | None) -> None:
+            if isinstance(widget, QToolButton) and id(widget) not in seen:
+                buttons.append(widget)
+                seen.add(id(widget))
+
+        for action in (getattr(h, "actGrid", None), getattr(h, "actStyle", None)):
+            if action is not None:
+                add(toolbar.widgetForAction(action))
+
+        # Event Labels may be a split QToolButton added via addWidget — find by object name
+        event_labels_btn = toolbar.findChild(QToolButton, "PlotToolbarEventLabels")
+        if event_labels_btn is not None:
+            add(event_labels_btn)
+        else:
+            action = getattr(h, "actChannelEventLabels", None)
+            if action is not None:
+                add(toolbar.widgetForAction(action))
+
+        return buttons
+
+    def _normalize_plot_toolbar_group_widths(self, compact: bool) -> None:
+        """Normalize button widths within each toolbar group independently."""
+        groups = [
+            (self._plot_toolbar_nav_buttons(), 100),
+            (self._plot_toolbar_view_buttons(), 80),
+            (self._plot_toolbar_signal_buttons(), 140),
+        ]
+        for buttons, max_width in groups:
+            if not buttons:
+                continue
+            for btn in buttons:
+                btn.setMinimumWidth(0)
+                btn.setMaximumWidth(16777215)
+                btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            if compact:
+                continue
+            widths = [btn.sizeHint().width() for btn in buttons if btn.sizeHint().isValid()]
+            if not widths:
+                continue
+            target = min(max(widths), max_width)
+            for btn in buttons:
+                btn.setMinimumWidth(target)
+                btn.setMaximumWidth(target)
+                btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+                btn.updateGeometry()
 
     def _normalize_plot_toolbar_button_geometry(self) -> None:
         h = self._host
@@ -703,14 +803,27 @@ class PlotManager(QObject):
 
         nav_pan = getattr(h, "actPgPan", None) or getattr(h, "actPan", None)
         nav_select = getattr(h, "actBoxZoom", None) or getattr(h, "actZoom", None)
-        view_action = getattr(toolbar, "_view_menu_action", None)
+
+        # Navigation group: Fit View, Autoscale Y, Zoom In, Zoom Out, Undo Zoom
         quick_actions = [
             getattr(toolbar, "_quick_zoom_all_action", None),
-            getattr(toolbar, "_quick_zoom_back_action", None),
+            getattr(toolbar, "_quick_autoscale_action", None),
             getattr(toolbar, "_quick_zoom_in_action", None),
             getattr(toolbar, "_quick_zoom_out_action", None),
-            getattr(toolbar, "_quick_autoscale_action", None),
+            getattr(toolbar, "_quick_zoom_back_action", None),
         ]
+
+        # View group: Grid, Event Labels (optional), Style
+        # Event Labels may be a widget action (split button) — prefer that over raw QAction
+        event_labels_action = (
+            getattr(toolbar, "_event_labels_widget_action", None)
+            or getattr(h, "actChannelEventLabels", None)
+        )
+        view_actions = [a for a in [
+            getattr(h, "actGrid", None),
+            event_labels_action,
+            getattr(h, "actStyle", None),
+        ] if a is not None]
 
         signal_actions = [
             getattr(h, "id_toggle_act", None),
@@ -725,21 +838,25 @@ class PlotManager(QObject):
         ]
 
         separators = [action for action in toolbar.actions() if action.isSeparator()]
-        sep_nav_signals = separators[0] if len(separators) > 0 else toolbar.addSeparator()
-        sep_signals_panels = separators[1] if len(separators) > 1 else toolbar.addSeparator()
+        sep_nav_view = separators[0] if len(separators) > 0 else toolbar.addSeparator()
+        sep_view_signals = separators[1] if len(separators) > 1 else toolbar.addSeparator()
+        sep_signals_panels = separators[2] if len(separators) > 2 else toolbar.addSeparator()
 
         # Row 2 canonical order:
-        # Pan, Select, Zoom All, Zoom Back, Zoom In, Zoom Out, Autoscale, More...
-        # | Inner, Outer, Pressure, Set Pressure | Project, Details.
+        # Project, Details
+        # | Pan, Select, Fit View, Autoscale Y, Zoom In, Zoom Out, Undo Zoom
+        # | Grid, Event Labels, Style
+        # | Inner, Outer, Pressure, Set Pressure
         ordered_actions = [
+            *panel_actions,
+            sep_signals_panels,
             nav_pan,
             nav_select,
             *quick_actions,
-            view_action,
-            sep_nav_signals,
+            sep_nav_view,
+            *view_actions,
+            sep_view_signals,
             *signal_actions,
-            sep_signals_panels,
-            *panel_actions,
         ]
 
         before_action = None
@@ -755,7 +872,7 @@ class PlotManager(QObject):
         for button in buttons:
             button.setMinimumWidth(0)
             button.setMaximumWidth(16777215)
-            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
         if compact:
             return
@@ -772,7 +889,7 @@ class PlotManager(QObject):
         for button in buttons:
             button.setMinimumWidth(target_width)
             button.setMaximumWidth(target_width)
-            button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
             button.updateGeometry()
 
     def _refresh_zoom_window(self) -> None:
@@ -1175,7 +1292,7 @@ class PlotManager(QObject):
             target = getattr(h, "canvas", None)
         if target is None:
             return
-        cursor = Qt.OpenHandCursor if mode == "pan" else Qt.CrossCursor
+        cursor = Qt.CursorShape.OpenHandCursor if mode == "pan" else Qt.CursorShape.CrossCursor
         with contextlib.suppress(Exception):
             target.setCursor(QCursor(cursor))
 
@@ -1222,6 +1339,20 @@ class PlotManager(QObject):
                 h.od_toggle_act.blockSignals(True)
                 h.od_toggle_act.setChecked(False)
                 h.od_toggle_act.blockSignals(False)
+        has_avg = has_trace and self._avg_pressure_channel_available()
+        if h.avg_pressure_toggle_act is not None:
+            h.avg_pressure_toggle_act.setEnabled(has_avg)
+            if not has_avg and h.avg_pressure_toggle_act.isChecked():
+                h.avg_pressure_toggle_act.blockSignals(True)
+                h.avg_pressure_toggle_act.setChecked(False)
+                h.avg_pressure_toggle_act.blockSignals(False)
+        has_set = has_trace and self._set_pressure_channel_available()
+        if h.set_pressure_toggle_act is not None:
+            h.set_pressure_toggle_act.setEnabled(has_set)
+            if not has_set and h.set_pressure_toggle_act.isChecked():
+                h.set_pressure_toggle_act.blockSignals(True)
+                h.set_pressure_toggle_act.setChecked(False)
+                h.set_pressure_toggle_act.blockSignals(False)
         if getattr(h, "actEditPoints", None) is not None:
             h.actEditPoints.setEnabled(has_trace)
 
@@ -1708,7 +1839,7 @@ class PlotManager(QObject):
             defaults=labels_defaults,
         )
 
-        if dialog.exec_():
+        if dialog.exec():
             h.apply_legend_settings(dialog.get_settings(), mark_dirty=True)
 
     def _on_trace_nav_window_requested(self, x0: float, x1: float) -> None:

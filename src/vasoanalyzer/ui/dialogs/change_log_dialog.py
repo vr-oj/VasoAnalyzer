@@ -6,9 +6,9 @@ import csv
 import io
 from typing import Any
 
-from PyQt5.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QAbstractTableModel, QModelIndex, QVariant
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
@@ -78,14 +78,14 @@ class _ChangeLogModel(QAbstractTableModel):
     def columnCount(self, parent=QModelIndex()) -> int:
         return len(_COLUMNS)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid() or index.row() >= len(self._filtered):
             return QVariant()
 
         entry = self._filtered[index.row()]
         col = index.column()
 
-        if role == Qt.DisplayRole:
+        if role == Qt.ItemDataRole.DisplayRole:
             if col == 0:
                 return entry.timestamp.strftime("%Y-%m-%d %H:%M:%S")
             if col == 1:
@@ -96,18 +96,18 @@ class _ChangeLogModel(QAbstractTableModel):
                 return entry.user
             return QVariant()
 
-        if role == Qt.ForegroundRole and col == 1:
+        if role == Qt.ItemDataRole.ForegroundRole and col == 1:
             color_hex = _CATEGORY_COLORS.get(entry.category)
             if color_hex:
                 return QColor(color_hex)
 
-        if role == Qt.ToolTipRole and col == 2:
+        if role == Qt.ItemDataRole.ToolTipRole and col == 2:
             return entry.description
 
         return QVariant()
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole) -> Any:
-        if role == Qt.DisplayRole and orientation == Qt.Horizontal:
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             if 0 <= section < len(_COLUMNS):
                 return _COLUMNS[section]
         return QVariant()
@@ -163,8 +163,8 @@ class ChangeLogDialog(QDialog):
         self._model = _ChangeLogModel(entries, self)
         self._table = QTableView()
         self._table.setModel(self._model)
-        self._table.setSelectionBehavior(QTableView.SelectRows)
-        self._table.setSelectionMode(QTableView.SingleSelection)
+        self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setSortingEnabled(False)
@@ -172,10 +172,10 @@ class ChangeLogDialog(QDialog):
 
         h = self._table.horizontalHeader()
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        h.setSectionResizeMode(2, QHeaderView.Stretch)
-        h.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
 
         layout.addWidget(self._table, 1)
 

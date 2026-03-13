@@ -13,11 +13,9 @@ import math
 import os
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
-    QAction,
-    QActionGroup,
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QActionGroup, QIcon
+from PyQt6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -36,6 +34,18 @@ if TYPE_CHECKING:
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 
 log = logging.getLogger(__name__)
+
+# Mapping from SQLite canonical column names to UI-facing labels
+_DB_TO_UI_COLUMNS = {
+    "t_seconds": "Time (s)",
+    "inner_diam": "Inner Diameter",
+    "outer_diam": "Outer Diameter",
+    "p_avg": "Avg Pressure (mmHg)",
+    "p1": "Pressure 1 (mmHg)",
+    "p2": "Set Pressure (mmHg)",
+    "frame_number": "FrameNumber",
+    "tiff_page": "TiffPage",
+}
 
 # Channel key → combo label  (keys match PyQtGraphTraceView mode parameter)
 _CHANNELS: list[tuple[str, str]] = [
@@ -273,6 +283,9 @@ class ComparisonPanel(QWidget):
 
     close_requested = pyqtSignal(object)  # emits self
 
+    # Emitted when this panel's X-range changes (x0, x1)
+    time_range_changed = pyqtSignal(object, float, float)  # (self, x0, x1)
+
     def __init__(
         self,
         dataset_id: int,
@@ -281,6 +294,8 @@ class ComparisonPanel(QWidget):
         channel: str,
         mouse_mode: str = "pan",
         autoscale_y: bool = True,
+        show_nav_bar: bool = True,
+        events: dict | None = None,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -289,11 +304,14 @@ class ComparisonPanel(QWidget):
         self._channel = channel
         self._mouse_mode = mouse_mode
         self._autoscale_y = autoscale_y
+        self._show_nav_bar = show_nav_bar
+        self._events = events  # {"times": [...], "labels": [...]}
 
         self._track = None           # PyQtGraphChannelTrack
         self._trace_view = None      # track.view  (PyQtGraphTraceView)
         self._nav_bar = None
         self._proxy = TraceViewNavProxy(trace)
+        self._syncing = False        # guard against recursive sync
 
         self._plot_container_layout: QVBoxLayout | None = None
         self._nav_bar_container_layout: QVBoxLayout | None = None
@@ -330,21 +348,21 @@ class ComparisonPanel(QWidget):
         self._plot_container_layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(plot_container, 1)
 
-        # Nav bar container
-        nav_container = QWidget()
-        self._nav_bar_container_layout = QVBoxLayout(nav_container)
-        self._nav_bar_container_layout.setContentsMargins(0, 2, 0, 0)
-        layout.addWidget(nav_container, 0)
+        # Nav bar container (only if nav bar is shown)
+        if self._show_nav_bar:
+            nav_container = QWidget()
+            self._nav_bar_container_layout = QVBoxLayout(nav_container)
+            self._nav_bar_container_layout.setContentsMargins(0, 2, 0, 0)
+            layout.addWidget(nav_container, 0)
 
     def _build_track(self) -> None:
-        from PyQt5.QtCore import QTimer
-        from vasoanalyzer.ui.navigation.trace_nav_bar import TraceNavBar
+        from PyQt6.QtCore import QTimer
         from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
         from vasoanalyzer.ui.plots.pyqtgraph_channel_track import PyQtGraphChannelTrack
         from vasoanalyzer.ui.plots.pyqtgraph_style import PLOT_AXIS_LABELS
 
         # Remove stale nav bar
-        if self._nav_bar is not None:
+        if self._nav_bar is not None and self._nav_bar_container_layout is not None:
             self._nav_bar_container_layout.removeWidget(self._nav_bar)
             self._nav_bar.setParent(None)
             self._nav_bar.deleteLater()
@@ -367,25 +385,85 @@ class ComparisonPanel(QWidget):
         # Wire proxy to the new trace view
         self._proxy.attach(self._trace_view)
 
-        # TraceNavBar using the proxy as plot_host
-        self._nav_bar = TraceNavBar(plot_host=self._proxy, parent=self)
-        self._nav_bar_container_layout.addWidget(self._nav_bar)
+        # Wire the SmoothPanViewBox host-driven callbacks so panning/zooming
+        # feels identical to the main window (smooth inertia, proper clamping).
+        view_box = self._trace_view.view_box()
+        if hasattr(view_box, "set_time_window_requesters"):
+            import contextlib
+            with contextlib.suppress(Exception):
+                view_box.set_time_window_requesters(
+                    pan_x=self._host_pan_x,
+                    zoom_x=self._host_zoom_x,
+                    set_window=lambda x0, x1, _reason: self._proxy.set_time_window(x0, x1),
+                    get_window=lambda: self._proxy.get_time_window() or (0.0, 1.0),
+                )
+
+        # Emit time_range_changed when the user pans/zooms this panel
+        self._proxy.add_time_window_listener(self._emit_range_changed)
+
+        # TraceNavBar (only if requested)
+        if self._show_nav_bar and self._nav_bar_container_layout is not None:
+            from vasoanalyzer.ui.navigation.trace_nav_bar import TraceNavBar
+            self._nav_bar = TraceNavBar(plot_host=self._proxy, parent=self)
+            self._nav_bar_container_layout.addWidget(self._nav_bar)
 
         # Defer set_model until the widget has real pixel dimensions
         QTimer.singleShot(0, self._apply_model)
+
+    def _host_pan_x(self, dt: float, reason: str = "pan") -> None:
+        """Pan the view by dt seconds (called by SmoothPanViewBox)."""
+        window = self._proxy.get_time_window()
+        if window is None:
+            return
+        x0, x1 = window
+        self._proxy.set_time_window(x0 + float(dt), x1 + float(dt))
+
+    def _host_zoom_x(
+        self, factor: float, anchor_x: float | None, reason: str = "zoom"
+    ) -> None:
+        """Zoom by factor around anchor (called by SmoothPanViewBox)."""
+        self._proxy.request_zoom_x(factor, anchor_x, reason)
+
+    def _emit_range_changed(self) -> None:
+        """Forward viewbox range change as a signal for cross-panel sync."""
+        if self._syncing:
+            return
+        window = self._proxy.get_time_window()
+        if window is not None:
+            self.time_range_changed.emit(self, float(window[0]), float(window[1]))
+
+    def set_time_window(self, x0: float, x1: float) -> None:
+        """Set X range from external sync (guards against recursion)."""
+        self._syncing = True
+        try:
+            self._proxy.set_time_window(x0, x1)
+        finally:
+            self._syncing = False
 
     def _apply_model(self) -> None:
         if self._track is None or self._trace is None:
             return
         # PyQtGraphChannelTrack.set_model calls view.set_model internally
         self._track.set_model(self._trace)
-        # Restore autoscale (track.set_model resets it to False)
-        self._trace_view.set_autoscale_y(self._autoscale_y)
         # Explicitly force the full X range (set_time_limits only sets constraints)
         x0, x1 = self._trace.full_range
         pw = max(int(self._trace_view.get_widget().width()), 400)
         self._trace_view.update_window(x0, x1, pixel_width=pw)
         self._trace_view.get_widget().getPlotItem().setXRange(float(x0), float(x1), padding=0)
+        # One-time autoscale so the trace is visible, then leave Y manual
+        self._track.autoscale_y_once()
+        self._trace_view.set_autoscale_y(False)
+        # Push event markers to the track and enable labels
+        if self._events and self._events.get("times"):
+            self._track.set_events(
+                self._events["times"],
+                labels=self._events.get("labels"),
+            )
+            # Use a larger font for readability in comparison panels
+            self._trace_view._event_layer.set_label_font_size(11.0)
+            self._trace_view.set_channel_event_labels_visible(True)
+            # Force label positioning now that view geometry is known
+            self._trace_view._event_layer.refresh_for_view(x0, x1, pw)
         if self._nav_bar is not None:
             self._nav_bar.refresh_from_host()
 
@@ -444,15 +522,15 @@ class ComparisonWindow(QWidget):
     """Floating window for side-by-side single-channel comparison of up to 4 datasets."""
 
     def __init__(self, host: "VasoAnalyzerApp"):
-        # Qt.Tool keeps the window above its parent without being system-wide always-on-top.
-        super().__init__(host, Qt.Tool)
+        # Qt.WindowType.Tool keeps the window above its parent without being system-wide always-on-top.
+        super().__init__(host, Qt.WindowType.Tool)
         self._host = host
         self._panels: list[ComparisonPanel] = []
         self._channel = "inner"
         self._mouse_mode = "pan"
-        self._autoscale_y_continuous = True
 
-        self.setWindowTitle("Dataset Comparison")
+        from utils.config import APP_VERSION
+        self.setWindowTitle(f"VasoAnalyzer {APP_VERSION} — Dataset Comparison")
         self.resize(1100, 600)
         self.setAcceptDrops(True)
 
@@ -486,7 +564,7 @@ class ComparisonWindow(QWidget):
         layout.addLayout(top)
 
         # ── Panel splitter ────────────────────────────────────────────
-        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(self._splitter, 1)
 
         # ── Empty state ───────────────────────────────────────────────
@@ -494,7 +572,7 @@ class ComparisonWindow(QWidget):
             "Drop datasets from the project tree to compare them\n"
             f"(up to {_MAX_PANELS} datasets — drag the same dataset twice for dual-viewport)"
         )
-        self._empty_label.setAlignment(Qt.AlignCenter)
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._empty_label)
 
         self._refresh_state()
@@ -504,7 +582,7 @@ class ComparisonWindow(QWidget):
         tb = QToolBar()
         tb.setObjectName("PlotToolbar")
         tb.setIconSize(QSize(22, 22))
-        tb.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         tb.setMovable(False)
         tb.setFloatable(False)
         _apply_toolbar_style(tb)
@@ -553,17 +631,10 @@ class ComparisonWindow(QWidget):
         tb.addSeparator()
 
         # ── Y controls ────────────────────────────────────────────────
-        act_autoscale_once = QAction(_load_icon("autoscale.svg"), "Autoscale Y\n(Once)", self)
-        act_autoscale_once.setToolTip("Autoscale Y — fit Y axis to visible data once (all panels)")
+        act_autoscale_once = QAction(_load_icon("autoscale.svg"), "Autoscale Y", self)
+        act_autoscale_once.setToolTip("Autoscale Y — fit Y axis to visible data (all panels)")
         act_autoscale_once.triggered.connect(self._on_autoscale_y_once)
         tb.addAction(act_autoscale_once)
-
-        self._act_auto_y = QAction(_load_icon("y-autoscale.svg"), "Y-Axis\nAutoscale", self)
-        self._act_auto_y.setCheckable(True)
-        self._act_auto_y.setChecked(self._autoscale_y_continuous)
-        self._act_auto_y.setToolTip("Auto Y — continuously rescale Y while navigating (all panels)")
-        self._act_auto_y.toggled.connect(self._on_auto_y_toggled)
-        tb.addAction(self._act_auto_y)
 
         return tb
 
@@ -586,12 +657,6 @@ class ComparisonWindow(QWidget):
     def _on_autoscale_y_once(self) -> None:
         for panel in self._panels:
             panel.autoscale_y_once()
-        self._act_auto_y.setChecked(False)
-
-    def _on_auto_y_toggled(self, checked: bool) -> None:
-        self._autoscale_y_continuous = checked
-        for panel in self._panels:
-            panel.set_autoscale_y(checked)
 
     # ------------------------------------------------------------------
     # Drag-and-drop
@@ -631,13 +696,17 @@ class ComparisonWindow(QWidget):
             )
             return
 
+        # Load events for this dataset
+        events_info = self._load_events(dataset_id)
+
         panel = ComparisonPanel(
             dataset_id,
             display_name,
             trace,
             self._channel,
             mouse_mode=self._mouse_mode,
-            autoscale_y=self._autoscale_y_continuous,
+            autoscale_y=False,
+            events=events_info,
             parent=self,
         )
         panel.close_requested.connect(self._remove_panel)
@@ -646,23 +715,95 @@ class ComparisonWindow(QWidget):
         self._refresh_state()
 
     def _load_trace(self, dataset_id: int):
-        """Return a TraceModel for dataset_id from the sample's cached trace_data."""
+        """Return a TraceModel for dataset_id.
+
+        First checks in-memory cache on the sample, then falls back to
+        loading from the project's SQLite database.
+        """
+        from vasoanalyzer.core.trace_model import TraceModel
+
         project = self._host.current_project
         if project is None:
             return None
+
+        # 1) Try in-memory cache
         for exp in project.experiments:
             for s in exp.samples:
                 if getattr(s, "dataset_id", None) == dataset_id:
                     if s.trace_data is not None:
                         try:
-                            from vasoanalyzer.core.trace_model import TraceModel
                             return TraceModel.from_dataframe(s.trace_data)
                         except Exception:
                             log.warning(
-                                "Could not build TraceModel for dataset_id=%s", dataset_id
+                                "Could not build TraceModel from cached data for dataset_id=%s",
+                                dataset_id,
                             )
-                    return None
+
+        # 2) Fall back to project database
+        ctx = getattr(self._host, "project_ctx", None)
+        if ctx is not None:
+            try:
+                df = ctx.repo.get_trace(dataset_id)
+                if df is not None and not df.empty:
+                    df = df.rename(columns=_DB_TO_UI_COLUMNS)
+                    return TraceModel.from_dataframe(df)
+            except Exception:
+                log.warning(
+                    "Could not load trace from database for dataset_id=%s",
+                    dataset_id,
+                    exc_info=True,
+                )
+
         return None
+
+    def _load_events(self, dataset_id: int) -> dict | None:
+        """Return event times and labels for a dataset, or None."""
+        import pandas as pd
+
+        project = self._host.current_project
+        if project is None:
+            return None
+
+        events_df: pd.DataFrame | None = None
+
+        # 1) Try in-memory cache on the sample
+        for exp in project.experiments:
+            for s in exp.samples:
+                if getattr(s, "dataset_id", None) == dataset_id:
+                    if s.events_data is not None and not s.events_data.empty:
+                        events_df = s.events_data
+                    break
+            if events_df is not None:
+                break
+
+        # 2) Fall back to project database
+        if events_df is None:
+            ctx = getattr(self._host, "project_ctx", None)
+            if ctx is not None:
+                with contextlib.suppress(Exception):
+                    events_df = ctx.repo.get_events(dataset_id)
+
+        if events_df is None or events_df.empty:
+            return None
+
+        # Extract times and labels
+        time_col = None
+        for candidate in ("Time (s)", "t_seconds", "time"):
+            if candidate in events_df.columns:
+                time_col = candidate
+                break
+        label_col = None
+        for candidate in ("Event", "event", "label"):
+            if candidate in events_df.columns:
+                label_col = candidate
+                break
+
+        if time_col is None:
+            return None
+
+        times = events_df[time_col].tolist()
+        labels = events_df[label_col].tolist() if label_col else [str(i + 1) for i in range(len(times))]
+        return {"times": times, "labels": labels}
 
     def _remove_panel(self, panel: ComparisonPanel) -> None:
         if panel in self._panels:

@@ -5,9 +5,9 @@ play/pause, scrubbing, and frame navigation controls.
 """
 
 import numpy as np
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QImage, QPixmap
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QSizePolicy,
@@ -52,9 +52,9 @@ class PreviewPlayerWidget(QWidget):
 
         # Frame display area
         self.frame_label = QLabel()
-        self.frame_label.setAlignment(Qt.AlignCenter)
+        self.frame_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.frame_label.setMinimumSize(400, 300)
-        self.frame_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.frame_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.frame_label.setStyleSheet("QLabel { background-color: #2b2b2b; }")
         layout.addWidget(self.frame_label)
 
@@ -62,7 +62,7 @@ class PreviewPlayerWidget(QWidget):
         controls_layout = QVBoxLayout()
 
         # Slider for scrubbing
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setMinimum(0)
         self.slider.setMaximum(0)
         self.slider.setValue(0)
@@ -136,8 +136,8 @@ class PreviewPlayerWidget(QWidget):
         # Scale to fit label while preserving aspect ratio
         scaled_pixmap = pixmap.scaled(
             self.frame_label.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
 
         self.frame_label.setPixmap(scaled_pixmap)
@@ -169,7 +169,7 @@ class PreviewPlayerWidget(QWidget):
         """
         h, w, c = arr.shape
         bytes_per_line = c * w
-        qimg = QImage(arr.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        qimg = QImage(arr.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
         return QPixmap.fromImage(qimg)
 
     def _toggle_playback(self):

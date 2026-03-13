@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -60,7 +60,7 @@ def _make_slider_row() -> tuple[QWidget, QSlider, QDoubleSpinBox]:
     row.setContentsMargins(0, 0, 0, 0)
     row.setSpacing(8)
 
-    slider = QSlider(Qt.Horizontal)
+    slider = QSlider(Qt.Orientation.Horizontal)
     slider.setRange(0, 100)
 
     spin = QDoubleSpinBox()
@@ -97,7 +97,7 @@ def create_layout_tab_widgets(dialog: DialogT, window) -> LayoutTabRefs:
     controls_layout.addWidget(help_lbl)
 
     controls_form = QFormLayout()
-    controls_form.setLabelAlignment(Qt.AlignRight)
+    controls_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
     controls_form.setHorizontalSpacing(12)
     controls_form.setVerticalSpacing(8)
 
@@ -132,7 +132,7 @@ def create_layout_tab_widgets(dialog: DialogT, window) -> LayoutTabRefs:
     dpi = dialog.logicalDpiX()
     preview_fig = Figure(figsize=(2.5, 2.5), facecolor=CURRENT_THEME["window_bg"], dpi=dpi)
     preview_canvas = FigureCanvas(preview_fig)
-    preview_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+    preview_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
     preview_ax = preview_fig.add_subplot(111)
     preview_ax.axis("off")
     preview_layout.addWidget(preview_canvas, 1)
@@ -142,7 +142,7 @@ def create_layout_tab_widgets(dialog: DialogT, window) -> LayoutTabRefs:
     main.setStretch(1, 1)
 
     scroll = QScrollArea()
-    scroll.setFrameShape(QScrollArea.NoFrame)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
     scroll.setWidgetResizable(True)
     scroll.setWidget(content)
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
     QDockWidget,
     QFormLayout,
     QGroupBox,
@@ -367,7 +367,7 @@ class MetadataDock(QDockWidget):
         blank_layout = QVBoxLayout(self._blank)
         label = QLabel("Select a project, experiment, or sample to view details.")
         label.setWordWrap(True)
-        label.setAlignment(Qt.AlignHCenter | Qt.AlignVCenter)
+        label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         blank_layout.addStretch(1)
         blank_layout.addWidget(label)
         blank_layout.addStretch(1)

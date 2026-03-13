@@ -6,8 +6,8 @@ import contextlib
 import logging
 
 import pyqtgraph as pg
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QGraphicsSceneMouseEvent, QGraphicsSceneWheelEvent
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class PanOnlyViewBox(pg.ViewBox):
             angle_delta = ev.angleDelta().y()  # Qt >=5
         except Exception:
             try:
-                angle_delta = ev.delta()
+                angle_delta = ev.angleDelta().y()
             except Exception:
                 angle_delta = 0
 

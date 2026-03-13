@@ -5,13 +5,13 @@ from __future__ import annotations
 import json
 import logging
 
-from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
-from PyQt5.QtNetwork import (
+from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtNetwork import (
     QNetworkAccessManager,
     QNetworkReply,
     QNetworkRequest,
 )
-from PyQt5.QtWidgets import QDialog
+from PyQt6.QtWidgets import QDialog
 
 from vasoanalyzer.services.version import is_newer_version
 
@@ -68,7 +68,7 @@ class UpdateChecker(QObject):
             request.setRawHeader(key.encode("ascii"), value.encode("ascii"))
 
         self._reply = self._nam.get(request)
-        self._reply.finished.connect(self._on_reply_finished, Qt.QueuedConnection)
+        self._reply.finished.connect(self._on_reply_finished, Qt.ConnectionType.QueuedConnection)
         self._in_progress = True
         if self._timer is not None:
             self._timer.start(_TIMEOUT_MS)
@@ -112,9 +112,9 @@ class UpdateChecker(QObject):
         latest: str | None = None
         error: BaseException | None = None
 
-        status = reply.attribute(QNetworkRequest.HttpStatusCodeAttribute)
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
         status_code = int(status) if status is not None else None
-        if reply.error() != QNetworkReply.NoError:
+        if reply.error() != QNetworkReply.NetworkError.NoError:
             log.info("Update check failed: %s", reply.errorString())
         elif status_code == 200:
             try:

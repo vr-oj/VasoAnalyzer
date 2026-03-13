@@ -8,8 +8,8 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtWidgets import QHBoxLayout, QInputDialog, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtWidgets import QFrame, QHBoxLayout, QInputDialog, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.plots.channel_track import ChannelTrackSpec
@@ -40,7 +40,7 @@ class _TrackGutterWidget(QWidget):
         self.setObjectName("ChannelTrackGutter")
         self.setFixedWidth(max(int(width_px), 0))
         self.setContentsMargins(0, 0, 0, 0)
-        self.setAttribute(Qt.WA_PaintUnclipped, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_PaintUnclipped, False)
         self._root_layout = QVBoxLayout(self)
         self._root_layout.setContentsMargins(0, 0, 0, 0)
         self._root_layout.setSpacing(0)
@@ -55,7 +55,7 @@ class _TrackGutterWidget(QWidget):
 
         self._channel_label = QLabel(str(label or ""), self)
         self._channel_label.setObjectName("ChannelTrackGutterLabel")
-        self._channel_label.setAlignment(Qt.AlignCenter)
+        self._channel_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._channel_label.setWordWrap(False)
         font = self._channel_label.font()
         font.setPointSizeF(8.0)
@@ -75,7 +75,7 @@ class _TrackGutterWidget(QWidget):
                 child.setParent(None)
         layout.addStretch(1)
         if widget is not None:
-            layout.addWidget(widget, 0, Qt.AlignHCenter | Qt.AlignTop)
+            layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         layout.addStretch(1)
 
     def attach_control_widgets(
@@ -146,7 +146,17 @@ class PyQtGraphChannelTrack:
             width_px=self._gutter_width_px,
             parent=self._container,
         )
+        self._gutter_separator = QFrame(self._container)
+        self._gutter_separator.setObjectName("GutterSeparator")
+        self._gutter_separator.setFrameShape(QFrame.Shape.VLine)
+        self._gutter_separator.setFrameShadow(QFrame.Shadow.Plain)
+        self._gutter_separator.setFixedWidth(1)
+        self._gutter_separator.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self._gutter_separator.setStyleSheet(
+            "QFrame#GutterSeparator { color: palette(mid); }"
+        )
         self._container_layout.addWidget(self._gutter_widget, 0)
+        self._container_layout.addWidget(self._gutter_separator, 0)
         self._container_layout.addWidget(self.view.get_widget(), 1)
         self._frame = TrackFrame(self._container)
 
@@ -368,6 +378,10 @@ class PyQtGraphChannelTrack:
     def divider_visible(self) -> bool:
         """Return whether the bottom divider line is visible."""
         return self._frame.divider_visible()
+
+    def set_divider_left_offset(self, px: int) -> None:
+        """Inset the divider bar by px from the left (gutter + axis width)."""
+        self._frame.set_divider_left_offset(int(px))
 
     def set_click_handler(self, handler) -> None:
         """Assign click handler callback for this track's view."""

@@ -20,9 +20,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QByteArray, QMimeData, QObject, QRunnable, QSettings, QTimer, Qt
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QByteArray, QMimeData, QObject, QRunnable, QSettings, QTimer, Qt
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QInputDialog,
@@ -250,10 +250,10 @@ class SampleManager(QObject):
                 f"Failed {len(failures)} dataset(s)."
             )
             msg.setInformativeText("You can copy the details for support.")
-            copy_btn = msg.addButton("Copy details", QMessageBox.ActionRole)
-            msg.addButton(QMessageBox.Ok)
+            copy_btn = msg.addButton("Copy details", QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QMessageBox.StandardButton.Ok)
             msg.setDetailedText(detail)
-            msg.exec_()
+            msg.exec()
             if msg.clickedButton() is copy_btn:
                 QApplication.clipboard().setText(detail)
 
@@ -474,10 +474,10 @@ class SampleManager(QObject):
             msg.setWindowTitle("Paste Partial")
             msg.setText(f"Pasted {len(imported_ids)} dataset(s); {len(failures)} failed.")
             msg.setInformativeText("You can copy the details for support.")
-            copy_btn = msg.addButton("Copy details", QMessageBox.ActionRole)
-            msg.addButton(QMessageBox.Ok)
+            copy_btn = msg.addButton("Copy details", QMessageBox.ButtonRole.ActionRole)
+            msg.addButton(QMessageBox.StandardButton.Ok)
             msg.setDetailedText(detail)
-            msg.exec_()
+            msg.exec()
             if msg.clickedButton() is copy_btn:
                 QApplication.clipboard().setText(detail)
 
@@ -500,6 +500,25 @@ class SampleManager(QObject):
                 return value
         return None
 
+    @staticmethod
+    def _iter_sample_items(exp_item):
+        """Yield all sample QTreeWidgetItems under an experiment item, including inside subfolders."""
+        for k in range(exp_item.childCount()):
+            child = exp_item.child(k)
+            if child is None:
+                continue
+            obj = child.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(obj, SampleN):
+                yield child
+            else:
+                # Subfolder item — search its children
+                for m in range(child.childCount()):
+                    sample_child = child.child(m)
+                    if sample_child is not None and isinstance(
+                        sample_child.data(0, Qt.ItemDataRole.UserRole), SampleN
+                    ):
+                        yield sample_child
+
     def _update_tree_icons_for_samples(self, samples: Sequence[SampleN]) -> None:
         h = self._host
         if not h.project_tree:
@@ -507,28 +526,21 @@ class SampleManager(QObject):
         for sample in samples:
             found = False
             for i in range(h.project_tree.topLevelItemCount()):
-                project_item = h.project_tree.topLevelItem(i)
-                if project_item is None:
+                exp_item = h.project_tree.topLevelItem(i)
+                if exp_item is None:
                     continue
-                for j in range(project_item.childCount()):
-                    exp_item = project_item.child(j)
-                    if exp_item is None:
-                        continue
-                    for k in range(exp_item.childCount()):
-                        sample_item = exp_item.child(k)
-                        if sample_item is None:
-                            continue
-                        if sample_item.data(0, Qt.UserRole) is sample:
-                            quality = h._get_sample_data_quality(sample)
-                            sample_item.setIcon(0, h._data_quality_icon(quality))
-                            sample_item.setToolTip(
-                                0,
-                                f"Data quality: {h._data_quality_label(quality)}",
-                            )
-                            found = True
-                            break
-                    if found:
+                for sample_item in self._iter_sample_items(exp_item):
+                    if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
+                        quality = h._get_sample_data_quality(sample)
+                        sample_item.setIcon(0, h._data_quality_icon(quality))
+                        sample_item.setToolTip(
+                            0,
+                            f"Data quality: {h._data_quality_label(quality)}",
+                        )
+                        found = True
                         break
+                if found:
+                    break
                 if found:
                     break
 
@@ -571,24 +583,16 @@ class SampleManager(QObject):
 
         tree = h.project_tree
         for i in range(tree.topLevelItemCount()):
-            project_item = tree.topLevelItem(i)
-            if project_item is None:
+            exp_item = tree.topLevelItem(i)
+            if exp_item is None:
                 continue
-            for j in range(project_item.childCount()):
-                exp_item = project_item.child(j)
-                if exp_item is None:
-                    continue
-                for k in range(exp_item.childCount()):
-                    sample_item = exp_item.child(k)
-                    if sample_item is None:
-                        continue
-                    item_sample = sample_item.data(0, Qt.UserRole)
-                    if item_sample is sample:
-                        tree.blockSignals(True)
-                        tree.setCurrentItem(sample_item)
-                        tree.blockSignals(False)
-                        tree.scrollToItem(sample_item)
-                        return
+            for sample_item in self._iter_sample_items(exp_item):
+                if sample_item.data(0, Qt.ItemDataRole.UserRole) is sample:
+                    tree.blockSignals(True)
+                    tree.setCurrentItem(sample_item)
+                    tree.blockSignals(False)
+                    tree.scrollToItem(sample_item)
+                    return
 
     def _selected_samples_from_tree(self) -> list[SampleN]:
         h = self._host
@@ -596,7 +600,7 @@ class SampleManager(QObject):
             return []
         samples: list[SampleN] = []
         for item in h.project_tree.selectedItems() or []:
-            obj = item.data(0, Qt.UserRole)
+            obj = item.data(0, Qt.ItemDataRole.UserRole)
             if isinstance(obj, SampleN) and obj not in samples:
                 samples.append(obj)
         return samples
@@ -1573,32 +1577,27 @@ class SampleManager(QObject):
         return (id_val, od_val, avg_val, set_val)
 
     def _start_sample_load_progress(self, sample_name: str) -> None:
-        """Begin status-bar progress indication for sample load."""
+        """Begin animated progress bar for sample load."""
         h = self._host
         if h._progress_bar is None:
             return
-        h._progress_bar.setRange(0, 0)
-        h._progress_bar.setVisible(True)
-        h._progress_bar.setFormat(f"Loading {sample_name}…")
+        h.show_progress(f"Loading {sample_name}…")
         if h.statusBar() is not None:
             h.statusBar().showMessage(f"Loading {sample_name}…")
 
     def _update_sample_load_progress(self, percent: int, label: str) -> None:
-        """Update status-bar sample load progress."""
+        """Update the progress label during sample load (animator owns the value)."""
         h = self._host
         if h._progress_bar is None:
             return
-        if h._progress_bar.minimum() == 0 and h._progress_bar.maximum() == 0:
-            h._progress_bar.setRange(0, 100)
-        h._progress_bar.setValue(max(0, min(percent, 100)))
-        h._progress_bar.setFormat(f"{label}… %p%")
+        h._progress_animator.update_label(f"{label}…")
 
     def _finish_sample_load_progress(self) -> None:
-        """Hide status-bar sample load progress."""
+        """Complete the animated progress bar after sample load."""
         h = self._host
         if h._progress_bar is None:
             return
-        h._progress_bar.setVisible(False)
+        h.hide_progress()
         if h.statusBar() is not None:
             h.statusBar().clearMessage()
 
@@ -1693,12 +1692,10 @@ class SampleManager(QObject):
         if getattr(h, "project_tree", None):
             experiment_expanded: dict[str, bool] = {}
             for _i in range(h.project_tree.topLevelItemCount()):
-                _root = h.project_tree.topLevelItem(_i)
-                for _j in range(_root.childCount()):
-                    _exp_item = _root.child(_j)
-                    _obj = _exp_item.data(0, Qt.UserRole)
-                    if isinstance(_obj, Experiment):
-                        experiment_expanded[_obj.name] = _exp_item.isExpanded()
+                _exp_item = h.project_tree.topLevelItem(_i)
+                _obj = _exp_item.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(_obj, Experiment):
+                    experiment_expanded[_obj.name] = _exp_item.isExpanded()
             if experiment_expanded:
                 state["experiment_expanded"] = experiment_expanded
         return state
@@ -2148,27 +2145,40 @@ class SampleManager(QObject):
                     (h.od_toggle_act.isChecked() if h.od_toggle_act is not None else False),
                 )
                 outer_supported = h._outer_channel_available()
-                h._apply_toggle_state(inner_on, outer_on, outer_supported=outer_supported)
+                avg_supported = h._avg_pressure_channel_available()
+                set_supported = h._set_pressure_channel_available()
+                h._apply_toggle_state(
+                    inner_on,
+                    outer_on,
+                    outer_supported=outer_supported,
+                    avg_pressure_supported=avg_supported,
+                    set_pressure_supported=set_supported,
+                )
                 h._rebuild_channel_layout(inner_on, outer_on, redraw=False)
             # Apply avg/set visibility after layout so ancillary tracks stay in sync
+            # Clamp to availability so stale saved state can't re-enable missing channels
+            avg_supported = h._avg_pressure_channel_available()
+            set_supported = h._set_pressure_channel_available()
             if (
                 "avg_pressure_visible" in state
                 and hasattr(h, "avg_pressure_toggle_act")
                 and h.avg_pressure_toggle_act is not None
             ):
+                effective_avg = state["avg_pressure_visible"] and avg_supported
                 h.avg_pressure_toggle_act.blockSignals(True)
-                h.avg_pressure_toggle_act.setChecked(state["avg_pressure_visible"])
+                h.avg_pressure_toggle_act.setChecked(effective_avg)
                 h.avg_pressure_toggle_act.blockSignals(False)
-                h._apply_channel_toggle("avg_pressure", state["avg_pressure_visible"])
+                h._apply_channel_toggle("avg_pressure", effective_avg)
             if (
                 "set_pressure_visible" in state
                 and hasattr(h, "set_pressure_toggle_act")
                 and h.set_pressure_toggle_act is not None
             ):
+                effective_set = state["set_pressure_visible"] and set_supported
                 h.set_pressure_toggle_act.blockSignals(True)
-                h.set_pressure_toggle_act.setChecked(state["set_pressure_visible"])
+                h.set_pressure_toggle_act.setChecked(effective_set)
                 h.set_pressure_toggle_act.blockSignals(False)
-                h._apply_channel_toggle("set_pressure", state["set_pressure_visible"])
+                h._apply_channel_toggle("set_pressure", effective_set)
 
             legend_settings = state.get("legend_settings")
             if isinstance(legend_settings, dict):

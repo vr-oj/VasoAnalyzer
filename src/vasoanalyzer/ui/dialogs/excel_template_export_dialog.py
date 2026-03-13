@@ -10,9 +10,9 @@ from pathlib import Path
 
 import pandas as pd
 from openpyxl import load_workbook
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -33,37 +33,12 @@ from vasoanalyzer.excel.flexible_writer import (
     apply_flexible_write_plan,
     build_flexible_write_plan,
 )
+from vasoanalyzer.excel.label_matching import best_match as _find_best_match
 from vasoanalyzer.excel.template_metadata import read_template_metadata
 from vasoanalyzer.excel.template_v1 import inspect_template, validate_template_or_raise
 from vasoanalyzer.excel.writer_v1 import apply_write_plan, build_write_plan
 from vasoanalyzer.export.generator import build_export_table, events_from_rows
 from vasoanalyzer.export.profiles import EVENT_TABLE_ROW_PER_EVENT, PRESSURE_CURVE_STANDARD
-
-
-def _normalize_label(label: str) -> str:
-    """Normalize a measurement label for fuzzy matching."""
-    return (
-        label.lower()
-        .replace("–", "-")
-        .replace("—", "-")
-        .replace(":", "-")
-        .replace("  ", " ")
-        .strip()
-    )
-
-
-def _find_best_match(template_label: str, session_labels: list[str]) -> str | None:
-    """Return the best-matching session event label for a template row label."""
-    norm_template = _normalize_label(template_label)
-    for sl in session_labels:
-        if _normalize_label(sl) == norm_template:
-            return sl
-    # Partial substring match
-    for sl in session_labels:
-        norm_sl = _normalize_label(sl)
-        if norm_template in norm_sl or norm_sl in norm_template:
-            return sl
-    return None
 
 
 class ExcelTemplateExportDialog(QDialog):
@@ -165,8 +140,8 @@ class ExcelTemplateExportDialog(QDialog):
         self._mapping_table.setHorizontalHeaderLabels(["Template Row Label", "Session Event"])
         self._mapping_table.horizontalHeader().setStretchLastSection(True)
         self._mapping_table.horizontalHeader().setDefaultSectionSize(260)
-        self._mapping_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._mapping_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._mapping_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._mapping_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         flex_layout.addWidget(self._mapping_table, 1)
 
         self._flexible_group.setVisible(False)
@@ -188,11 +163,11 @@ class ExcelTemplateExportDialog(QDialog):
         self.preview_table = QTableWidget(0, 3)
         self.preview_table.setHorizontalHeaderLabels(["Row / Metric", "Value", "Target Cell"])
         self.preview_table.horizontalHeader().setStretchLastSection(True)
-        self.preview_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.preview_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         preview_layout.addWidget(self.preview_table)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
-        self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         preview_layout.addWidget(self.status_label)
         layout.addWidget(preview_group, 1)
 
@@ -411,16 +386,16 @@ class ExcelTemplateExportDialog(QDialog):
 
             if event_row.is_header:
                 item = QTableWidgetItem(f"— {event_row.label} —")
-                item.setFlags(Qt.ItemIsEnabled)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 item.setForeground(QColor("#9CA3AF"))
                 self._mapping_table.setItem(row_idx, 0, item)
                 blank = QTableWidgetItem("")
-                blank.setFlags(Qt.ItemIsEnabled)
+                blank.setFlags(Qt.ItemFlag.ItemIsEnabled)
                 blank.setForeground(QColor("#9CA3AF"))
                 self._mapping_table.setItem(row_idx, 1, blank)
             else:
                 label_item = QTableWidgetItem(event_row.label)
-                label_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                label_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
                 self._mapping_table.setItem(row_idx, 0, label_item)
 
                 combo = QComboBox()

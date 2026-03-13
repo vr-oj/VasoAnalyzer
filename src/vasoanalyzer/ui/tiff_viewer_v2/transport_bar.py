@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from vasoanalyzer.ui.icons import snapshot_icon
 from vasoanalyzer.ui.theme import CURRENT_THEME
@@ -17,15 +17,15 @@ class TiffScrubBar(QtWidgets.QSlider):
     """Custom scrub bar with a physical rail + handle."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(QtCore.Qt.Horizontal, parent)
+        super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
         self.setObjectName("TiffScrubBar")
         self.setMouseTracking(True)
         self.setTracking(True)
-        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
         self.setRange(0, 0)
-        self.setFixedHeight(30)
-        self._track_height = 10
-        self._handle_radius = 8
+        self.setFixedHeight(24)
+        self._track_height = 8
+        self._handle_radius = 7
         self._hovering = False
         self._dragging = False
 
@@ -88,12 +88,12 @@ class TiffScrubBar(QtWidgets.QSlider):
             handle = self._handle_rect().adjusted(-4, -4, 4, 4)
             hover = handle.contains(pos)
         self.setCursor(
-            QtCore.Qt.SizeHorCursor if hover or self._dragging else QtCore.Qt.ArrowCursor
+            QtCore.Qt.CursorShape.SizeHorCursor if hover or self._dragging else QtCore.Qt.CursorShape.ArrowCursor
         )
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
         palette = self.palette()
         window = palette.window().color()
@@ -121,13 +121,13 @@ class TiffScrubBar(QtWidgets.QSlider):
             clip_path.addRoundedRect(track, radius, radius)
             painter.save()
             painter.setClipPath(clip_path)
-            painter.setPen(QtCore.Qt.NoPen)
+            painter.setPen(QtCore.Qt.PenStyle.NoPen)
             painter.setBrush(fill)
             painter.drawRoundedRect(progress_rect, radius, radius)
             painter.restore()
 
         handle_rect = self._handle_rect()
-        painter.setPen(QtCore.Qt.NoPen)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.setBrush(shadow)
         painter.drawEllipse(handle_rect.translated(0, 1))
 
@@ -136,30 +136,30 @@ class TiffScrubBar(QtWidgets.QSlider):
         painter.drawEllipse(handle_rect)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._dragging = True
             self.setSliderDown(True)
-            self.setValue(self._value_from_pos(event.localPos()))
-            self._update_cursor(event.localPos())
+            self.setValue(self._value_from_pos(event.position()))
+            self._update_cursor(event.position())
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.buttons() & QtCore.Qt.LeftButton:
+        if event.buttons() & QtCore.Qt.MouseButton.LeftButton:
             self._dragging = True
             self.setSliderDown(True)
-            self.setValue(self._value_from_pos(event.localPos()))
-        self._hovering = self._handle_rect().adjusted(-4, -4, 4, 4).contains(event.localPos())
-        self._update_cursor(event.localPos())
+            self.setValue(self._value_from_pos(event.position()))
+        self._hovering = self._handle_rect().adjusted(-4, -4, 4, 4).contains(event.position())
+        self._update_cursor(event.position())
         self.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self._dragging = False
             self.setSliderDown(False)
-            self._update_cursor(event.localPos())
+            self._update_cursor(event.position())
             self.update()
             event.accept()
             return
@@ -172,7 +172,7 @@ class TiffScrubBar(QtWidgets.QSlider):
     def leaveEvent(self, event: QtCore.QEvent) -> None:
         self._hovering = False
         self._dragging = False
-        self.setCursor(QtCore.Qt.ArrowCursor)
+        self.setCursor(QtCore.Qt.CursorShape.ArrowCursor)
         self.update()
         super().leaveEvent(event)
 
@@ -187,14 +187,14 @@ class TiffTransportBar(QtWidgets.QFrame):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("TiffTransportBar")
-        self._icon_size = QtCore.QSize(16, 16)
-        self._button_size = 30
+        self._icon_size = QtCore.QSize(14, 14)
+        self._button_size = 26
         self._page_count = 0
         self._page_index = 0
         self._speed_multiplier = 1.0
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 4)
         layout.setSpacing(2)
 
         self.scrub_bar = TiffScrubBar(self)
@@ -207,7 +207,7 @@ class TiffTransportBar(QtWidgets.QFrame):
 
         self.start_button = QtWidgets.QToolButton(self)
         self.start_button.setAutoRaise(False)
-        self.start_button.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
+        self.start_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.start_button.setIconSize(self._icon_size)
         self.start_button.setFixedSize(self._button_size, self._button_size)
         self.start_button.setToolTip("Jump to first frame")
@@ -217,7 +217,7 @@ class TiffTransportBar(QtWidgets.QFrame):
         self.play_button = QtWidgets.QToolButton(self)
         self.play_button.setAutoRaise(False)
         self.play_button.setCheckable(True)
-        self.play_button.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
+        self.play_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.play_button.setIconSize(self._icon_size)
         self.play_button.setFixedSize(self._button_size, self._button_size)
         self.play_button.setToolTip("Play")
@@ -226,39 +226,33 @@ class TiffTransportBar(QtWidgets.QFrame):
 
         self.end_button = QtWidgets.QToolButton(self)
         self.end_button.setAutoRaise(False)
-        self.end_button.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly)
+        self.end_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.end_button.setIconSize(self._icon_size)
         self.end_button.setFixedSize(self._button_size, self._button_size)
         self.end_button.setToolTip("Jump to last frame")
         self.end_button.clicked.connect(self._on_jump_end)
         row.addWidget(self.end_button)
+
         row.addStretch(1)
 
-        self.speed_label = QtWidgets.QLabel("Speed:")
-        self.speed_label.setObjectName("SnapshotSpeedLabel")
         self.speed_combo = QtWidgets.QComboBox(self)
         self.speed_combo.setObjectName("SnapshotSpeedCombo")
         self.speed_combo.setToolTip("Playback speed multiplier")
-        self.speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        self.speed_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents)
         for value in (0.25, 0.5, 1.0, 2.0, 5.0, 10.0):
             self.speed_combo.addItem(_format_multiplier(value), value)
         self.speed_combo.currentIndexChanged.connect(self._on_speed_changed)
-        self.speed_pill = QtWidgets.QFrame(self)
-        self.speed_pill.setObjectName("SnapshotSpeedPill")
-        self.speed_pill.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
-        speed_layout = QtWidgets.QHBoxLayout(self.speed_pill)
-        speed_layout.setContentsMargins(8, 4, 8, 4)
-        speed_layout.setSpacing(6)
-        speed_layout.addWidget(self.speed_label)
-        speed_layout.addWidget(self.speed_combo)
+        row.addWidget(self.speed_combo)
+        # Backward-compat aliases used by snapshot_manager
+        self.speed_label = self.speed_combo
+        self.speed_pill = self.speed_combo
 
         self.time_label = QtWidgets.QLabel("Frame 0 / 0")
         self.time_label.setObjectName("SnapshotTimeLabel")
-        self.time_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-        self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        self.time_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self.time_label.setSizePolicy(QtWidgets.QSizePolicy.Policy.Maximum, QtWidgets.QSizePolicy.Policy.Fixed)
         row.addWidget(self.time_label)
         layout.addLayout(row)
-
         self._apply_control_styles()
         self._apply_icons()
         self.set_speed_multiplier(1.0)
@@ -336,29 +330,22 @@ QToolButton:disabled {{
     border-color: {_rgba(border)};
 }}
 """
-        pill_bg = QtGui.QColor(button_bg)
-        pill_bg.setAlpha(235)
-        pill_border = QtGui.QColor(border)
-        pill_border.setAlpha(210)
-        pill_radius = max(10, radius + 6)
-        pill_style = f"""
-QFrame#SnapshotSpeedPill {{
-    background: {_rgba(pill_bg)};
-    border: 1px solid {_rgba(pill_border)};
-    border-radius: {pill_radius}px;
-}}
-"""
         combo_style = f"""
 QComboBox#SnapshotSpeedCombo {{
-    background: transparent;
-    border: none;
-    padding: 2px 4px;
+    background: {_rgba(button_bg)};
+    border: 1px solid {_rgba(border)};
+    border-radius: {radius}px;
+    padding: 2px 6px 2px 6px;
     min-height: 22px;
     color: {_rgba(text)};
+    font-size: 10px;
+}}
+QComboBox#SnapshotSpeedCombo:hover {{
+    background: {_rgba(hover)};
 }}
 QComboBox#SnapshotSpeedCombo::drop-down {{
     border: none;
-    width: 18px;
+    width: 14px;
 }}
 QComboBox#SnapshotSpeedCombo QAbstractItemView {{
     background: {_rgba(field)};
@@ -372,13 +359,11 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
         )
         for button in (self.start_button, self.play_button, self.end_button):
             button.setStyleSheet(button_style)
-        self.speed_pill.setStyleSheet(pill_style)
         self.speed_combo.setStyleSheet(combo_style)
-        self.speed_label.setStyleSheet(f"color: {_rgba(text)}; font-size: 10px;")
         self.time_label.setStyleSheet(label_style)
 
     def changeEvent(self, event: QtCore.QEvent) -> None:
-        if event.type() == QtCore.QEvent.PaletteChange:
+        if event.type() == QtCore.QEvent.Type.PaletteChange:
             self._apply_control_styles()
             self._apply_icons()
         super().changeEvent(event)
@@ -389,7 +374,7 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
             self.play_button,
             self.end_button,
             self.scrub_bar,
-            self.speed_pill,
+            self.speed_combo,
         ):
             widget.setEnabled(enabled)
         self.time_label.setEnabled(True)
@@ -398,6 +383,7 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
         self._page_count = max(0, int(page_count))
         self.scrub_bar.setRange(0, max(0, self._page_count - 1))
         self.set_controls_enabled(self._page_count > 0)
+        self._lock_time_label_width()
         self._update_frame_label()
 
     def set_page_index(self, page_index: int) -> None:
@@ -433,6 +419,21 @@ QComboBox#SnapshotSpeedCombo QAbstractItemView {{
 
     def set_time_readout(self, text: str) -> None:
         self.time_label.setText(text)
+        fm = self.time_label.fontMetrics()
+        needed = fm.horizontalAdvance(text) + 8
+        if needed > self.time_label.minimumWidth():
+            self.time_label.setMinimumWidth(needed)
+
+    def _lock_time_label_width(self) -> None:
+        """Set a stable minimum width so the label doesn't resize during scrub."""
+        if self._page_count <= 0:
+            self.time_label.setMinimumWidth(0)
+            return
+        n = str(self._page_count)
+        # Use the widest plausible text for this page count
+        sample = f"Frame {n} / {n}   00000.00 s / 00000.00 s"
+        fm = self.time_label.fontMetrics()
+        self.time_label.setMinimumWidth(fm.horizontalAdvance(sample) + 8)
 
     def _update_frame_label(self) -> None:
         if self._page_count <= 0:

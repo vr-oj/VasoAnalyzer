@@ -11,7 +11,7 @@ import os
 from collections import OrderedDict
 from collections.abc import Hashable
 
-from PyQt5 import QtGui
+from PyQt6 import QtGui
 
 DEFAULT_QIMAGE_CACHE_MB = 512
 

@@ -7,8 +7,8 @@
 
 from pathlib import Path
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QDialog,
@@ -80,7 +80,7 @@ class FolderImportDialog(QDialog):
         self.folder_edit.setReadOnly(True)
         self.folder_edit.setToolTip(path_text)
         self.folder_edit.setCursorPosition(0)
-        self.folder_edit.setFocusPolicy(Qt.NoFocus)
+        self.folder_edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         change_btn = QPushButton("Change…", self)
         change_btn.setEnabled(False)
         path_layout.addWidget(self.folder_edit, 1)
@@ -105,18 +105,18 @@ class FolderImportDialog(QDialog):
             ["Import", "Sample Name", "Trace File", "Events", "Status"]
         )
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header_item = self.table.horizontalHeaderItem(0)
         if header_item is not None:
             header_item.setText("")
             header_item.setToolTip("Import")
-            header_item.setTextAlignment(Qt.AlignCenter)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setTextElideMode(Qt.ElideMiddle)
+            header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.table.setColumnWidth(0, 36)
         self.table.setColumnWidth(3, max(self.table.columnWidth(3), 70))
         self.table.setColumnWidth(4, max(self.table.columnWidth(4), 110))
@@ -154,7 +154,7 @@ class FolderImportDialog(QDialog):
             "Combine all checked traces into a single merged dataset\n"
             "instead of importing each as a separate dataset."
         )
-        self.merge_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.merge_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.merge_btn.toggled.connect(self._update_status_label)
         import_layout.addWidget(self.merge_btn)
 
@@ -170,10 +170,10 @@ class FolderImportDialog(QDialog):
         layout.addWidget(self.status_label)
 
         # Dialog buttons
-        self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
-        self.ok_button = self.button_box.button(QDialogButtonBox.Ok)
+        self.ok_button = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         if self.ok_button:
             self.ok_button.setText("Import Selected")
         layout.addWidget(self.button_box)
@@ -187,13 +187,13 @@ class FolderImportDialog(QDialog):
         for row, candidate in enumerate(self.candidates):
             # Checkbox column
             checkbox_item = QTableWidgetItem()
-            checkbox_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            checkbox_item.setCheckState(Qt.Unchecked)
+            checkbox_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            checkbox_item.setCheckState(Qt.CheckState.Unchecked)
             self.table.setItem(row, 0, checkbox_item)
 
             # Sample name (subfolder name)
             name_item = QTableWidgetItem(candidate.subfolder)
-            name_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            name_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row, 1, name_item)
 
             # Trace file (relative path for display)
@@ -202,23 +202,23 @@ class FolderImportDialog(QDialog):
                 trace_display = "..." + trace_display[-47:]
             trace_item = QTableWidgetItem(trace_display)
             trace_item.setToolTip(candidate.trace_file)
-            trace_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            trace_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row, 2, trace_item)
 
             # Events file status
             events_text = "✓" if candidate.events_file else "—"
             events_item = QTableWidgetItem(events_text)
-            events_item.setTextAlignment(Qt.AlignCenter)
+            events_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if candidate.events_file:
                 events_item.setToolTip(candidate.events_file)
-            events_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            events_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row, 3, events_item)
 
             # Status
             status_text, status_tooltip = self._get_status_display(candidate.status)
             status_item = QTableWidgetItem(status_text)
             status_item.setToolTip(status_tooltip)
-            status_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            status_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.table.setItem(row, 4, status_item)
 
         # Unblock signals now that table is fully populated
@@ -266,19 +266,19 @@ class FolderImportDialog(QDialog):
 
             if mode == "new":
                 is_new = candidate.status in {"NEW", "MODIFIED"}
-                item.setCheckState(Qt.Checked if is_new else Qt.Unchecked)
-                item.setFlags(Qt.ItemIsEnabled)
+                item.setCheckState(Qt.CheckState.Checked if is_new else Qt.CheckState.Unchecked)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             elif mode == "all":
                 if candidate.status == "ALREADY_LOADED":
-                    item.setCheckState(Qt.Unchecked)
+                    item.setCheckState(Qt.CheckState.Unchecked)
                 else:
-                    item.setCheckState(Qt.Checked)
-                item.setFlags(Qt.ItemIsEnabled)
+                    item.setCheckState(Qt.CheckState.Checked)
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             else:  # custom
-                item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
                 if not self._custom_initialized:
                     is_new = candidate.status in {"NEW", "MODIFIED"}
-                    item.setCheckState(Qt.Checked if is_new else Qt.Unchecked)
+                    item.setCheckState(Qt.CheckState.Checked if is_new else Qt.CheckState.Unchecked)
         self.table.blockSignals(False)
 
         if mode == "custom":
@@ -313,7 +313,7 @@ class FolderImportDialog(QDialog):
         count = 0
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)
-            if item is not None and item.checkState() == Qt.Checked:
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
                 count += 1
         return count
 
@@ -362,7 +362,7 @@ class FolderImportDialog(QDialog):
         selected = []
         for row, candidate in enumerate(self.candidates):
             item = self.table.item(row, 0)
-            if item is not None and item.checkState() == Qt.Checked:
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
                 selected.append(candidate)
         return selected
 

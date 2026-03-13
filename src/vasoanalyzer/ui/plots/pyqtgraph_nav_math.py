@@ -76,6 +76,3 @@ def tick_style_for_trace_count(trace_count: int) -> TickStyle:
     else:
         density = 0.55
     return TickStyle(density=density, text_offset=6, text_width=34, text_height=18)
-    if count <= 4:
-        return TickStyle(density=0.85, text_offset=5, text_width=30, text_height=16)
-    return TickStyle(density=0.7, text_offset=4, text_width=28, text_height=14)

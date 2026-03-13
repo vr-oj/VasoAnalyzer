@@ -11,9 +11,9 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QObject
-from PyQt5.QtGui import QIcon, QPalette
-from PyQt5.QtWidgets import QAction, QApplication, QPushButton, QToolButton
+from PyQt6.QtCore import QObject
+from PyQt6.QtGui import QIcon, QPalette, QAction
+from PyQt6.QtWidgets import QApplication, QPushButton, QToolButton
 
 if TYPE_CHECKING:
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
@@ -284,17 +284,12 @@ class ThemeManager(QObject):
                 border: 1px solid {panel_border};
                 border-radius: {radius}px;
             }}
-            QLabel#SnapshotSpeedLabel,
             QLabel#SnapshotTimeLabel {{
                 color: {text};
                 font-size: 10px;
             }}
             QLabel#SnapshotTimeLabel {{
                 font-family: Menlo, Consolas, "Courier New", monospace;
-            }}
-            QLabel#SnapshotStatusLabel {{
-                color: {status};
-                font-size: 10px;
             }}
             QLabel#SnapshotSubsampleLabel {{
                 background: {button_hover};
@@ -308,8 +303,8 @@ class ThemeManager(QObject):
                 border: 1px solid {border};
                 border-radius: {radius}px;
                 padding: 0px;
-                min-height: 30px;
-                min-width: 30px;
+                min-height: 26px;
+                min-width: 26px;
                 font-size: 12px;
             }}
             QFrame#SnapshotCard QToolButton:hover {{
@@ -376,9 +371,11 @@ class ThemeManager(QObject):
         except Exception:
             log.debug("Failed to assign icon to import button", exc_info=True)
 
-        if hasattr(h, "_shared_button_css"):
+        if hasattr(h, "_primary_toolbar_css"):
+            toolbar.setStyleSheet(h._primary_toolbar_css())
+        elif hasattr(h, "_shared_button_css"):
             toolbar.setStyleSheet(h._shared_button_css())
-            for action in toolbar.actions():
-                widget = toolbar.widgetForAction(action)
-                if isinstance(widget, QPushButton):
-                    h._apply_button_style(widget)
+        for action in toolbar.actions():
+            widget = toolbar.widgetForAction(action)
+            if isinstance(widget, QPushButton) and hasattr(h, "_apply_button_style"):
+                h._apply_button_style(widget)

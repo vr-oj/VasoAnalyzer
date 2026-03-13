@@ -46,3 +46,6 @@ ruff.txt
 
 # Project-specific ignores
 ExcelTemplates/
+/.claude
+Histamine Signaling Pathway.vaso
+Histamine Signaling Pathway.vaso.lock

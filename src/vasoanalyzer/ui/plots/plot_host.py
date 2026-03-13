@@ -15,7 +15,7 @@ from matplotlib.axes import Axes
 from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.text import Annotation, Text
-from PyQt5.QtCore import QTimer
+from PyQt6.QtCore import QTimer
 
 from vasoanalyzer.app.flags import is_enabled
 from vasoanalyzer.core.trace_model import TraceModel
@@ -1274,8 +1274,8 @@ class PlotHost:
 
     def _show_qt_tooltip(self, evt, html: str) -> None:
         try:
-            from PyQt5.QtGui import QCursor
-            from PyQt5.QtWidgets import QToolTip
+            from PyQt6.QtGui import QCursor
+            from PyQt6.QtWidgets import QToolTip
 
             QToolTip.showText(QCursor.pos(), html)
         except Exception:
@@ -1300,7 +1300,7 @@ class PlotHost:
     def _hide_tooltip(self) -> None:
         self._last_hover_text = None
         try:
-            from PyQt5.QtWidgets import QToolTip
+            from PyQt6.QtWidgets import QToolTip
 
             QToolTip.hideText()
         except Exception:

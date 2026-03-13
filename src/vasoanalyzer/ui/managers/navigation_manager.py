@@ -12,9 +12,8 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
-from PyQt5.QtCore import QObject, Qt
-from PyQt5.QtGui import QKeySequence
-from PyQt5.QtWidgets import QAction
+from PyQt6.QtCore import QObject, Qt
+from PyQt6.QtGui import QKeySequence, QAction
 
 if TYPE_CHECKING:
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
@@ -59,14 +58,14 @@ class NavigationManager(QObject):
         def _add_action(label: str, shortcut: str, handler) -> None:
             action = QAction(label, h)
             action.setShortcut(shortcut)
-            action.setShortcutContext(Qt.WindowShortcut)
+            action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             action.triggered.connect(handler)
             h.addAction(action)
             h._trace_nav_shortcuts.append(action)
 
         zoom_all = QAction("Zoom to All (X)", h)
         zoom_all.setShortcuts([QKeySequence("0"), QKeySequence("Ctrl+0")])
-        zoom_all.setShortcutContext(Qt.WindowShortcut)
+        zoom_all.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
         zoom_all.triggered.connect(self._zoom_all_x)
         h.addAction(zoom_all)
         h._trace_nav_shortcuts.append(zoom_all)
@@ -111,7 +110,7 @@ class NavigationManager(QObject):
             current_window=current_window,
             cursor_available=cursor_available,
         )
-        if not dialog.exec_():
+        if not dialog.exec():
             return
         time_value = dialog.time_value()
         if time_value is None:

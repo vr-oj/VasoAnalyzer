@@ -3,7 +3,56 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtWidgets import QUndoCommand
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from PyQt6.QtGui import QUndoCommand
+
+if TYPE_CHECKING:
+    from vasoanalyzer.ui.event_table import EventRow
+
+
+class AddEventCommand(QUndoCommand):
+    """Undoable command for inserting one event into the event table."""
+
+    def __init__(self, app, index: int, row: EventRow, meta: dict[str, Any] | None = None):
+        label_text = row[0] if row else "event"
+        super().__init__(f"Add Event '{label_text}'")
+        self.app = app
+        self._index = index
+        self._row = row
+        self._meta = dict(meta or {})
+
+    def redo(self) -> None:
+        self.app._insert_event_at(self._index, self._row, self._meta)
+
+    def undo(self) -> None:
+        self.app._remove_event_at(self._index)
+
+
+class DeleteEventsCommand(QUndoCommand):
+    """Undoable command for deleting one or more events from the event table."""
+
+    def __init__(self, app, removed: list[tuple[int, EventRow, dict[str, Any]]]):
+        count = len(removed)
+        if count == 1:
+            super().__init__(f"Delete Event '{removed[0][1][0]}'")
+        else:
+            super().__init__(f"Delete {count} Events")
+        self.app = app
+        # Store as (index, row, meta) sorted by index ascending for re-insertion
+        self._removed = sorted(removed, key=lambda r: r[0])
+
+    def redo(self) -> None:
+        # Remove in reverse order so indices stay valid
+        for idx, _row, _meta in reversed(self._removed):
+            self.app._remove_event_at(idx)
+
+    def undo(self) -> None:
+        # Re-insert in ascending order
+        for idx, row, meta in self._removed:
+            self.app._insert_event_at(idx, row, meta)
 
 
 class ReplaceEventCommand(QUndoCommand):

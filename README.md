@@ -1,286 +1,224 @@
-# VasoAnalyzer v3.0.2
+# VasoAnalyzer v3.1.0
 
-**Companion app for VasoTracker — Pressure Myography Analysis Toolkit**
+**Desktop analysis toolkit for pressure myography — built for VasoTracker users**
 
-VasoAnalyzer is a cross-platform **desktop app** (Windows / macOS) for analyzing
-pressure myography experiments. It focuses on:
+<!-- TODO: Add screenshot/banner image here -->
 
-- fast, responsive trace visualization  
-- rich event annotation  
-- careful point editing with an audit trail  
-- export-ready figures and tables
+VasoAnalyzer turns raw VasoTracker recordings into clean, export-ready results without leaving your desktop. Load a trace CSV, annotate events, clean artefacts, fill your lab's Excel template, and export publication-quality figures — all inside a single `.vaso` project file you can share with collaborators or archive for reproducibility.
 
-Everything for an experiment lives in a single project file (`.vaso`) so you
-can send a whole analysis to a collaborator as one file.
+> **Privacy first** — all processing happens locally. No cloud, no account, no data leaves your machine.
 
 ---
 
-## 🔬 VasoTracker Integration
+## Who is this for?
 
-**Full support for VasoTracker experimental data with:**
+VasoAnalyzer is designed for researchers and lab members who run **pressure myography experiments** with [VasoTracker](https://vasotracker.com) and need a fast, reliable way to:
 
-- **Microsecond-precision time tracking** — Uses `Time_s_exact` for 14 µs accuracy (vs 100 ms)
-- **Automatic file discovery** — Drop any file (trace CSV, event table, or TIFF) and VasoAnalyzer finds siblings
-- **Complete data preservation** — All VasoTracker columns saved (frame numbers, TIFF pages, temperature, markers, caliper)
-- **Smart event linking** — Frame-based synchronization for perfect TIFF alignment
-- **Provenance tracking** — Original filenames, timestamps, and data sources preserved
-- **External TIFF by default** — Small `.vaso` files; optional embedding for archival
+- Visualize multi-channel diameter and pressure traces
+- Annotate protocol events (drug additions, pressure steps, washes)
+- Clean artefacts and spikes before analysis
+- Compare datasets side by side
+- Export figures and tables for papers and presentations
+- Keep an organized, reproducible record of every experiment
 
-👉 See [**VasoTracker Import Guide**](docs/vasotracker_import.md) for complete documentation.
-
----
-
-## ✨ Key Features
-
-- **Single-file projects (`.vaso`)**
-  - All datasets, analysis state, and configuration are stored inside one file.
-  - Designed to be portable between machines and OSes.
-
-- **Multi-track trace viewer**
-  - Inner diameter, outer diameter, pressure, and set-pressure stacked in a
-    synchronized view.
-  - Level-of-detail rendering keeps navigation smooth even for long recordings.
-  - Event strip above the trace shows numbered event markers aligned in time.
-  - Per-channel event labels drawn inline on each track for at-a-glance
-    protocol context.
-
-- **Point Editor with audit history**
-  - Interactive editor for cleaning artefacts and spikes in diameter traces.
-  - Connect-across / delete-with-NaN operations.
-  - Edits are recorded as structured actions and summarized in the dataset
-    “Edit History” panel.
-
-- **Event management**
-  - CSV-based event import (time + label, plus optional metadata).
-  - Events are tied to the trace and shown in both the event table and plots.
-  - Default plot labels use event indices (1, 2, 3, …) that match the table.
-
-- **Excel Mapper**
-  - Map event- and trace-level data into your lab’s Excel templates.
-  - Reuse mappings so you don’t have to redo column wiring every time.
-  - Flexible template writer supports non-standard lab workbooks: pick a sheet
-    and column, preview the result, and write without overwriting formulas.
-
-- **Exports + GIFs**
-  - Export to clipboard, CSV, and Excel templates with consistent formatting.
-  - Generate high-res plot images (PNG/TIFF/SVG) and synchronized vessel +
-    trace GIF animations from the same data.
-
-- **Cross-platform**
-  - Runs on recent Windows and macOS versions.
-  - Pure Python + Qt + PyQtGraph + Matplotlib, no cloud dependencies.
+If you currently copy-paste VasoTracker CSVs into Excel by hand, VasoAnalyzer replaces that entire workflow.
 
 ---
 
-## 🧬 Project Files (`.vaso`)
+## Key capabilities
 
-VasoAnalyzer stores entire experiments as a single project file.
+### Single-file projects (`.vaso`)
+Every dataset, event annotation, edit, figure setting, and export configuration lives in one portable SQLite file. Back it up, email it, or drop it on a shared drive — your collaborator opens the exact same view.
 
-- **`.vaso`** — a ZIP container you can open with any ZIP tool for debugging
-  and share freely between machines.
+### Multi-track trace viewer
+Inner diameter, outer diameter, pressure, and set-pressure channels stacked in a synchronized view with smooth pan and zoom. Event markers sit above the trace and inline on each channel so you always know where you are in the protocol.
 
-A `.vaso` project typically includes:
+### Dataset comparison
+Open the comparison tool to view multiple datasets side by side. Drag samples from the project tree, compare traces across experiments, and see event markers overlaid on each panel.
 
-- **HEAD.json** — top-level metadata for the experiment.
-- **Embedded staging database** — SQLite file with traces, events, and
-  derived tables.
-- **Snapshots** — optional TIFF snapshots or down-sampled frames for preview.
-- **Views & settings** — plot styles, axis settings, event label options.
-- **Edit history** — audit entries for point edits made in the Point Editor.
-- **Exports** — exported tables, plot images, and GIF settings.
+### Point Editor with audit trail
+Interactively clean spikes and artefacts by deleting or connecting points. Every edit is recorded as a structured action and visible in the Edit History panel — nothing is silently discarded.
 
-You can safely back up, version, and share a project by copying the `.vaso`
-file. For advanced debugging, unzip it with any ZIP tool.
+### Event management
+Import event files (CSV/TXT with Time + Label + optional metadata like temperature and caliper readings). Events appear as plot markers, table rows, and strip annotations. Adjust timing and labels in place.
 
----
+### Excel Mapper
+Map event-level and trace-level data into your lab's existing Excel templates. The mapper uses intelligent label matching (exact, normalized, and fuzzy) and remembers your corrections across sessions. Formulas and formatting in the template are preserved.
 
-## 🚀 Quick Start (End-Users)
+### Exports
+- **Figures** — PNG, TIFF, or SVG at publication resolution
+- **GIF animations** — synchronized vessel image + trace playback
+- **Event tables** — CSV with diameters, pressures, and metadata per event
+- **Dataset packages** (`.vasods`) — share individual datasets between projects
+- **Reports** — composite figures with trace, event table, and metadata
 
-### 1. Install
-
-- **Binary build (recommended)**
-  - Download the latest Windows/macOS build from the project’s Releases page.
-  - Windows: unzip, then run `VasoAnalyzer.exe`.
-  - macOS: unzip, drag the app to **Applications**, then right-click → **Open**
-    on first run to bypass Gatekeeper.
-
-- **From source (advanced)**
-  - See [Run from source](#-%EF%B8%8F-run-from-source-advanced) below.
-
-### 2. Create or open a project
-
-1. Launch **VasoAnalyzer**.
-2. From the Home screen choose:
-   - **New project / experiment** to start from scratch, or  
-   - **Open project** to load an existing `*.vaso` file.
-3. The left sidebar shows your project tree (cohorts → samples → traces).
-
-### 3. Import data
-
-For each sample / trace:
-
-1. Click **Open Data…** in the toolbar.
-2. Choose:
-   - **Trace CSV**: must contain a time column and at least an inner diameter
-     column. Common header variants are recognized automatically.
-   - **Events CSV/TXT**: at minimum, `Time` and `Label`; optional metadata
-     columns (e.g. `Temp`, `P1`, `P2`, `Caliper`) are preserved.
-   - **TIFF snapshot** (optional): a representative stack; frames are
-     down-sampled for fast preview.
-
-After import, the trace viewer will show stacked ID/OD/pressure tracks plus an
-event table.
-
-### 4. Clean and annotate
-
-- Use **Edit Points** to open the Point Editor:
-  - Clean spikes and artefacts by deleting or connecting points.
-  - Apply changes to update the main trace.
-  - The “Edit History” section in the Details panel records what you did.
-
-- Use the **Events** table to adjust event times and labels:
-  - These are reflected in the plot and the event strip.
-
-- Use **Plot Settings** to adjust:
-  - Grid, axes, fonts, and tick styling.
-  - Event label appearance.
-
-### 5. Export
-
-VasoAnalyzer supports several export paths:
-
-- **Event tables** (CSV) — one row per event with associated diameters /
-  pressures and metadata.
-- **Excel Mapper** — map data into a lab-specific Excel template.
-- **Figures** — export plots and composed figures as PNG/TIFF/SVG (depending on
-  platform and configuration).
-
-All exports are reproducible: VasoAnalyzer stores enough state inside the
-project to regenerate views.
-
-### 6. Save and reopen
-
-- Use **Save Project** in the toolbar to persist your work to the `.vaso` file.
-- Later, double-click a `.vaso` or open from within the app to resume exactly
-  where you left off (including plots, events, edit history, and figures).
-
-### 7. Share datasets between projects
-
-Individual datasets can be shared between projects using **dataset packages**
-(`.vasods`) — lightweight ZIP archives containing a single dataset's trace,
-events, results, and metadata.
-
-**Export a dataset:**
-
-1. Select the dataset you want to share in the project tree.
-2. Go to **File → Export → Export Dataset Package…**
-3. Choose a destination and save the `.vasods` file.
-
-**Import a dataset:**
-
-- **From a `.vasods` file:** Go to **File → Open Data → Import Dataset
-  Package…**, select the `.vasods` file, and choose which experiment to import
-  it into.
-- **From another project:** Go to **File → Open Data → Import from Project…**
-  to browse another `.vaso` project in read-only mode, select one or more
-  datasets, and import them into your current project.
-
-Imported datasets preserve their original metadata and optionally keep the
-source experiment grouping. Name collisions are handled automatically.
+### Full VasoTracker integration
+- Microsecond-precision timing via `Time_s_exact`
+- Automatic sibling file discovery (drop any file and VasoAnalyzer finds the rest)
+- Frame-based TIFF synchronization for perfect image alignment
+- All VasoTracker columns preserved (frame numbers, TIFF pages, temperature, markers, caliper)
+- Provenance tracking — original filenames, timestamps, and data sources recorded
 
 ---
 
-## 🧰 Supported Inputs (summary)
+## Quick start
 
-- **Trace CSV**
-  - Required columns:
-    - `Time (s)` or similar
-    - `Inner Diameter (µm)` (header variants allowed)
-  - Optional columns:
-    - `Outer Diameter (µm)`
-    - one or more pressure channels
-    - any extra numeric or categorical columns
+### Install
 
-- **Event CSV/TXT**
-  - Required: `Time`, `Label`
-  - Optional: `Temp`, `P1`, `P2`, `Caliper`, and other metadata columns.
+Download the latest release for your platform from the [Releases page](https://github.com/vr-oj/VasoAnalyzer/releases).
 
-- **Images**
-  - TIFF stacks for snapshot/preview.
-  - Large stacks are auto-sampled for responsiveness.
+| Platform | Download | Steps |
+|----------|----------|-------|
+| **Windows** | `VasoAnalyzer-Setup-x.x.x.exe` | Run the installer and follow the prompts. A desktop shortcut is created automatically. |
+| **macOS** | `VasoAnalyzer-x.x.x.zip` | Extract, drag `VasoAnalyzer.app` to **Applications**, then right-click → **Open** on first launch to bypass Gatekeeper. |
 
----
+VasoAnalyzer checks for updates automatically (configurable in *Help → Check for Updates*).
 
-## 🗂️ Repository Layout (high-level)
+### Typical workflow
 
-- `src/vasoanalyzer/`
-  - `app/` — application entry points and launchers
-  - `cli/` — `vaso` command-line interface
-  - `ui/` — Qt dialogs, main window, point editor, Excel Mapper, export dialogs
-  - `core/` — project model, trace/event handling, audit, logging
-  - `storage/` — SQLite / project I/O
-  - `excel/` — Excel template reading and flexible writer
-  - `io/` — trace and event file importers
-  - `services/` — project repository, cache, and folder-import services
-  - `analysis/` — analysis and metrics modules
-  - `export/` — export generators and reports
-  - `utils/` — utility modules
-- `docs/` — user guide, welcome tour, and import documentation
-- `resources/` — application assets (icons, art, stylesheet)
-- `schemas/` — data/schema definitions and validation helpers
-- `scripts/` — maintenance and developer utilities
-- `tests/` — test suite
-- `packaging/` — PyInstaller spec, installer scripts, platform configs
-- `README.md` — this file
-- `LICENSE`, `CITATION.cff` — licensing and citation info
-
-(Details may vary slightly by version.)
+1. **Create a project** — launch VasoAnalyzer and click *Create New Project* on the Home screen.
+2. **Import data** — go to *File → Import* in the menu bar. Load a trace CSV (time + diameter), an event file (time + label), and optionally a TIFF stack.
+3. **Explore** — pan and zoom through the trace. Use `P` for pan mode, `Z` for select/zoom mode, scroll to navigate.
+4. **Clean** — open the Point Editor to remove spikes and artefacts. All edits are tracked.
+5. **Annotate** — adjust event labels and timing in the Events table. Changes are reflected on the plot immediately.
+6. **Export** — export figures (PNG/TIFF/SVG), event tables as CSV, or dataset packages for sharing.
+7. **Save** — press `Cmd/Ctrl + Shift + S` to save. The `.vaso` file captures everything — reopen it tomorrow to the exact same view.
 
 ---
 
-## 🧪 Run from source (advanced)
+## Supported data formats
 
-1. Install **Python 3.10+**.
-2. Create and activate a virtual environment.
-3. Install dependencies:
+### Trace CSV
+- **Required**: a time column (`Time (s)` or similar) and an inner diameter column (`Inner Diameter (µm)`)
+- **Optional**: outer diameter, pressure, set-pressure, and any additional numeric or categorical columns
+- Common header variants are recognized automatically
 
-   ```bash
-   pip install -r requirements.txt
-   pip install -e .
-   ```
+### Event CSV / TXT
+- **Required**: `Time` and `Label`
+- **Optional**: `Temp`, `P1`, `P2`, `Caliper`, and other metadata columns
+- If an event file sits next to a trace file, VasoAnalyzer auto-detects it
 
-4. Run the app:
+### Images
+- TIFF stacks for snapshot/preview (large stacks are auto-sampled for performance)
 
-   ```bash
-   python -m src.main
-   ```
-
-On first run you may see debug logging in the console; packaged builds typically
-suppress most of this.
-
----
-
-## 💻 Installing on macOS (packaged build)
-
-- Build or download the `.app`, then move it into `/Applications` (helps Launch Services register file types).
-- In Finder, right-click a `.vaso` file → `Open With` → `VasoAnalyzer`, and enable **Always Open With**. This binds `.vaso` files to VasoAnalyzer so double-click opens the app instead of unzipping.
-- If icons/association still look wrong, run the app once from `/Applications` or refresh Launch Services (`lsregister -f /Applications/VasoAnalyzer*.app`).
+### Project files
+- `.vaso` — single-file SQLite project containing all datasets, annotations, and settings
+- `.vasods` — single-dataset package for sharing between projects
 
 ---
 
-## 🔐 Privacy
+## Run from source
 
-* All processing happens **locally** on your machine.
-* The app may optionally check for updates (GitHub Releases) on startup using a
-  short HTTP request.
-* No data, traces, or images are uploaded by default.
+```bash
+# 1. Python 3.10+ required
+python --version
+
+# 2. Create a virtual environment
+python -m venv .venv && source .venv/bin/activate  # macOS/Linux
+python -m venv .venv && .venv\Scripts\activate      # Windows
+
+# 3. Install
+pip install -r requirements.txt
+pip install -e .
+
+# 4. Launch
+python -m src.main
+```
 
 ---
 
-## 🙌 Citation & License
+## macOS tips
 
-If VasoAnalyzer contributed to your work, please cite it using the metadata in
-`CITATION.cff`.
+- Move the `.app` to `/Applications` so Launch Services registers file type associations.
+- Right-click any `.vaso` file → *Open With* → *VasoAnalyzer*, then check *Always Open With* to bind `.vaso` files permanently.
+- If icons look wrong after moving the app, run it once from `/Applications` or refresh with `lsregister -f /Applications/VasoAnalyzer*.app`.
 
-This project is released under the **CC BY-NC-SA 4.0** license. See `LICENSE`
-and `LICENSES/` in this repository for details.
+---
+
+## Keyboard shortcuts (highlights)
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd/Ctrl + O` | Import trace CSV |
+| `Cmd/Ctrl + Shift + O` | Open project |
+| `Cmd/Ctrl + Shift + S` | Save project |
+| `P` | Pan mode |
+| `Z` | Select / rectangle zoom |
+| `0` | Zoom to full range |
+| `A` | Auto-scale Y-axis |
+| `Backspace` | Undo last zoom |
+| `[ / ]` | Previous / next event |
+| `Cmd/Ctrl + Z / Y` | Undo / Redo |
+| `Cmd/Ctrl + /` | Open Welcome Guide |
+
+See *Help → Keyboard Shortcuts* in the app for the complete list.
+
+---
+
+## Project layout
+
+```
+src/vasoanalyzer/
+  app/        — application entry points and launchers
+  ui/         — Qt dialogs, main window, point editor, Excel Mapper
+  core/       — project model, trace/event handling, audit trail
+  storage/    — SQLite project I/O and .vaso bundle format
+  excel/      — Excel template reading, flexible writer, label matching
+  io/         — trace and event file importers, TIFF loader
+  services/   — project repository, cache, version checking
+  analysis/   — analysis and metrics modules
+  export/     — export generators, reports, clipboard
+  cli/        — command-line interface
+docs/         — user manual, welcome tour, architecture docs
+tests/        — test suite
+packaging/    — PyInstaller specs, installer scripts
+resources/    — icons, SVGs, stylesheets
+```
+
+---
+
+## Documentation
+
+- [User Manual](docs/USER_MANUAL.md) — comprehensive guide covering every feature in depth
+- [VasoTracker Import Guide](docs/vasotracker_import.md) — detailed VasoTracker data integration
+- [Welcome Tour](docs/WELCOME_TOUR.md) — in-app onboarding reference
+- [Bundle Format](docs/BUNDLE_FORMAT.md) — `.vaso` file format specification
+
+---
+
+## Privacy
+
+- All processing happens **locally** on your machine.
+- Optional update check on startup (one HTTPS request to GitHub Releases).
+- No data, traces, or images are uploaded.
+
+---
+
+## How to cite this software
+
+If VasoAnalyzer contributed to your research, please cite it as:
+
+> Vega Rodríguez, O. J. (2025). *VasoAnalyzer* (v3.1.0) [Computer software]. https://github.com/vr-oj/VasoAnalyzer
+
+BibTeX:
+
+```bibtex
+@software{VasoAnalyzer,
+  author    = {Vega Rodríguez, Osvaldo J.},
+  title     = {VasoAnalyzer},
+  version   = {3.1.0},
+  year      = {2025},
+  url       = {https://github.com/vr-oj/VasoAnalyzer},
+  license   = {CC-BY-NC-SA-4.0}
+}
+```
+
+Machine-readable citation metadata is also available in [`CITATION.cff`](CITATION.cff).
+
+You can also find this citation from within the app via *Help → How to Cite*.
+
+---
+
+## License
+
+This project is released under the **CC BY-NC-SA 4.0** license. See [`LICENSE`](LICENSE) for details.

@@ -7,17 +7,17 @@
 
 from __future__ import annotations
 
-from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 
 class SnapshotTimelineSlider(QtWidgets.QSlider):
     """Timeline slider with a high-contrast scrub line."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
-        super().__init__(QtCore.Qt.Horizontal, parent)
+        super().__init__(QtCore.Qt.Orientation.Horizontal, parent)
         self.setObjectName("SnapshotTimeline")
         self.setFixedHeight(28)
-        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding, QtWidgets.QSizePolicy.Policy.Fixed)
         self.setRange(0, 0)
 
     def _accent_color(self) -> QtGui.QColor:
@@ -37,21 +37,21 @@ class SnapshotTimelineSlider(QtWidgets.QSlider):
         super().paintEvent(event)
 
         painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
 
         option = QtWidgets.QStyleOptionSlider()
         self.initStyleOption(option)
         style = self.style()
         groove = style.subControlRect(
-            QtWidgets.QStyle.CC_Slider,
+            QtWidgets.QStyle.ComplexControl.CC_Slider,
             option,
-            QtWidgets.QStyle.SC_SliderGroove,
+            QtWidgets.QStyle.SubControl.SC_SliderGroove,
             self,
         )
         handle = style.subControlRect(
-            QtWidgets.QStyle.CC_Slider,
+            QtWidgets.QStyle.ComplexControl.CC_Slider,
             option,
-            QtWidgets.QStyle.SC_SliderHandle,
+            QtWidgets.QStyle.SubControl.SC_SliderHandle,
             self,
         )
         if groove.isNull():
@@ -60,7 +60,7 @@ class SnapshotTimelineSlider(QtWidgets.QSlider):
         accent = self._accent_color()
         line_x = handle.center().x()
         pen = QtGui.QPen(accent, 2)
-        pen.setCapStyle(QtCore.Qt.FlatCap)
+        pen.setCapStyle(QtCore.Qt.PenCapStyle.FlatCap)
         painter.setPen(pen)
         painter.drawLine(
             QtCore.QPointF(line_x, groove.top() - 1),

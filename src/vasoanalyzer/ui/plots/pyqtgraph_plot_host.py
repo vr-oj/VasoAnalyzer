@@ -13,9 +13,9 @@ from typing import Any, cast
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPen
-from PyQt5.QtWidgets import QApplication, QFrame, QHBoxLayout, QVBoxLayout, QWidget
+from PyQt6.QtCore import QEvent, QObject, QPointF, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QPen
+from PyQt6.QtWidgets import QApplication, QFrame, QHBoxLayout, QVBoxLayout, QWidget
 
 from vasoanalyzer.core.trace_model import TraceModel
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
@@ -76,11 +76,9 @@ class PyQtGraphPlotHost(InteractionHost):
 
     _AXIS_WIDTH_PX = 62
     _EVENT_STRIP_HEIGHT_PX = 22
-    _SHARED_TIME_AXIS_FOOTER_HEIGHT_PX = 30
-    _SHARED_TIME_AXIS_FOOTER_ENABLED = False
     _EVENT_LABEL_TRACKS_ENABLED = False
     _LEFT_AXIS_TICK_TEXT_OFFSET_PX = 6
-    _LEFT_AXIS_TICK_TEXT_WIDTH_PX = 40
+    _LEFT_AXIS_TICK_TEXT_WIDTH_PX = 34
     _LEFT_AXIS_TICK_TEXT_HEIGHT_PX = 16
 
     def __init__(self, *, dpi: int = 100, enable_opengl: bool = True) -> None:
@@ -142,7 +140,6 @@ class PyQtGraphPlotHost(InteractionHost):
         self._channel_event_labels_visible: bool = False
         self._channel_event_label_font_size: float = 9.0
         self._use_top_event_lane: bool = True
-        self._shared_time_axis_footer_enabled: bool = bool(self._SHARED_TIME_AXIS_FOOTER_ENABLED)
         self._event_label_tracks_enabled: bool = bool(self._EVENT_LABEL_TRACKS_ENABLED)
         self._selected_event_index: int | None = None
 
@@ -171,6 +168,7 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_font_size = float(style.font_size)
         self._tick_font_size = float(style.tick_font_size)
         self._time_mode = TimeMode.AUTO
+        self._bottom_tick_spacing_s: float | None = None
         self._default_line_width: float = 1.6
         self._xrange_debug_connected = False
         self._xrange_debug_view_box = None
@@ -202,6 +200,7 @@ class PyQtGraphPlotHost(InteractionHost):
             min_axis_width_px=self._AXIS_WIDTH_PX,
             left_gutter_px=0,
         )
+        self._axis_width_sync.sigAxisWidthChanged.connect(self._on_axis_width_changed)
         self._x_grid_visible: bool = True
         self._y_grid_visible: bool = True
         self._grid_alpha = float(style.grid_alpha)
@@ -322,20 +321,6 @@ class PyQtGraphPlotHost(InteractionHost):
         # Refresh axis ownership and fonts after visibility change
         self.refresh_axes_and_fonts(reason="channel-visible-changed")
 
-    def set_shared_time_axis_footer_enabled(self, enabled: bool) -> None:
-        """Toggle dedicated footer X-axis row to keep channel viewports equal."""
-        value = bool(enabled)
-        if value == self._shared_time_axis_footer_enabled:
-            return
-        self._shared_time_axis_footer_enabled = value
-        self.refresh_axes_and_fonts(reason="shared-time-axis-footer-toggle")
-        self._apply_event_label_options()
-        self._sync_event_strip_axes()
-
-    def shared_time_axis_footer_enabled(self) -> bool:
-        """Return whether dedicated footer X-axis row is enabled."""
-        return bool(self._shared_time_axis_footer_enabled)
-
     def set_click_handler(self, handler: Callable[[str, float, float, int, Any], None] | None):
         """Assign a global click handler for all tracks."""
         self._click_handler = handler
@@ -455,7 +440,7 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def _sampling_crosshair_pen(self) -> QPen:
         accent = CURRENT_THEME.get("accent", DEFAULT_THEME_ACCENT)
-        return pg.mkPen(color=accent, width=1, style=Qt.DashLine)
+        return pg.mkPen(color=accent, width=1, style=Qt.PenStyle.DashLine)
 
     def _refresh_sampling_crosshair_theme(self) -> None:
         crosshair_pen = self._sampling_crosshair_pen()
@@ -676,6 +661,7 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 self._event_strip_widget.setBackground(hex_to_pyqtgraph_color(bg))
             self._event_strip_widget.setContentsMargins(0, 0, 0, 0)
+            self._tighten_plot_item_layout(self._event_strip_widget.getPlotItem())
             self._event_strip_widget.setFixedHeight(self._EVENT_STRIP_HEIGHT_PX)
             self._event_strip_track = PyQtGraphEventStripTrack(
                 self._event_strip_widget.getPlotItem()
@@ -694,9 +680,10 @@ class PyQtGraphPlotHost(InteractionHost):
             with contextlib.suppress(Exception):
                 self._event_top_lane_widget.setBackground(hex_to_pyqtgraph_color(bg))
             with contextlib.suppress(Exception):
-                self._event_top_lane_widget.setFrameStyle(QFrame.NoFrame)
+                self._event_top_lane_widget.setFrameStyle(QFrame.Shape.NoFrame)
             self._event_top_lane_widget.setStyleSheet(f"background-color: {bg};")
             self._event_top_lane_widget.setContentsMargins(0, 0, 0, 0)
+            self._tighten_plot_item_layout(self._event_top_lane_widget.getPlotItem())
             self._event_top_lane_track = PyQtGraphEventStripTrack(
                 self._event_top_lane_widget.getPlotItem(),
                 label_max_chars=20,
@@ -850,7 +837,7 @@ class PyQtGraphPlotHost(InteractionHost):
             if self._top_lane_separator is None:
                 self._top_lane_separator = QFrame()
                 self._top_lane_separator.setFixedHeight(2)
-                self._top_lane_separator.setFrameShape(QFrame.NoFrame)
+                self._top_lane_separator.setFrameShape(QFrame.Shape.NoFrame)
             self.layout.insertWidget(1, self._top_lane_separator, 0)
             self._update_top_lane_separator_style()
 
@@ -890,6 +877,7 @@ class PyQtGraphPlotHost(InteractionHost):
             show_divider = bool(track.is_visible() and spec.track_id != bottom_visible_id)
             with contextlib.suppress(Exception):
                 track.set_divider_visible(show_divider)
+        self._update_divider_left_offsets()
 
     def _wire_crosshair_sync(self) -> None:
         """Register crosshair sync callbacks so a hover in one track drives V-lines in all others."""
@@ -1059,7 +1047,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 angle_delta = None
         if angle_delta is None and hasattr(event, "delta"):
             try:
-                angle_delta = event.delta()
+                angle_delta = event.angleDelta().y()
             except Exception:
                 angle_delta = None
         if angle_delta is None:
@@ -1138,22 +1126,22 @@ class PyQtGraphPlotHost(InteractionHost):
             qt_mods = None
         if qt_mods is None:
             return mods
-        if qt_mods & Qt.ShiftModifier:
+        if qt_mods & Qt.KeyboardModifier.ShiftModifier:
             mods.add("shift")
-        if qt_mods & Qt.ControlModifier:
+        if qt_mods & Qt.KeyboardModifier.ControlModifier:
             mods.add("control")
-        if qt_mods & Qt.AltModifier:
+        if qt_mods & Qt.KeyboardModifier.AltModifier:
             mods.add("alt")
-        if qt_mods & Qt.MetaModifier:
+        if qt_mods & Qt.KeyboardModifier.MetaModifier:
             mods.add("meta")
         return mods
 
     def _button_name_from_qt(self, button: Qt.MouseButton) -> str:
-        if button == Qt.LeftButton:
+        if button == Qt.MouseButton.LeftButton:
             return "left"
-        if button == Qt.MiddleButton:
+        if button == Qt.MouseButton.MiddleButton:
             return "middle"
-        if button == Qt.RightButton:
+        if button == Qt.MouseButton.RightButton:
             return "right"
         return str(button)
 
@@ -1175,21 +1163,11 @@ class PyQtGraphPlotHost(InteractionHost):
         is_bottom_track: bool,
     ) -> None:
         """Ensure only the bottom track shows X-axis labels/ticks."""
-        if self._shared_time_axis_footer_enabled:
-            with contextlib.suppress(Exception):
-                track.view.set_bottom_axis_visible(False)
-            with contextlib.suppress(Exception):
-                track.view.get_widget().getPlotItem().setLabel("bottom", "")
-            return
         with contextlib.suppress(Exception):
             track.view.set_bottom_axis_visible(bool(is_bottom_track))
         # Keep X-axis title hidden; show only ticks/values.
         with contextlib.suppress(Exception):
             track.view.get_widget().getPlotItem().setLabel("bottom", "")
-
-    def _footer_xlabel_text(self) -> str:
-        # Keep footer X-axis title hidden; show only ticks/values.
-        return ""
 
     def _resolved_bottom_track_id(self) -> str | None:
         """Resolve the active bottom track ID honoring visibility."""
@@ -1286,12 +1264,35 @@ class PyQtGraphPlotHost(InteractionHost):
         for track in self._tracks.values():
             with contextlib.suppress(Exception):
                 track.view.set_left_outer_gutter_px(0)
+            with contextlib.suppress(Exception):
+                track.view.reapply_plot_item_layout()
             self._apply_axis_font_to_track(track, trace_count=trace_count)
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
+        self._update_divider_left_offsets()
         for track in self._tracks.values():
             track.view.refresh_event_markers()
+
+    @staticmethod
+    def _tighten_plot_item_layout(plot_item) -> None:
+        """Apply zero-margin, zero-spacing layout to a PlotItem's QGraphicsGridLayout.
+
+        PyQtGraph may set non-zero default ContentsMargins or horizontal spacing
+        on PlotItem layouts.  Channel tracks reset these via _apply_plot_item_layout()
+        in PyQtGraphTraceView, but event-strip and top-lane PlotWidgets are raw
+        pg.PlotWidget instances that never get that treatment.  Any leftover margin
+        shifts their ViewBox to the right and breaks x=0 alignment.
+        """
+        layout = getattr(plot_item, "layout", None)
+        if layout is None:
+            return
+        with contextlib.suppress(Exception):
+            layout.setContentsMargins(0, 0, 0, 0)
+        with contextlib.suppress(Exception):
+            layout.setHorizontalSpacing(0)
+        with contextlib.suppress(Exception):
+            layout.setVerticalSpacing(0)
 
     def _axis_width_px(self, axis) -> int:
         if axis is None:
@@ -1339,6 +1340,8 @@ class PyQtGraphPlotHost(InteractionHost):
     def _sync_event_strip_axes(self) -> None:
         if self._event_strip_track is None or not self._tracks:
             return
+        if self._event_strip_widget is not None:
+            self._tighten_plot_item_layout(self._event_strip_widget.getPlotItem())
         ref_track = None
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
@@ -1381,57 +1384,14 @@ class PyQtGraphPlotHost(InteractionHost):
         bottom_axis = strip_plot_item.getAxis("bottom")
         if bottom_axis is not None:
             strip_plot_item.showAxis("bottom")
-            if self._shared_time_axis_footer_enabled:
-                style = get_pyqtgraph_style()
-                tick_style = tick_style_for_trace_count(max(self._count_visible_tracks(), 1))
-                tick_font = QFont(self._axis_font_family, int(round(self._tick_font_size)))
-                label_font = QFont(self._axis_font_family, int(round(self._axis_font_size)))
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.enableAutoSIPrefix(False)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setPen(pg.mkPen(style.axis_pen_color))
-                with contextlib.suppress(Exception):
-                    bottom_axis.setTextPen(pg.mkPen(style.tick_label_color))
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.setTickFont(tick_font)
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.setTickDensity(tick_style.density)
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.setStyle(
-                        showValues=True,
-                        tickLength=5,
-                        tickTextOffset=tick_style.text_offset,
-                        tickTextWidth=tick_style.text_width,
-                        tickTextHeight=tick_style.text_height,
-                        autoExpandTextSpace=False,
-                        autoReduceTextSpace=False,
-                        stopAxisAtTick=(False, False),
-                    )
-                # Clear the strip's muted explicit tick list so the shared footer
-                # axis can auto-generate visible ticks/labels.
-                with contextlib.suppress(Exception):
-                    bottom_axis.setTicks(None)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setLabel(self._footer_xlabel_text())
-                with contextlib.suppress(AttributeError):
-                    bottom_axis.label.setFont(label_font)
-                    bottom_axis.label.show()
-                    bottom_axis.showLabel(True)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX)
-                self._recenter_bottom_label(bottom_axis)
-            else:
-                self._hide_axis_visuals(bottom_axis)
-                with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(0)
+            self._hide_axis_visuals(bottom_axis)
+            with contextlib.suppress(Exception):
+                bottom_axis.setHeight(0)
 
     def _on_event_strip_height_requested(self, height_px: int) -> None:
         if self._event_strip_widget is None:
             return
-        if self._shared_time_axis_footer_enabled and not self._event_label_tracks_enabled:
-            target = max(int(self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX), 14)
-        else:
-            target = max(int(height_px), 14)
+        target = max(int(height_px), 14)
         current = int(self._event_strip_widget.height())
         if abs(target - current) <= 2:
             return
@@ -1440,6 +1400,8 @@ class PyQtGraphPlotHost(InteractionHost):
     def _sync_event_top_lane_axes(self) -> None:
         if self._event_top_lane_track is None or not self._tracks:
             return
+        if self._event_top_lane_widget is not None:
+            self._tighten_plot_item_layout(self._event_top_lane_widget.getPlotItem())
         ref_track = None
         for spec in self._channel_specs:
             track = self._tracks.get(spec.track_id)
@@ -1542,13 +1504,10 @@ class PyQtGraphPlotHost(InteractionHost):
 
         if self._event_strip_track is not None and self._event_strip_widget is not None:
             show_strip = (
-                bool(self._shared_time_axis_footer_enabled)
-                or (
-                    not self._use_top_event_lane
-                    and bool(self._event_label_tracks_enabled)
-                    and bool(self._event_entries)
-                    and self._event_display_mode != EventDisplayMode.OFF
-                )
+                not self._use_top_event_lane
+                and bool(self._event_label_tracks_enabled)
+                and bool(self._event_entries)
+                and self._event_display_mode != EventDisplayMode.OFF
             )
             self._event_strip_widget.setVisible(show_strip)
             self._event_strip_track.set_visible(show_strip)
@@ -1564,11 +1523,7 @@ class PyQtGraphPlotHost(InteractionHost):
                 self._event_strip_track.set_display_mode(EventDisplayMode.OFF)
                 self._event_strip_track.set_selected_event(None)
                 self._event_strip_track.set_hovered_event(None)
-                self._on_event_strip_height_requested(
-                    self._SHARED_TIME_AXIS_FOOTER_HEIGHT_PX
-                    if self._shared_time_axis_footer_enabled
-                    else self._EVENT_STRIP_HEIGHT_PX
-                )
+                self._on_event_strip_height_requested(self._EVENT_STRIP_HEIGHT_PX)
 
     def _on_track_event_hover(self, index: int | None) -> None:
         resolved = None if index is None else int(index)
@@ -1668,6 +1623,25 @@ class PyQtGraphPlotHost(InteractionHost):
 
     def time_mode(self) -> str:
         return str(self._time_mode.value)
+
+    def set_bottom_tick_spacing(self, spacing_s: float | None) -> None:
+        """Set fixed major tick spacing on the bottom time axis (seconds). None = auto."""
+        self._bottom_tick_spacing_s = spacing_s if (spacing_s and spacing_s > 0) else None
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.view._time_axis.set_tick_spacing(self._bottom_tick_spacing_s)
+        for widget in (self._event_strip_widget, self._event_top_lane_widget):
+            if widget is None:
+                continue
+            with contextlib.suppress(Exception):
+                axis = widget.getPlotItem().getAxis("bottom")
+                set_tick_spacing = getattr(axis, "set_tick_spacing", None)
+                if callable(set_tick_spacing):
+                    set_tick_spacing(self._bottom_tick_spacing_s)
+
+    def bottom_tick_spacing_s(self) -> float | None:
+        """Return the current fixed tick spacing in seconds, or None for auto."""
+        return self._bottom_tick_spacing_s
 
     def set_grid_visible(self, enabled: bool, *, alpha: float | None = None) -> None:
         """Show/hide the shared grid across all tracks."""
@@ -1779,6 +1753,10 @@ class PyQtGraphPlotHost(InteractionHost):
             br = label.boundingRect()
             width = float(axis.size().width())
             height = float(axis.size().height())
+            # Guard: if layout hasn't settled yet (height=0) skip repositioning.
+            # A negative y would place the label over the tick region, hiding ticks.
+            if height <= 0:
+                return
             nudge = 5
             x = width / 2.0 - br.width() / 2.0
             y = height - br.height() + nudge
@@ -1802,6 +1780,16 @@ class PyQtGraphPlotHost(InteractionHost):
         ylabel_font = QFont(self._axis_font_family, max(label_size - 2, 7))
         xlabel_font = QFont(self._axis_font_family, label_size)
         tick_font = QFont(self._axis_font_family, tick_size)
+        # Windows: Qt's default ClearType hinting makes tick labels and axis
+        # titles look grid-fitted and heavy compared to macOS CoreText.
+        # PreferNoHinting + PreferAntialias gives smooth, proportional rendering
+        # that closely matches the macOS Avenir Next appearance.
+        if sys.platform.startswith("win"):
+            for _f in (ylabel_font, xlabel_font, tick_font):
+                _f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
+                _f.setStyleStrategy(
+                    QFont.StyleStrategy.PreferAntialias | QFont.StyleStrategy.PreferOutline  # type: ignore[operator]
+                )
         self._axis_width_sync.set_min_from_sample_text("-999.9", tick_font)
 
         left_axis = plot_item.getAxis("left")
@@ -1864,19 +1852,22 @@ class PyQtGraphPlotHost(InteractionHost):
                 bottom_axis.setTickDensity(tick_style.density)
             with contextlib.suppress(AttributeError):
                 bottom_axis.setStyle(
+                    showValues=True,
+                    tickLength=5,
                     tickTextOffset=tick_style.text_offset,
                     tickTextWidth=tick_style.text_width,
                     tickTextHeight=tick_style.text_height,
+                    autoReduceTextSpace=False,
+                    stopAxisAtTick=(False, False),
                 )
-            # Force axis height so tick labels have space to render.
-            # On Windows, setHeight(None) auto-calc runs before textHeight is
-            # populated (no ticks drawn yet) and returns ~0, clipping labels.
-            if sys.platform.startswith("win"):
-                with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(40)
-            else:
-                with contextlib.suppress(Exception):
-                    bottom_axis.setHeight(None)
+            with contextlib.suppress(Exception):
+                set_tick_spacing = getattr(bottom_axis, "set_tick_spacing", None)
+                if callable(set_tick_spacing):
+                    set_tick_spacing(self._bottom_tick_spacing_s)
+            with contextlib.suppress(Exception):
+                bottom_axis.setHeight(None)
+            with contextlib.suppress(Exception):
+                bottom_axis.update()
             self._recenter_bottom_label(bottom_axis)
 
     def _normalize_color_tuple(self, color: Any) -> tuple[float, float, float, float] | None:
@@ -1956,6 +1947,22 @@ class PyQtGraphPlotHost(InteractionHost):
         self._axis_width_sync.request_sync()
         self._sync_event_strip_axes()
         self._sync_event_top_lane_axes()
+
+    def _update_divider_left_offsets(self) -> None:
+        """Extend each track's divider bar across the full row width (gutter + axis + plot)."""
+        for track in self._tracks.values():
+            with contextlib.suppress(Exception):
+                track.set_divider_left_offset(0)
+
+    def _on_axis_width_changed(self, _width_px: int) -> None:
+        """Called whenever AxisWidthSync applies a new axis width (including deferred shrink).
+
+        Ensures the event strip and top lane stay pixel-aligned with channel tracks
+        even when the shrink timer fires asynchronously.
+        """
+        self._sync_event_strip_axes()
+        self._sync_event_top_lane_axes()
+        self._update_divider_left_offsets()
 
     def set_model(self, model: TraceModel) -> None:
         """Set the trace data model for all tracks."""
@@ -2429,13 +2436,6 @@ class PyQtGraphPlotHost(InteractionHost):
         self._shared_xlabel_text = str(text)
         with contextlib.suppress(Exception):
             self._update_bottom_axis_assignments()
-
-        if self._shared_time_axis_footer_enabled:
-            for track in self._tracks.values():
-                with contextlib.suppress(Exception):
-                    track.view.get_widget().getPlotItem().setLabel("bottom", "")
-            self._sync_event_strip_axes()
-            return
 
         bottom_track_id = self._resolved_bottom_track_id()
         if bottom_track_id is None:
@@ -2949,8 +2949,8 @@ class PyQtGraphPlotHost(InteractionHost):
                         try:
                             modifiers = ev.modifiers()
                         except Exception:
-                            modifiers = Qt.NoModifier
-                        ctrl_or_cmd = bool(modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+                            modifiers = Qt.KeyboardModifier.NoModifier
+                        ctrl_or_cmd = bool(modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier))
                         if ctrl_or_cmd:
                             set_source_callable("wheel.ctrl_zoom", None)
 
@@ -3310,7 +3310,7 @@ class _ResizeEventFilter(QObject):
 
     def eventFilter(self, obj, event):  # noqa: N802 - Qt API uses camelCase
         """Filter resize events and schedule axis/font refresh."""
-        if event.type() == QEvent.Resize:
+        if event.type() == QEvent.Type.Resize:
             # Schedule refresh after layout has stabilized
             # Use QTimer.singleShot(0, ...) to ensure refresh happens after
             # Qt has updated widget geometry and layout metrics

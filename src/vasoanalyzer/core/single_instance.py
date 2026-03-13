@@ -10,9 +10,9 @@ import weakref
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-from PyQt5.QtCore import QObject, QTimer
-from PyQt5.QtNetwork import QLocalServer, QLocalSocket
-from PyQt5.QtWidgets import QMessageBox
+from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+from PyQt6.QtWidgets import QMessageBox
 
 if sys.platform == "win32":
     DEFAULT_SERVER_NAME = "vasoanalyzer_single_instance"

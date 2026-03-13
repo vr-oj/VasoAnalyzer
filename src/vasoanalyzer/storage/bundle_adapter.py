@@ -317,6 +317,40 @@ def open_project_handle(
         handle.container_path = path
         handle.temp_bundle_root = temp_root
 
+        # Check for autosave sidecar: if it's newer than the container, restore it
+        # into the staging DB so work from the last autosave survives a crash.
+        if not readonly:
+            _sidecar = path.with_suffix(".autosave.sqlite")
+            if _sidecar.is_file():
+                try:
+                    _container_mtime = path.stat().st_mtime
+                    _sidecar_mtime = _sidecar.stat().st_mtime
+                    if _sidecar_mtime > _container_mtime:
+                        log.warning(
+                            "open_project_handle: autosave sidecar detected (%s) — "
+                            "restoring autosave data into staging DB",
+                            _sidecar,
+                        )
+                        _src = sqlite3.connect(
+                            f"file:{_sidecar}?mode=ro", uri=True, timeout=10.0
+                        )
+                        try:
+                            _src.backup(conn)
+                        finally:
+                            _src.close()
+                        conn.commit()
+                        log.warning(
+                            "open_project_handle: autosave recovery complete from %s",
+                            _sidecar,
+                        )
+                    # Remove sidecar regardless — it's either been recovered or is stale
+                    _sidecar.unlink(missing_ok=True)
+                except Exception:
+                    log.warning(
+                        "open_project_handle: autosave sidecar recovery failed",
+                        exc_info=True,
+                    )
+
         return handle, conn
 
     elif is_bundle:
@@ -694,7 +728,7 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
         """Read snapshot retention from settings with safe fallback."""
         keep_count = DEFAULT_SNAPSHOT_KEEP_COUNT
         try:
-            from PyQt5.QtCore import QSettings
+            from PyQt6.QtCore import QSettings
 
             settings = QSettings("TykockiLab", "VasoAnalyzer")
             value = settings.value("snapshots/keep_count", keep_count, type=int)
@@ -789,6 +823,12 @@ def save_project_handle(handle: ProjectHandle, *, skip_snapshot: bool = False) -
                 log.info(f"Packing bundle back to container: {handle.container_path}")
                 pack_temp_bundle_to_container(handle.path, handle.container_path)
                 log.info("Container updated successfully")
+                # Remove autosave sidecar — data is now durably stored in the container.
+                _sidecar = handle.container_path.with_suffix(".autosave.sqlite")
+                try:
+                    _sidecar.unlink(missing_ok=True)
+                except Exception:
+                    log.debug("Could not remove autosave sidecar", exc_info=True)
 
         else:
             head_marked = False

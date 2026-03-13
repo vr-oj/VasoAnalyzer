@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal
 
 if TYPE_CHECKING:  # pragma: no cover
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp

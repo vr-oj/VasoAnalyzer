@@ -18,6 +18,8 @@ project repository.
 
 import contextlib
 import csv
+import hashlib
+import json
 import os
 import re
 import tempfile
@@ -29,14 +31,13 @@ from typing import Any, cast
 
 import pandas as pd
 from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string, get_column_letter, range_boundaries
-from PyQt5.QtCore import QAbstractTableModel, QMimeData, QModelIndex, QSettings, Qt, pyqtProperty
-from PyQt5.QtGui import QBrush, QColor, QFont, QPalette
-from PyQt5.QtWidgets import (
+from openpyxl.utils import get_column_letter, range_boundaries
+from PyQt6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, QSettings, Qt, pyqtProperty
+from PyQt6.QtGui import QBrush, QColor, QFont, QPalette
+from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QFileDialog,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -45,7 +46,6 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QSplitter,
     QTableView,
     QTableWidget,
     QTableWidgetItem,
@@ -59,6 +59,7 @@ import logging
 
 import vasoanalyzer.ui.theme as theme
 from vasoanalyzer.excel import TemplateMetadata
+from vasoanalyzer.excel.label_matching import normalize_label, best_match
 
 __all__ = ["ExcelMapWizard"]
 
@@ -68,30 +69,6 @@ DEFAULT_QMODEL_INDEX = QModelIndex()
 
 SESSION_EVENT_MIME = "application/vnd.vaso.session-event"
 
-_NORM_SUBS = re.compile(r"[:\-–—•+/\\()\[\]{}=,;]")
-
-
-def _norm_label(label: str) -> str:
-    """Normalize a measurement label for fuzzy matching.
-
-    Handles common formatting differences between session event labels and
-    template row labels:
-    - Converts micro sign µ → u (e.g. "1 µM PE" → "1 um pe")
-    - Removes separator characters (colon, dash, em-dash, plus, etc.)
-    - Collapses whitespace
-    - Case-insensitive (lowercased)
-
-    Examples::
-
-        _norm_label("20 mmHg: Max")  →  "20 mmhg max"
-        _norm_label("+ 1 µM CCh")   →  "1 um cch"
-        _norm_label("1 µM PE")      →  "1 um pe"
-    """
-    s = label.strip().lower()
-    s = s.replace("µ", "u").replace("μ", "u")  # micro sign variants
-    s = _NORM_SUBS.sub(" ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
 
 
 # UI Design Tokens
@@ -161,19 +138,19 @@ def get_fonts() -> dict[str, QFont]:
 
     # Configure sizes and weights
     fonts["h1"].setPointSize(16)
-    fonts["h1"].setWeight(QFont.Bold)
+    fonts["h1"].setWeight(QFont.Weight.Bold)
 
     fonts["h2"].setPointSize(14)
-    fonts["h2"].setWeight(QFont.DemiBold)
+    fonts["h2"].setWeight(QFont.Weight.DemiBold)
 
     fonts["h3"].setPointSize(12)
-    fonts["h3"].setWeight(QFont.DemiBold)
+    fonts["h3"].setWeight(QFont.Weight.DemiBold)
 
     fonts["body"].setPointSize(14)  # Increased from 11
-    fonts["body"].setWeight(QFont.Normal)
+    fonts["body"].setWeight(QFont.Weight.Normal)
 
     fonts["small"].setPointSize(12)  # Increased from 10
-    fonts["small"].setWeight(QFont.Normal)
+    fonts["small"].setWeight(QFont.Weight.Normal)
 
     fonts["mono"].setPointSize(12)  # Increased from 10
 
@@ -306,6 +283,89 @@ def get_modern_combobox_stylesheet() -> str:
 
         QComboBox:editable {{
             background-color: {bg};
+        }}
+
+        QComboBox QAbstractItemView {{
+            background-color: {popup_bg};
+            border: 1px solid {border};
+            color: {text};
+            selection-background-color: {selection_bg};
+            selection-color: {selection_text};
+        }}
+    """
+
+
+def _get_cell_combobox_stylesheet() -> str:
+    """Combobox stylesheet for use inside QTableWidget cells.
+
+    The combo fills the entire cell with no outer border or margin so it
+    looks like a native part of the table row.  A chevron on the right
+    signals that it is interactive.
+    """
+    table_bg = theme.CURRENT_THEME.get(
+        "table_bg", theme.CURRENT_THEME.get("panel_bg", "#FFFFFF")
+    )
+    text = theme.CURRENT_THEME.get(
+        "table_text", theme.CURRENT_THEME.get("text", "#111827")
+    )
+    muted = theme.CURRENT_THEME.get("text_disabled", "#9CA3AF")
+    hover_bg = theme.CURRENT_THEME.get(
+        "table_hover", theme.CURRENT_THEME.get("button_hover_bg", table_bg)
+    )
+    border_focus = theme.CURRENT_THEME.get(
+        "accent", theme.CURRENT_THEME.get("accent_fill", "#3B82F6")
+    )
+    popup_bg = theme.CURRENT_THEME.get("table_bg", table_bg)
+    border = theme.CURRENT_THEME.get(
+        "panel_border",
+        theme.CURRENT_THEME.get("table_header_border", "#D1D5DB"),
+    )
+    selection_bg = theme.CURRENT_THEME.get(
+        "selection_bg", theme.CURRENT_THEME.get("accent_fill", "#2563EB")
+    )
+    selection_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
+
+    # Inline SVG chevron encoded as a data URI.  The colour is taken from
+    # the muted/disabled text token so it stays subtle.
+    _c = muted.lstrip("#")
+    chevron = (
+        f"data:image/svg+xml,"
+        f"%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E"
+        f"%3Cpath d='M1 1l4 4 4-4' stroke='%23{_c}' stroke-width='1.5' "
+        f"fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E"
+        f"%3C/svg%3E"
+    )
+
+    return f"""
+        QComboBox {{
+            background-color: transparent;
+            border: none;
+            border-radius: 0px;
+            padding: 4px 24px 4px 8px;
+            margin: 0px;
+            color: {text};
+            font-size: 14px;
+        }}
+
+        QComboBox:hover {{
+            background-color: {hover_bg};
+        }}
+
+        QComboBox:focus {{
+            border: 1px solid {border_focus};
+        }}
+
+        QComboBox::drop-down {{
+            border: none;
+            width: 24px;
+            subcontrol-origin: padding;
+            subcontrol-position: center right;
+        }}
+
+        QComboBox::down-arrow {{
+            image: url("{chevron}");
+            width: 10px;
+            height: 6px;
         }}
 
         QComboBox QAbstractItemView {{
@@ -508,16 +568,16 @@ class PandasModel(QAbstractTableModel):
     def columnCount(self, parent: QModelIndex = DEFAULT_QMODEL_INDEX) -> int:
         return len(self._df.columns)
 
-    def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
-        if not index.isValid() or role != Qt.DisplayRole:
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
             return None
         value = self._df.iat[index.row(), index.column()]
         return "" if pd.isna(value) else str(value)
 
-    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):
-        if role != Qt.DisplayRole:
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
-        if orientation == Qt.Horizontal:
+        if orientation == Qt.Orientation.Horizontal:
             return self._df.columns[section]
         return str(section + 1)
 
@@ -527,12 +587,12 @@ class SessionValuesTable(QTableWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setAlternatingRowColors(True)
         self.setDragEnabled(True)
-        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self.verticalHeader().setVisible(False)
 
     def mimeTypes(self) -> list[str]:
@@ -548,7 +608,7 @@ class SessionValuesTable(QTableWidget):
         if item is None:
             return mime
 
-        event_index = item.data(Qt.UserRole)
+        event_index = item.data(Qt.ItemDataRole.UserRole)
         if event_index is None:
             return mime
 
@@ -565,9 +625,9 @@ class TemplatePreviewTable(QTableWidget):
         self._drop_context = None
         self._active_drop_column: int | None = None
         self.setAcceptDrops(True)
-        self.setDragDropMode(QAbstractItemView.DropOnly)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self._apply_theme()
 
     def set_drop_context(self, context) -> None:
@@ -630,12 +690,12 @@ class TemplatePreviewTable(QTableWidget):
 
         palette.setColor(self.backgroundRole(), QColor(table_bg))
         palette.setColor(self.foregroundRole(), QColor(text))
-        palette.setColor(QPalette.Base, QColor(table_bg))
-        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
-        palette.setColor(QPalette.Text, QColor(text))
-        palette.setColor(QPalette.WindowText, QColor(text))
-        palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(highlighted_text))
+        palette.setColor(QPalette.ColorRole.Base, QColor(table_bg))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.ColorRole.Text, QColor(text))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(highlighted_text))
 
         self.setPalette(palette)
         # Use the new modern table stylesheet
@@ -690,7 +750,7 @@ class TemplatePage(WizardPageBase):
         # Recent templates UI
         self.recent_templates_label = QLabel("Recent templates")
         self.recent_templates_list = QListWidget()
-        self.recent_templates_list.setSelectionMode(QListWidget.SingleSelection)
+        self.recent_templates_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
         self.recent_templates_list.setAlternatingRowColors(True)
         self.recent_templates_list.setUniformItemSizes(True)
         self.recent_templates_list.itemActivated.connect(self._on_recent_template_activated)
@@ -963,7 +1023,7 @@ class TemplatePage(WizardPageBase):
             file_name = os.path.basename(path)
             item = QListWidgetItem(file_name)
             item.setToolTip(path)
-            item.setData(Qt.UserRole, path)
+            item.setData(Qt.ItemDataRole.UserRole, path)
             self.recent_templates_list.addItem(item)
 
         self.recent_templates_label.setVisible(True)
@@ -990,7 +1050,7 @@ class TemplatePage(WizardPageBase):
         """Handle activation of a recent template entry."""
         if item is None:
             return
-        path = item.data(Qt.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
         self._load_template_from_path(path)
@@ -1007,7 +1067,7 @@ class TemplatePage(WizardPageBase):
         item = self.recent_templates_list.currentItem()
         if item is None:
             return
-        path = item.data(Qt.UserRole)
+        path = item.data(Qt.ItemDataRole.UserRole)
         if not path:
             return
         paths = [p for p in self._load_recent_templates() if p != path]
@@ -1256,7 +1316,12 @@ class DateColumnOption:
     def display(self) -> str:
         base = self.letter
         if self.value not in (None, ""):
-            base = f"{base} – {self.value}"
+            from datetime import datetime
+
+            val = self.value
+            if isinstance(val, datetime):
+                val = val.strftime("%m/%d/%Y")
+            base = f"{base} – {val}"
         if self.is_new:
             base += " (new)"
         elif self.empty_slots == 0:
@@ -1267,35 +1332,43 @@ class DateColumnOption:
 class RowMappingPage(WizardPageBase):
     """Interactive mapping page with preview and row-by-row controls."""
 
-    PREVIEW_ROW_LIMIT = 30
-
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Step 2: Map Events to Template Rows")
 
         self._event_row_widgets: dict[int, QComboBox] = {}
         self._value_items: dict[int, QTableWidgetItem] = {}
+        self._current_value_items: dict[int, QTableWidgetItem] = {}
         self._status_items: dict[int, QTableWidgetItem] = {}
         self._template_row_to_table_index: dict[int, int] = {}
-        self._preview_row_to_template_row: dict[int, int] = {}
-        self._preview_base_values: dict[int, str] = {}
-        self._active_preview_column: int | None = None
         self._initialised = False
 
         root = QVBoxLayout(self)
-        root.setSpacing(SPACING["md"])
-        root.setContentsMargins(SPACING["lg"], SPACING["lg"], SPACING["lg"], SPACING["lg"])
+        root.setSpacing(SPACING["sm"])
+        root.setContentsMargins(SPACING["lg"], SPACING["md"], SPACING["lg"], SPACING["md"])
 
+        fonts = get_fonts()
+        colors = get_semantic_colors()
+        border_color = theme.CURRENT_THEME.get(
+            "panel_border",
+            theme.CURRENT_THEME.get("table_header_border", "#D1D5DB"),
+        )
+        muted_text = colors["muted"]
+
+        # ---- status banner ----
         self.info_label = QLabel()
         self.info_label.setWordWrap(True)
-        fonts = get_fonts()
         self.info_label.setFont(fonts["body"])
         root.addWidget(self.info_label)
 
+        # ---- control bar ----
         control_row = QHBoxLayout()
-        control_row.setSpacing(SPACING["md"])
-        control_row.setContentsMargins(SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"])
-        control_row.addWidget(QLabel("Measurement:"))
+        control_row.setSpacing(SPACING["sm"])
+        control_row.setContentsMargins(0, 0, 0, 0)
+
+        meas_label = QLabel("Measurement:")
+        meas_label.setFont(fonts["small"])
+        control_row.addWidget(meas_label)
         self.measurement_combo = QComboBox()
         self.measurement_combo.setStyleSheet(get_modern_combobox_stylesheet())
         control_row.addWidget(self.measurement_combo)
@@ -1312,7 +1385,7 @@ class RowMappingPage(WizardPageBase):
 
         self.select_unmapped_btn = QToolButton()
         self.select_unmapped_btn.setText("Select Unmapped…")
-        self.select_unmapped_btn.setObjectName("PrimaryButton")  # Make it primary
+        self.select_unmapped_btn.setObjectName("PrimaryButton")
         self.select_unmapped_btn.setStyleSheet(get_modern_button_stylesheet())
         self.select_unmapped_btn.setVisible(False)
         control_row.addWidget(self.select_unmapped_btn)
@@ -1320,74 +1393,45 @@ class RowMappingPage(WizardPageBase):
         control_row.addStretch()
         root.addLayout(control_row)
 
-        splitter = QSplitter()
-        splitter.setOrientation(Qt.Horizontal)
-        root.addWidget(splitter, 1)
-
-        self.preview_table = TemplatePreviewTable()
-        self.preview_table.setAlternatingRowColors(True)
-        self.preview_table.horizontalHeader().setStretchLastSection(True)
-        self.preview_table.verticalHeader().setVisible(False)
-        self.preview_table.verticalHeader().setDefaultSectionSize(36)
-        self.preview_table.set_drop_context(self)
-        self._apply_table_theme(self.preview_table)
-        preview_container = QVBoxLayout()
-        preview_container.setSpacing(SPACING["sm"])
-        preview_container.setContentsMargins(
-            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
-        )
-        preview_widget = QFrame()
-        preview_widget.setLayout(preview_container)
-        preview_container.addWidget(QLabel("Template Preview"))
-        preview_container.addWidget(self.preview_table, 1)
-        splitter.addWidget(preview_widget)
-
+        # ---- mapping table (full width) ----
         self.mapping_table = QTableWidget()
-        self.mapping_table.setColumnCount(5)
+        self.mapping_table.setColumnCount(6)
         self.mapping_table.setHorizontalHeaderLabels(
-            ["Row", "Template Label", "Session Event", "Value to Write", "Status"]
+            ["Row", "Template Label", "Session Event", "Value", "Current", ""]
         )
         self.mapping_table.verticalHeader().setVisible(False)
-        self.mapping_table.verticalHeader().setDefaultSectionSize(36)
-        self.mapping_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.mapping_table.verticalHeader().setDefaultSectionSize(40)
+        self.mapping_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._apply_table_theme(self.mapping_table)
-        self.mapping_table.setAlternatingRowColors(True)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.mapping_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        splitter.addWidget(self.mapping_table)
+        self.mapping_table.setAlternatingRowColors(False)
+        mh = self.mapping_table.horizontalHeader()
+        mh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        mh.resizeSection(0, 48)
+        mh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        mh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        mh.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        mh.resizeSection(3, 80)
+        mh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        mh.resizeSection(4, 80)
+        mh.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        mh.resizeSection(5, 40)
+        root.addWidget(self.mapping_table, 1)
 
-        self.session_values_table = SessionValuesTable()
-        self.session_values_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        self.session_values_table.verticalHeader().setDefaultSectionSize(36)
-        session_container = QVBoxLayout()
-        session_container.setSpacing(SPACING["sm"])
-        session_container.setContentsMargins(
-            SPACING["md"], SPACING["md"], SPACING["md"], SPACING["md"]
-        )
-        session_widget = QFrame()
-        session_widget.setLayout(session_container)
-        session_container.addWidget(QLabel("Session Values"))
-        session_container.addWidget(self.session_values_table, 1)
-        splitter.addWidget(session_widget)
-
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 4)
-        splitter.setStretchFactor(2, 2)
-
+        # ---- helper text ----
         helper_lines = [
             "Headers use bold, filled Column A cells; the wizard never writes to them.",
             "To add an event row, type its label in Column A with normal text and no fill.",
             "Pick the active date column in the row of dates; values go into that column.",
-            "Override matches using the dropdowns—your selections control the final export.",
+            "Override matches using the dropdowns — your selections control the final export.",
         ]
-        helper_text = QLabel("\n".join(helper_lines))
+        helper_text = QLabel("  •  ".join(helper_lines))
         helper_text.setWordWrap(True)
         helper_text.setFont(fonts["small"])
-        colors = get_semantic_colors()
-        helper_text.setStyleSheet(f"color: {colors['muted']};")
+        helper_text.setStyleSheet(
+            f"color: {muted_text};"
+            f"border-top: 1px solid {border_color};"
+            f"padding-top: {SPACING['sm']}px;"
+        )
         root.addWidget(helper_text)
 
         self.measurement_combo.currentTextChanged.connect(self._on_measurement_changed)
@@ -1404,12 +1448,12 @@ class RowMappingPage(WizardPageBase):
         highlight = theme.CURRENT_THEME.get("selection_bg", "#1D4ED8")
         highlighted_text = theme.CURRENT_THEME.get("highlighted_text", "#FFFFFF")
 
-        palette.setColor(QPalette.Base, QColor(table_bg))
-        palette.setColor(QPalette.AlternateBase, QColor(alt_bg))
-        palette.setColor(QPalette.Text, QColor(text))
-        palette.setColor(QPalette.WindowText, QColor(text))
-        palette.setColor(QPalette.Highlight, QColor(highlight))
-        palette.setColor(QPalette.HighlightedText, QColor(highlighted_text))
+        palette.setColor(QPalette.ColorRole.Base, QColor(table_bg))
+        palette.setColor(QPalette.ColorRole.AlternateBase, QColor(alt_bg))
+        palette.setColor(QPalette.ColorRole.Text, QColor(text))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Highlight, QColor(highlight))
+        palette.setColor(QPalette.ColorRole.HighlightedText, QColor(highlighted_text))
 
         table.setPalette(palette)
         # Use the new modern table stylesheet
@@ -1420,9 +1464,7 @@ class RowMappingPage(WizardPageBase):
         self.pick_date_combo.setStyleSheet(get_modern_combobox_stylesheet())
         self.redetect_btn.setStyleSheet(get_modern_button_stylesheet())
         self.select_unmapped_btn.setStyleSheet(get_modern_button_stylesheet())
-        self._apply_table_theme(self.preview_table)
         self._apply_table_theme(self.mapping_table)
-        self._apply_table_theme(self.session_values_table)
 
     # --------------------------------------------------
     def initializePage(self) -> None:
@@ -1440,8 +1482,6 @@ class RowMappingPage(WizardPageBase):
         self._populate_measurement_options()
         self._populate_date_options()
         self._rebuild_mapping_table()
-        self._refresh_preview()
-        self._refresh_session_values_table()
         self._update_status_banner()
         self._initialised = True
 
@@ -1487,41 +1527,6 @@ class RowMappingPage(WizardPageBase):
         wiz.ensure_active_date_value(self)
 
     # --------------------------------------------------
-    def _refresh_session_values_table(self) -> None:
-        wiz = self._wizard()
-        events = getattr(wiz, "session_events", [])
-        measurement = wiz.current_measurement
-
-        headers = ["Event", "Time (s)", measurement or "Value"]
-        table = self.session_values_table
-        table.setColumnCount(len(headers))
-        table.setHorizontalHeaderLabels(headers)
-        table.setRowCount(len(events))
-
-        for row_idx, event in enumerate(events):
-            event_item = QTableWidgetItem(event.label)
-            event_item.setData(Qt.UserRole, event.index)
-            table.setItem(row_idx, 0, event_item)
-
-            time_text = ""
-            if event.time_value is not None and not pd.isna(event.time_value):
-                time_text = f"{event.time_value:.2f}"
-            table.setItem(row_idx, 1, QTableWidgetItem(time_text))
-
-            value = event.values.get(measurement) if measurement else float("nan")
-            if pd.isna(value):
-                value_text = "—"
-            elif isinstance(value, Real):
-                value_text = f"{value:.2f}"
-            else:
-                value_text = str(value)
-            table.setItem(row_idx, 2, QTableWidgetItem(value_text))
-
-        table.resizeRowsToContents()
-        table.resizeColumnsToContents()
-        table.horizontalHeader().setStretchLastSection(True)
-
-    # --------------------------------------------------
     def _rebuild_mapping_table(self) -> None:
         wiz = self._wizard()
         event_rows = [row for row in wiz.event_rows if not row.is_header]
@@ -1529,29 +1534,36 @@ class RowMappingPage(WizardPageBase):
         self.mapping_table.setRowCount(len(event_rows))
         self._event_row_widgets.clear()
         self._value_items.clear()
+        self._current_value_items: dict[int, QTableWidgetItem] = {}
         self._status_items.clear()
         self._template_row_to_table_index = {}
 
         font_mono = QFont("Menlo", 10)
+        no_edit = Qt.ItemFlag.ItemIsEditable
 
         for row_idx, event_row in enumerate(event_rows):
             row_number_item = QTableWidgetItem(str(event_row.row_index))
-            row_number_item.setFlags(row_number_item.flags() & ~Qt.ItemIsEditable)
+            row_number_item.setFlags(row_number_item.flags() & ~no_edit)
             row_number_item.setFont(font_mono)
+            row_number_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+            )
             self.mapping_table.setItem(row_idx, 0, row_number_item)
 
             self._template_row_to_table_index[event_row.row_index] = row_idx
 
             label_item = QTableWidgetItem(event_row.label)
-            label_item.setFlags(label_item.flags() & ~Qt.ItemIsEditable)
+            label_item.setFlags(label_item.flags() & ~no_edit)
             self.mapping_table.setItem(row_idx, 1, label_item)
 
             combo = QComboBox()
-            combo.setEditable(True)
-            combo.setInsertPolicy(QComboBox.NoInsert)
-            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-            combo.setStyleSheet(get_modern_combobox_stylesheet())
-            combo.addItem("<leave unmapped>", None)
+            combo.setEditable(False)
+            combo.setSizeAdjustPolicy(
+                QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+            )
+            combo.setMinimumContentsLength(14)
+            combo.setStyleSheet(_get_cell_combobox_stylesheet())
+            combo.addItem("<unmapped>", None)
             for event in wiz.session_events:
                 combo.addItem(event.combo_text, event.index)
 
@@ -1567,17 +1579,36 @@ class RowMappingPage(WizardPageBase):
             self.mapping_table.setCellWidget(row_idx, 2, combo)
             self._event_row_widgets[event_row.row_index] = combo
 
+            # col 3: mapped value
             value_item = QTableWidgetItem("")
-            value_item.setFlags(value_item.flags() & ~Qt.ItemIsEditable)
+            value_item.setFlags(value_item.flags() & ~no_edit)
+            value_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
             self.mapping_table.setItem(row_idx, 3, value_item)
             self._value_items[event_row.row_index] = value_item
 
-            status_item = QTableWidgetItem("○")
-            status_item.setFlags(status_item.flags() & ~Qt.ItemIsEditable)
-            self.mapping_table.setItem(row_idx, 4, status_item)
+            # col 4: current template value
+            current_item = QTableWidgetItem("")
+            current_item.setFlags(current_item.flags() & ~no_edit)
+            current_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            muted_color = get_semantic_colors()["muted"]
+            current_item.setForeground(QBrush(QColor(muted_color)))
+            self.mapping_table.setItem(row_idx, 4, current_item)
+            self._current_value_items[event_row.row_index] = current_item
+
+            # col 5: status indicator
+            status_item = QTableWidgetItem("")
+            status_item.setFlags(status_item.flags() & ~no_edit)
+            status_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+            )
+            self.mapping_table.setItem(row_idx, 5, status_item)
             self._status_items[event_row.row_index] = status_item
 
-        self.mapping_table.resizeRowsToContents()
+        self._refresh_current_value_column()
         self._refresh_value_column()
         self._refresh_status_icons()
 
@@ -1599,161 +1630,76 @@ class RowMappingPage(WizardPageBase):
             item.setText(text)
 
     # --------------------------------------------------
+    def _refresh_current_value_column(self) -> None:
+        """Show the value currently in the Excel template cell."""
+        wiz = self._wizard()
+        date_col = wiz.active_date_column
+        for row_index, item in self._current_value_items.items():
+            text = ""
+            if date_col is not None and wiz.ws is not None:
+                cell_val = wiz.ws.cell(
+                    row=row_index, column=date_col.column_index
+                ).value
+                if cell_val is not None:
+                    if isinstance(cell_val, (int, float)) and not isinstance(cell_val, bool):
+                        text = f"{cell_val:.2f}"
+                    else:
+                        text = str(cell_val)
+            item.setText(text)
+
+    # --------------------------------------------------
     def _refresh_status_icons(self) -> None:
         wiz = self._wizard()
         assignments = Counter(
-            assignment for assignment in wiz.row_assignments.values() if assignment is not None
+            a for a in wiz.row_assignments.values() if a is not None
         )
         duplicates = {idx for idx, count in assignments.items() if count > 1}
 
         colors = get_semantic_colors()
-        for row_index, item in self._status_items.items():
-            assignment = wiz.row_assignments.get(row_index)
-            if assignment is None:
-                item.setText("○")
-                item.setToolTip("No session event mapped")
-                item.setForeground(QBrush(QColor(colors["error"])))
-                # Larger font for better visibility
-                font = item.font()
-                font.setPointSize(14)
-                item.setFont(font)
-            elif assignment in duplicates:
-                item.setText("⚠")  # Warning triangle instead of !
-                item.setToolTip("Session event reused on multiple rows")
-                item.setForeground(QBrush(QColor(colors["warning"])))
-                font = item.font()
-                font.setPointSize(14)
-                item.setFont(font)
-            else:
-                item.setText("✓")
-                item.setToolTip("Mapped")
-                item.setForeground(QBrush(QColor(COLORS["success"])))  # Use explicit green color
-                # Bold green checkmark
-                font = item.font()
-                font.setPointSize(16)
-                font.setBold(True)
-                item.setFont(font)
-
-    # --------------------------------------------------
-    def _refresh_preview(self) -> None:
-        wiz = self._wizard()
-        preview_data = wiz.preview_template_data(limit=self.PREVIEW_ROW_LIMIT)
-        self.preview_table.clear()
-        self._preview_row_to_template_row = {}
-        self._preview_base_values = {}
-        self._active_preview_column = None
         table_bg = theme.CURRENT_THEME.get("table_bg", "#020617")
-        alt_bg = theme.CURRENT_THEME.get("alternate_bg", table_bg)
-        table_text = theme.CURRENT_THEME.get(
-            "table_text", theme.CURRENT_THEME.get("text", "#FFFFFF")
-        )
-        active_bg = theme.CURRENT_THEME.get(
-            "accent_fill", theme.CURRENT_THEME.get("selection_bg", table_bg)
-        )
-        event_bg = alt_bg
-        header_bg = theme.CURRENT_THEME.get("button_hover_bg", alt_bg)
-        if not preview_data:
-            self.preview_table.setRowCount(0)
-            self.preview_table.setColumnCount(0)
-            self.preview_table.set_active_drop_column(None)
-            return
+        col_count = self.mapping_table.columnCount()
 
-        headers = [key for key in preview_data[0] if not key.startswith("_")]
-        self.preview_table.setColumnCount(len(headers))
-        self.preview_table.setHorizontalHeaderLabels(headers)
-        self.preview_table.setRowCount(len(preview_data))
+        # Subtle row tint colors (low-alpha blends)
+        mapped_bg = QColor(colors["success"])
+        mapped_bg.setAlpha(25)
+        warning_bg = QColor(colors["warning"])
+        warning_bg.setAlpha(25)
+        unmapped_bg = QColor(table_bg)  # no tint
 
-        active_col = preview_data[0].get("_active_col")
-        active_col_letter = get_column_letter(active_col) if active_col else None
-        if active_col_letter and active_col_letter in headers:
-            self._active_preview_column = headers.index(active_col_letter)
-        self.preview_table.set_active_drop_column(self._active_preview_column)
+        for row_index, status_item in self._status_items.items():
+            table_row = self._template_row_to_table_index.get(row_index)
+            if table_row is None:
+                continue
+            assignment = wiz.row_assignments.get(row_index)
 
-        for row_idx, row in enumerate(preview_data):
-            is_header = row.get("_is_header", False)
-            is_event = row.get("_is_event", False)
-            active_col = row.get("_active_col")
-            template_row_index = row.get("Row")
-            for col_idx, key in enumerate(headers):
-                value = row.get(key)
-                # Format numerical values to 2 decimal places
-                if value is None:
-                    display_text = ""
-                elif isinstance(value, (int, float)) and not isinstance(value, bool):
-                    display_text = f"{value:.2f}"
-                else:
-                    display_text = str(value)
-                item = QTableWidgetItem(display_text)
-                item.setForeground(QBrush(QColor(table_text)))
-                bg_color = alt_bg if row_idx % 2 else table_bg
-                if key not in ("Row", "Label"):
-                    col_index = column_index_from_string(key)
-                    if active_col and col_index == active_col:
-                        bg_color = active_bg
-                    elif is_event:
-                        bg_color = event_bg
-                    if (
-                        self._active_preview_column is not None
-                        and col_idx == self._active_preview_column
-                        and is_event
-                        and template_row_index is not None
-                    ):
-                        # Format base value to 2 decimal places
-                        if value is None:
-                            base_text = ""
-                        elif isinstance(value, (int, float)) and not isinstance(value, bool):
-                            base_text = f"{value:.2f}"
-                        else:
-                            base_text = str(value)
-                        self._preview_base_values[template_row_index] = base_text
-                        assignment = wiz.row_assignments.get(template_row_index)
-                        if assignment is not None:
-                            mapped_value = wiz.value_for_event(assignment, wiz.current_measurement)
-                            if pd.isna(mapped_value):
-                                display_text = "—"
-                            elif isinstance(mapped_value, Real):
-                                display_text = f"{mapped_value:.2f}"
-                            else:
-                                display_text = str(mapped_value)
-                            item.setText(display_text)
-                if is_header and key == "Label":
-                    font = item.font()
-                    font.setBold(True)
-                    item.setFont(font)
-                    bg_color = header_bg
-                item.setBackground(QBrush(QColor(bg_color)))
-                self.preview_table.setItem(row_idx, col_idx, item)
-            if is_event and template_row_index is not None:
-                self._preview_row_to_template_row[row_idx] = template_row_index
+            # -- status indicator --
+            font = status_item.font()
+            font.setPointSize(14)
+            font.setBold(False)
+            if assignment is None:
+                status_item.setText("○")
+                status_item.setToolTip("Not mapped")
+                status_item.setForeground(QBrush(QColor(colors["error"])))
+                row_bg = unmapped_bg
+            elif assignment in duplicates:
+                status_item.setText("⚠")
+                status_item.setToolTip("Event reused on multiple rows")
+                status_item.setForeground(QBrush(QColor(colors["warning"])))
+                row_bg = warning_bg
+            else:
+                status_item.setText("✓")
+                status_item.setToolTip("Mapped")
+                status_item.setForeground(QBrush(QColor(colors["success"])))
+                font.setBold(True)
+                row_bg = mapped_bg
+            status_item.setFont(font)
 
-        self.preview_table.resizeColumnsToContents()
-        self.preview_table.horizontalHeader().setStretchLastSection(True)
-
-    # --------------------------------------------------
-    def event_index_from_mime(self, mime: QMimeData) -> int | None:
-        if mime is None or not mime.hasFormat(SESSION_EVENT_MIME):
-            return None
-        try:
-            data = bytes(mime.data(SESSION_EVENT_MIME)).decode().strip()
-            return int(data)
-        except (ValueError, TypeError, AttributeError):
-            return None
-
-    # --------------------------------------------------
-    def template_row_for_preview_row(self, preview_row: int) -> int | None:
-        return self._preview_row_to_template_row.get(preview_row)
-
-    # --------------------------------------------------
-    def assign_event_to_row(self, template_row_index: int, session_event_index: int) -> None:
-        combo = self._event_row_widgets.get(template_row_index)
-        if combo is not None:
-            idx = combo.findData(session_event_index)
-            combo.blockSignals(True)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
-
-        self._apply_assignment(template_row_index, session_event_index)
+            # -- row background tint --
+            brush = QBrush(row_bg)
+            for col in range(col_count):
+                cell = self.mapping_table.item(table_row, col)
+                if cell is not None:
+                    cell.setBackground(brush)
 
     # --------------------------------------------------
     def _apply_assignment(self, row_index: int, event_index: int | None) -> None:
@@ -1762,46 +1708,6 @@ class RowMappingPage(WizardPageBase):
         self._refresh_value_column()
         self._refresh_status_icons()
         self._update_status_banner()
-        self._update_preview_cell_for_row(row_index)
-
-    # --------------------------------------------------
-    def _update_preview_cell_for_row(self, template_row_index: int) -> None:
-        if self._active_preview_column is None:
-            return
-
-        preview_row = None
-        for row_idx, tmpl_idx in self._preview_row_to_template_row.items():
-            if tmpl_idx == template_row_index:
-                preview_row = row_idx
-                break
-
-        if preview_row is None:
-            return
-
-        item = self.preview_table.item(preview_row, self._active_preview_column)
-        if item is None:
-            return
-
-        wiz = self._wizard()
-        assignment = wiz.row_assignments.get(template_row_index)
-        if assignment is None:
-            base = self._preview_base_values.get(template_row_index)
-            if base is None and wiz.ws is not None and wiz.active_date_column is not None:
-                value = wiz.ws.cell(
-                    row=template_row_index, column=wiz.active_date_column.column_index
-                ).value
-                base = "" if value is None else str(value)
-            item.setText(base or "")
-            return
-
-        value = wiz.value_for_event(assignment, wiz.current_measurement)
-        if pd.isna(value):
-            text = "—"
-        elif isinstance(value, Real):
-            text = f"{value:.2f}"
-        else:
-            text = str(value)
-        item.setText(text)
 
     # --------------------------------------------------
     def _update_status_banner(self) -> None:
@@ -1832,10 +1738,9 @@ class RowMappingPage(WizardPageBase):
         wiz = self._wizard()
         wiz.current_measurement = value
         self._refresh_value_column()
+        self._refresh_current_value_column()
         self._refresh_status_icons()
         self._update_status_banner()
-        self._refresh_preview()
-        self._refresh_session_values_table()
 
     # --------------------------------------------------
     def _on_redetect(self) -> None:
@@ -1847,8 +1752,6 @@ class RowMappingPage(WizardPageBase):
             return
         self._populate_date_options()
         self._rebuild_mapping_table()
-        self._refresh_preview()
-        self._refresh_session_values_table()
         self._update_status_banner()
 
     # --------------------------------------------------
@@ -1861,7 +1764,7 @@ class RowMappingPage(WizardPageBase):
         wiz = self._wizard()
         wiz.set_active_date_column(option)
         wiz.ensure_active_date_value(self)
-        self._refresh_preview()
+        self._refresh_current_value_column()
         self._refresh_status_icons()
 
     # --------------------------------------------------
@@ -1936,17 +1839,31 @@ class PreviewPage(WizardPageBase):
             )
             return
 
+        # Pre-export validation
+        wiz = self._wizard()
+        warnings = self._validate_before_export(wiz)
+        if warnings:
+            warning_text = "\n".join(f"• {w}" for w in warnings)
+            proceed = QMessageBox.warning(
+                self,
+                "Mapping Warnings",
+                f"{warning_text}\n\nContinue anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if proceed != QMessageBox.StandardButton.Yes:
+                return
+
         confirm = QMessageBox.question(
             self,
             "Update Template",
             f"This will overwrite {target_path.name} with the mapped values. Continue?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if confirm != QMessageBox.Yes:
+        if confirm != QMessageBox.StandardButton.Yes:
             return
 
-        wiz = self._wizard()
         wiz.apply_mapping()
 
         try:
@@ -1965,8 +1882,36 @@ class PreviewPage(WizardPageBase):
             QMessageBox.critical(self, "Save Failed", str(exc))
             return
 
+        # Persist mapping corrections for future sessions
+        wiz.save_mapping_history()
+
         QMessageBox.information(self, "Template Updated", f"Mappings written to {target_path}")
         self.completeChanged.emit()
+
+    # ------------------------------------------------------
+    @staticmethod
+    def _validate_before_export(wiz: "ExcelMapWizard") -> list[str]:
+        """Return a list of human-readable warnings (empty = all good)."""
+        warnings: list[str] = []
+
+        # Unmapped rows
+        unmapped = sum(1 for v in wiz.row_assignments.values() if v is None)
+        if unmapped:
+            warnings.append(
+                f"{unmapped} template row(s) have no mapped event and will be skipped."
+            )
+
+        # Duplicate event assignments
+        assignments = Counter(a for a in wiz.row_assignments.values() if a is not None)
+        dupes = {idx for idx, count in assignments.items() if count > 1}
+        if dupes:
+            event_by_index = {e.index: e for e in wiz.session_events}
+            dupe_labels = [event_by_index[i].label for i in dupes if i in event_by_index]
+            warnings.append(
+                f"Event(s) mapped to multiple rows: {', '.join(dupe_labels)}"
+            )
+
+        return warnings
 
     # ------------------------------------------------------
     def isComplete(self) -> bool:
@@ -1990,10 +1935,10 @@ class ExcelMapWizard(QWizard):
     def __init__(self, parent=None, events_df: pd.DataFrame | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Map Events to Excel")
-        self.setWizardStyle(QWizard.ModernStyle)
-        self.setOption(QWizard.HaveFinishButtonOnEarlyPages)
+        self.setWizardStyle(QWizard.WizardStyle.ModernStyle)
+        self.setOption(QWizard.WizardOption.HaveFinishButtonOnEarlyPages)
         self.setMinimumSize(1100, 720)
-        self.resize(1200, 750)
+        self.resize(1280, 780)
 
         # Apply modern dialog styling
         combined_stylesheet = (
@@ -2489,6 +2434,9 @@ class ExcelMapWizard(QWizard):
         if self.active_date_column:
             self._load_existing_assignments_from_sheet()
 
+        # Pass 0: apply saved mapping history (user corrections from previous sessions)
+        self._apply_mapping_history()
+
         # Pass 1: exact case-insensitive match
         label_map: dict[str, deque[int]] = {}
         for event in self.session_events:
@@ -2509,7 +2457,7 @@ class ExcelMapWizard(QWizard):
         # differences between session event labels and template row labels.
         norm_map: dict[str, deque[int]] = {}
         for event in self.session_events:
-            key = _norm_label(event.label)
+            key = normalize_label(event.label)
             norm_map.setdefault(key, deque()).append(event.index)
 
         for row in self.event_rows:
@@ -2517,10 +2465,99 @@ class ExcelMapWizard(QWizard):
                 continue
             if self.row_assignments.get(row.row_index) is not None:
                 continue  # already matched in pass 1
-            key = _norm_label(row.label)
+            key = normalize_label(row.label)
             queue = norm_map.get(key)
             if queue:
                 self.row_assignments[row.row_index] = queue.popleft()
+
+        # Pass 3: fuzzy match — substring containment + token-overlap scoring
+        # for rows that still have no assignment after exact/normalised passes.
+        assigned_indices: set[int] = {
+            idx for idx in self.row_assignments.values() if idx is not None
+        }
+        remaining_labels = [
+            e.label
+            for e in self.session_events
+            if e.index not in assigned_indices
+        ]
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            if self.row_assignments.get(row.row_index) is not None:
+                continue
+            match_label = best_match(row.label, remaining_labels)
+            if match_label is not None:
+                # Find the event index for this label
+                for event in self.session_events:
+                    if event.label == match_label and event.index not in assigned_indices:
+                        self.row_assignments[row.row_index] = event.index
+                        assigned_indices.add(event.index)
+                        remaining_labels.remove(match_label)
+                        break
+
+    # --------------------------------------------------
+    # Mapping persistence — remember user corrections
+    # --------------------------------------------------
+
+    def _template_fingerprint(self) -> str:
+        """Return a stable hash identifying this template by its row labels."""
+        labels = sorted(
+            normalize_label(r.label) for r in self.event_rows if not r.is_header
+        )
+        raw = "|".join(labels)
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+    def _load_mapping_history(self) -> dict[str, str]:
+        """Load previously saved template_label → session_label map."""
+        settings = QSettings("TykockiLab", "VasoAnalyzer")
+        key = f"excel_mapping_history/{self._template_fingerprint()}"
+        data = settings.value(key, "", type=str)
+        if data:
+            try:
+                return json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return {}
+
+    def save_mapping_history(self) -> None:
+        """Persist current row_assignments as template_label → session_label."""
+        history: dict[str, str] = {}
+        event_by_index = {e.index: e for e in self.session_events}
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            ev_idx = self.row_assignments.get(row.row_index)
+            if ev_idx is not None and ev_idx in event_by_index:
+                history[row.label] = event_by_index[ev_idx].label
+        if history:
+            settings = QSettings("TykockiLab", "VasoAnalyzer")
+            key = f"excel_mapping_history/{self._template_fingerprint()}"
+            settings.setValue(key, json.dumps(history))
+
+    def _apply_mapping_history(self) -> None:
+        """Apply saved mappings as Pass 0 (before fuzzy matching)."""
+        history = self._load_mapping_history()
+        if not history:
+            return
+        # Build label→event index lookup
+        label_to_events: dict[str, list[int]] = {}
+        for event in self.session_events:
+            label_to_events.setdefault(event.label, []).append(event.index)
+
+        assigned: set[int] = set()
+        for row in self.event_rows:
+            if row.is_header:
+                continue
+            if self.row_assignments.get(row.row_index) is not None:
+                continue
+            saved_label = history.get(row.label)
+            if saved_label and saved_label in label_to_events:
+                candidates = label_to_events[saved_label]
+                for idx in candidates:
+                    if idx not in assigned:
+                        self.row_assignments[row.row_index] = idx
+                        assigned.add(idx)
+                        break
 
     # --------------------------------------------------
     def value_for_event(self, event_index: int, measurement: str | None) -> Any:

@@ -3,9 +3,9 @@
 # Licensed under CC BY-NC-SA 4.0 International
 # http://creativecommons.org/licenses/by-nc-sa/4.0/
 
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFrame,
@@ -88,19 +88,19 @@ class TutorialDialog(QDialog):
 
         for title, bullets in steps:
             hdr = QLabel(title)
-            hdr.setFont(QFont("Arial", 16, QFont.Bold))
+            hdr.setFont(QFont("Arial", 16, QFont.Weight.Bold))
             vbox.addWidget(hdr)
 
             for b in bullets:
                 lbl = QLabel(f"• {b}")
-                lbl.setTextFormat(Qt.RichText)
+                lbl.setTextFormat(Qt.TextFormat.RichText)
                 lbl.setWordWrap(True)
                 lbl.setIndent(12)
                 vbox.addWidget(lbl)
 
             sep = QFrame()
-            sep.setFrameShape(QFrame.HLine)
-            sep.setFrameShadow(QFrame.Sunken)
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setFrameShadow(QFrame.Shadow.Sunken)
             vbox.addWidget(sep)
 
         container.setLayout(vbox)
@@ -118,5 +118,5 @@ class TutorialDialog(QDialog):
         main.addLayout(footer)
 
     def exec_(self):
-        super().exec_()
+        super().exec()
         return self.dont_show_chk.isChecked()

@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from PyQt5.QtCore import QEvent, Qt
+from PyQt6.QtCore import QEvent, Qt
 
 log = logging.getLogger(__name__)
 
@@ -29,8 +29,8 @@ class GestureCanvas(FigureCanvasQTAgg):
         log.info("GestureCanvas: Initializing with gesture support")
 
         # Enable gesture recognition
-        pinch_success = self.grabGesture(Qt.PinchGesture)
-        pan_success = self.grabGesture(Qt.PanGesture)
+        pinch_success = self.grabGesture(Qt.GestureType.PinchGesture)
+        pan_success = self.grabGesture(Qt.GestureType.PanGesture)
 
         log.info(f"GestureCanvas: grabGesture(PinchGesture) = {pinch_success}")
         log.info(f"GestureCanvas: grabGesture(PanGesture) = {pan_success}")
@@ -50,7 +50,7 @@ class GestureCanvas(FigureCanvasQTAgg):
 
     def event(self, event):
         """Override event handler to process gestures."""
-        if event.type() == QEvent.Gesture:
+        if event.type() == QEvent.Type.Gesture:
             self._gesture_event_count += 1
             log.debug(f"GestureCanvas: Gesture event detected (count={self._gesture_event_count})")
             return self._handle_gesture_event(event)
@@ -61,7 +61,7 @@ class GestureCanvas(FigureCanvasQTAgg):
         log.debug("GestureCanvas: _handle_gesture_event called")
 
         # Handle pinch gesture for zooming
-        pinch = event.gesture(Qt.PinchGesture)
+        pinch = event.gesture(Qt.GestureType.PinchGesture)
         if pinch is not None:
             log.debug(f"GestureCanvas: Pinch gesture detected, state={pinch.state()}")
             handled = self._handle_pinch_gesture(pinch)
@@ -70,7 +70,7 @@ class GestureCanvas(FigureCanvasQTAgg):
                 return True
 
         # Handle pan gesture for panning
-        pan = event.gesture(Qt.PanGesture)
+        pan = event.gesture(Qt.GestureType.PanGesture)
         if pan is not None:
             log.debug(f"GestureCanvas: Pan gesture detected, state={pan.state()}")
             handled = self._handle_pan_gesture(pan)
@@ -85,13 +85,13 @@ class GestureCanvas(FigureCanvasQTAgg):
         state = gesture.state()
         log.debug(f"GestureCanvas: _handle_pinch_gesture state={state}")
 
-        if state == Qt.GestureStarted:
+        if state == Qt.GestureState.GestureStarted:
             # Store initial scale
             self._last_scale_factor = 1.0
             log.info("GestureCanvas: Pinch gesture STARTED")
             return True
 
-        elif state == Qt.GestureUpdated:
+        elif state == Qt.GestureState.GestureUpdated:
             # Get scale change since last update
             current_scale = gesture.totalScaleFactor()
 
@@ -123,11 +123,11 @@ class GestureCanvas(FigureCanvasQTAgg):
 
             return True
 
-        elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
+        elif state == Qt.GestureState.GestureFinished or state == Qt.GestureState.GestureCanceled:
             # Reset gesture state
             self._last_scale_factor = 1.0
             log.info(
-                f"GestureCanvas: Pinch gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
+                f"GestureCanvas: Pinch gesture {'FINISHED' if state == Qt.GestureState.GestureFinished else 'CANCELED'}"
             )
             return True
 
@@ -138,14 +138,14 @@ class GestureCanvas(FigureCanvasQTAgg):
         state = gesture.state()
         log.debug(f"GestureCanvas: _handle_pan_gesture state={state}")
 
-        if state == Qt.GestureStarted:
+        if state == Qt.GestureState.GestureStarted:
             # Reset accumulated pan
             self._accumulated_pan_x = 0.0
             self._accumulated_pan_y = 0.0
             log.info("GestureCanvas: Pan gesture STARTED")
             return True
 
-        elif state == Qt.GestureUpdated:
+        elif state == Qt.GestureState.GestureUpdated:
             # Get total pan offset from start
             offset = gesture.offset()
             total_dx = offset.x()
@@ -170,12 +170,12 @@ class GestureCanvas(FigureCanvasQTAgg):
 
             return True
 
-        elif state == Qt.GestureFinished or state == Qt.GestureCanceled:
+        elif state == Qt.GestureState.GestureFinished or state == Qt.GestureState.GestureCanceled:
             # Reset gesture state
             self._accumulated_pan_x = 0.0
             self._accumulated_pan_y = 0.0
             log.info(
-                f"GestureCanvas: Pan gesture {'FINISHED' if state == Qt.GestureFinished else 'CANCELED'}"
+                f"GestureCanvas: Pan gesture {'FINISHED' if state == Qt.GestureState.GestureFinished else 'CANCELED'}"
             )
             return True
 

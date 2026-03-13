@@ -7,7 +7,7 @@ to enable gradual migration of code from matplotlib to PyQtGraph.
 from __future__ import annotations
 
 import pyqtgraph as pg
-from PyQt5.QtGui import QColor
+from PyQt6.QtGui import QColor
 
 __all__ = ["PyQtGraphLineCompat"]
 
@@ -115,16 +115,16 @@ class PyQtGraphLineCompat:
                 else:
                     # Map matplotlib styles to Qt styles
                     style_map = {
-                        "-": pg.QtCore.Qt.SolidLine,
-                        "solid": pg.QtCore.Qt.SolidLine,
-                        "--": pg.QtCore.Qt.DashLine,
-                        "dashed": pg.QtCore.Qt.DashLine,
-                        "-.": pg.QtCore.Qt.DashDotLine,
-                        "dashdot": pg.QtCore.Qt.DashDotLine,
-                        ":": pg.QtCore.Qt.DotLine,
-                        "dotted": pg.QtCore.Qt.DotLine,
+                        "-": pg.QtCore.Qt.PenStyle.SolidLine,
+                        "solid": pg.QtCore.Qt.PenStyle.SolidLine,
+                        "--": pg.QtCore.Qt.PenStyle.DashLine,
+                        "dashed": pg.QtCore.Qt.PenStyle.DashLine,
+                        "-.": pg.QtCore.Qt.PenStyle.DashDotLine,
+                        "dashdot": pg.QtCore.Qt.PenStyle.DashDotLine,
+                        ":": pg.QtCore.Qt.PenStyle.DotLine,
+                        "dotted": pg.QtCore.Qt.PenStyle.DotLine,
                     }
-                    qt_style = style_map.get(style, pg.QtCore.Qt.SolidLine)
+                    qt_style = style_map.get(style, pg.QtCore.Qt.PenStyle.SolidLine)
                     pen.setStyle(qt_style)
                 self._item.setPen(pen)
 
@@ -139,10 +139,10 @@ class PyQtGraphLineCompat:
         # Map Qt styles to matplotlib styles
         qt_style = pen.style()
         style_map = {
-            pg.QtCore.Qt.SolidLine: "-",
-            pg.QtCore.Qt.DashLine: "--",
-            pg.QtCore.Qt.DashDotLine: "-.",
-            pg.QtCore.Qt.DotLine: ":",
+            pg.QtCore.Qt.PenStyle.SolidLine: "-",
+            pg.QtCore.Qt.PenStyle.DashLine: "--",
+            pg.QtCore.Qt.PenStyle.DashDotLine: "-.",
+            pg.QtCore.Qt.PenStyle.DotLine: ":",
         }
         return style_map.get(qt_style, "-")
 

@@ -7,8 +7,8 @@ import math
 import time
 
 import pyqtgraph as pg
-from PyQt5.QtCore import QTimer
-from PyQt5.QtGui import QColor
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QColor
 
 from vasoanalyzer.ui.theme import CURRENT_THEME
 

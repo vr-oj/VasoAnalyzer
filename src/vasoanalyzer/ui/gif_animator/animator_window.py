@@ -8,9 +8,9 @@ import logging
 
 import numpy as np
 import pandas as pd
-from PyQt5.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QImage, QPalette, QPixmap
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QPoint, QRect, Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QImage, QPalette, QPixmap
+from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
@@ -113,9 +113,9 @@ class CropImageLabel(QLabel):
         self._scale = 1.0
         self._origin = QPoint(0, 0)
         self._selection_rect = QRect()
-        self._rubber_band = QRubberBand(QRubberBand.Rectangle, self)
+        self._rubber_band = QRubberBand(QRubberBand.Shape.Rectangle, self)
 
-        self.setAlignment(Qt.AlignCenter)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(400, 300)
         self._update_pixmap()
 
@@ -125,7 +125,7 @@ class CropImageLabel(QLabel):
         self._rubber_band.hide()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and self._scaled_pixmap is not None:
+        if event.button() == Qt.MouseButton.LeftButton and self._scaled_pixmap is not None:
             self._origin = event.pos()
             self._rubber_band.setGeometry(QRect(self._origin, self._origin))
             self._rubber_band.show()
@@ -135,7 +135,7 @@ class CropImageLabel(QLabel):
             self._rubber_band.setGeometry(QRect(self._origin, event.pos()).normalized())
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._rubber_band.isVisible():
+        if event.button() == Qt.MouseButton.LeftButton and self._rubber_band.isVisible():
             self._selection_rect = self._rubber_band.geometry().normalized()
 
     def _update_pixmap(self) -> None:
@@ -143,8 +143,8 @@ class CropImageLabel(QLabel):
             return
         scaled = self._source_pixmap.scaled(
             self.size(),
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
         )
         self._scaled_pixmap = scaled
         self.setPixmap(scaled)
@@ -184,7 +184,7 @@ class CropSelectionDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(self._crop_label)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -205,7 +205,7 @@ class CropSelectionDialog(QDialog):
 
         h, w, c = arr.shape
         bytes_per_line = c * w
-        qimg = QImage(arr.data, w, h, bytes_per_line, QImage.Format_RGB888).copy()
+        qimg = QImage(arr.data, w, h, bytes_per_line, QImage.Format.Format_RGB888).copy()
         return QPixmap.fromImage(qimg)
 
     def get_crop_rect(self) -> tuple[int, int, int, int] | None:
@@ -249,7 +249,8 @@ class GifAnimatorWindow(QMainWindow):
         self.frame_time_metadata = frame_time_result  # Store metadata for auditability
 
         # Setup UI
-        self.setWindowTitle(f"GIF Animator - {sample.name}")
+        from utils.config import APP_VERSION
+        self.setWindowTitle(f"VasoAnalyzer {APP_VERSION} — GIF Animator")
         self.setGeometry(100, 100, 1200, 700)
 
         self._init_ui()
@@ -604,7 +605,7 @@ class GifAnimatorWindow(QMainWindow):
             return
         frame = self.sample.snapshots[0]
         dialog = CropSelectionDialog(frame, self)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         rect = dialog.get_crop_rect()
         if rect is None:
@@ -631,7 +632,7 @@ class GifAnimatorWindow(QMainWindow):
         main_layout = QHBoxLayout(central_widget)
 
         # Splitter for resizable panels
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
 
         # Left panel: Preview player
         self.preview_player = PreviewPlayerWidget()
@@ -1105,8 +1106,8 @@ class GifAnimatorWindow(QMainWindow):
         bg = theme.get("window_bg", "#FFFFFF")
         text = theme.get("text", "#000000")
         palette = self.palette()
-        palette.setColor(QPalette.Window, QColor(bg))
-        palette.setColor(QPalette.WindowText, QColor(text))
+        palette.setColor(QPalette.ColorRole.Window, QColor(bg))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
         self.setPalette(palette)
         self.setAutoFillBackground(True)
         self._apply_cancel_button_style()
@@ -1418,10 +1419,10 @@ class GifAnimatorWindow(QMainWindow):
                 "Consider reducing frame count (shorter duration or lower FPS), "
                 "resolution, or using faster playback speed.\n\n"
                 "Continue anyway?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.StandardButton.No:
                 logger.info("User cancelled render due to high memory warning")
                 return
 
@@ -1597,7 +1598,7 @@ class GifAnimatorWindow(QMainWindow):
 
         # Show progress dialog
         progress = QProgressDialog("Exporting GIF...", "Cancel", 0, 100, self)
-        progress.setWindowModality(Qt.WindowModal)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.show()
 
         try:

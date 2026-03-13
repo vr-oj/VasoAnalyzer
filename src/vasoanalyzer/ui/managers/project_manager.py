@@ -19,11 +19,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt5.QtCore import QObject, QSettings
-from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
+from PyQt6.QtCore import QObject, QSettings
+from PyQt6.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 if TYPE_CHECKING:
-    from PyQt5.QtCore import Qt
+    from PyQt6.QtCore import Qt
 
     from vasoanalyzer.ui.main_window import VasoAnalyzerApp
 
@@ -56,7 +56,7 @@ class ProjectManager(QObject):
         from vasoanalyzer.ui.dialogs.new_project_dialog import NewProjectDialog
 
         dialog = NewProjectDialog(host, settings=host.settings)
-        if dialog.exec_() != QDialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
         self._create_project_from_inputs(
@@ -104,10 +104,10 @@ class ProjectManager(QObject):
                 f"Store active projects locally (~/Documents, ~/Desktop), then copy .vaso "
                 f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue creating project in {cloud_service}?</b>",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.StandardButton.No:
                 return False
 
         from vasoanalyzer.core.project import Experiment, Project
@@ -237,10 +237,10 @@ class ProjectManager(QObject):
                                 "An autosave snapshot newer than this project was found.\n"
                                 "Would you like to recover it?"
                             ),
-                            QMessageBox.Yes | QMessageBox.No,
-                            QMessageBox.Yes,
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                            QMessageBox.StandardButton.Yes,
                         )
-                        if choice == QMessageBox.Yes:
+                        if choice == QMessageBox.StandardButton.Yes:
                             try:
                                 project = restore_autosave(path)
                                 restored_from_autosave = True
@@ -268,10 +268,10 @@ class ProjectManager(QObject):
                             "Convert it to the new single-file .vaso format now?\n"
                             "A backup (.bak1) will be kept for safety."
                         ),
-                        QMessageBox.Yes | QMessageBox.No,
-                        QMessageBox.Yes,
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.Yes,
                     )
-                    if choice != QMessageBox.Yes:
+                    if choice != QMessageBox.StandardButton.Yes:
                         host.statusBar().showMessage("Conversion cancelled.", 5000)
                         return
                     try:
@@ -365,20 +365,20 @@ class ProjectManager(QObject):
             first_sample_item = None
             first_exp_item = None
             if tree and host.current_project.experiments:
-                from PyQt5.QtCore import Qt
+                from PyQt6.QtCore import Qt
 
                 root_item = tree.topLevelItem(0)
                 first_exp = host.current_project.experiments[0]
                 if root_item is not None:
                     for i in range(root_item.childCount()):
                         child = root_item.child(i)
-                        if child.data(0, Qt.UserRole) is first_exp:
+                        if child.data(0, Qt.ItemDataRole.UserRole) is first_exp:
                             first_exp_item = child
                             if first_exp.samples:
                                 target_sample = first_exp.samples[0]
                                 for j in range(child.childCount()):
                                     sample_child = child.child(j)
-                                    if sample_child.data(0, Qt.UserRole) is target_sample:
+                                    if sample_child.data(0, Qt.ItemDataRole.UserRole) is target_sample:
                                         first_sample_item = sample_child
                                         break
                             break
@@ -538,13 +538,9 @@ class ProjectManager(QObject):
     # ------------------------------------------------------------------
 
     def _on_save_progress_changed(self, percent: int, message: str) -> None:
-        """Update main progress bar from save worker signals."""
+        """Update the progress label from save worker step signals."""
         host = self._host
-
-        if not host._progress_bar.isVisible():
-            host.show_progress("", maximum=100)
-        host._progress_bar.setValue(percent)
-        host._progress_bar.setFormat(f"{message}... %p%")
+        host._progress_animator.update_label(message)
         host.statusBar().showMessage(message)
 
     def _on_save_error(self, details: str) -> None:
@@ -699,10 +695,10 @@ class ProjectManager(QObject):
                 f"Store active projects locally (~/Documents, ~/Desktop), then copy .vaso "
                 f"files to cloud storage for backup and sharing.\n\n"
                 f"<b>Continue saving to {cloud_service}?</b>",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            if reply == QMessageBox.No:
+            if reply == QMessageBox.StandardButton.No:
                 return
 
         log.info("Manual save (Save As) requested destination=%s", path)

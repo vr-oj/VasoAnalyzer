@@ -4,9 +4,9 @@ import logging
 from collections.abc import Callable
 from typing import Protocol
 
-from PyQt5.QtCore import QSettings, Qt, pyqtSignal
-from PyQt5.QtSvg import QSvgWidget
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtWidgets import (
     QApplication,
     QBoxLayout,
     QFrame,
@@ -63,7 +63,6 @@ class HomePage(QWidget):
         super().__init__(parent=window)
         self._window = window
         self.setObjectName("HomePage")
-        self._settings = QSettings("TykockiLab", "VasoAnalyzer")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -72,8 +71,8 @@ class HomePage(QWidget):
         self._scroll_area = QScrollArea(self)
         self._scroll_area.setObjectName("HomeScrollArea")
         self._scroll_area.setWidgetResizable(True)
-        self._scroll_area.setFrameShape(QFrame.NoFrame)
-        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         root.addWidget(self._scroll_area, 1)
 
         scroll_host = QWidget()
@@ -87,7 +86,7 @@ class HomePage(QWidget):
         self._content = QWidget(scroll_host)
         self._content.setObjectName("HomeContent")
         self._content.setMaximumWidth(1120)
-        self._content.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._content.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         content_layout = QVBoxLayout(self._content)
         content_layout.setContentsMargins(32, 32, 32, 24)
@@ -95,17 +94,8 @@ class HomePage(QWidget):
         content_layout.addWidget(self._build_hero_section(), stretch=0)
         content_layout.addWidget(self._build_cards_row(), stretch=0)
 
-        scroll_layout.addWidget(self._content, 0, Qt.AlignHCenter | Qt.AlignTop)
+        scroll_layout.addWidget(self._content, 0, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
 
-        self._banner_container = QFrame(self)
-        self._banner_container.setObjectName("HomeBannerContainer")
-        banner_layout = QVBoxLayout(self._banner_container)
-        banner_layout.setContentsMargins(32, 8, 32, 24)
-        banner_layout.setSpacing(0)
-        banner_layout.addWidget(self.cloud_storage_warning)
-        root.addWidget(self._banner_container, 0)
-
-        self._apply_cloud_storage_visibility()
         self._apply_stylesheet()
         self._update_responsive_layout()
 
@@ -125,7 +115,7 @@ class HomePage(QWidget):
             else QSvgWidget(window.icon_path("Home.svg"))
         )
         hero_icon.setFixedSize(72, 72)
-        layout.addWidget(hero_icon, alignment=Qt.AlignTop)
+        layout.addWidget(hero_icon, alignment=Qt.AlignmentFlag.AlignTop)
 
         text_column = QVBoxLayout()
         text_column.setSpacing(12)
@@ -140,11 +130,11 @@ class HomePage(QWidget):
 
         badge = QLabel(APP_VERSION, hero)
         badge.setObjectName("BetaBadgeLabel")
-        badge.setAlignment(Qt.AlignCenter)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setFixedHeight(24)
-        badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        badge.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         badge.setToolTip("Current release")
-        title_row.addWidget(badge, 0, Qt.AlignVCenter)
+        title_row.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
         title_row.addStretch(1)
 
         subtitle = QLabel(
@@ -153,35 +143,6 @@ class HomePage(QWidget):
         )
         subtitle.setWordWrap(True)
         subtitle.setObjectName("HeroSubtitle")
-
-        cloud_warning = QFrame(self)
-        cloud_warning.setObjectName("CloudStorageWarning")
-        cloud_layout = QHBoxLayout(cloud_warning)
-        cloud_layout.setContentsMargins(12, 8, 12, 8)
-        cloud_layout.setSpacing(12)
-
-        cloud_text = QLabel(
-            (
-                "<b>Storage recommendation</b><br>"
-                "Store active projects on your local drive (Documents, Desktop) for best reliability. "
-                "Cloud storage sync can interrupt database writes, potentially causing corruption. "
-                "Copy .vaso files to cloud storage for backup and sharing."
-            ),
-            cloud_warning,
-        )
-        cloud_text.setWordWrap(True)
-        cloud_text.setObjectName("CloudStorageWarningText")
-        cloud_layout.addWidget(cloud_text, 1)
-
-        dismiss_btn = QToolButton(cloud_warning)
-        dismiss_btn.setObjectName("CloudStorageWarningDismiss")
-        dismiss_btn.setText("Got it, don't show again")
-        dismiss_btn.setAutoRaise(True)
-        dismiss_btn.setCursor(Qt.PointingHandCursor)
-        dismiss_btn.clicked.connect(self._dismiss_cloud_storage_warning)
-        cloud_layout.addWidget(dismiss_btn, 0, Qt.AlignTop)
-
-        self.cloud_storage_warning = cloud_warning
 
         text_column.addLayout(title_row)
         text_column.addWidget(subtitle)
@@ -196,7 +157,7 @@ class HomePage(QWidget):
         window = self._window
         container = QWidget(self)
         container.setObjectName("HomePrimaryActions")
-        row = QBoxLayout(QBoxLayout.LeftToRight)
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
         container.setLayout(row)
@@ -233,7 +194,7 @@ class HomePage(QWidget):
         self._primary_actions_widget = container
         self._primary_action_buttons = [window.home_resume_btn, open_btn, create_btn]
         for button in self._primary_action_buttons:
-            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            button.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         return container
 
@@ -241,7 +202,7 @@ class HomePage(QWidget):
         window = self._window
         container = QWidget(self)
         container.setObjectName("HomeSecondaryActions")
-        row = QBoxLayout(QBoxLayout.LeftToRight)
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(12)
         container.setLayout(row)
@@ -259,7 +220,7 @@ class HomePage(QWidget):
         row.addWidget(import_btn)
 
         self._secondary_actions_spacer = QSpacerItem(
-            0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum
+            0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
         )
         row.addItem(self._secondary_actions_spacer)
 
@@ -267,7 +228,7 @@ class HomePage(QWidget):
         welcome_btn.setObjectName("HomeHelpButton")
         welcome_btn.setText("Welcome Guide")
         welcome_btn.setAutoRaise(True)
-        welcome_btn.setCursor(Qt.PointingHandCursor)
+        welcome_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         welcome_btn.clicked.connect(lambda: window.show_welcome_guide(modal=False))
         row.addWidget(welcome_btn)
 
@@ -275,14 +236,14 @@ class HomePage(QWidget):
         self._secondary_actions_widget = container
         self._secondary_import_button = import_btn
         self._secondary_help_button = welcome_btn
-        import_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        import_btn.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
         return container
 
     def _build_cards_row(self) -> QWidget:
         container = QWidget(self)
         container.setObjectName("HomeCardsRow")
-        row = QBoxLayout(QBoxLayout.LeftToRight)
+        row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(24)
         container.setLayout(row)
@@ -317,11 +278,11 @@ class HomePage(QWidget):
             "Clear all", window.clear_recent_files
         )
         window.home_clear_sessions_button.setVisible(False)
-        header.addWidget(window.home_clear_sessions_button, 0, Qt.AlignRight)
+        header.addWidget(window.home_clear_sessions_button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header)
 
         subtitle = QLabel(
-            "Files and folders recently brought into projects",
+            "Traces and data files you've recently opened",
             card,
         )
         subtitle.setObjectName("CardSubtitle")
@@ -354,7 +315,7 @@ class HomePage(QWidget):
             "Clear all", window.clear_recent_projects
         )
         window.home_clear_projects_button.setVisible(False)
-        header.addWidget(window.home_clear_projects_button, 0, Qt.AlignRight)
+        header.addWidget(window.home_clear_projects_button, 0, Qt.AlignmentFlag.AlignRight)
         layout.addLayout(header)
 
         subtitle = QLabel("Projects you've worked on recently", card)
@@ -368,27 +329,13 @@ class HomePage(QWidget):
         layout.addStretch()
         return card
 
-    def _apply_cloud_storage_visibility(self) -> None:
-        show = self._settings.value("home/show_storage_warning", True, type=bool)
-        if hasattr(self, "cloud_storage_warning"):
-            self.cloud_storage_warning.setVisible(bool(show))
-        if hasattr(self, "_banner_container"):
-            self._banner_container.setVisible(bool(show))
-
-    def _dismiss_cloud_storage_warning(self) -> None:
-        self._settings.setValue("home/show_storage_warning", False)
-        if hasattr(self, "cloud_storage_warning"):
-            self.cloud_storage_warning.hide()
-        if hasattr(self, "_banner_container"):
-            self._banner_container.hide()
-
     def _make_clear_button(self, text: str, callback: Callable[[], None]) -> QToolButton:
         button = QToolButton(self)
         button.setObjectName("HomeClearButton")
         button.setText(text)
         button.setAutoRaise(True)
-        button.setToolButtonStyle(Qt.ToolButtonTextOnly)
-        button.setCursor(Qt.PointingHandCursor)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(callback)
         return button
 
@@ -412,9 +359,9 @@ class HomePage(QWidget):
         return total > available_width
 
     def _set_action_button_policy(self, buttons: list[QWidget], *, expand: bool) -> None:
-        policy = QSizePolicy.Expanding if expand else QSizePolicy.Preferred
+        policy = QSizePolicy.Policy.Expanding if expand else QSizePolicy.Policy.Preferred
         for button in buttons:
-            button.setSizePolicy(policy, QSizePolicy.Fixed)
+            button.setSizePolicy(policy, QSizePolicy.Policy.Fixed)
 
     def _update_responsive_layout(self) -> None:
         if not hasattr(self, "_content"):
@@ -427,7 +374,7 @@ class HomePage(QWidget):
                 self._primary_actions_layout.spacing(),
                 available_width,
             )
-            direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
+            direction = QBoxLayout.Direction.TopToBottom if stack else QBoxLayout.Direction.LeftToRight
             self._primary_actions_layout.setDirection(direction)
             self._primary_actions_layout.setSpacing(10 if stack else 12)
             self._set_action_button_policy(self._primary_action_buttons, expand=stack)
@@ -439,32 +386,32 @@ class HomePage(QWidget):
                 self._secondary_actions_layout.spacing(),
                 available_width,
             )
-            direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
+            direction = QBoxLayout.Direction.TopToBottom if stack else QBoxLayout.Direction.LeftToRight
             self._secondary_actions_layout.setDirection(direction)
             self._secondary_actions_layout.setSpacing(8 if stack else 12)
             if hasattr(self, "_secondary_actions_spacer"):
                 if stack:
                     self._secondary_actions_spacer.changeSize(
-                        0, 0, QSizePolicy.Fixed, QSizePolicy.Fixed
+                        0, 0, QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
                     )
                 else:
                     self._secondary_actions_spacer.changeSize(
-                        0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum
+                        0, 0, QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum
                     )
             self._secondary_actions_layout.setAlignment(
                 self._secondary_help_button,
-                Qt.AlignLeft if stack else (Qt.AlignRight | Qt.AlignVCenter),
+                Qt.AlignmentFlag.AlignLeft if stack else (Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
             )
             self._secondary_import_button.setSizePolicy(
-                QSizePolicy.Expanding if stack else QSizePolicy.Preferred,
-                QSizePolicy.Fixed,
+                QSizePolicy.Policy.Expanding if stack else QSizePolicy.Policy.Preferred,
+                QSizePolicy.Policy.Fixed,
             )
             self._secondary_actions_layout.invalidate()
 
         if hasattr(self, "_cards_layout"):
             available_width = self._cards_widget.contentsRect().width()
             stack = self._needs_stack(self._cards, self._cards_layout.spacing(), available_width)
-            direction = QBoxLayout.TopToBottom if stack else QBoxLayout.LeftToRight
+            direction = QBoxLayout.Direction.TopToBottom if stack else QBoxLayout.Direction.LeftToRight
             self._cards_layout.setDirection(direction)
             self._cards_layout.setSpacing(16 if stack else 24)
 
@@ -522,8 +469,6 @@ class HomePage(QWidget):
         accent = CURRENT_THEME.get("accent", text_color)
         accent_fill = CURRENT_THEME.get("accent_fill", accent)
         row_hover_color = rgba_from_hex(accent_fill, 0.12)
-        info_bg = rgba_from_hex(accent_fill, 0.08)
-        info_border = rgba_from_hex(accent_fill, 0.35)
         card_border_color = rgba_from_hex(border_color, 0.55)
         hero_border_color = rgba_from_hex(border_color, 0.85)
         button_bg = CURRENT_THEME.get("button_bg", window_bg)
@@ -553,8 +498,7 @@ QWidget#HomePage {{
 }}
 QScrollArea#HomeScrollArea,
 QWidget#HomeScrollHost,
-QWidget#HomeContent,
-QFrame#HomeBannerContainer {{
+QWidget#HomeContent {{
     background: {page_bg};
 }}
 QFrame#HeroFrame {{
@@ -652,52 +596,54 @@ QToolButton#HomeHelpButton:hover {{
     color: {card_title_color};
     text-decoration: underline;
 }}
-QFrame#CloudStorageWarning {{
-    background-color: {info_bg};
-    border: 1px solid {info_border};
-    border-radius: 10px;
-    padding: 1px;
-}}
-QLabel#CloudStorageWarningText {{
-    color: {text_color};
-    font-size: 12px;
-}}
-QToolButton#CloudStorageWarningDismiss {{
-    background: transparent;
-    color: {muted_action_color};
-    border: none;
-    padding: 2px 4px;
-    font-size: 11px;
-    font-weight: 500;
-}}
-QToolButton#CloudStorageWarningDismiss:hover {{
-    color: {card_title_color};
-    text-decoration: underline;
-}}
+/* --- Recent rows --- */
 QWidget#HomeRecentRow {{
     border: 1px solid {card_border_color};
     border-radius: 10px;
 }}
+QWidget#HomeRecentRow:hover {{
+    background: {row_hover_color};
+}}
 
-/* Make recent file/project rows clearly readable */
+/* Name button inside row */
 QWidget#HomeRecentRow QPushButton[isGhost="true"] {{
     color: {card_title_color};
     background-color: transparent;
     border: none;
-    padding: 7px 12px;
-    min-height: 32px;
+    padding: 0px;
+    min-height: 18px;
     font-size: 13px;
+    font-weight: 500;
     text-align: left;
 }}
-
-/* Keep ghost buttons transparent on hover inside recent rows */
 QWidget#HomeRecentRow QPushButton[isGhost="true"]:hover {{
     background-color: transparent;
 }}
 
-/* Subtle hover background for the whole row */
-QWidget#HomeRecentRow:hover {{
-    background: {row_hover_color};
+/* Path subtitle */
+QLabel#HomeRecentPath {{
+    color: {placeholder_color};
+    font-size: 11px;
+    padding: 0px;
+}}
+
+/* Missing file badge */
+QLabel#HomeMissingBadge {{
+    color: {placeholder_color};
+    background: {rgba_from_hex(text_color, 0.06)};
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-right: 4px;
+}}
+
+/* Dim missing rows */
+QWidget#HomeRecentRow[missing="true"] {{
+    opacity: 0.55;
+}}
+QWidget#HomeRecentRow[missing="true"] QPushButton[isGhost="true"] {{
+    color: {placeholder_color};
 }}
 """
         )

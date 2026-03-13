@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QEvent, QObject, Qt
-from PyQt5.QtGui import QNativeGestureEvent
+from PyQt6.QtCore import QEvent, QObject, Qt
+from PyQt6.QtGui import QNativeGestureEvent
 
 
 class PinchBlocker(QObject):
@@ -20,7 +20,7 @@ class PinchBlocker(QObject):
         if (
             isinstance(ev, QNativeGestureEvent)
             and hasattr(Qt, "ZoomNativeGesture")
-            and ev.gestureType() == Qt.ZoomNativeGesture
+            and ev.gestureType() == Qt.NativeGestureType.ZoomNativeGesture
         ):
             ev.accept()
             return True  # Consume pinch zoom

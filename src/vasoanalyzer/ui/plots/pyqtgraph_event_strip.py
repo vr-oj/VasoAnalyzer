@@ -9,9 +9,9 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import pyqtgraph as pg
-from PyQt5.QtCore import QPointF
-from PyQt5.QtGui import QColor, QCursor, QFont, QFontMetricsF
-from PyQt5.QtWidgets import QApplication, QToolTip
+from PyQt6.QtCore import QPointF
+from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetricsF
+from PyQt6.QtWidgets import QApplication, QToolTip
 
 from vasoanalyzer.ui.event_labels_v3 import EventEntryV3, LayoutOptionsV3
 from vasoanalyzer.ui.plots.event_display_mode import (

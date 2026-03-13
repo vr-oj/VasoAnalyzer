@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from PyQt5.QtCore import QEvent, QObject, Qt, pyqtSignal
-from PyQt5.QtGui import QDoubleValidator, QKeyEvent
-from PyQt5.QtWidgets import (
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt6.QtGui import QDoubleValidator, QKeyEvent
+from PyQt6.QtWidgets import (
     QButtonGroup,
     QFormLayout,
     QFrame,
@@ -94,8 +94,8 @@ class EventReviewPanel(QWidget):
 
         # Separator
         sep1 = QFrame()
-        sep1.setFrameShape(QFrame.HLine)
-        sep1.setFrameShadow(QFrame.Sunken)
+        sep1.setFrameShape(QFrame.Shape.HLine)
+        sep1.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(sep1)
 
         # Editable values section
@@ -106,8 +106,8 @@ class EventReviewPanel(QWidget):
 
         # Separator
         sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setFrameShadow(QFrame.Sunken)
+        sep2.setFrameShape(QFrame.Shape.HLine)
+        sep2.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(sep2)
 
         # Review state section
@@ -115,8 +115,8 @@ class EventReviewPanel(QWidget):
 
         # Separator
         sep3 = QFrame()
-        sep3.setFrameShape(QFrame.HLine)
-        sep3.setFrameShadow(QFrame.Sunken)
+        sep3.setFrameShape(QFrame.Shape.HLine)
+        sep3.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(sep3)
 
         # Navigation section
@@ -169,16 +169,16 @@ class EventReviewPanel(QWidget):
         layout = QFormLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         # Event label (read-only)
         self.label_value = QLabel("—")
-        self.label_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.label_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addRow("Event:", self.label_value)
 
         # Time (read-only)
         self.time_value = QLabel("—")
-        self.time_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.time_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addRow("Time (s):", self.time_value)
 
         return widget
@@ -189,7 +189,7 @@ class EventReviewPanel(QWidget):
         layout = QFormLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
-        layout.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
 
         # ID field (editable)
         self.id_input = QLineEdit()
@@ -600,7 +600,7 @@ class EventReviewPanel(QWidget):
     def _on_close_review(self) -> None:
         """Handle close review button click."""
         # Find parent dock widget and hide it
-        from PyQt5.QtWidgets import QDockWidget
+        from PyQt6.QtWidgets import QDockWidget
 
         parent = self.parent()
         while parent is not None:
@@ -775,14 +775,14 @@ class EventReviewPanel(QWidget):
         (buttons, radio buttons, etc.) have their key events intercepted for
         navigation and action shortcuts.
         """
-        if event.type() != QEvent.KeyPress:
+        if event.type() != QEvent.Type.KeyPress:
             return super().eventFilter(obj, event)
 
         key = event.key()
         in_line_edit = isinstance(obj, QLineEdit)
 
         # Always let Escape through regardless of focus
-        if key == Qt.Key_Escape:
+        if key == Qt.Key.Key_Escape:
             if self._sampling_mode:
                 self._on_sample_requested()
             else:
@@ -795,36 +795,36 @@ class EventReviewPanel(QWidget):
             return False
 
         # Navigation (up/down = previous/next, matching table row order)
-        if key in (Qt.Key_Down, Qt.Key_N):
+        if key in (Qt.Key.Key_Down, Qt.Key.Key_N):
             self._on_next()
             return True
-        if key in (Qt.Key_Up, Qt.Key_P):
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_P):
             self._on_previous()
             return True
 
         # Actions
-        if key == Qt.Key_C:
+        if key == Qt.Key.Key_C:
             self._on_confirm_review()
             return True
-        if key == Qt.Key_S:
+        if key == Qt.Key.Key_S:
             self._on_sample_requested()
             return True
-        if key == Qt.Key_E:
+        if key == Qt.Key.Key_E:
             self._edit_current_label()
             return True
-        if key == Qt.Key_T:
+        if key == Qt.Key.Key_T:
             self._edit_current_time()
             return True
-        if key in (Qt.Key_Delete, Qt.Key_Backspace):
+        if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._delete_current_event()
             return True
 
         # Review state number keys
         _state_keys = {
-            Qt.Key_1: REVIEW_UNREVIEWED,
-            Qt.Key_2: REVIEW_CONFIRMED,
-            Qt.Key_3: REVIEW_EDITED,
-            Qt.Key_4: REVIEW_NEEDS_FOLLOWUP,
+            Qt.Key.Key_1: REVIEW_UNREVIEWED,
+            Qt.Key.Key_2: REVIEW_CONFIRMED,
+            Qt.Key.Key_3: REVIEW_EDITED,
+            Qt.Key.Key_4: REVIEW_NEEDS_FOLLOWUP,
         }
         if key in _state_keys:
             self._set_review_state(_state_keys[key])
